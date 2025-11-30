@@ -1,0 +1,22 @@
+[workspace]
+resolver = "3"
+members = ["crates/cli"]
+
+[workspace.package]
+version = "0.1.0"
+rust-version = "1.90.0"
+edition = "2024"
+authors = ["Celerrate Contributors <celerrate@jdevelop.io>"]
+license = "MIT OR Apache-2.0"
+description = "A fast, modern PHP toolchain written in Rust."
+repository = "https://github.com/celerrate/celerrate"
+homepage = "https://celerrate.jdevelop.io"
+documentation = "https://celerrate.jdevelop.io"
+keywords = ["php", "toolchain", "performance", "safety", "utilities"]
+categories = ["development-tools", "programming-languages", "performance"]
+readme = "README.md"
+
+[workspace.dependencies]
+clap = { version = "4.5", features = ["derive"] }
+thiserror = "2.0"
+anyhow = "1.0"
