@@ -1,0 +1,21 @@
+# We treat all warnings as errors
+# Use #[allow(clippy::...)] for exceptions with justification
+
+# Type complexity - Allow reasonably complex types
+type-complexity-threshold = 500
+
+# Cognitive complexity - Warn on complex functions
+cognitive-complexity-threshold = 30
+
+# Too many arguments - Functions should have ≤ 7 arguments
+too-many-arguments-threshold = 7
+
+# Module name consistency
+enforce-iter-loop-reborrow = true
+
+# Allow derive(Eq, PartialEq) even with floats (will warn if used with f32/f64)
+allow-expect-in-tests = true
+allow-unwrap-in-tests = true
+
+# Avoid useless vec! macro
+vec-box-size-threshold = 4
