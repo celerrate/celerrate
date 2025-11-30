@@ -1,0 +1,23 @@
+edition = "2024"
+
+# Line width
+max_width = 100
+
+# Indentation
+tab_spaces = 4
+hard_tabs = false
+
+# Functions (use stable naming)
+fn_params_layout = "Tall"
+
+# Imports
+reorder_imports = true
+reorder_modules = true
+
+# Lists
+match_block_trailing_comma = true
+
+# Misc
+merge_derives = true
+use_field_init_shorthand = true
+use_try_shorthand = true
