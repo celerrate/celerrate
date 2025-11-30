@@ -1,0 +1,36 @@
+# Scans dependencies for security vulnerabilities, outdated crates, and licensing issues
+# See https://embarkstudios.github.io/cargo-deny/
+
+[advisories]
+# Vulnerability database is required
+db-path = "$CARGO_HOME/advisory-db"
+
+# Allow unmaintained crates that are used indirectly but are not critical
+ignore = [
+    # No current exceptions
+]
+
+[licenses]
+# The confidence threshold for detecting a license from license text
+confidence-threshold = 0.8
+
+# List of explicitly allowed licenses
+allow = [
+    "Apache-2.0",
+    "MIT",
+    "Unicode-3.0",
+]
+
+[bans]
+# Lint level for when multiple versions of the same crate are detected
+multiple-versions = "warn"
+
+[sources]
+# Lint level for what to happen when a crate from a crate registry that is not in the allowed registries is detected
+unknown-registry = "warn"
+
+# Lint level for what to happen when a crate from a git repository that is not in the allowed repositories is detected
+unknown-git = "warn"
+
+# Allow crates from crates.io by default
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
