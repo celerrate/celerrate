@@ -9,7 +9,8 @@ const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 /// provenance data on the decoded [`SourceText`], not an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceTooLarge {
-    /// Byte length the decoded text would have reached.
+    /// A byte length the decoded text reaches or exceeds: a lower bound
+    /// when the failure is detected before decoding completes.
     pub decoded_length: usize,
 }
 
