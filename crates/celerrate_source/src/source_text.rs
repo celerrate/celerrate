@@ -118,10 +118,7 @@ fn decode_lossy(bytes: &[u8]) -> Result<(String, Vec<TextRange>), SourceTooLarge
             }
             Err(error) => {
                 let valid_up_to = error.valid_up_to();
-                if let Some(Ok(valid)) = remaining
-                    .get(..valid_up_to)
-                    .map(core::str::from_utf8)
-                {
+                if let Some(Ok(valid)) = remaining.get(..valid_up_to).map(core::str::from_utf8) {
                     text.push_str(valid);
                 }
                 let start = text_size_of(text.len())?;
