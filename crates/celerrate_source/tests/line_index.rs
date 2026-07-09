@@ -113,3 +113,12 @@ fn offset_rejects_column_that_overflows() {
         None
     );
 }
+
+#[test]
+fn offset_accepts_column_one_past_end_of_interior_line() {
+    let index = LineIndex::new("ab\ncd");
+    assert_eq!(
+        index.offset(LineCol { line: 0, col: 3 }),
+        Some(TextSize::from(3))
+    );
+}
