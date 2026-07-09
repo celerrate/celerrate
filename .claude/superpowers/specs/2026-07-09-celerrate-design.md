@@ -329,7 +329,43 @@ TDD as the default development loop, with five tiers:
 5. **Benchmarks tracked in CI** (criterion) with regression thresholds —
    performance is a feature and is tested like one.
 
-## 10. Sub-project sequencing
+## 10. Repository standards and open-source hygiene
+
+The repository itself is a product surface: for a project claiming to
+replace the ecosystem, repo quality is a credibility signal. Delivered with
+sub-project 1 (foundations) and maintained from the first commit:
+
+- **README.md** — the pitch (what, why, differentiators), an honest project
+  status ("early development, not yet usable"), the roadmap by pillar, and a
+  quick start once one exists. The README is the landing page: written with
+  the same care as the diagnostics.
+- **Licensing files** — `LICENSE-MIT` and `LICENSE-APACHE` (dual-license
+  convention of the Rust ecosystem), copyright JDevelop.
+- **CONTRIBUTING.md** — development setup, the TDD loop as the expected
+  workflow, commit conventions (gitmoji + Conventional Commits), how to add
+  a rule or a diagnostic, the anti-false-positive policy as a contribution
+  rule.
+- **CODE_OF_CONDUCT.md** — Contributor Covenant.
+- **SECURITY.md** — private vulnerability reporting channel. Non-negotiable
+  for a tool that will ship security analysis itself.
+- **Issue and PR templates** (`.github/`) — bug report, rule proposal,
+  false-positive report (first-class template, per the policy), and the
+  pre-filled internal-error template that the CLI's crash reporter links to.
+- **CHANGELOG.md** — Keep a Changelog format, SemVer releases.
+- **Toolchain pinning and workspace hygiene** — `rust-toolchain.toml`,
+  `rustfmt.toml`, workspace-level Clippy configuration carrying the
+  zero-panic lint policy (section 8), and `cargo-deny` (license and security
+  advisory auditing of dependencies — a tool preaching safety audits its own
+  supply chain).
+- **CI from day 1** (GitHub Actions) — tests, Clippy at deny level,
+  formatting check, cargo-deny; the real-project corpus and benchmark
+  tracking join as soon as they exist (section 9).
+- **CLAUDE.md** — project-level instructions for AI-assisted development:
+  the engineering rules of this spec (zero panic, strict layering, TDD), the
+  crate map, and pointers to the specs. Development is heavily AI-assisted;
+  the repository must carry its own operating manual.
+
+## 11. Sub-project sequencing
 
 Each sub-project gets its own spec → plan → implementation cycle:
 
