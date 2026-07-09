@@ -1,0 +1,5 @@
+# Superpowers transient working state
+.superpowers/
+
+# Celerrate analysis cache (future product artifact)
+.celerrate/
