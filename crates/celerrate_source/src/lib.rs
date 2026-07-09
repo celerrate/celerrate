@@ -11,4 +11,4 @@ pub use text_size::{TextRange, TextSize};
 
 mod line_index;
 
-pub use line_index::{LineCol, LineIndex};
+pub use line_index::{LineColumn, LineIndex};
