@@ -41,6 +41,8 @@ impl LineIndex {
     /// Maps a byte offset to its line/column position. Offsets are expected
     /// to lie within the indexed text (`0..=len`); the end-of-text offset
     /// maps to the position just past the last character.
+    /// Offsets past the end of the text are not detected: they map, without
+    /// panicking, to an oversized column on the last line.
     pub fn line_col(&self, offset: TextSize) -> LineCol {
         let line = self
             .line_starts
@@ -59,6 +61,8 @@ impl LineIndex {
     /// line's last byte is accepted: on interior lines it is the next
     /// line's start (which `line_col` reports as the next line's column
     /// zero), on the last line it is the end of text.
+    /// Columns are byte offsets and may land inside a multi-byte character;
+    /// validating character boundaries is the caller's responsibility.
     pub fn offset(&self, line_col: LineCol) -> Option<TextSize> {
         let line = usize::try_from(line_col.line).ok()?;
         let line_start = self.line_starts.get(line).copied()?;
