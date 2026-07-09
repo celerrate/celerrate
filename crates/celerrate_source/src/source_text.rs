@@ -108,7 +108,7 @@ const REPLACEMENT_CHARACTER: char = '\u{FFFD}';
 /// follows) becomes one U+FFFD, and its range in the decoded text is
 /// recorded.
 fn decode_lossy(bytes: &[u8]) -> Result<(String, Vec<TextRange>), SourceTooLarge> {
-    let mut text = String::new();
+    let mut text = String::with_capacity(bytes.len());
     let mut replacements = Vec::new();
     let mut remaining = bytes;
     loop {
