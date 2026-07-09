@@ -9,6 +9,8 @@
 
 pub use text_size::{TextRange, TextSize};
 
+mod file_id;
 mod line_index;
 
+pub use file_id::FileId;
 pub use line_index::{LineColumn, LineIndex};
