@@ -8,6 +8,7 @@ edition = "2024"
 rust-version = "1.94"
 license = "MIT OR Apache-2.0"
 authors = ["JDevelop"]
+repository = "https://github.com/celerrate/celerrate"
 
 [workspace.dependencies]
 text-size = "1"
