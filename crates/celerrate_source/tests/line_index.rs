@@ -70,3 +70,46 @@ fn offset_at_end_of_text_is_on_the_last_line() {
         LineCol { line: 1, col: 2 }
     );
 }
+
+#[test]
+fn offset_roundtrips_every_char_boundary() {
+    let text = "ab\r\ncd\né\nend";
+    let index = LineIndex::new(text);
+    for (position, _) in text.char_indices() {
+        let offset = TextSize::from(position as u32);
+        assert_eq!(index.offset(index.line_col(offset)), Some(offset));
+    }
+}
+
+#[test]
+fn offset_accepts_end_of_text() {
+    let index = LineIndex::new("ab\ncd");
+    assert_eq!(
+        index.offset(LineCol { line: 1, col: 2 }),
+        Some(TextSize::from(5))
+    );
+}
+
+#[test]
+fn offset_rejects_line_out_of_range() {
+    let index = LineIndex::new("ab\ncd");
+    assert_eq!(index.offset(LineCol { line: 2, col: 0 }), None);
+}
+
+#[test]
+fn offset_rejects_column_past_end_of_line() {
+    let index = LineIndex::new("ab\ncd");
+    assert_eq!(index.offset(LineCol { line: 0, col: 7 }), None);
+}
+
+#[test]
+fn offset_rejects_column_that_overflows() {
+    let index = LineIndex::new("ab\ncd");
+    assert_eq!(
+        index.offset(LineCol {
+            line: 1,
+            col: u32::MAX
+        }),
+        None
+    );
+}
