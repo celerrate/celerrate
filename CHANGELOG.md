@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Cargo workspace with the zero-panic lint policy.
-- `celerrate_source`: source text primitives (spans, line/column index).
+- `celerrate_source`: source text primitives (spans, line/column index,
+  file identifiers, byte decoding with BOM and invalid-UTF-8 provenance).
 
 [Unreleased]: https://github.com/celerrate/celerrate/commits/main
