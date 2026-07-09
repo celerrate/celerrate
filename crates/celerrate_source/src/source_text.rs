@@ -100,11 +100,48 @@ fn text_size_of(length: usize) -> Result<TextSize, SourceTooLarge> {
         })
 }
 
-/// Decodes bytes to UTF-8, replacing invalid sequences with U+FFFD.
-/// Replacement-range tracking arrives with the invalid-input tests; for
-/// valid input the lossy conversion is a borrowed pass-through.
+const REPLACEMENT_CHARACTER: char = '\u{FFFD}';
+
+/// Decodes bytes to UTF-8. Each invalid sequence (a maximal invalid
+/// subpart, per the Unicode substitution recommendation `core::str`
+/// follows) becomes one U+FFFD, and its range in the decoded text is
+/// recorded.
 fn decode_lossy(bytes: &[u8]) -> Result<(String, Vec<TextRange>), SourceTooLarge> {
-    Ok((String::from_utf8_lossy(bytes).into_owned(), Vec::new()))
+    let mut text = String::new();
+    let mut replacements = Vec::new();
+    let mut remaining = bytes;
+    loop {
+        match core::str::from_utf8(remaining) {
+            Ok(valid) => {
+                text.push_str(valid);
+                break;
+            }
+            Err(error) => {
+                let valid_up_to = error.valid_up_to();
+                if let Some(Ok(valid)) = remaining
+                    .get(..valid_up_to)
+                    .map(core::str::from_utf8)
+                {
+                    text.push_str(valid);
+                }
+                let start = text_size_of(text.len())?;
+                text.push(REPLACEMENT_CHARACTER);
+                let end = text_size_of(text.len())?;
+                replacements.push(TextRange::new(start, end));
+                let skip = match error.error_len() {
+                    Some(invalid_length) => valid_up_to + invalid_length,
+                    // A truncated character at the end of input: nothing
+                    // left to decode after it.
+                    None => remaining.len(),
+                };
+                remaining = remaining.get(skip..).unwrap_or_default();
+                if remaining.is_empty() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok((text, replacements))
 }
 
 #[cfg(test)]

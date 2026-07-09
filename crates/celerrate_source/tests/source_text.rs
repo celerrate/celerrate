@@ -59,3 +59,63 @@ fn line_endings_and_nul_bytes_pass_through() {
     assert_eq!(source.text(), "a\r\nb\0c");
     assert!(source.is_pristine());
 }
+
+use celerrate_source::{TextRange, TextSize};
+
+fn range(start: u32, end: u32) -> TextRange {
+    TextRange::new(TextSize::from(start), TextSize::from(end))
+}
+
+#[test]
+fn invalid_byte_at_start_is_replaced_and_recorded() {
+    let source = SourceText::from_bytes(b"\xFFabc").expect("fits the cap");
+    assert_eq!(source.text(), "\u{FFFD}abc");
+    assert_eq!(source.replacements(), &[range(0, 3)]);
+    assert!(!source.is_pristine());
+}
+
+#[test]
+fn invalid_byte_in_the_middle_is_replaced_and_recorded() {
+    let source = SourceText::from_bytes(b"ab\xFFcd").expect("fits the cap");
+    assert_eq!(source.text(), "ab\u{FFFD}cd");
+    assert_eq!(source.replacements(), &[range(2, 5)]);
+}
+
+#[test]
+fn invalid_byte_at_the_end_is_replaced_and_recorded() {
+    let source = SourceText::from_bytes(b"ab\xFF").expect("fits the cap");
+    assert_eq!(source.text(), "ab\u{FFFD}");
+    assert_eq!(source.replacements(), &[range(2, 5)]);
+}
+
+#[test]
+fn consecutive_invalid_bytes_each_get_a_replacement() {
+    let source = SourceText::from_bytes(b"a\xFF\xFEb").expect("fits the cap");
+    assert_eq!(source.text(), "a\u{FFFD}\u{FFFD}b");
+    assert_eq!(source.replacements(), &[range(1, 4), range(4, 7)]);
+}
+
+#[test]
+fn truncated_multibyte_character_at_the_end_is_one_replacement() {
+    // "é" is C3 A9; the input stops after C3.
+    let source = SourceText::from_bytes(b"caf\xC3").expect("fits the cap");
+    assert_eq!(source.text(), "caf\u{FFFD}");
+    assert_eq!(source.replacements(), &[range(3, 6)]);
+}
+
+#[test]
+fn literal_replacement_character_in_valid_input_is_not_recorded() {
+    let source = SourceText::from_bytes("a\u{FFFD}b".as_bytes()).expect("fits the cap");
+    assert_eq!(source.text(), "a\u{FFFD}b");
+    assert!(source.replacements().is_empty());
+    assert!(source.is_pristine());
+}
+
+#[test]
+fn bom_and_replacements_combine_in_pristine() {
+    let source = SourceText::from_bytes(b"\xEF\xBB\xBFa\xFF").expect("fits the cap");
+    assert_eq!(source.text(), "a\u{FFFD}");
+    assert!(source.had_utf8_bom());
+    assert_eq!(source.replacements(), &[range(1, 4)]);
+    assert!(!source.is_pristine());
+}
