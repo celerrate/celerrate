@@ -104,6 +104,15 @@ fn truncated_multibyte_character_at_the_end_is_one_replacement() {
 }
 
 #[test]
+fn truncated_multibyte_sequence_in_the_middle_is_one_replacement() {
+    // E0 A0 is the truncated prefix of a three-byte sequence; decoding
+    // resumes at the following valid byte.
+    let source = SourceText::from_bytes(b"a\xE0\xA0b").expect("fits the cap");
+    assert_eq!(source.text(), "a\u{FFFD}b");
+    assert_eq!(source.replacements(), &[range(1, 4)]);
+}
+
+#[test]
 fn literal_replacement_character_in_valid_input_is_not_recorded() {
     let source = SourceText::from_bytes("a\u{FFFD}b".as_bytes()).expect("fits the cap");
     assert_eq!(source.text(), "a\u{FFFD}b");
