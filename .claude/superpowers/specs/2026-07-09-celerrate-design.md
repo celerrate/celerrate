@@ -6,8 +6,11 @@ Status: Approved (brainstorming output; each sub-project gets its own detailed s
 ## 1. Vision
 
 Celerrate is a complete toolchain for PHP, written in Rust, published as open
-source (MIT) under JDevelop. It is a serious competitor to the existing PHP
-tooling ecosystem and aims to replace it over time.
+source under JDevelop, dual-licensed **MIT OR Apache-2.0** (the Rust
+ecosystem convention: Apache-2.0 adds an explicit patent grant, MIT keeps
+maximum simplicity). The "Celerrate" name is a JDevelop trademark. It is a
+serious competitor to the existing PHP tooling ecosystem and aims to replace
+it over time.
 
 Five pillars, all built on one shared engine:
 
