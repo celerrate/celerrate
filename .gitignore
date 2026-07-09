@@ -6,3 +6,6 @@
 
 # Celerrate analysis cache (future product artifact)
 .celerrate/
+
+# Rust build artifacts
+/target/

@@ -718,7 +718,7 @@ git commit -m "📄 docs: add community files, issue templates, and CLAUDE.md"
 
 **Interfaces:**
 - Consumes: the workspace dependency `text-size` declared in Task 1.
-- Produces: `celerrate_source::{TextRange, TextSize}` (re-exports), `celerrate_source::LineCol { line: u32, col: u32 }` (both zero-based; `col` is a byte offset within the line), `celerrate_source::LineIndex` with `fn new(text: &str) -> LineIndex` and `fn line_col(&self, offset: TextSize) -> LineCol`. Task 6 adds `fn offset(&self, line_col: LineCol) -> Option<TextSize>`.
+- Produces: `celerrate_source::{TextRange, TextSize}` (re-exports), `celerrate_source::LineColumn { line: u32, column: u32 }` (both zero-based; `column` is a byte offset within the line), `celerrate_source::LineIndex` with `fn new(text: &str) -> LineIndex` and `fn line_column(&self, offset: TextSize) -> LineColumn`. Task 6 adds `fn offset(&self, line_column: LineColumn) -> Option<TextSize>`.
 
 - [ ] **Step 1: Add the dependency and module wiring**
 
@@ -745,7 +745,7 @@ pub use text_size::{TextRange, TextSize};
 
 mod line_index;
 
-pub use line_index::{LineCol, LineIndex};
+pub use line_index::{LineColumn, LineIndex};
 ```
 
 Create `crates/celerrate_source/src/line_index.rs` with only the types (no logic yet, so the failing test in Step 3 fails only on the missing methods, not on missing types):
@@ -753,13 +753,13 @@ Create `crates/celerrate_source/src/line_index.rs` with only the types (no logic
 ```rust
 use text_size::TextSize;
 
-/// A zero-based line/column position. `col` is a byte offset within the
+/// A zero-based line/column position. `column` is a byte offset within the
 /// line, not a character count: multi-byte UTF-8 characters advance it by
 /// their byte length. Rendering layers convert to user-facing columns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct LineCol {
+pub struct LineColumn {
     pub line: u32,
-    pub col: u32,
+    pub column: u32,
 }
 
 /// Maps byte offsets to line/column positions and back for one text.
@@ -778,14 +778,14 @@ The text length is deliberately not stored yet: nothing reads it before Task 6's
 The snippets below are already in rustfmt's output form for `style_edition = "2024"` (single-line `assert_eq!` calls with these arguments exceed the default call width and get split); paste them verbatim so `cargo fmt --all --check` stays clean.
 
 ```rust
-use celerrate_source::{LineCol, LineIndex, TextSize};
+use celerrate_source::{LineColumn, LineIndex, TextSize};
 
 #[test]
 fn empty_text_maps_offset_zero_to_origin() {
     let index = LineIndex::new("");
     assert_eq!(
-        index.line_col(TextSize::from(0)),
-        LineCol { line: 0, col: 0 }
+        index.line_column(TextSize::from(0)),
+        LineColumn { line: 0, column: 0 }
     );
 }
 
@@ -793,8 +793,8 @@ fn empty_text_maps_offset_zero_to_origin() {
 fn single_line_columns_are_byte_offsets() {
     let index = LineIndex::new("hello");
     assert_eq!(
-        index.line_col(TextSize::from(3)),
-        LineCol { line: 0, col: 3 }
+        index.line_column(TextSize::from(3)),
+        LineColumn { line: 0, column: 3 }
     );
 }
 
@@ -802,16 +802,16 @@ fn single_line_columns_are_byte_offsets() {
 fn newline_starts_a_new_line() {
     let index = LineIndex::new("ab\ncd");
     assert_eq!(
-        index.line_col(TextSize::from(2)),
-        LineCol { line: 0, col: 2 }
+        index.line_column(TextSize::from(2)),
+        LineColumn { line: 0, column: 2 }
     );
     assert_eq!(
-        index.line_col(TextSize::from(3)),
-        LineCol { line: 1, col: 0 }
+        index.line_column(TextSize::from(3)),
+        LineColumn { line: 1, column: 0 }
     );
     assert_eq!(
-        index.line_col(TextSize::from(4)),
-        LineCol { line: 1, col: 1 }
+        index.line_column(TextSize::from(4)),
+        LineColumn { line: 1, column: 1 }
     );
 }
 
@@ -819,12 +819,12 @@ fn newline_starts_a_new_line() {
 fn crlf_newline_keeps_carriage_return_on_its_line() {
     let index = LineIndex::new("ab\r\ncd");
     assert_eq!(
-        index.line_col(TextSize::from(2)),
-        LineCol { line: 0, col: 2 }
+        index.line_column(TextSize::from(2)),
+        LineColumn { line: 0, column: 2 }
     );
     assert_eq!(
-        index.line_col(TextSize::from(4)),
-        LineCol { line: 1, col: 0 }
+        index.line_column(TextSize::from(4)),
+        LineColumn { line: 1, column: 0 }
     );
 }
 
@@ -833,12 +833,12 @@ fn multibyte_characters_advance_columns_by_byte_length() {
     // 'é' is two bytes in UTF-8.
     let index = LineIndex::new("é\nx");
     assert_eq!(
-        index.line_col(TextSize::from(2)),
-        LineCol { line: 0, col: 2 }
+        index.line_column(TextSize::from(2)),
+        LineColumn { line: 0, column: 2 }
     );
     assert_eq!(
-        index.line_col(TextSize::from(3)),
-        LineCol { line: 1, col: 0 }
+        index.line_column(TextSize::from(3)),
+        LineColumn { line: 1, column: 0 }
     );
 }
 
@@ -846,8 +846,8 @@ fn multibyte_characters_advance_columns_by_byte_length() {
 fn offset_at_end_of_text_is_on_the_last_line() {
     let index = LineIndex::new("ab\ncd");
     assert_eq!(
-        index.line_col(TextSize::from(5)),
-        LineCol { line: 1, col: 2 }
+        index.line_column(TextSize::from(5)),
+        LineColumn { line: 1, column: 2 }
     );
 }
 ```
@@ -857,7 +857,7 @@ fn offset_at_end_of_text_is_on_the_last_line() {
 Run: `cargo test --package celerrate_source --test line_index`
 Expected: FAIL to compile with ``error[E0599]: no function or associated item named `new` found`` (the type exists, the behavior does not).
 
-- [ ] **Step 4: Implement `new` and `line_col`**
+- [ ] **Step 4: Implement `new` and `line_column`**
 
 Append to `crates/celerrate_source/src/line_index.rs`:
 
@@ -878,15 +878,15 @@ impl LineIndex {
     /// Maps a byte offset to its line/column position. Offsets are expected
     /// to lie within the indexed text (`0..=len`); the end-of-text offset
     /// maps to the position just past the last character.
-    pub fn line_col(&self, offset: TextSize) -> LineCol {
+    pub fn line_column(&self, offset: TextSize) -> LineColumn {
         let line = self
             .line_starts
             .partition_point(|&start| start <= offset)
             .saturating_sub(1);
         let line_start = self.line_starts.get(line).copied().unwrap_or_default();
-        LineCol {
+        LineColumn {
             line: line as u32,
-            col: u32::from(offset) - u32::from(line_start),
+            column: u32::from(offset) - u32::from(line_start),
         }
     }
 }
@@ -917,8 +917,8 @@ git commit -m "✨ feat(source): add spans re-exports and line index forward map
 - Test: `crates/celerrate_source/tests/line_index.rs` (append)
 
 **Interfaces:**
-- Consumes: `LineIndex`, `LineCol` from Task 5.
-- Produces: `LineIndex::offset(&self, line_col: LineCol) -> Option<TextSize>` — `None` when the line does not exist, the column runs past the end of the line, or the position is not representable (overflow). Also adds the stored text length (`len` field) that bounds the last line.
+- Consumes: `LineIndex`, `LineColumn` from Task 5.
+- Produces: `LineIndex::offset(&self, line_column: LineColumn) -> Option<TextSize>` — `None` when the line does not exist, the column runs past the end of the line, or the position is not representable (overflow). Also adds the stored text length (`len` field) that bounds the last line.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -931,7 +931,7 @@ fn offset_roundtrips_every_char_boundary() {
     let index = LineIndex::new(text);
     for (position, _) in text.char_indices() {
         let offset = TextSize::from(position as u32);
-        assert_eq!(index.offset(index.line_col(offset)), Some(offset));
+        assert_eq!(index.offset(index.line_column(offset)), Some(offset));
     }
 }
 
@@ -939,7 +939,7 @@ fn offset_roundtrips_every_char_boundary() {
 fn offset_accepts_end_of_text() {
     let index = LineIndex::new("ab\ncd");
     assert_eq!(
-        index.offset(LineCol { line: 1, col: 2 }),
+        index.offset(LineColumn { line: 1, column: 2 }),
         Some(TextSize::from(5))
     );
 }
@@ -947,22 +947,22 @@ fn offset_accepts_end_of_text() {
 #[test]
 fn offset_rejects_line_out_of_range() {
     let index = LineIndex::new("ab\ncd");
-    assert_eq!(index.offset(LineCol { line: 2, col: 0 }), None);
+    assert_eq!(index.offset(LineColumn { line: 2, column: 0 }), None);
 }
 
 #[test]
 fn offset_rejects_column_past_end_of_line() {
     let index = LineIndex::new("ab\ncd");
-    assert_eq!(index.offset(LineCol { line: 0, col: 7 }), None);
+    assert_eq!(index.offset(LineColumn { line: 0, column: 7 }), None);
 }
 
 #[test]
 fn offset_rejects_column_that_overflows() {
     let index = LineIndex::new("ab\ncd");
     assert_eq!(
-        index.offset(LineCol {
+        index.offset(LineColumn {
             line: 1,
-            col: u32::MAX
+            column: u32::MAX
         }),
         None
     );
@@ -1019,12 +1019,12 @@ Finally, append inside the `impl LineIndex` block:
     /// when the line does not exist, the column runs past the end of the
     /// line, or the position is not representable. The column one past the
     /// line's last byte is accepted: on interior lines it is the next
-    /// line's start (which `line_col` reports as the next line's column
+    /// line's start (which `line_column` reports as the next line's column
     /// zero), on the last line it is the end of text.
-    pub fn offset(&self, line_col: LineCol) -> Option<TextSize> {
-        let line = usize::try_from(line_col.line).ok()?;
+    pub fn offset(&self, line_column: LineColumn) -> Option<TextSize> {
+        let line = usize::try_from(line_column.line).ok()?;
         let line_start = self.line_starts.get(line).copied()?;
-        let candidate = line_start.checked_add(TextSize::from(line_col.col))?;
+        let candidate = line_start.checked_add(TextSize::from(line_column.column))?;
         let line_end = self.line_starts.get(line + 1).copied().unwrap_or(self.len);
         (candidate <= line_end).then_some(candidate)
     }

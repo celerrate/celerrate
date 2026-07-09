@@ -1,0 +1,22 @@
+name: Bug report
+description: Something behaves incorrectly.
+labels: ["bug"]
+body:
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: The smallest PHP snippet or setup that triggers the problem.
+      render: php
+  - type: input
+    id: version
+    attributes:
+      label: Celerrate version
+      placeholder: output of `celerrate --version`, or the commit hash if built from source
