@@ -1,0 +1,18 @@
+name: Internal error
+description: Celerrate reported an internal error (this template is pre-filled by the crash reporter).
+labels: ["internal-error", "bug"]
+body:
+  - type: textarea
+    id: report
+    attributes:
+      label: Internal error report
+      description: Paste the report printed by Celerrate.
+      render: text
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Celerrate version
+    validations:
+      required: true

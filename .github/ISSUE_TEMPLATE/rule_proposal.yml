@@ -1,0 +1,21 @@
+name: Rule proposal
+description: Propose a new diagnostic rule.
+labels: ["rule-proposal"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: What problem does the rule catch?
+    validations:
+      required: true
+  - type: textarea
+    id: examples
+    attributes:
+      label: Failing and passing examples
+      render: php
+    validations:
+      required: true
+  - type: textarea
+    id: fix
+    attributes:
+      label: Is an automatic fix possible? Is it safe?

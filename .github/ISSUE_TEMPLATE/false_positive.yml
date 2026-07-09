@@ -1,0 +1,30 @@
+name: False positive
+description: Celerrate reported a diagnostic on correct code. We treat these as priority bugs.
+labels: ["false-positive", "bug"]
+body:
+  - type: input
+    id: diagnostic-id
+    attributes:
+      label: Diagnostic identifier
+      placeholder: e.g. CEL0231
+    validations:
+      required: true
+  - type: textarea
+    id: code
+    attributes:
+      label: The code that is incorrectly flagged
+      render: php
+    validations:
+      required: true
+  - type: textarea
+    id: why-correct
+    attributes:
+      label: Why the code is correct
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Celerrate version
+    validations:
+      required: true
