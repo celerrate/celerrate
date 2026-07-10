@@ -372,6 +372,13 @@ syntax_kinds! {
     GotoStatement,
     /// `label:`, the target of a `goto`.
     LabelStatement,
+    /// `if (condition) body`, with optional `ElseIfClause`s and one
+    /// optional `ElseClause`, in either classic or alternative syntax.
+    IfStatement,
+    /// `elseif (condition) body` (or its alternative-syntax form).
+    ElseIfClause,
+    /// `else body` (or its alternative-syntax form).
+    ElseClause,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

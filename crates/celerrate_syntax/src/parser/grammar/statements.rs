@@ -41,6 +41,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Global) => global_statement(parser),
         Some(SyntaxKind::Unset) => unset_statement(parser),
         Some(SyntaxKind::Goto) => goto_statement(parser),
+        Some(SyntaxKind::If) => if_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -223,6 +224,76 @@ fn label_statement(parser: &mut Parser) {
     parser.bump(); // the label
     parser.bump(); // `:`
     marker.complete(parser, SyntaxKind::LabelStatement);
+}
+
+/// The tokens that end a nested statement list. A nested list never
+/// consumes one of these: the construct that owns it eats it, and an
+/// orphan unwinds to the source-file loop, which consumes anything.
+/// This is the plan's contextual recovery set, and the reason every
+/// nested list terminates: unwinding consumes nothing, but the top
+/// level always progresses.
+fn at_statement_list_terminator(parser: &mut Parser) -> bool {
+    matches!(
+        parser.current(),
+        Some(
+            SyntaxKind::CloseBrace
+                | SyntaxKind::EndIf
+                | SyntaxKind::EndWhile
+                | SyntaxKind::EndFor
+                | SyntaxKind::EndForeach
+                | SyntaxKind::EndSwitch
+                | SyntaxKind::EndDeclare
+                | SyntaxKind::Else
+                | SyntaxKind::ElseIf
+                | SyntaxKind::Case
+                | SyntaxKind::Default
+        )
+    )
+}
+
+/// `( expression )` after a control-flow keyword. The tokens stay
+/// flat under the statement node, like `match`'s subject.
+fn parenthesized_condition(parser: &mut Parser) {
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        expression(parser);
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+}
+
+/// The single embedded statement of a control-flow body
+/// (`if (c) body`). A statement-list terminator or end of input means
+/// the body is missing: diagnosed, never consumed, so the enclosing
+/// construct recovers its own closer.
+fn embedded_statement(parser: &mut Parser) {
+    if parser.current().is_none() || at_statement_list_terminator(parser) {
+        parser.diagnose_missing(ParserDiagnosticKind::ExpectedStatement);
+        return;
+    }
+    super::statement_list_step(parser);
+}
+
+fn if_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `if`
+    parenthesized_condition(parser);
+    embedded_statement(parser);
+    while parser.at(SyntaxKind::ElseIf) {
+        let clause = parser.start();
+        parser.bump();
+        parenthesized_condition(parser);
+        embedded_statement(parser);
+        clause.complete(parser, SyntaxKind::ElseIfClause);
+    }
+    if parser.at(SyntaxKind::Else) {
+        let clause = parser.start();
+        parser.bump();
+        embedded_statement(parser);
+        clause.complete(parser, SyntaxKind::ElseClause);
+    }
+    marker.complete(parser, SyntaxKind::IfStatement);
 }
 
 #[cfg(test)]
