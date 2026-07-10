@@ -464,6 +464,15 @@ fn member_modifiers(parser: &mut Parser) {
 /// forms parse here and adjacency is judged upstairs (the same trade
 /// recorded on `name`). Only the exact `( identifier )` shape is
 /// taken: anything else belongs to the member that follows.
+///
+/// The token view carries kinds, not text, so the identifier cannot be
+/// required to be `set` here: any `( identifier )` after a visibility
+/// reads as the suffix, including the parenthesized single-name type
+/// `private (Foo) $x;`, and the identifier's validity is judged
+/// upstairs on the flat tokens. No legal program misreads: Zend
+/// rejects both the spaced suffix and a one-member parenthesized DNF
+/// group (a group requires at least two intersection members), so the
+/// collision only decides which diagnostic path invalid code takes.
 fn asymmetric_visibility_suffix(parser: &mut Parser) {
     if parser.at(SyntaxKind::OpenParenthesis)
         && parser.nth(1) == Some(SyntaxKind::Identifier)

@@ -56,6 +56,47 @@ fn asymmetric_visibility_stays_flat_modifier_tokens() {
 }
 
 #[test]
+fn a_parenthesized_single_name_after_a_visibility_reads_as_the_suffix() {
+    // The recorded trade-off of `asymmetric_visibility_suffix`: the
+    // kinds-only lookahead cannot require the identifier to be `set`,
+    // so a parenthesized single-name type reads as the suffix. Both
+    // readings are invalid Zend (a spaced suffix, and a one-member
+    // parenthesized DNF group), so no legal program misreads.
+    insta::assert_snapshot!(render_member("private (Foo) $x;"), @r#"
+    PropertyDeclaration
+      Private "private"
+      OpenParenthesis "("
+      Identifier "Foo"
+      CloseParenthesis ")"
+      PropertyElement
+        Variable "$x"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_parenthesized_intersection_after_a_visibility_stays_a_type() {
+    insta::assert_snapshot!(render_member("private (Foo&Bar) $x;"), @r#"
+    PropertyDeclaration
+      Private "private"
+      ParenthesizedType
+        OpenParenthesis "("
+        IntersectionType
+          NamedType
+            Name
+              Identifier "Foo"
+          Ampersand "&"
+          NamedType
+            Name
+              Identifier "Bar"
+        CloseParenthesis ")"
+      PropertyElement
+        Variable "$x"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
 fn a_nullable_static_property_parses() {
     assert_eq!(
         parser_diagnostics("<?php class A { protected static ?self $instance = null; }"),
