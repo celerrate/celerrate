@@ -865,11 +865,14 @@ fn match_expression(parser: &mut Parser) -> CompletedMarker {
 
 /// One arm: a condition list (or `default`), `=>`, the body.
 ///
-/// Progress in the condition-list loop is enforced for the same reason
-/// as `match_expression`'s arm loop: the nesting guard can refuse a
-/// later condition's expression outright, without consuming a token, so
-/// each iteration records the position before parsing a condition and,
-/// if it is unchanged afterward, forces an `error_element` bump.
+/// Unlike `match_expression`'s arm loop, this loop's own termination
+/// does not depend on the position guard below: every iteration already
+/// bumps the comma before attempting a condition, so it always advances
+/// and is bounded by the finite token stream regardless. The guard is
+/// defensive, not load-bearing: it exists so a condition the nesting
+/// guard refuses (without consuming a token) is still swept into an
+/// `ErrorElement` here, rather than left dangling for
+/// `match_expression`'s own arm-loop guard to recover one layer out.
 fn match_arm(parser: &mut Parser) {
     let marker = parser.start();
     if !parser.eat(SyntaxKind::Default) {
@@ -879,8 +882,13 @@ fn match_arm(parser: &mut Parser) {
         expression(parser);
         while parser.at(SyntaxKind::Comma) {
             parser.bump();
-            if parser.at(SyntaxKind::FatArrow) {
-                // A trailing comma in the condition list.
+            if !parser.current().is_some_and(starts_expression) {
+                // A trailing comma in the condition list, or malformed
+                // input right after the comma (the arrow, or the arm
+                // list's closing brace on input like `match ($x) { 1, }`):
+                // stop instead of forcing a parse, so that non-expression
+                // token is left for the caller to consume rather than
+                // being swallowed here.
                 break;
             }
             let position_before_condition = parser.position();
@@ -1069,11 +1077,19 @@ fn closure_use_clause(parser: &mut Parser) {
 /// changed): every step either bumps an inline-HTML/tag token or
 /// dispatches to `statement`, whose own arms all bump at least one
 /// token before returning.
+///
+/// A blown fuse must unwind through this loop, exactly like
+/// `source_file`'s: once the step budget is exceeded, `current` (and
+/// `nth`) report `None` for the rest of the parse, but `at_end` stays
+/// false, since it reads the raw token position, which the fuse never
+/// touches and which real, unconsumed tokens can still sit past. Gating
+/// this loop on `at_end` alone would spin forever in that state; the
+/// condition must observe `current`, mirroring `source_file`'s idiom.
 fn block(parser: &mut Parser) {
     let marker = parser.start();
     if parser.at(SyntaxKind::OpenBrace) {
         parser.bump();
-        while !parser.at(SyntaxKind::CloseBrace) && !parser.at_end() {
+        while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
             super::statement_list_step(parser);
         }
         parser.expect(SyntaxKind::CloseBrace);

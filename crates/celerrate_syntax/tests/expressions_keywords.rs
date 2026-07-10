@@ -321,6 +321,36 @@ fn garbage_inside_match_is_wrapped_and_the_tree_survives() {
 }
 
 #[test]
+fn a_condition_list_trailing_comma_with_no_arrow_does_not_swallow_the_brace() {
+    // `match ($x) { 1, }` has no `=>` at all: after the trailing comma,
+    // `match_arm` used to force a parse of the arm list's own `}` as the
+    // next condition, swallowing it into an `ErrorElement` and leaving a
+    // spurious missing-`CloseBrace` diagnostic even though the brace was
+    // right there in the source.
+    let parse = support::parse_verified("<?php match ($x) { 1, };");
+    let diagnostics = parse.diagnostics();
+    assert!(
+        diagnostics.len() <= 2,
+        "recovery must stay bounded: {diagnostics:?}"
+    );
+    assert!(
+        !diagnostics.iter().any(|diagnostic| matches!(
+            diagnostic.kind,
+            SyntaxDiagnosticKind::Parser(ParserDiagnosticKind::Expected(SyntaxKind::CloseBrace))
+        )),
+        "the arm list's closing brace must not be reported missing: {diagnostics:?}"
+    );
+    assert!(
+        parse
+            .tree()
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| token.kind() == SyntaxKind::CloseBrace),
+        "a CloseBrace token must survive in the tree, not be wrapped away"
+    );
+}
+
+#[test]
 fn pathological_nesting_inside_a_match_arm_condition_terminates() {
     // Deeply nested parentheses inside a match arm's condition list can
     // exhaust the nesting guard while `match_expression`'s own arm loop
