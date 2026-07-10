@@ -1,0 +1,40 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/recovery.php
+---
+SourceFile@0..50
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  EchoStatement@6..12
+    Echo@6..10 "echo"
+    Whitespace@10..11 " "
+    Semicolon@11..12 ";"
+  Whitespace@12..13 "\n"
+  EchoStatement@13..19
+    Echo@13..17 "echo"
+    Whitespace@17..18 " "
+    Literal@18..19
+      IntegerLiteral@18..19 "1"
+  Whitespace@19..20 " "
+  EchoStatement@20..27
+    Echo@20..24 "echo"
+    Whitespace@24..25 " "
+    Literal@25..26
+      IntegerLiteral@25..26 "2"
+    Semicolon@26..27 ";"
+  Whitespace@27..28 "\n"
+  ErrorNode@28..29
+    Plus@28..29 "+"
+  Whitespace@29..30 "\n"
+  EchoStatement@30..50
+    Echo@30..34 "echo"
+    Whitespace@34..35 " "
+    Literal@35..50
+      SingleQuotedString@35..50 "'unterminated;\n"
+---
+Parser(ExpectedExpression) @ 11..12
+Parser(ExpectedSemicolon) @ 19..19
+Parser(UnexpectedToken) @ 28..29
+Lexer(UnterminatedString) @ 35..36
+Parser(ExpectedSemicolon) @ 50..50
