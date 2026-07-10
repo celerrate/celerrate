@@ -197,16 +197,19 @@ impl Lexer<'_> {
     }
 
     /// Only called when `heredoc_header_at` matched; the redundant parse
-    /// keeps the call sites free of unwraps.
+    /// keeps the call sites free of unwraps. A consumed `b`/`B` prefix
+    /// shifts where the header begins (`cursor.pending_length()` is
+    /// nonzero in that case); the start range still covers the whole
+    /// token, prefix included.
     pub(super) fn lex_heredoc_start(&mut self) {
         let Some(header) = heredoc_header_at(self.cursor.rest()) else {
             self.lex_unexpected_character();
             return;
         };
-        let start_offset = self.token_start();
-        let start = TextRange::at(start_offset, text_size(header.length));
+        let header_start = self.token_start() + self.cursor.pending_length();
+        let start = TextRange::new(self.token_start(), header_start + text_size(header.length));
         let label = TextRange::at(
-            start_offset + text_size(header.label_start),
+            header_start + text_size(header.label_start),
             text_size(header.label_length),
         );
         self.cursor.bump_bytes(header.length);

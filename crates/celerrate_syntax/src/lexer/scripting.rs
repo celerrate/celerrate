@@ -53,6 +53,16 @@ impl Lexer<'_> {
                 self.lex_double_quote_delimiter();
             }
             '`' => self.lex_backtick_delimiter(),
+            'b' | 'B'
+                if self
+                    .cursor
+                    .rest()
+                    .get(1..)
+                    .is_some_and(|after_prefix| heredoc_header_at(after_prefix).is_some()) =>
+            {
+                self.cursor.bump();
+                self.lex_heredoc_start();
+            }
             character if is_name_start(character) => self.lex_name(),
             '(' => self.lex_parenthesis_or_cast(),
             '{' => self.lex_open_brace(),

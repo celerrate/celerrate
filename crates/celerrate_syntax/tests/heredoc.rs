@@ -149,3 +149,41 @@ fn an_empty_heredoc_closes_immediately() {
         ]
     );
 }
+
+#[test]
+fn a_binary_prefix_belongs_to_the_heredoc_start() {
+    assert_eq!(
+        texts("<?php b<<<EOT\nx\nEOT"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (HeredocStart, "b<<<EOT\n".to_owned()),
+            (StringFragment, "x\n".to_owned()),
+            (HeredocEnd, "EOT".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_binary_prefix_works_on_nowdocs_too() {
+    assert_eq!(
+        texts("<?php B<<<'RAW'\n$x\nRAW"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (HeredocStart, "B<<<'RAW'\n".to_owned()),
+            (StringFragment, "$x\n".to_owned()),
+            (HeredocEnd, "RAW".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn an_unterminated_binary_heredoc_covers_the_whole_start_token() {
+    let (_tokens, diagnostics) = lex_verified("<?php b<<<EOT\nbody");
+    let diagnostic = diagnostics.first().copied().expect("one diagnostic");
+    assert_eq!(diagnostic.kind, LexerDiagnosticKind::UnterminatedHeredoc);
+    // The start token "b<<<EOT\n" spans offsets 6..14.
+    assert_eq!(u32::from(diagnostic.range.start()), 6);
+    assert_eq!(u32::from(diagnostic.range.end()), 14);
+}
