@@ -11,6 +11,13 @@ pub(crate) fn is_name_continue(character: char) -> bool {
     is_name_start(character) || character.is_ascii_digit()
 }
 
+/// A radix prefix counts only when a digit-ish character follows: "0x"
+/// alone lexes as the integer zero then the name "x", as in Zend.
+fn starts_with_radix_prefix(rest: &str, prefix: &str) -> bool {
+    rest.strip_prefix(prefix)
+        .is_some_and(|after| after.starts_with(|c: char| c.is_ascii_alphanumeric()))
+}
+
 impl Lexer<'_> {
     pub(super) fn lex_scripting(&mut self) {
         let Some(character) = self.cursor.peek() else {
@@ -24,10 +31,22 @@ impl Lexer<'_> {
             }
             '?' if self.cursor.rest().starts_with("?>") => self.lex_close_tag(),
             '$' => self.lex_dollar(),
+            character if character.is_ascii_digit() => self.lex_number(),
+            '.' if self
+                .cursor
+                .peek_second()
+                .is_some_and(|c| c.is_ascii_digit()) =>
+            {
+                self.lex_number()
+            }
             character if is_name_start(character) => self.lex_name(),
             ';' => {
                 self.cursor.eat(';');
                 self.emit(SyntaxKind::Semicolon);
+            }
+            '+' => {
+                self.cursor.eat('+');
+                self.emit(SyntaxKind::Plus);
             }
             _ => self.lex_unexpected_character(),
         }
@@ -62,5 +81,73 @@ impl Lexer<'_> {
         let kind =
             SyntaxKind::from_keyword(self.cursor.pending_text()).unwrap_or(SyntaxKind::Identifier);
         self.emit(kind);
+    }
+
+    fn lex_number(&mut self) {
+        let rest = self.cursor.rest();
+        if starts_with_radix_prefix(rest, "0x") || starts_with_radix_prefix(rest, "0X") {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return;
+        }
+        if starts_with_radix_prefix(rest, "0b") || starts_with_radix_prefix(rest, "0B") {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return;
+        }
+        if starts_with_radix_prefix(rest, "0o") || starts_with_radix_prefix(rest, "0O") {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return;
+        }
+        // Decimal digits. Separator placement and octal digit validity
+        // are judged upstairs; the lexer takes the maximal run.
+        let mut is_float = false;
+        self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+        if self.cursor.peek() == Some('.')
+            && (self
+                .cursor
+                .peek_second()
+                .is_some_and(|c| c.is_ascii_digit())
+                || !self.cursor.pending_text().is_empty())
+        {
+            // "1.5", "1.", and ".5" are all floats, as in Zend's DNUM.
+            is_float = true;
+            self.cursor.eat('.');
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+        }
+        if self.eat_exponent() {
+            is_float = true;
+        }
+        let kind = if is_float {
+            SyntaxKind::FloatLiteral
+        } else {
+            SyntaxKind::IntegerLiteral
+        };
+        self.emit(kind);
+    }
+
+    /// Consumes `[eE][+-]?digits` only when the digits are there;
+    /// otherwise consumes nothing ("1e" is an integer then a name).
+    fn eat_exponent(&mut self) -> bool {
+        if !matches!(self.cursor.peek(), Some('e' | 'E')) {
+            return false;
+        }
+        let after_marker = self.cursor.rest().get(1..).unwrap_or_default();
+        let after_sign = after_marker
+            .strip_prefix(['+', '-'])
+            .unwrap_or(after_marker);
+        if !after_sign.starts_with(|c: char| c.is_ascii_digit()) {
+            return false;
+        }
+        self.cursor.bump();
+        if matches!(self.cursor.peek(), Some('+' | '-')) {
+            self.cursor.bump();
+        }
+        self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+        true
     }
 }
