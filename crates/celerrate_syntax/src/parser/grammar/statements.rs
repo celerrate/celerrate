@@ -61,13 +61,16 @@ fn empty_statement(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::EmptyStatement);
 }
 
-/// Statements until end of input or the list's closing brace. The
+/// Statements until end of input or a statement-list terminator. The
 /// guard observes `current` (not `at_end`): once the fuse blows,
 /// `current` reports `None` while real unconsumed tokens can still sit
 /// past the raw position, and this loop must unwind, not spin. The
-/// test module below drives exactly that state.
+/// test module below drives exactly that state. Every nested list
+/// (blocks included) stops at any terminator in the shared set, not
+/// just its own closer: the construct that owns a terminator consumes
+/// it, and an orphan unwinds to the source-file loop.
 pub(super) fn statement_list(parser: &mut Parser) {
-    while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
+    while parser.current().is_some() && !at_statement_list_terminator(parser) {
         super::statement_list_step(parser);
     }
 }
@@ -279,19 +282,40 @@ fn if_statement(parser: &mut Parser) {
     let marker = parser.start();
     parser.bump(); // `if`
     parenthesized_condition(parser);
-    embedded_statement(parser);
-    while parser.at(SyntaxKind::ElseIf) {
-        let clause = parser.start();
-        parser.bump();
-        parenthesized_condition(parser);
+    if parser.eat(SyntaxKind::Colon) {
+        statement_list(parser);
+        while parser.at(SyntaxKind::ElseIf) {
+            let clause = parser.start();
+            parser.bump();
+            parenthesized_condition(parser);
+            parser.expect(SyntaxKind::Colon);
+            statement_list(parser);
+            clause.complete(parser, SyntaxKind::ElseIfClause);
+        }
+        if parser.at(SyntaxKind::Else) {
+            let clause = parser.start();
+            parser.bump();
+            parser.expect(SyntaxKind::Colon);
+            statement_list(parser);
+            clause.complete(parser, SyntaxKind::ElseClause);
+        }
+        parser.expect(SyntaxKind::EndIf);
+        terminate_statement(parser);
+    } else {
         embedded_statement(parser);
-        clause.complete(parser, SyntaxKind::ElseIfClause);
-    }
-    if parser.at(SyntaxKind::Else) {
-        let clause = parser.start();
-        parser.bump();
-        embedded_statement(parser);
-        clause.complete(parser, SyntaxKind::ElseClause);
+        while parser.at(SyntaxKind::ElseIf) {
+            let clause = parser.start();
+            parser.bump();
+            parenthesized_condition(parser);
+            embedded_statement(parser);
+            clause.complete(parser, SyntaxKind::ElseIfClause);
+        }
+        if parser.at(SyntaxKind::Else) {
+            let clause = parser.start();
+            parser.bump();
+            embedded_statement(parser);
+            clause.complete(parser, SyntaxKind::ElseClause);
+        }
     }
     marker.complete(parser, SyntaxKind::IfStatement);
 }

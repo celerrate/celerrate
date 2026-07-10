@@ -108,3 +108,70 @@ fn a_missing_condition_parenthesis_is_diagnosed() {
 fn a_missing_body_is_diagnosed_without_consuming() {
     assert!(parser_diagnostics("<?php if ($x)").contains(&ParserDiagnosticKind::ExpectedStatement));
 }
+
+#[test]
+fn an_alternative_if_closes_with_endif() {
+    insta::assert_snapshot!(
+        render_statement("if ($x): echo 1; elseif ($y): echo 2; else: echo 3; endif;"),
+        @r#"
+    IfStatement
+      If "if"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$x"
+      CloseParenthesis ")"
+      Colon ":"
+      EchoStatement
+        Echo "echo"
+        Literal
+          IntegerLiteral "1"
+        Semicolon ";"
+      ElseIfClause
+        ElseIf "elseif"
+        OpenParenthesis "("
+        VariableReference
+          Variable "$y"
+        CloseParenthesis ")"
+        Colon ":"
+        EchoStatement
+          Echo "echo"
+          Literal
+            IntegerLiteral "2"
+          Semicolon ";"
+      ElseClause
+        Else "else"
+        Colon ":"
+        EchoStatement
+          Echo "echo"
+          Literal
+            IntegerLiteral "3"
+          Semicolon ";"
+      EndIf "endif"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn inline_html_interrupts_an_alternative_body() {
+    // The templating idiom: the body of the colon form is raw HTML
+    // between a close tag and the next open tag.
+    assert!(parser_diagnostics("<?php if ($x): ?><p>yes</p><?php endif;").is_empty());
+}
+
+#[test]
+fn a_missing_endif_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php if ($x): echo 1;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::EndIf))
+    );
+}
+
+#[test]
+fn a_block_does_not_swallow_an_alternative_closer() {
+    // `endif` inside braces belongs to nobody: the block stops,
+    // diagnoses its missing brace, and the orphan surfaces to the
+    // source-file loop as an error element.
+    let diagnostics = parser_diagnostics("<?php { endif; }");
+    assert!(diagnostics.contains(&ParserDiagnosticKind::Expected(SyntaxKind::CloseBrace)));
+    assert!(diagnostics.contains(&ParserDiagnosticKind::UnexpectedToken));
+}
