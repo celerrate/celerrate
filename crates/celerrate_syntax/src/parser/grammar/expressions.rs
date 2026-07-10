@@ -37,6 +37,7 @@ const LOGICAL_NOT_LEVEL: u8 = 24;
 const INSTANCEOF_LEVEL: u8 = 25;
 const UNARY_LEVEL: u8 = 26;
 const POWER_LEVEL: u8 = 27;
+const CLONE_LEVEL: u8 = 28;
 
 fn left_binding_power(level: u8) -> u8 {
     level * 2
@@ -141,6 +142,8 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::DoubleQuote
             | SyntaxKind::Backtick
             | SyntaxKind::HeredocStart
+            | SyntaxKind::New
+            | SyntaxKind::Clone
     )
 }
 
@@ -236,6 +239,12 @@ fn prefix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
         return None;
     };
     let (node_kind, operand_power) = match kind {
+        SyntaxKind::Clone if parser.nth(1) != Some(SyntaxKind::OpenParenthesis) => {
+            let marker = parser.start();
+            parser.bump();
+            expression_with_minimum_power(parser, left_binding_power(CLONE_LEVEL));
+            return Some(marker.complete(parser, SyntaxKind::CloneExpression));
+        }
         SyntaxKind::Bang => (
             SyntaxKind::PrefixExpression,
             left_binding_power(LOGICAL_NOT_LEVEL),
@@ -633,11 +642,87 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
         Some(SyntaxKind::OpenParenthesis) => Some(parenthesized_expression(parser)),
+        Some(SyntaxKind::New) => Some(new_expression(parser)),
+        // The 8.5 function form; a primary, so postfix chains wrap it.
+        Some(SyntaxKind::Clone) if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) => {
+            let marker = parser.start();
+            parser.bump();
+            argument_list(parser);
+            Some(marker.complete(parser, SyntaxKind::CloneExpression))
+        }
         _ => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
             None
         }
     }
+}
+
+/// `new` with a class reference and optional arguments. The class
+/// reference is narrower than an expression: calls are excluded so
+/// the argument list stays the `new`'s. Postfix chains wrap the
+/// completed node afterwards, which is how 8.4's `new Foo()->bar()`
+/// parses; version gating is semantic.
+fn new_expression(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // `new`
+    match parser.current() {
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash) => {
+            name(parser);
+        }
+        Some(SyntaxKind::Namespace) if parser.nth(1) == Some(SyntaxKind::Backslash) => {
+            name(parser);
+        }
+        Some(SyntaxKind::Static) => parser.bump(),
+        Some(SyntaxKind::Variable | SyntaxKind::Dollar) => {
+            new_class_reference_chain(parser);
+        }
+        Some(SyntaxKind::OpenParenthesis) => {
+            parenthesized_expression(parser);
+        }
+        // `new class { ... }` (anonymous classes) belongs to the
+        // declarations plan; recovery keeps the tokens until then.
+        Some(SyntaxKind::Class) => error_element(parser),
+        _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression),
+    }
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        argument_list(parser);
+    }
+    marker.complete(parser, SyntaxKind::NewExpression)
+}
+
+/// The variable form of a class reference: member, scoped, and index
+/// wraps, calls excluded (Zend's new_variable). Deliberately repeats
+/// three postfix arms; folding them together would thread an
+/// allow-calls flag through the hot loop for one caller.
+fn new_class_reference_chain(parser: &mut Parser) -> Option<CompletedMarker> {
+    let mut left = simple_variable(parser)?;
+    loop {
+        left = match parser.current() {
+            Some(SyntaxKind::Arrow | SyntaxKind::NullsafeArrow) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                member_name(parser);
+                marker.complete(parser, SyntaxKind::MemberAccessExpression)
+            }
+            Some(SyntaxKind::ColonColon) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                member_name(parser);
+                marker.complete(parser, SyntaxKind::ScopedAccessExpression)
+            }
+            Some(SyntaxKind::OpenBracket) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                if !parser.at(SyntaxKind::CloseBracket) {
+                    expression(parser);
+                }
+                parser.expect(SyntaxKind::CloseBracket);
+                marker.complete(parser, SyntaxKind::IndexExpression)
+            }
+            _ => break,
+        };
+    }
+    Some(left)
 }
 
 fn parenthesized_expression(parser: &mut Parser) -> CompletedMarker {

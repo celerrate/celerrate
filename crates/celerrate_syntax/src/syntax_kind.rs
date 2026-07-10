@@ -310,6 +310,10 @@ syntax_kinds! {
     BraceInterpolation,
     /// `${ ... }` inside a string, the deprecated form.
     DollarBraceInterpolation,
+    /// `new` with a class reference and optional constructor arguments.
+    NewExpression,
+    /// `clone value` or the 8.5 function form `clone(...)`.
+    CloneExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
