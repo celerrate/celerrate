@@ -3,11 +3,8 @@
 //! tree builder replays them. The parser never fails and never touches
 //! the tree.
 
-// TEMPORARY until Task 5's `parse()` consumes the parser: keeps the
-// intermediate commit clean under `-D warnings`. Task 5 removes it.
-#![allow(dead_code)]
-
 mod event;
+mod grammar;
 mod token_source;
 
 pub(crate) use event::Event;
@@ -17,6 +14,15 @@ use celerrate_source::{TextRange, TextSize};
 use crate::diagnostic::{ParserDiagnostic, ParserDiagnosticKind};
 use crate::syntax_kind::SyntaxKind;
 use token_source::TokenSource;
+
+/// Runs the parser over a token stream: events for the builder plus
+/// structured diagnostics. Never fails; degenerate input yields
+/// `ErrorNode` wreckage and diagnostics.
+pub(crate) fn run(tokens: &[crate::token::Token]) -> (Vec<Event>, Vec<ParserDiagnostic>) {
+    let mut parser = Parser::new(TokenSource::new(tokens));
+    grammar::source_file(&mut parser);
+    (parser.events, parser.diagnostics)
+}
 
 struct Parser {
     source: TokenSource,

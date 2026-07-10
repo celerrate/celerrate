@@ -28,7 +28,6 @@ pub struct LexerDiagnostic {
 
 /// What the parser expected or could not place, structurally. Rendering
 /// into messages is an upper layer's business.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ParserDiagnosticKind {
     /// An expression position holds no expression.
@@ -45,5 +44,20 @@ pub enum ParserDiagnosticKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ParserDiagnostic {
     pub kind: ParserDiagnosticKind,
+    pub range: TextRange,
+}
+
+/// One diagnostic from the syntax layer, wherever it arose.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SyntaxDiagnosticKind {
+    Lexer(LexerDiagnosticKind),
+    Parser(ParserDiagnosticKind),
+}
+
+/// A syntax diagnostic: lexer and parser findings merged into one
+/// stream, in source order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SyntaxDiagnostic {
+    pub kind: SyntaxDiagnosticKind,
     pub range: TextRange,
 }

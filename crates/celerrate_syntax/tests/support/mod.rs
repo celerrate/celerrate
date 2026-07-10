@@ -49,3 +49,14 @@ pub fn texts(source: &str) -> Vec<(SyntaxKind, String)> {
         })
         .collect()
 }
+
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn parse_verified(source: &str) -> celerrate_syntax::Parse {
+    let parse = celerrate_syntax::parse(source);
+    assert_eq!(
+        parse.tree().text().to_string(),
+        source,
+        "the tree must be lossless"
+    );
+    parse
+}

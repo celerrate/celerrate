@@ -26,9 +26,6 @@ use crate::syntax_kind::SyntaxKind;
 use crate::token::Token;
 use crate::tree::PhpLanguage;
 
-// TEMPORARY until Task 5's `parse()` consumes this: keeps the
-// intermediate commit clean under `-D warnings`. Task 5 removes it.
-#[allow(dead_code)]
 pub(crate) fn build_tree(source: &str, tokens: &[Token], mut events: Vec<Event>) -> GreenNode {
     let mut builder = GreenNodeBuilder::new();
     let mut raw = RawTokens {
