@@ -9,3 +9,6 @@
 
 # Rust build artifacts
 /target/
+
+# cargo-insta transient pending snapshots
+*.pending-snap
