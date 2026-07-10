@@ -3,7 +3,7 @@
 mod support;
 
 use celerrate_syntax::ParserDiagnosticKind;
-use support::{parser_diagnostics, render_statement};
+use support::{parser_diagnostics, render_expression, render_statement};
 
 #[test]
 fn a_backed_enum_with_heritage_and_cases() {
@@ -98,4 +98,24 @@ fn a_bare_enum_with_no_name_is_diagnosed_and_wrapped() {
         diagnostics.contains(&ParserDiagnosticKind::ExpectedExpression),
         "got {diagnostics:?}"
     );
+}
+
+#[test]
+fn new_enum_parenthesized_stays_a_constructor_call() {
+    // Zend keeps `enum` usable as a plain class or function name for
+    // backward compatibility: directly followed by `(`, it is never the
+    // declaration keyword, even right after `new`. Same hack as
+    // `new readonly(...)`, pinned by the test beside this one.
+    insta::assert_snapshot!(render_expression("new enum(1)"), @r#"
+    NewExpression
+      New "new"
+      Name
+        Enum "enum"
+      ArgumentList
+        OpenParenthesis "("
+        Argument
+          Literal
+            IntegerLiteral "1"
+        CloseParenthesis ")"
+    "#);
 }
