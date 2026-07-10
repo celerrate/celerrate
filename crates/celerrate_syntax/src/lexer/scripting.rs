@@ -264,6 +264,8 @@ impl Lexer<'_> {
                 break;
             }
             if self.cursor.rest().starts_with("?>") {
+                // Left unconsumed: the scripting dispatch lexes the
+                // close tag itself on the next step.
                 break;
             }
             self.cursor.bump();
@@ -377,9 +379,9 @@ fn cast_at(rest: &str) -> Option<(SyntaxKind, usize)> {
     let word = after_leading.get(..word_length)?;
     let after_word = after_leading.get(word_length..)?;
     let after_trailing = after_word.trim_start_matches([' ', '\t']);
-    after_trailing.strip_prefix(')')?;
+    let after_parenthesis = after_trailing.strip_prefix(')')?;
     let kind = cast_kind(word)?;
-    let total_length = rest.len() - after_trailing.len() + ')'.len_utf8();
+    let total_length = rest.len() - after_parenthesis.len();
     Some((kind, total_length))
 }
 
