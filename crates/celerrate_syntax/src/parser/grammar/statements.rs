@@ -48,6 +48,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Foreach) => foreach_statement(parser),
         Some(SyntaxKind::Switch) => switch_statement(parser),
         Some(SyntaxKind::Try) => try_statement(parser),
+        Some(SyntaxKind::Declare) => declare_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -525,6 +526,41 @@ fn catch_clause(parser: &mut Parser) {
     }
     block(parser);
     clause.complete(parser, SyntaxKind::CatchClause);
+}
+
+fn declare_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `declare`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        // Terminates: each iteration bumps the directive's identifier
+        // before anything refusable, or breaks.
+        loop {
+            if !parser.at(SyntaxKind::Identifier) {
+                parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+                break;
+            }
+            let directive = parser.start();
+            parser.bump();
+            parser.expect(SyntaxKind::Equals);
+            expression(parser);
+            directive.complete(parser, SyntaxKind::DeclareDirective);
+            if !parser.eat(SyntaxKind::Comma) {
+                break;
+            }
+        }
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    if parser.eat(SyntaxKind::Colon) {
+        statement_list(parser);
+        parser.expect(SyntaxKind::EndDeclare);
+        terminate_statement(parser);
+    } else {
+        embedded_statement(parser);
+    }
+    marker.complete(parser, SyntaxKind::DeclareStatement);
 }
 
 #[cfg(test)]

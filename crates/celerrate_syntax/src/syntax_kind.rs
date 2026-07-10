@@ -405,6 +405,12 @@ syntax_kinds! {
     CatchClause,
     /// `finally block`.
     FinallyClause,
+    /// `declare( directives ) body`, either syntax; the body may be a
+    /// lone `;` (an empty statement).
+    DeclareStatement,
+    /// One `name = value` directive; which names and values are legal
+    /// is semantic.
+    DeclareDirective,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
