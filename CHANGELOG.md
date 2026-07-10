@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `celerrate_syntax`: complete PHP 8.1+ lexer (lossless token stream,
   string interpolation, structured diagnostics), snapshot corpus, and a
   continuous fuzz target.
-- The parser covers the full PHP 8.5 grammar: the complete expression
+- The parser covers the full PHP 8.5 grammar (except `__halt_compiler`,
+  recorded out of scope for Foundations): the complete expression
   grammar (Zend precedence table, calls and access chains, `match`,
   closures, the pipe operator), the complete statement grammar (control
   flow in classic and alternative syntax, `try`/`catch`/`finally`,
