@@ -114,34 +114,7 @@ impl Lexer<'_> {
     }
 
     fn lex_number(&mut self) {
-        // Binary and octal deliberately take the maximal decimal-digit
-        // run: digit validity ("0b2", "0o99") is judged upstairs, so each
-        // stays a single literal.
-        let rest = self.cursor.rest();
-        let is_hex_digit = |c: char| c.is_ascii_hexdigit();
-        let is_decimal_digit = |c: char| c.is_ascii_digit();
-        if starts_with_radix_prefix(rest, "0x", is_hex_digit)
-            || starts_with_radix_prefix(rest, "0X", is_hex_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
-            return;
-        }
-        if starts_with_radix_prefix(rest, "0b", is_decimal_digit)
-            || starts_with_radix_prefix(rest, "0B", is_decimal_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
-            return;
-        }
-        if starts_with_radix_prefix(rest, "0o", is_decimal_digit)
-            || starts_with_radix_prefix(rest, "0O", is_decimal_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
+        if self.try_lex_radix_integer() {
             return;
         }
         // Decimal digits. Separator placement and octal digit validity
@@ -169,6 +142,38 @@ impl Lexer<'_> {
             SyntaxKind::IntegerLiteral
         };
         self.emit(kind);
+    }
+
+    /// Consumes a `0x`/`0b`/`0o` integer (either case) when one starts
+    /// at the cursor and returns true; consumes nothing otherwise.
+    /// Binary and octal deliberately take the maximal decimal-digit
+    /// run: digit validity ("0b2", "0o99") is judged upstairs, so each
+    /// stays a single literal. Also used by the variable-offset mode:
+    /// Zend's ST_VAR_OFFSET accepts the same integer forms as
+    /// scripting.
+    pub(super) fn try_lex_radix_integer(&mut self) -> bool {
+        let rest = self.cursor.rest();
+        let is_hex_digit = |c: char| c.is_ascii_hexdigit();
+        let is_decimal_digit = |c: char| c.is_ascii_digit();
+        if starts_with_radix_prefix(rest, "0x", is_hex_digit)
+            || starts_with_radix_prefix(rest, "0X", is_hex_digit)
+        {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return true;
+        }
+        if starts_with_radix_prefix(rest, "0b", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0B", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0o", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0O", is_decimal_digit)
+        {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return true;
+        }
+        false
     }
 
     /// Consumes `[eE][+-]?digits` only when the digits are there;

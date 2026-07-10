@@ -148,8 +148,14 @@ impl Lexer<'_> {
                 self.emit(SyntaxKind::Minus);
             }
             Some(character) if character.is_ascii_digit() => {
-                self.cursor.eat_while(|c| c.is_ascii_digit());
-                self.emit(SyntaxKind::IntegerLiteral);
+                // Zend's ST_VAR_OFFSET accepts the same integer forms as
+                // scripting mode (LNUM, HNUM, BNUM, ONUM, all lexed as
+                // T_NUM_STRING); offset validity is a semantic judgment,
+                // as everywhere else.
+                if !self.try_lex_radix_integer() {
+                    self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+                    self.emit(SyntaxKind::IntegerLiteral);
+                }
             }
             Some('$') if self.cursor.peek_second().is_some_and(is_name_start) => {
                 self.cursor.eat('$');

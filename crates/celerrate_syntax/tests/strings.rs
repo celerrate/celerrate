@@ -343,3 +343,57 @@ fn unterminated_brace_interpolation_diagnoses_the_opening() {
             .any(|diagnostic| { diagnostic.kind == LexerDiagnosticKind::UnterminatedString })
     );
 }
+
+#[test]
+fn radix_prefixed_offsets_interpolate_as_one_literal() {
+    // Zend's ST_VAR_OFFSET lexes LNUM, HNUM, BNUM, and ONUM alike as
+    // T_NUM_STRING; offset validity is judged semantically.
+    assert_eq!(
+        texts(r#"<?php "$a[0x1A] $a[0b11] $a[0o17] $a[1_000]""#),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (DoubleQuote, "\"".to_owned()),
+            (Variable, "$a".to_owned()),
+            (OpenBracket, "[".to_owned()),
+            (IntegerLiteral, "0x1A".to_owned()),
+            (CloseBracket, "]".to_owned()),
+            (StringFragment, " ".to_owned()),
+            (Variable, "$a".to_owned()),
+            (OpenBracket, "[".to_owned()),
+            (IntegerLiteral, "0b11".to_owned()),
+            (CloseBracket, "]".to_owned()),
+            (StringFragment, " ".to_owned()),
+            (Variable, "$a".to_owned()),
+            (OpenBracket, "[".to_owned()),
+            (IntegerLiteral, "0o17".to_owned()),
+            (CloseBracket, "]".to_owned()),
+            (StringFragment, " ".to_owned()),
+            (Variable, "$a".to_owned()),
+            (OpenBracket, "[".to_owned()),
+            (IntegerLiteral, "1_000".to_owned()),
+            (CloseBracket, "]".to_owned()),
+            (DoubleQuote, "\"".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_radix_prefix_without_a_digit_falls_back_in_offsets_too() {
+    // "0x" with no hex digit after it: the integer zero, then the name,
+    // exactly as in scripting mode.
+    assert_eq!(
+        texts(r#"<?php "$a[0xg]""#),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (DoubleQuote, "\"".to_owned()),
+            (Variable, "$a".to_owned()),
+            (OpenBracket, "[".to_owned()),
+            (IntegerLiteral, "0".to_owned()),
+            (Identifier, "xg".to_owned()),
+            (CloseBracket, "]".to_owned()),
+            (DoubleQuote, "\"".to_owned()),
+        ]
+    );
+}
