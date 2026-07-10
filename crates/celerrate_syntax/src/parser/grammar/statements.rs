@@ -8,7 +8,7 @@ use crate::syntax_kind::SyntaxKind;
 use super::Parser;
 use super::expressions::{
     argument_list, error_element, expression, name, parameter_list, simple_variable,
-    starts_expression, type_reference,
+    starts_expression,
 };
 
 pub(super) fn statement(parser: &mut Parser) {
@@ -587,7 +587,7 @@ fn function_declaration(parser: &mut Parser) {
     parser.expect(SyntaxKind::Identifier);
     parameter_list(parser);
     if parser.eat(SyntaxKind::Colon) {
-        type_reference(parser);
+        super::types::type_expression(parser);
     }
     block(parser);
     marker.complete(parser, SyntaxKind::FunctionDeclaration);

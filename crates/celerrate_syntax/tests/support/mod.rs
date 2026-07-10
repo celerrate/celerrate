@@ -187,3 +187,29 @@ pub fn parser_diagnostics(source: &str) -> Vec<celerrate_syntax::ParserDiagnosti
         })
         .collect()
 }
+
+/// Renders the return type of `<?php function fixture(): {type_source} {}`
+/// as an indented tree, offsets and trivia omitted: the workhorse
+/// assertion of the type grammar tests.
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn render_type(type_source: &str) -> String {
+    let source = format!("<?php function fixture(): {type_source} {{}}");
+    let parse = parse_verified(&source);
+    let function = parse
+        .tree()
+        .children()
+        .next()
+        .expect("a function declaration");
+    let type_node = function
+        .children()
+        .find(|node| {
+            !matches!(
+                node.kind(),
+                celerrate_syntax::SyntaxKind::ParameterList | celerrate_syntax::SyntaxKind::Block
+            )
+        })
+        .expect("a return type node");
+    let mut output = String::new();
+    render_element_without_offsets(&mut output, type_node.into(), 0);
+    output
+}

@@ -47,13 +47,15 @@ fn a_named_function_declares() {
       ParameterList
         OpenParenthesis "("
         Parameter
-          TypeReference
-            Identifier "int"
+          NamedType
+            Name
+              Identifier "int"
           Variable "$a"
         Comma ","
         Parameter
-          TypeReference
-            Identifier "int"
+          NamedType
+            Name
+              Identifier "int"
           Variable "$b"
           Equals "="
           Literal
@@ -85,9 +87,11 @@ fn by_reference_returns_and_return_types_parse() {
         OpenParenthesis "("
         CloseParenthesis ")"
       Colon ":"
-      TypeReference
+      NullableType
         Question "?"
-        Identifier "iterable"
+        NamedType
+          Name
+            Identifier "iterable"
       Block
         OpenBrace "{"
         CloseBrace "}"

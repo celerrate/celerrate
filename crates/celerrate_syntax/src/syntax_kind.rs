@@ -345,9 +345,6 @@ syntax_kinds! {
     /// One parameter: optional type, `&`, `...`, the variable, and an
     /// optional default.
     Parameter,
-    /// One optionally-nullable named type. The declarations plan
-    /// replaces this with the full union/intersection/DNF grammar.
-    TypeReference,
     /// `use ( variables )` on a closure.
     ClosureUseClause,
     /// `{ statements }`.
@@ -414,6 +411,17 @@ syntax_kinds! {
     /// `function name(parameters): type { body }`, the top-level form;
     /// methods arrive with the declarations plan.
     FunctionDeclaration,
+    /// One named type: a qualified `Name`, or a keyword type token
+    /// (`array`, `callable`, `static`) sitting bare.
+    NamedType,
+    /// `?type`.
+    NullableType,
+    /// `A|B|C`, one flat node for the whole chain.
+    UnionType,
+    /// `A&B&C`, one flat node for the whole chain.
+    IntersectionType,
+    /// `( type )` inside a type: the DNF grouping form.
+    ParenthesizedType,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

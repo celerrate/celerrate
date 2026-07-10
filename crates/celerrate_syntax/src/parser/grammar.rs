@@ -7,6 +7,7 @@ use super::{CompletedMarker, Parser};
 
 mod expressions;
 mod statements;
+mod types;
 
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();

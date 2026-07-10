@@ -25,15 +25,17 @@ SourceFile@0..431
     ParameterList@44..73
       OpenParenthesis@44..45 "("
       Parameter@45..55
-        TypeReference@45..48
-          Identifier@45..48 "int"
+        NamedType@45..48
+          Name@45..48
+            Identifier@45..48 "int"
         Whitespace@48..49 " "
         Variable@49..55 "$first"
       Comma@55..56 ","
       Whitespace@56..57 " "
       Parameter@57..72
-        TypeReference@57..60
-          Identifier@57..60 "int"
+        NamedType@57..60
+          Name@57..60
+            Identifier@57..60 "int"
         Whitespace@60..61 " "
         Variable@61..68 "$second"
         Whitespace@68..69 " "
@@ -44,8 +46,9 @@ SourceFile@0..431
       CloseParenthesis@72..73 ")"
     Colon@73..74 ":"
     Whitespace@74..75 " "
-    TypeReference@75..78
-      Identifier@75..78 "int"
+    NamedType@75..78
+      Name@75..78
+        Identifier@75..78 "int"
     Whitespace@78..79 "\n"
     Block@79..111
       OpenBrace@79..80 "{"
@@ -73,16 +76,18 @@ SourceFile@0..431
     ParameterList@129..150
       OpenParenthesis@129..130 "("
       Parameter@130..149
-        TypeReference@130..138
+        NamedType@130..138
           Callable@130..138 "callable"
         Whitespace@138..139 " "
         Variable@139..149 "$predicate"
       CloseParenthesis@149..150 ")"
     Colon@150..151 ":"
     Whitespace@151..152 " "
-    TypeReference@152..159
+    NullableType@152..159
       Question@152..153 "?"
-      Identifier@153..159 "object"
+      NamedType@153..159
+        Name@153..159
+          Identifier@153..159 "object"
     Whitespace@159..160 "\n"
     Block@160..430
       OpenBrace@160..161 "{"

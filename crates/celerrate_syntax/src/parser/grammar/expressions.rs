@@ -409,7 +409,7 @@ fn starts_argument(parser: &mut Parser) -> bool {
 /// missing unless the list sits at a legitimate boundary (its closer,
 /// a statement boundary, end of input). Shared by every
 /// comma-separated list of this plan.
-fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
+pub(super) fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
     if parser.eat(SyntaxKind::Comma) {
         return;
     }
@@ -916,7 +916,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
             closure_use_clause(parser);
         }
         if parser.eat(SyntaxKind::Colon) {
-            type_reference(parser);
+            super::types::type_expression(parser);
         }
         super::statements::block(parser);
         marker.complete(parser, SyntaxKind::ClosureExpression)
@@ -925,7 +925,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
         parser.eat(SyntaxKind::Ampersand); // by-reference return
         parameter_list(parser);
         if parser.eat(SyntaxKind::Colon) {
-            type_reference(parser);
+            super::types::type_expression(parser);
         }
         parser.expect(SyntaxKind::FatArrow);
         expression(parser);
@@ -974,6 +974,7 @@ fn starts_parameter(parser: &mut Parser) -> bool {
                 | SyntaxKind::Array
                 | SyntaxKind::Callable
                 | SyntaxKind::Static
+                | SyntaxKind::OpenParenthesis
         )
     )
 }
@@ -984,7 +985,7 @@ fn parameter(parser: &mut Parser) {
         parser.current(),
         Some(SyntaxKind::Variable | SyntaxKind::Ampersand | SyntaxKind::Ellipsis)
     ) {
-        type_reference(parser);
+        super::types::type_expression(parser);
     }
     parser.eat(SyntaxKind::Ampersand);
     parser.eat(SyntaxKind::Ellipsis);
@@ -993,44 +994,6 @@ fn parameter(parser: &mut Parser) {
         expression(parser);
     }
     marker.complete(parser, SyntaxKind::Parameter);
-}
-
-/// One optionally-nullable named type (`int`, `?\Foo\Bar`, `callable`,
-/// `array`, `static`). Union, intersection, and DNF forms arrive with
-/// the declarations plan, which replaces this rule.
-///
-/// The qualified-name tokens are bumped directly, not through `name`:
-/// `name` wraps them in their own `Name` node (as `NameExpression`
-/// needs, to keep a name a reusable, independently-addressable unit),
-/// but a `TypeReference` has no such second consumer, so the tokens sit
-/// directly under it.
-pub(super) fn type_reference(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.eat(SyntaxKind::Question);
-    match parser.current() {
-        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace) => {
-            qualified_type_name(parser);
-        }
-        Some(kind) if kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_current(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
-    marker.complete(parser, SyntaxKind::TypeReference);
-}
-
-/// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`, bumped directly under the
-/// caller's node. Mirrors `name`'s token sequence without its `Name`
-/// wrapper.
-fn qualified_type_name(parser: &mut Parser) {
-    if parser.eat(SyntaxKind::Namespace) {
-        parser.expect(SyntaxKind::Backslash);
-    } else {
-        parser.eat(SyntaxKind::Backslash);
-    }
-    parser.expect(SyntaxKind::Identifier);
-    while parser.at(SyntaxKind::Backslash) && parser.nth(1) == Some(SyntaxKind::Identifier) {
-        parser.bump();
-        parser.bump();
-    }
 }
 
 /// `use ( variables )` on a closure. Progress is guaranteed without an
