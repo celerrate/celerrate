@@ -37,3 +37,80 @@ fn a_directive_without_a_value_is_diagnosed() {
             .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Equals))
     );
 }
+
+#[test]
+fn a_named_function_declares() {
+    insta::assert_snapshot!(render_statement("function add(int $a, int $b = 0) { return $a + $b; }"), @r#"
+    FunctionDeclaration
+      Function "function"
+      Identifier "add"
+      ParameterList
+        OpenParenthesis "("
+        Parameter
+          TypeReference
+            Identifier "int"
+          Variable "$a"
+        Comma ","
+        Parameter
+          TypeReference
+            Identifier "int"
+          Variable "$b"
+          Equals "="
+          Literal
+            IntegerLiteral "0"
+        CloseParenthesis ")"
+      Block
+        OpenBrace "{"
+        ReturnStatement
+          Return "return"
+          BinaryExpression
+            VariableReference
+              Variable "$a"
+            Plus "+"
+            VariableReference
+              Variable "$b"
+          Semicolon ";"
+        CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn by_reference_returns_and_return_types_parse() {
+    insta::assert_snapshot!(render_statement("function &all(): ?iterable { }"), @r#"
+    FunctionDeclaration
+      Function "function"
+      Ampersand "&"
+      Identifier "all"
+      ParameterList
+        OpenParenthesis "("
+        CloseParenthesis ")"
+      Colon ":"
+      TypeReference
+        Question "?"
+        Identifier "iterable"
+      Block
+        OpenBrace "{"
+        CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn an_anonymous_function_stays_a_closure_expression() {
+    insta::assert_snapshot!(render_statement("function () { };"), @r#"
+    ExpressionStatement
+      ClosureExpression
+        Function "function"
+        ParameterList
+          OpenParenthesis "("
+          CloseParenthesis ")"
+        Block
+          OpenBrace "{"
+          CloseBrace "}"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_by_reference_closure_also_stays_an_expression() {
+    assert!(parser_diagnostics("<?php $f = function &() { return $x; };").is_empty());
+}

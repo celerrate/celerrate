@@ -938,7 +938,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
 /// force `parameter` to consume at least one token before it can reach
 /// any refusable sub-parse (the default value), unlike `argument_list`
 /// where the element can be a bare, refusable expression.
-fn parameter_list(parser: &mut Parser) {
+pub(super) fn parameter_list(parser: &mut Parser) {
     let marker = parser.start();
     if parser.at(SyntaxKind::OpenParenthesis) {
         parser.bump();
@@ -1004,7 +1004,7 @@ fn parameter(parser: &mut Parser) {
 /// needs, to keep a name a reusable, independently-addressable unit),
 /// but a `TypeReference` has no such second consumer, so the tokens sit
 /// directly under it.
-fn type_reference(parser: &mut Parser) {
+pub(super) fn type_reference(parser: &mut Parser) {
     let marker = parser.start();
     parser.eat(SyntaxKind::Question);
     match parser.current() {

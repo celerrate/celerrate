@@ -411,6 +411,9 @@ syntax_kinds! {
     /// One `name = value` directive; which names and values are legal
     /// is semantic.
     DeclareDirective,
+    /// `function name(parameters): type { body }`, the top-level form;
+    /// methods arrive with the declarations plan.
+    FunctionDeclaration,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
