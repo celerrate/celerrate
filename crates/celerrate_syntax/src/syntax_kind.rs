@@ -392,6 +392,12 @@ syntax_kinds! {
     /// `foreach (subject as key => value) body`, either syntax; the
     /// `=>` separates the optional key target from the value target.
     ForeachStatement,
+    /// `switch (subject) { cases }`, either syntax.
+    SwitchStatement,
+    /// One `case expression:` or `default:` section, its statements
+    /// included; the body ends where the next section (or the switch)
+    /// begins, so an empty body is a fallthrough.
+    SwitchCase,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

@@ -46,6 +46,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Do) => do_while_statement(parser),
         Some(SyntaxKind::For) => for_statement(parser),
         Some(SyntaxKind::Foreach) => foreach_statement(parser),
+        Some(SyntaxKind::Switch) => switch_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -424,6 +425,59 @@ fn foreach_statement(parser: &mut Parser) {
 fn foreach_target(parser: &mut Parser) {
     parser.eat(SyntaxKind::Ampersand);
     expression(parser);
+}
+
+fn switch_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `switch`
+    parenthesized_condition(parser);
+    if parser.eat(SyntaxKind::OpenBrace) {
+        // Zend tolerates one stray `;` before the first case.
+        parser.eat(SyntaxKind::Semicolon);
+        switch_case_list(parser, SyntaxKind::CloseBrace);
+        parser.expect(SyntaxKind::CloseBrace);
+    } else if parser.eat(SyntaxKind::Colon) {
+        parser.eat(SyntaxKind::Semicolon);
+        switch_case_list(parser, SyntaxKind::EndSwitch);
+        parser.expect(SyntaxKind::EndSwitch);
+        terminate_statement(parser);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace));
+    }
+    marker.complete(parser, SyntaxKind::SwitchStatement);
+}
+
+/// Sections until `closing`. Terminates: the case and default arms
+/// always bump their keyword before anything refusable, and the
+/// fallback arm is an error element, which always bumps.
+fn switch_case_list(parser: &mut Parser, closing: SyntaxKind) {
+    while parser.current().is_some() && !parser.at(closing) {
+        match parser.current() {
+            Some(SyntaxKind::Case) => {
+                let case = parser.start();
+                parser.bump();
+                expression(parser);
+                switch_case_separator(parser);
+                statement_list(parser);
+                case.complete(parser, SyntaxKind::SwitchCase);
+            }
+            Some(SyntaxKind::Default) => {
+                let case = parser.start();
+                parser.bump();
+                switch_case_separator(parser);
+                statement_list(parser);
+                case.complete(parser, SyntaxKind::SwitchCase);
+            }
+            _ => error_element(parser),
+        }
+    }
+}
+
+/// `:` or the Zend-legal `;` after a case label.
+fn switch_case_separator(parser: &mut Parser) {
+    if !parser.eat(SyntaxKind::Colon) && !parser.eat(SyntaxKind::Semicolon) {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Colon));
+    }
 }
 
 #[cfg(test)]
