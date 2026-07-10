@@ -163,8 +163,9 @@ integer `0` followed by the name `b2`). One token gives the semantic
 layer a single literal to attach an invalid-digit diagnostic to,
 instead of a confusing name-after-number token pair. The same rule
 applies to radix-prefixed offsets in string interpolation
-(`"$a[0b2]"`).
-
+(`"$a[0b2]"`). The maximal run also swallows misplaced `_` separators:
+`1_` is one `IntegerLiteral` where Zend splits it into the integer and
+a name, in scripting mode and in offsets alike.
 
 ## 4. Error handling
 
