@@ -1,0 +1,251 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_members.php
+---
+SourceFile@0..579
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  ClassDeclaration@7..578
+    Class@7..12 "class"
+    Whitespace@12..13 " "
+    Identifier@13..20 "Account"
+    Whitespace@20..21 " "
+    MemberList@21..578
+      OpenBrace@21..22 "{"
+      Whitespace@22..27 "\n    "
+      PropertyDeclaration@27..39
+        Var@27..30 "var"
+        Whitespace@30..31 " "
+        PropertyElement@31..38
+          Variable@31..38 "$legacy"
+        Semicolon@38..39 ";"
+      Whitespace@39..44 "\n    "
+      PropertyDeclaration@44..82
+        Public@44..50 "public"
+        Whitespace@50..51 " "
+        NamedType@51..54
+          Name@51..54
+            Identifier@51..54 "int"
+        Whitespace@54..55 " "
+        PropertyElement@55..67
+          Variable@55..63 "$balance"
+          Whitespace@63..64 " "
+          Equals@64..65 "="
+          Whitespace@65..66 " "
+          Literal@66..67
+            IntegerLiteral@66..67 "0"
+        Comma@67..68 ","
+        Whitespace@68..69 " "
+        PropertyElement@69..81
+          Variable@69..77 "$pending"
+          Whitespace@77..78 " "
+          Equals@78..79 "="
+          Whitespace@79..80 " "
+          Literal@80..81
+            IntegerLiteral@80..81 "0"
+        Semicolon@81..82 ";"
+      Whitespace@82..87 "\n    "
+      PropertyDeclaration@87..127
+        Protected@87..96 "protected"
+        Whitespace@96..97 " "
+        Static@97..103 "static"
+        Whitespace@103..104 " "
+        NullableType@104..109
+          Question@104..105 "?"
+          NamedType@105..109
+            Name@105..109
+              Identifier@105..109 "self"
+        Whitespace@109..110 " "
+        PropertyElement@110..126
+          Variable@110..119 "$instance"
+          Whitespace@119..120 " "
+          Equals@120..121 "="
+          Whitespace@121..122 " "
+          NameExpression@122..126
+            Name@122..126
+              Identifier@122..126 "null"
+        Semicolon@126..127 ";"
+      Whitespace@127..132 "\n    "
+      ConstantDeclaration@132..171
+        Final@132..137 "final"
+        Whitespace@137..138 " "
+        Protected@138..147 "protected"
+        Whitespace@147..148 " "
+        Const@148..153 "const"
+        Whitespace@153..154 " "
+        NamedType@154..157
+          Name@154..157
+            Identifier@154..157 "int"
+        Whitespace@157..158 " "
+        ConstantElement@158..170
+          Identifier@158..165 "CEILING"
+          Whitespace@165..166 " "
+          Equals@166..167 "="
+          Whitespace@167..168 " "
+          Literal@168..170
+            IntegerLiteral@168..170 "10"
+        Semicolon@170..171 ";"
+      Whitespace@171..176 "\n    "
+      ConstantDeclaration@176..204
+        Const@176..181 "const"
+        Whitespace@181..182 " "
+        ConstantElement@182..203
+          For@182..185 "FOR"
+          Whitespace@185..186 " "
+          Equals@186..187 "="
+          Whitespace@187..188 " "
+          Literal@188..203
+            SingleQuotedString@188..203 "'semi-reserved'"
+        Semicolon@203..204 ";"
+      Whitespace@204..210 "\n\n    "
+      MethodDeclaration@210..242
+        Public@210..216 "public"
+        Whitespace@216..217 " "
+        Function@217..225 "function"
+        Whitespace@225..226 " "
+        Identifier@226..237 "__construct"
+        ParameterList@237..239
+          OpenParenthesis@237..238 "("
+          CloseParenthesis@238..239 ")"
+        Whitespace@239..240 " "
+        Block@240..242
+          OpenBrace@240..241 "{"
+          CloseBrace@241..242 "}"
+      Whitespace@242..247 "\n    "
+      MethodDeclaration@247..286
+        Abstract@247..255 "abstract"
+        Whitespace@255..256 " "
+        Public@256..262 "public"
+        Whitespace@262..263 " "
+        Function@263..271 "function"
+        Whitespace@271..272 " "
+        Identifier@272..277 "close"
+        ParameterList@277..279
+          OpenParenthesis@277..278 "("
+          CloseParenthesis@278..279 ")"
+        Colon@279..280 ":"
+        Whitespace@280..281 " "
+        NamedType@281..285
+          Name@281..285
+            Identifier@281..285 "void"
+        Semicolon@285..286 ";"
+      Whitespace@286..291 "\n    "
+      MethodDeclaration@291..335
+        Public@291..297 "public"
+        Whitespace@297..298 " "
+        Function@298..306 "function"
+        Whitespace@306..307 " "
+        List@307..311 "list"
+        ParameterList@311..313
+          OpenParenthesis@311..312 "("
+          CloseParenthesis@312..313 ")"
+        Colon@313..314 ":"
+        Whitespace@314..315 " "
+        NamedType@315..320
+          Array@315..320 "array"
+        Whitespace@320..321 " "
+        Block@321..335
+          OpenBrace@321..322 "{"
+          Whitespace@322..323 " "
+          ReturnStatement@323..333
+            Return@323..329 "return"
+            Whitespace@329..330 " "
+            ArrayExpression@330..332
+              OpenBracket@330..331 "["
+              CloseBracket@331..332 "]"
+            Semicolon@332..333 ";"
+          Whitespace@333..334 " "
+          CloseBrace@334..335 "}"
+      Whitespace@335..340 "\n    "
+      MethodDeclaration@340..400
+        Public@340..346 "public"
+        Whitespace@346..347 " "
+        Function@347..355 "function"
+        Whitespace@355..356 " "
+        Ampersand@356..357 "&"
+        Identifier@357..366 "reference"
+        ParameterList@366..368
+          OpenParenthesis@366..367 "("
+          CloseParenthesis@367..368 ")"
+        Colon@368..369 ":"
+        Whitespace@369..370 " "
+        NamedType@370..373
+          Name@370..373
+            Identifier@370..373 "int"
+        Whitespace@373..374 " "
+        Block@374..400
+          OpenBrace@374..375 "{"
+          Whitespace@375..376 " "
+          ReturnStatement@376..398
+            Return@376..382 "return"
+            Whitespace@382..383 " "
+            MemberAccessExpression@383..397
+              VariableReference@383..388
+                Variable@383..388 "$this"
+              Arrow@388..390 "->"
+              MemberName@390..397
+                Identifier@390..397 "balance"
+            Semicolon@397..398 ";"
+          Whitespace@398..399 " "
+          CloseBrace@399..400 "}"
+      Whitespace@400..406 "\n\n    "
+      TraitUseClause@406..576
+        Use@406..409 "use"
+        Whitespace@409..410 " "
+        Name@410..416
+          Identifier@410..416 "Greets"
+        Comma@416..417 ","
+        Whitespace@417..418 " "
+        Name@418..424
+          Identifier@418..424 "Counts"
+        Whitespace@424..425 " "
+        TraitAdaptationList@425..576
+          OpenBrace@425..426 "{"
+          Whitespace@426..435 "\n        "
+          TraitPrecedence@435..466
+            Name@435..441
+              Identifier@435..441 "Greets"
+            ColonColon@441..443 "::"
+            Identifier@443..448 "hello"
+            Whitespace@448..449 " "
+            InsteadOf@449..458 "insteadof"
+            Whitespace@458..459 " "
+            Name@459..465
+              Identifier@459..465 "Counts"
+            Semicolon@465..466 ";"
+          Whitespace@466..475 "\n        "
+          TraitAlias@475..515
+            Name@475..481
+              Identifier@475..481 "Counts"
+            ColonColon@481..483 "::"
+            Identifier@483..488 "hello"
+            Whitespace@488..489 " "
+            As@489..491 "as"
+            Whitespace@491..492 " "
+            Protected@492..501 "protected"
+            Whitespace@501..502 " "
+            Identifier@502..514 "countedHello"
+            Semicolon@514..515 ";"
+          Whitespace@515..524 "\n        "
+          TraitAlias@524..543
+            List@524..528 "list"
+            Whitespace@528..529 " "
+            As@529..531 "as"
+            Whitespace@531..532 " "
+            Identifier@532..542 "unreserved"
+            Semicolon@542..543 ";"
+          Whitespace@543..552 "\n        "
+          TraitAlias@552..570
+            Name@552..558
+              Identifier@552..558 "rename"
+            Whitespace@558..559 " "
+            As@559..561 "as"
+            Whitespace@561..562 " "
+            Private@562..569 "private"
+            Semicolon@569..570 ";"
+          Whitespace@570..575 "\n    "
+          CloseBrace@575..576 "}"
+      Whitespace@576..577 "\n"
+      CloseBrace@577..578 "}"
+  Whitespace@578..579 "\n"

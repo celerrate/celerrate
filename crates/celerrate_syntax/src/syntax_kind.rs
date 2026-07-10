@@ -345,9 +345,6 @@ syntax_kinds! {
     /// One parameter: optional type, `&`, `...`, the variable, and an
     /// optional default.
     Parameter,
-    /// One optionally-nullable named type. The declarations plan
-    /// replaces this with the full union/intersection/DNF grammar.
-    TypeReference,
     /// `use ( variables )` on a closure.
     ClosureUseClause,
     /// `{ statements }`.
@@ -414,6 +411,81 @@ syntax_kinds! {
     /// `function name(parameters): type { body }`, the top-level form;
     /// methods arrive with the declarations plan.
     FunctionDeclaration,
+    /// One named type: a qualified `Name`, or a keyword type token
+    /// (`array`, `callable`, `static`) sitting bare.
+    NamedType,
+    /// `?type`.
+    NullableType,
+    /// `A|B|C`, one flat node for the whole chain.
+    UnionType,
+    /// `A&B&C`, one flat node for the whole chain.
+    IntersectionType,
+    /// `( type )` inside a type: the DNF grouping form.
+    ParenthesizedType,
+    /// `const FOO = 1, BAR = 2;`, optionally typed (8.3), at the top
+    /// level or as a class member (with modifiers).
+    ConstantDeclaration,
+    /// One `name = value` element of a constant declaration.
+    ConstantElement,
+    /// `namespace A\B;` or `namespace A\B { ... }` or `namespace { ... }`.
+    NamespaceDeclaration,
+    /// `use A\B;` and every import shape: aliases, `function`/`const`
+    /// types, clause lists, group imports.
+    UseDeclaration,
+    /// One imported name: optional per-item `function`/`const` type
+    /// (inside groups), the name, an optional group or alias.
+    UseClause,
+    /// `\{ items }` of a grouped import.
+    UseGroup,
+    /// `class Name extends B implements C, D { members }`, with
+    /// optional `abstract` / `final` / `readonly` modifiers. Anonymous
+    /// classes (`new class(...) { ... }`) share this kind and simply
+    /// have no name; their constructor arguments sit before the
+    /// heritage clauses.
+    ClassDeclaration,
+    /// `interface Name extends A, B { members }`.
+    InterfaceDeclaration,
+    /// `trait Name { members }`.
+    TraitDeclaration,
+    /// `extends` and its comma-separated names.
+    ExtendsClause,
+    /// `implements` and its comma-separated names.
+    ImplementsClause,
+    /// `{ members }` of a class-like body.
+    MemberList,
+    /// `public int $a = 1, $b;`: modifiers, optional type, then the
+    /// declarator elements.
+    PropertyDeclaration,
+    /// One `$name [= initializer]` element; a hooked property carries
+    /// its `PropertyHookList` here.
+    PropertyElement,
+    /// `function name(parameters): type { body }` (or `;` for the
+    /// abstract and interface forms) as a class member, modifiers
+    /// included.
+    MethodDeclaration,
+    /// `use TraitA, TraitB;` inside a class body, with an optional
+    /// adaptation list instead of the semicolon.
+    TraitUseClause,
+    /// `{ adaptations }` of a trait use.
+    TraitAdaptationList,
+    /// `A::member insteadof B, C;`.
+    TraitPrecedence,
+    /// `[A::]member as [visibility] [name];`.
+    TraitAlias,
+    /// `enum Name: BackingType implements A { cases and members }`.
+    EnumDeclaration,
+    /// `case Name;` or `case Name = expression;`.
+    EnumCase,
+    /// `{ get; set(...) { ... } }` on a property or a promoted
+    /// parameter (8.4).
+    PropertyHookList,
+    /// One hook: optional `final`, optional `&`, the name, an optional
+    /// parameter list, then `;`, `=> expression;`, or a block.
+    PropertyHook,
+    /// `#[Attribute(arguments), Other]`: one bracketed group.
+    AttributeGroup,
+    /// One attribute inside a group: a name and optional arguments.
+    Attribute,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

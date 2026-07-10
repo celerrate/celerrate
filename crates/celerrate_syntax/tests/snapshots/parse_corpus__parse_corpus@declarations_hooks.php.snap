@@ -1,0 +1,268 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_hooks.php
+---
+SourceFile@0..567
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  ClassDeclaration@7..507
+    Class@7..12 "class"
+    Whitespace@12..13 " "
+    Identifier@13..19 "Person"
+    Whitespace@19..20 " "
+    MemberList@20..507
+      OpenBrace@20..21 "{"
+      Whitespace@21..26 "\n    "
+      PropertyDeclaration@26..172
+        Public@26..32 "public"
+        Whitespace@32..33 " "
+        NamedType@33..39
+          Name@33..39
+            Identifier@33..39 "string"
+        Whitespace@39..40 " "
+        PropertyElement@40..172
+          Variable@40..45 "$name"
+          Whitespace@45..46 " "
+          PropertyHookList@46..172
+            OpenBrace@46..47 "{"
+            Whitespace@47..56 "\n        "
+            PropertyHook@56..87
+              Identifier@56..59 "get"
+              Whitespace@59..60 " "
+              FatArrow@60..62 "=>"
+              Whitespace@62..63 " "
+              CallExpression@63..86
+                NameExpression@63..73
+                  Name@63..73
+                    Identifier@63..73 "strtoupper"
+                ArgumentList@73..86
+                  OpenParenthesis@73..74 "("
+                  Argument@74..85
+                    MemberAccessExpression@74..85
+                      VariableReference@74..79
+                        Variable@74..79 "$this"
+                      Arrow@79..81 "->"
+                      MemberName@81..85
+                        Identifier@81..85 "name"
+                  CloseParenthesis@85..86 ")"
+              Semicolon@86..87 ";"
+            Whitespace@87..96 "\n        "
+            PropertyHook@96..166
+              Identifier@96..99 "set"
+              ParameterList@99..114
+                OpenParenthesis@99..100 "("
+                Parameter@100..113
+                  NamedType@100..106
+                    Name@100..106
+                      Identifier@100..106 "string"
+                  Whitespace@106..107 " "
+                  Variable@107..113 "$value"
+                CloseParenthesis@113..114 ")"
+              Whitespace@114..115 " "
+              Block@115..166
+                OpenBrace@115..116 "{"
+                Whitespace@116..129 "\n            "
+                ExpressionStatement@129..156
+                  AssignmentExpression@129..155
+                    MemberAccessExpression@129..140
+                      VariableReference@129..134
+                        Variable@129..134 "$this"
+                      Arrow@134..136 "->"
+                      MemberName@136..140
+                        Identifier@136..140 "name"
+                    Whitespace@140..141 " "
+                    Equals@141..142 "="
+                    Whitespace@142..143 " "
+                    CallExpression@143..155
+                      NameExpression@143..147
+                        Name@143..147
+                          Identifier@143..147 "trim"
+                      ArgumentList@147..155
+                        OpenParenthesis@147..148 "("
+                        Argument@148..154
+                          VariableReference@148..154
+                            Variable@148..154 "$value"
+                        CloseParenthesis@154..155 ")"
+                  Semicolon@155..156 ";"
+                Whitespace@156..165 "\n        "
+                CloseBrace@165..166 "}"
+            Whitespace@166..171 "\n    "
+            CloseBrace@171..172 "}"
+      Whitespace@172..178 "\n\n    "
+      PropertyDeclaration@178..225
+        Public@178..184 "public"
+        Whitespace@184..185 " "
+        Private@185..192 "private"
+        OpenParenthesis@192..193 "("
+        Identifier@193..196 "set"
+        CloseParenthesis@196..197 ")"
+        Whitespace@197..198 " "
+        NamedType@198..215
+          Name@198..215
+            Identifier@198..215 "DateTimeImmutable"
+        Whitespace@215..216 " "
+        PropertyElement@216..224
+          Variable@216..224 "$created"
+        Semicolon@224..225 ";"
+      Whitespace@225..231 "\n\n    "
+      PropertyDeclaration@231..302
+        Public@231..237 "public"
+        Whitespace@237..238 " "
+        NamedType@238..243
+          Array@238..243 "array"
+        Whitespace@243..244 " "
+        PropertyElement@244..302
+          Variable@244..250 "$items"
+          Whitespace@250..251 " "
+          PropertyHookList@251..302
+            OpenBrace@251..252 "{"
+            Whitespace@252..261 "\n        "
+            PropertyHook@261..296
+              Final@261..266 "final"
+              Whitespace@266..267 " "
+              Ampersand@267..268 "&"
+              Identifier@268..271 "get"
+              Whitespace@271..272 " "
+              Block@272..296
+                OpenBrace@272..273 "{"
+                Whitespace@273..274 " "
+                ReturnStatement@274..294
+                  Return@274..280 "return"
+                  Whitespace@280..281 " "
+                  MemberAccessExpression@281..293
+                    VariableReference@281..286
+                      Variable@281..286 "$this"
+                    Arrow@286..288 "->"
+                    MemberName@288..293
+                      Identifier@288..293 "items"
+                  Semicolon@293..294 ";"
+                Whitespace@294..295 " "
+                CloseBrace@295..296 "}"
+            Whitespace@296..301 "\n    "
+            CloseBrace@301..302 "}"
+      Whitespace@302..308 "\n\n    "
+      MethodDeclaration@308..505
+        Public@308..314 "public"
+        Whitespace@314..315 " "
+        Function@315..323 "function"
+        Whitespace@323..324 " "
+        Identifier@324..335 "__construct"
+        ParameterList@335..502
+          OpenParenthesis@335..336 "("
+          Whitespace@336..345 "\n        "
+          Parameter@345..374
+            Public@345..351 "public"
+            Whitespace@351..352 " "
+            Readonly@352..360 "readonly"
+            Whitespace@360..361 " "
+            NamedType@361..367
+              Name@361..367
+                Identifier@361..367 "string"
+            Whitespace@367..368 " "
+            Variable@368..374 "$first"
+          Comma@374..375 ","
+          Whitespace@375..384 "\n        "
+          Parameter@384..421
+            Private@384..391 "private"
+            OpenParenthesis@391..392 "("
+            Identifier@392..395 "set"
+            CloseParenthesis@395..396 ")"
+            Whitespace@396..397 " "
+            NamedType@397..403
+              Name@397..403
+                Identifier@397..403 "string"
+            Whitespace@403..404 " "
+            Variable@404..409 "$last"
+            Whitespace@409..410 " "
+            Equals@410..411 "="
+            Whitespace@411..412 " "
+            Literal@412..421
+              SingleQuotedString@412..421 "'unknown'"
+          Comma@421..422 ","
+          Whitespace@422..431 "\n        "
+          Parameter@431..495
+            Public@431..437 "public"
+            Whitespace@437..438 " "
+            NamedType@438..444
+              Name@438..444
+                Identifier@438..444 "string"
+            Whitespace@444..445 " "
+            Variable@445..450 "$full"
+            Whitespace@450..451 " "
+            PropertyHookList@451..495
+              OpenBrace@451..452 "{"
+              Whitespace@452..453 " "
+              PropertyHook@453..493
+                Identifier@453..456 "get"
+                Whitespace@456..457 " "
+                FatArrow@457..459 "=>"
+                Whitespace@459..460 " "
+                BinaryExpression@460..492
+                  BinaryExpression@460..478
+                    MemberAccessExpression@460..472
+                      VariableReference@460..465
+                        Variable@460..465 "$this"
+                      Arrow@465..467 "->"
+                      MemberName@467..472
+                        Identifier@467..472 "first"
+                    Whitespace@472..473 " "
+                    Dot@473..474 "."
+                    Whitespace@474..475 " "
+                    Literal@475..478
+                      SingleQuotedString@475..478 "' '"
+                  Whitespace@478..479 " "
+                  Dot@479..480 "."
+                  Whitespace@480..481 " "
+                  MemberAccessExpression@481..492
+                    VariableReference@481..486
+                      Variable@481..486 "$this"
+                    Arrow@486..488 "->"
+                    MemberName@488..492
+                      Identifier@488..492 "last"
+                Semicolon@492..493 ";"
+              Whitespace@493..494 " "
+              CloseBrace@494..495 "}"
+          Comma@495..496 ","
+          Whitespace@496..501 "\n    "
+          CloseParenthesis@501..502 ")"
+        Whitespace@502..503 " "
+        Block@503..505
+          OpenBrace@503..504 "{"
+          CloseBrace@504..505 "}"
+      Whitespace@505..506 "\n"
+      CloseBrace@506..507 "}"
+  Whitespace@507..509 "\n\n"
+  InterfaceDeclaration@509..566
+    Interface@509..518 "interface"
+    Whitespace@518..519 " "
+    Identifier@519..524 "Named"
+    Whitespace@524..525 " "
+    MemberList@525..566
+      OpenBrace@525..526 "{"
+      Whitespace@526..531 "\n    "
+      PropertyDeclaration@531..564
+        Public@531..537 "public"
+        Whitespace@537..538 " "
+        NamedType@538..544
+          Name@538..544
+            Identifier@538..544 "string"
+        Whitespace@544..545 " "
+        PropertyElement@545..564
+          Variable@545..550 "$name"
+          Whitespace@550..551 " "
+          PropertyHookList@551..564
+            OpenBrace@551..552 "{"
+            Whitespace@552..553 " "
+            PropertyHook@553..557
+              Identifier@553..556 "get"
+              Semicolon@556..557 ";"
+            Whitespace@557..558 " "
+            PropertyHook@558..562
+              Identifier@558..561 "set"
+              Semicolon@561..562 ";"
+            Whitespace@562..563 " "
+            CloseBrace@563..564 "}"
+      Whitespace@564..565 "\n"
+      CloseBrace@565..566 "}"
+  Whitespace@566..567 "\n"

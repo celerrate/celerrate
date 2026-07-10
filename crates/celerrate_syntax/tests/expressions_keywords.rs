@@ -74,11 +74,13 @@ fn new_without_arguments_still_chains_member_access() {
 }
 
 #[test]
-fn an_anonymous_class_is_deferred_with_recovery() {
-    // `new class {}` belongs to the declarations plan; until then the
-    // tokens survive through recovery.
-    assert!(
-        parser_diagnostics("<?php new class;").contains(&ParserDiagnosticKind::UnexpectedToken)
+fn an_anonymous_class_without_a_member_list_is_diagnosed_not_wrecked() {
+    // `new class {}` now parses as a real anonymous `ClassDeclaration`
+    // (celerrate_syntax::tests::declarations_class_like); a missing
+    // `{ ... }` is a normal missing-token diagnostic, not wreckage.
+    assert_eq!(
+        parser_diagnostics("<?php new class;"),
+        vec![ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace)]
     );
 }
 

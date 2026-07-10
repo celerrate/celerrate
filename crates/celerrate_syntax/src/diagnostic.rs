@@ -60,6 +60,12 @@ pub enum ParserDiagnosticKind {
     /// A control-flow body position holds no statement (`if ($x)` at
     /// end of input, or directly against a closing keyword).
     ExpectedStatement,
+    /// A type position holds no type (`function f(): {}`).
+    ExpectedType,
+    /// A position that requires a declaration holds none (attribute
+    /// groups in front of a non-declaration, modifiers with nothing to
+    /// modify).
+    ExpectedDeclaration,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

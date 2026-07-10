@@ -73,8 +73,9 @@ fn return_types_parse_on_both_forms() {
         OpenParenthesis "("
         CloseParenthesis ")"
       Colon ":"
-      TypeReference
-        Identifier "int"
+      NamedType
+        Name
+          Identifier "int"
       FatArrow "=>"
       Literal
         IntegerLiteral "1"

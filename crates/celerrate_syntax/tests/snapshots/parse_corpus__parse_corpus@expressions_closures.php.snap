@@ -1,6 +1,5 @@
 ---
 source: crates/celerrate_syntax/tests/parse_corpus.rs
-assertion_line: 13
 expression: "support::render_parse(&source)"
 input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_closures.php
 ---
@@ -71,19 +70,22 @@ SourceFile@0..483
         ParameterList@96..144
           OpenParenthesis@96..97 "("
           Parameter@97..103
-            TypeReference@97..100
-              Identifier@97..100 "int"
+            NamedType@97..100
+              Name@97..100
+                Identifier@97..100 "int"
             Whitespace@100..101 " "
             Variable@101..103 "$x"
           Comma@103..104 ","
           Whitespace@104..105 " "
           Parameter@105..124
-            TypeReference@105..114
+            NullableType@105..114
               Question@105..106 "?"
-              Backslash@106..107 "\\"
-              Identifier@107..110 "Foo"
-              Backslash@110..111 "\\"
-              Identifier@111..114 "Bar"
+              NamedType@106..114
+                Name@106..114
+                  Backslash@106..107 "\\"
+                  Identifier@107..110 "Foo"
+                  Backslash@110..111 "\\"
+                  Identifier@111..114 "Bar"
             Whitespace@114..115 " "
             Variable@115..117 "$y"
             Whitespace@117..118 " "
@@ -95,7 +97,7 @@ SourceFile@0..483
           Comma@124..125 ","
           Whitespace@125..126 " "
           Parameter@126..143
-            TypeReference@126..134
+            NamedType@126..134
               Callable@126..134 "callable"
             Whitespace@134..135 " "
             Ellipsis@135..138 "..."
@@ -103,9 +105,11 @@ SourceFile@0..483
           CloseParenthesis@143..144 ")"
         Colon@144..145 ":"
         Whitespace@145..146 " "
-        TypeReference@146..150
+        NullableType@146..150
           Question@146..147 "?"
-          Identifier@147..150 "int"
+          NamedType@147..150
+            Name@147..150
+              Identifier@147..150 "int"
         Whitespace@150..151 " "
         Block@151..167
           OpenBrace@151..152 "{"
@@ -228,14 +232,15 @@ SourceFile@0..483
         ParameterList@323..331
           OpenParenthesis@323..324 "("
           Parameter@324..330
-            TypeReference@324..327
-              Identifier@324..327 "int"
+            NamedType@324..327
+              Name@324..327
+                Identifier@324..327 "int"
             Whitespace@327..328 " "
             Variable@328..330 "$x"
           CloseParenthesis@330..331 ")"
         Colon@331..332 ":"
         Whitespace@332..333 " "
-        TypeReference@333..341
+        NamedType@333..341
           Callable@333..341 "callable"
         Whitespace@341..342 " "
         FatArrow@342..344 "=>"
@@ -246,15 +251,17 @@ SourceFile@0..483
           ParameterList@348..356
             OpenParenthesis@348..349 "("
             Parameter@349..355
-              TypeReference@349..352
-                Identifier@349..352 "int"
+              NamedType@349..352
+                Name@349..352
+                  Identifier@349..352 "int"
               Whitespace@352..353 " "
               Variable@353..355 "$y"
             CloseParenthesis@355..356 ")"
           Colon@356..357 ":"
           Whitespace@357..358 " "
-          TypeReference@358..361
-            Identifier@358..361 "int"
+          NamedType@358..361
+            Name@358..361
+              Identifier@358..361 "int"
           Whitespace@361..362 " "
           FatArrow@362..364 "=>"
           Whitespace@364..365 " "

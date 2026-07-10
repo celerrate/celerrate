@@ -7,8 +7,7 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::Parser;
 use super::expressions::{
-    argument_list, error_element, expression, name, parameter_list, simple_variable,
-    starts_expression, type_reference,
+    argument_list, error_element, expression, name, simple_variable, starts_expression,
 };
 
 pub(super) fn statement(parser: &mut Parser) {
@@ -56,9 +55,28 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Identifier) if parser.nth(1) == Some(SyntaxKind::Colon) => {
             label_statement(parser)
         }
-        Some(SyntaxKind::Function) if at_function_declaration(parser) => {
-            function_declaration(parser)
+        Some(SyntaxKind::Function) if super::declarations::at_function_declaration(parser) => {
+            super::declarations::declaration(parser)
         }
+        Some(SyntaxKind::Const) => super::declarations::declaration(parser),
+        Some(SyntaxKind::Namespace) if parser.nth(1) != Some(SyntaxKind::Backslash) => {
+            super::declarations::declaration(parser)
+        }
+        Some(SyntaxKind::Use) => super::declarations::declaration(parser),
+        Some(
+            SyntaxKind::Class
+            | SyntaxKind::Interface
+            | SyntaxKind::Trait
+            | SyntaxKind::Abstract
+            | SyntaxKind::Final,
+        ) => super::declarations::declaration(parser),
+        Some(SyntaxKind::Readonly) if parser.nth(1) != Some(SyntaxKind::OpenParenthesis) => {
+            super::declarations::declaration(parser)
+        }
+        Some(SyntaxKind::Enum) if parser.nth(1) == Some(SyntaxKind::Identifier) => {
+            super::declarations::declaration(parser)
+        }
+        Some(SyntaxKind::AttributeOpen) => super::declarations::declaration(parser),
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}
@@ -132,9 +150,8 @@ fn expression_statement(parser: &mut Parser) {
     let marker = parser.start();
     if expression(parser).is_none() {
         // The dispatcher saw an expression start but the grammar
-        // refused (for example `namespace` without `\`). The refusal
-        // already carried its diagnostic; consume the token so the
-        // statement loop always advances.
+        // refused. The refusal already carried its diagnostic; consume
+        // the token so the statement loop always advances.
         if parser.at_end() {
             marker.abandon(parser);
             return;
@@ -156,7 +173,7 @@ fn error_statement(parser: &mut Parser) {
 /// PHP requires `;` after a statement except immediately before `?>`,
 /// where it is optional. End of input does not exempt it (Zend rejects
 /// that too), so we diagnose it: zero-width, after the last token.
-fn terminate_statement(parser: &mut Parser) {
+pub(super) fn terminate_statement(parser: &mut Parser) {
     if parser.at(SyntaxKind::Semicolon) {
         parser.bump();
         return;
@@ -289,6 +306,17 @@ fn embedded_statement(parser: &mut Parser) {
     super::statement_list_step(parser);
 }
 
+/// The alternative-syntax body shared by `while`, `for`, `foreach`,
+/// and `declare` once their `:` is consumed: the statement list, the
+/// closing keyword, the statement terminator. `if` and `switch` place
+/// clauses or case sections between the list and the closer, so they
+/// keep their own sequences.
+fn alternative_body(parser: &mut Parser, closing: SyntaxKind) {
+    statement_list(parser);
+    parser.expect(closing);
+    terminate_statement(parser);
+}
+
 fn if_statement(parser: &mut Parser) {
     let marker = parser.start();
     parser.bump(); // `if`
@@ -336,9 +364,7 @@ fn while_statement(parser: &mut Parser) {
     parser.bump(); // `while`
     parenthesized_condition(parser);
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndWhile);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndWhile);
     } else {
         embedded_statement(parser);
     }
@@ -370,9 +396,7 @@ fn for_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndFor);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndFor);
     } else {
         embedded_statement(parser);
     }
@@ -415,9 +439,7 @@ fn foreach_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndForeach);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndForeach);
     } else {
         embedded_statement(parser);
     }
@@ -558,36 +580,11 @@ fn declare_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndDeclare);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndDeclare);
     } else {
         embedded_statement(parser);
     }
     marker.complete(parser, SyntaxKind::DeclareStatement);
-}
-
-/// `function` declares only when a name follows, with an optional `&`
-/// between: `function (` and `function &(` are closure expressions.
-fn at_function_declaration(parser: &mut Parser) -> bool {
-    match parser.nth(1) {
-        Some(SyntaxKind::Identifier) => true,
-        Some(SyntaxKind::Ampersand) => parser.nth(2) == Some(SyntaxKind::Identifier),
-        _ => false,
-    }
-}
-
-fn function_declaration(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.bump(); // `function`
-    parser.eat(SyntaxKind::Ampersand); // by-reference return
-    parser.expect(SyntaxKind::Identifier);
-    parameter_list(parser);
-    if parser.eat(SyntaxKind::Colon) {
-        type_reference(parser);
-    }
-    block(parser);
-    marker.complete(parser, SyntaxKind::FunctionDeclaration);
 }
 
 #[cfg(test)]
@@ -639,5 +636,58 @@ mod tests {
             .filter(|diagnostic| diagnostic.kind == ParserDiagnosticKind::NoProgress)
             .count();
         assert_eq!(no_progress_count, 1, "exactly one NoProgress diagnostic");
+    }
+
+    #[test]
+    fn a_refused_expression_start_is_wrapped_and_consumed() {
+        // `expression_statement`'s refusal branch: `expression()` can
+        // return `None` on a token the dispatcher vetted as an
+        // expression start (bare `namespace` here: the primary rule
+        // requires a following `\`). The branch must keep the
+        // statement loop advancing: diagnose, consume exactly that one
+        // token, and wrap it in an `ErrorNode`. No dispatcher arm
+        // currently routes such a token here (bare `namespace` now
+        // dispatches as a namespace declaration), so this drives the
+        // rule directly; bare `enum` (no name following, so the
+        // declaration dispatch does not claim it) reaches this same
+        // branch from source text, pinned publicly by
+        // `a_bare_enum_with_no_name_is_diagnosed_and_wrapped` in
+        // `declarations_enums.rs`.
+        let source = "<?php namespace + 1;";
+        let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
+        let mut parser = Parser::new(TokenSource::new(&tokens));
+        let root = parser.start();
+        parser.bump(); // `<?php`
+        super::expression_statement(&mut parser);
+        assert_eq!(
+            parser.current(),
+            Some(SyntaxKind::Plus),
+            "exactly the refused `namespace` token must be consumed"
+        );
+        assert!(
+            parser
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ParserDiagnosticKind::ExpectedExpression),
+            "the refusal must carry its ExpectedExpression diagnostic"
+        );
+        root.complete(&mut parser, SyntaxKind::SourceFile);
+        parser.recover_unconsumed_tail();
+        let tree = SyntaxNode::new_root(crate::tree::builder::build_tree(
+            source,
+            &tokens,
+            parser.events,
+        ));
+        assert_eq!(
+            tree.text().to_string(),
+            source,
+            "the tree must stay lossless around the wrapped token"
+        );
+        assert!(
+            tree.children()
+                .any(|node| node.kind() == SyntaxKind::ErrorNode
+                    && node.text().to_string().contains("namespace")),
+            "the refused token must sit wrapped in an ErrorNode"
+        );
     }
 }

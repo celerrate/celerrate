@@ -1,0 +1,236 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_types.php
+---
+SourceFile@0..376
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  FunctionDeclaration@7..67
+    Function@7..15 "function"
+    Whitespace@15..16 " "
+    Identifier@16..23 "scalars"
+    ParameterList@23..58
+      OpenParenthesis@23..24 "("
+      Parameter@24..30
+        NamedType@24..27
+          Name@24..27
+            Identifier@24..27 "int"
+        Whitespace@27..28 " "
+        Variable@28..30 "$a"
+      Comma@30..31 ","
+      Whitespace@31..32 " "
+      Parameter@32..42
+        NullableType@32..39
+          Question@32..33 "?"
+          NamedType@33..39
+            Name@33..39
+              Identifier@33..39 "string"
+        Whitespace@39..40 " "
+        Variable@40..42 "$b"
+      Comma@42..43 ","
+      Whitespace@43..44 " "
+      Parameter@44..57
+        UnionType@44..54
+          NamedType@44..49
+            Name@44..49
+              Identifier@44..49 "float"
+          Pipe@49..50 "|"
+          NamedType@50..54
+            Name@50..54
+              Identifier@50..54 "bool"
+        Whitespace@54..55 " "
+        Variable@55..57 "$c"
+      CloseParenthesis@57..58 ")"
+    Colon@58..59 ":"
+    Whitespace@59..60 " "
+    NamedType@60..64
+      Name@60..64
+        Identifier@60..64 "void"
+    Whitespace@64..65 " "
+    Block@65..67
+      OpenBrace@65..66 "{"
+      CloseBrace@66..67 "}"
+  Whitespace@67..68 "\n"
+  FunctionDeclaration@68..117
+    Function@68..76 "function"
+    Whitespace@76..77 " "
+    Identifier@77..83 "unions"
+    ParameterList@83..103
+      OpenParenthesis@83..84 "("
+      Parameter@84..102
+        UnionType@84..99
+          NamedType@84..87
+            Name@84..87
+              Identifier@84..87 "int"
+          Pipe@87..88 "|"
+          NamedType@88..94
+            Name@88..94
+              Identifier@88..94 "string"
+          Pipe@94..95 "|"
+          NamedType@95..99
+            Name@95..99
+              Identifier@95..99 "null"
+        Whitespace@99..100 " "
+        Variable@100..102 "$x"
+      CloseParenthesis@102..103 ")"
+    Colon@103..104 ":"
+    Whitespace@104..105 " "
+    UnionType@105..114
+      NamedType@105..108
+        Name@105..108
+          Identifier@105..108 "int"
+      Pipe@108..109 "|"
+      NamedType@109..114
+        Name@109..114
+          Identifier@109..114 "false"
+    Whitespace@114..115 " "
+    Block@115..117
+      OpenBrace@115..116 "{"
+      CloseBrace@116..117 "}"
+  Whitespace@117..118 "\n"
+  FunctionDeclaration@118..177
+    Function@118..126 "function"
+    Whitespace@126..127 " "
+    Identifier@127..140 "intersections"
+    ParameterList@140..166
+      OpenParenthesis@140..141 "("
+      Parameter@141..165
+        IntersectionType@141..162
+          NamedType@141..150
+            Name@141..150
+              Identifier@141..150 "Countable"
+          Ampersand@150..151 "&"
+          NamedType@151..162
+            Name@151..162
+              Identifier@151..162 "ArrayAccess"
+        Whitespace@162..163 " "
+        Variable@163..165 "$x"
+      CloseParenthesis@165..166 ")"
+    Colon@166..167 ":"
+    Whitespace@167..168 " "
+    NamedType@168..174
+      Static@168..174 "static"
+    Whitespace@174..175 " "
+    Block@175..177
+      OpenBrace@175..176 "{"
+      CloseBrace@176..177 "}"
+  Whitespace@177..178 "\n"
+  FunctionDeclaration@178..257
+    Function@178..186 "function"
+    Whitespace@186..187 " "
+    Identifier@187..190 "dnf"
+    ParameterList@190..223
+      OpenParenthesis@190..191 "("
+      Parameter@191..222
+        UnionType@191..219
+          ParenthesizedType@191..214
+            OpenParenthesis@191..192 "("
+            IntersectionType@192..213
+              NamedType@192..201
+                Name@192..201
+                  Identifier@192..201 "Countable"
+              Ampersand@201..202 "&"
+              NamedType@202..213
+                Name@202..213
+                  Identifier@202..213 "ArrayAccess"
+            CloseParenthesis@213..214 ")"
+          Pipe@214..215 "|"
+          NamedType@215..219
+            Name@215..219
+              Identifier@215..219 "null"
+        Whitespace@219..220 " "
+        Variable@220..222 "$x"
+      CloseParenthesis@222..223 ")"
+    Colon@223..224 ":"
+    Whitespace@224..225 " "
+    UnionType@225..254
+      ParenthesizedType@225..248
+        OpenParenthesis@225..226 "("
+        IntersectionType@226..247
+          NamedType@226..237
+            Name@226..237
+              Identifier@226..237 "Traversable"
+          Ampersand@237..238 "&"
+          NamedType@238..247
+            Name@238..247
+              Identifier@238..247 "Countable"
+        CloseParenthesis@247..248 ")"
+      Pipe@248..249 "|"
+      NamedType@249..254
+        Name@249..254
+          Identifier@249..254 "false"
+    Whitespace@254..255 " "
+    Block@255..257
+      OpenBrace@255..256 "{"
+      CloseBrace@256..257 "}"
+  Whitespace@257..258 "\n"
+  FunctionDeclaration@258..306
+    Function@258..266 "function"
+    Whitespace@266..267 " "
+    Identifier@267..277 "references"
+    ParameterList@277..296
+      OpenParenthesis@277..278 "("
+      Parameter@278..282
+        NamedType@278..279
+          Name@278..279
+            Identifier@278..279 "A"
+        Ampersand@279..280 "&"
+        Variable@280..282 "$x"
+      Comma@282..283 ","
+      Whitespace@283..284 " "
+      Parameter@284..295
+        NamedType@284..285
+          Name@284..285
+            Identifier@284..285 "B"
+        Whitespace@285..286 " "
+        Ampersand@286..287 "&"
+        Ellipsis@287..290 "..."
+        Variable@290..295 "$rest"
+      CloseParenthesis@295..296 ")"
+    Colon@296..297 ":"
+    Whitespace@297..298 " "
+    NamedType@298..303
+      Name@298..303
+        Identifier@298..303 "never"
+    Whitespace@303..304 " "
+    Block@304..306
+      OpenBrace@304..305 "{"
+      CloseBrace@305..306 "}"
+  Whitespace@306..307 "\n"
+  FunctionDeclaration@307..375
+    Function@307..315 "function"
+    Whitespace@315..316 " "
+    Identifier@316..324 "relative"
+    ParameterList@324..364
+      OpenParenthesis@324..325 "("
+      Parameter@325..342
+        NamedType@325..339
+          Name@325..339
+            Namespace@325..334 "namespace"
+            Backslash@334..335 "\\"
+            Identifier@335..339 "Kind"
+        Whitespace@339..340 " "
+        Variable@340..342 "$x"
+      Comma@342..343 ","
+      Whitespace@343..344 " "
+      Parameter@344..363
+        NamedType@344..360
+          Name@344..360
+            Backslash@344..345 "\\"
+            Identifier@345..350 "Fully"
+            Backslash@350..351 "\\"
+            Identifier@351..360 "Qualified"
+        Whitespace@360..361 " "
+        Variable@361..363 "$y"
+      CloseParenthesis@363..364 ")"
+    Colon@364..365 ":"
+    Whitespace@365..366 " "
+    NamedType@366..372
+      Name@366..372
+        Identifier@366..372 "parent"
+    Whitespace@372..373 " "
+    Block@373..375
+      OpenBrace@373..374 "{"
+      CloseBrace@374..375 "}"
+  Whitespace@375..376 "\n"

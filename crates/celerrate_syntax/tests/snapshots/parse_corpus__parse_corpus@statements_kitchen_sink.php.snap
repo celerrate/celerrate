@@ -25,16 +25,17 @@ SourceFile@0..772
     ParameterList@48..87
       OpenParenthesis@48..49 "("
       Parameter@49..60
-        TypeReference@49..54
+        NamedType@49..54
           Array@49..54 "array"
         Whitespace@54..55 " "
         Variable@55..60 "$jobs"
       Comma@60..61 ","
       Whitespace@61..62 " "
       Parameter@62..86
-        TypeReference@62..71
+        NullableType@62..71
           Question@62..63 "?"
-          Callable@63..71 "callable"
+          NamedType@63..71
+            Callable@63..71 "callable"
         Whitespace@71..72 " "
         Variable@72..79 "$notify"
         Whitespace@79..80 " "
@@ -46,8 +47,9 @@ SourceFile@0..772
       CloseParenthesis@86..87 ")"
     Colon@87..88 ":"
     Whitespace@88..89 " "
-    TypeReference@89..92
-      Identifier@89..92 "int"
+    NamedType@89..92
+      Name@89..92
+        Identifier@89..92 "int"
     Whitespace@92..93 "\n"
     Block@93..771
       OpenBrace@93..94 "{"

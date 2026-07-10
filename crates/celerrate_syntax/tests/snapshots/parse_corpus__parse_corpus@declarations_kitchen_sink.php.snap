@@ -1,0 +1,422 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_kitchen_sink.php
+---
+SourceFile@0..936
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  NamespaceDeclaration@7..21
+    Namespace@7..16 "namespace"
+    Whitespace@16..17 " "
+    Name@17..20
+      Identifier@17..20 "App"
+    Semicolon@20..21 ";"
+  Whitespace@21..23 "\n\n"
+  UseDeclaration@23..88
+    Use@23..26 "use"
+    Whitespace@26..27 " "
+    UseClause@27..87
+      Name@27..40
+        Identifier@27..30 "App"
+        Backslash@30..31 "\\"
+        Identifier@31..40 "Contracts"
+      UseGroup@40..87
+        Backslash@40..41 "\\"
+        OpenBrace@41..42 "{"
+        UseClause@42..60
+          Name@42..51
+            Identifier@42..51 "Countable"
+          Whitespace@51..52 " "
+          As@52..54 "as"
+          Whitespace@54..55 " "
+          Identifier@55..60 "Sized"
+        Comma@60..61 ","
+        Whitespace@61..62 " "
+        UseClause@62..86
+          Function@62..70 "function"
+          Whitespace@70..71 " "
+          Name@71..86
+            Identifier@71..86 "assert_positive"
+        CloseBrace@86..87 "}"
+    Semicolon@87..88 ";"
+  Whitespace@88..90 "\n\n"
+  ClassDeclaration@90..777
+    AttributeGroup@90..118
+      AttributeOpen@90..92 "#["
+      Attribute@92..117
+        Name@92..98
+          Identifier@92..98 "Entity"
+        ArgumentList@98..117
+          OpenParenthesis@98..99 "("
+          Argument@99..116
+            Identifier@99..104 "table"
+            Colon@104..105 ":"
+            Whitespace@105..106 " "
+            Literal@106..116
+              SingleQuotedString@106..116 "'accounts'"
+          CloseParenthesis@116..117 ")"
+      CloseBracket@117..118 "]"
+    Whitespace@118..119 "\n"
+    Final@119..124 "final"
+    Whitespace@124..125 " "
+    Class@125..130 "class"
+    Whitespace@130..131 " "
+    Identifier@131..138 "Account"
+    Whitespace@138..139 " "
+    ExtendsClause@139..151
+      Extends@139..146 "extends"
+      Whitespace@146..147 " "
+      Name@147..151
+        Identifier@147..151 "Base"
+    Whitespace@151..152 " "
+    ImplementsClause@152..181
+      Implements@152..162 "implements"
+      Whitespace@162..163 " "
+      Name@163..168
+        Identifier@163..168 "Sized"
+      Comma@168..169 ","
+      Whitespace@169..170 " "
+      Name@170..181
+        Backslash@170..171 "\\"
+        Identifier@171..181 "Stringable"
+    Whitespace@181..182 "\n"
+    MemberList@182..777
+      OpenBrace@182..183 "{"
+      Whitespace@183..188 "\n    "
+      TraitUseClause@188..321
+        Use@188..191 "use"
+        Whitespace@191..192 " "
+        Name@192..201
+          Identifier@192..201 "Auditable"
+        Comma@201..202 ","
+        Whitespace@202..203 " "
+        Name@203..213
+          Identifier@203..213 "Timestamps"
+        Whitespace@213..214 " "
+        TraitAdaptationList@214..321
+          OpenBrace@214..215 "{"
+          Whitespace@215..224 "\n        "
+          TraitPrecedence@224..263
+            Name@224..233
+              Identifier@224..233 "Auditable"
+            ColonColon@233..235 "::"
+            Identifier@235..241 "record"
+            Whitespace@241..242 " "
+            InsteadOf@242..251 "insteadof"
+            Whitespace@251..252 " "
+            Name@252..262
+              Identifier@252..262 "Timestamps"
+            Semicolon@262..263 ";"
+          Whitespace@263..272 "\n        "
+          TraitAlias@272..315
+            Name@272..282
+              Identifier@272..282 "Timestamps"
+            ColonColon@282..284 "::"
+            Identifier@284..290 "record"
+            Whitespace@290..291 " "
+            As@291..293 "as"
+            Whitespace@293..294 " "
+            Protected@294..303 "protected"
+            Whitespace@303..304 " "
+            Identifier@304..314 "recordTime"
+            Semicolon@314..315 ";"
+          Whitespace@315..320 "\n    "
+          CloseBrace@320..321 "}"
+      Whitespace@321..327 "\n\n    "
+      PropertyDeclaration@327..463
+        Public@327..333 "public"
+        Whitespace@333..334 " "
+        Private@334..341 "private"
+        OpenParenthesis@341..342 "("
+        Identifier@342..345 "set"
+        CloseParenthesis@345..346 ")"
+        Whitespace@346..347 " "
+        NamedType@347..350
+          Name@347..350
+            Identifier@347..350 "int"
+        Whitespace@350..351 " "
+        PropertyElement@351..463
+          Variable@351..359 "$balance"
+          Whitespace@359..360 " "
+          Equals@360..361 "="
+          Whitespace@361..362 " "
+          Literal@362..363
+            IntegerLiteral@362..363 "0"
+          Whitespace@363..364 " "
+          PropertyHookList@364..463
+            OpenBrace@364..365 "{"
+            Whitespace@365..374 "\n        "
+            PropertyHook@374..396
+              Identifier@374..377 "get"
+              Whitespace@377..378 " "
+              FatArrow@378..380 "=>"
+              Whitespace@380..381 " "
+              MemberAccessExpression@381..395
+                VariableReference@381..386
+                  Variable@381..386 "$this"
+                Arrow@386..388 "->"
+                MemberName@388..395
+                  Identifier@388..395 "balance"
+              Semicolon@395..396 ";"
+            Whitespace@396..405 "\n        "
+            PropertyHook@405..457
+              Identifier@405..408 "set"
+              ParameterList@408..420
+                OpenParenthesis@408..409 "("
+                Parameter@409..419
+                  NamedType@409..412
+                    Name@409..412
+                      Identifier@409..412 "int"
+                  Whitespace@412..413 " "
+                  Variable@413..419 "$value"
+                CloseParenthesis@419..420 ")"
+              Whitespace@420..421 " "
+              Block@421..457
+                OpenBrace@421..422 "{"
+                Whitespace@422..423 " "
+                ExpressionStatement@423..455
+                  AssignmentExpression@423..454
+                    MemberAccessExpression@423..437
+                      VariableReference@423..428
+                        Variable@423..428 "$this"
+                      Arrow@428..430 "->"
+                      MemberName@430..437
+                        Identifier@430..437 "balance"
+                    Whitespace@437..438 " "
+                    Equals@438..439 "="
+                    Whitespace@439..440 " "
+                    CallExpression@440..454
+                      NameExpression@440..443
+                        Name@440..443
+                          Identifier@440..443 "max"
+                      ArgumentList@443..454
+                        OpenParenthesis@443..444 "("
+                        Argument@444..445
+                          Literal@444..445
+                            IntegerLiteral@444..445 "0"
+                        Comma@445..446 ","
+                        Whitespace@446..447 " "
+                        Argument@447..453
+                          VariableReference@447..453
+                            Variable@447..453 "$value"
+                        CloseParenthesis@453..454 ")"
+                  Semicolon@454..455 ";"
+                Whitespace@455..456 " "
+                CloseBrace@456..457 "}"
+            Whitespace@457..462 "\n    "
+            CloseBrace@462..463 "}"
+      Whitespace@463..469 "\n\n    "
+      ConstantDeclaration@469..533
+        Final@469..474 "final"
+        Whitespace@474..475 " "
+        Public@475..481 "public"
+        Whitespace@481..482 " "
+        Const@482..487 "const"
+        Whitespace@487..488 " "
+        UnionType@488..516
+          ParenthesizedType@488..511
+            OpenParenthesis@488..489 "("
+            IntersectionType@489..510
+              NamedType@489..498
+                Name@489..498
+                  Identifier@489..498 "Countable"
+              Ampersand@498..499 "&"
+              NamedType@499..510
+                Name@499..510
+                  Identifier@499..510 "Traversable"
+            CloseParenthesis@510..511 ")"
+          Pipe@511..512 "|"
+          NamedType@512..516
+            Name@512..516
+              Identifier@512..516 "null"
+        Whitespace@516..517 " "
+        ConstantElement@517..532
+          Identifier@517..525 "REGISTRY"
+          Whitespace@525..526 " "
+          Equals@526..527 "="
+          Whitespace@527..528 " "
+          NameExpression@528..532
+            Name@528..532
+              Identifier@528..532 "null"
+        Semicolon@532..533 ";"
+      Whitespace@533..539 "\n\n    "
+      MethodDeclaration@539..666
+        Public@539..545 "public"
+        Whitespace@545..546 " "
+        Function@546..554 "function"
+        Whitespace@554..555 " "
+        Identifier@555..566 "__construct"
+        ParameterList@566..663
+          OpenParenthesis@566..567 "("
+          Whitespace@567..576 "\n        "
+          Parameter@576..616
+            AttributeGroup@576..581
+              AttributeOpen@576..578 "#["
+              Attribute@578..580
+                Name@578..580
+                  Identifier@578..580 "Id"
+              CloseBracket@580..581 "]"
+            Whitespace@581..582 " "
+            Public@582..588 "public"
+            Whitespace@588..589 " "
+            Readonly@589..597 "readonly"
+            Whitespace@597..598 " "
+            NamedType@598..604
+              Name@598..604
+                Identifier@598..604 "string"
+            Whitespace@604..605 " "
+            Variable@605..616 "$identifier"
+          Comma@616..617 ","
+          Whitespace@617..626 "\n        "
+          Parameter@626..656
+            Protected@626..635 "protected"
+            Whitespace@635..636 " "
+            NullableType@636..641
+              Question@636..637 "?"
+              NamedType@637..641
+                Name@637..641
+                  Identifier@637..641 "self"
+            Whitespace@641..642 " "
+            Variable@642..649 "$parent"
+            Whitespace@649..650 " "
+            Equals@650..651 "="
+            Whitespace@651..652 " "
+            NameExpression@652..656
+              Name@652..656
+                Identifier@652..656 "null"
+          Comma@656..657 ","
+          Whitespace@657..662 "\n    "
+          CloseParenthesis@662..663 ")"
+        Whitespace@663..664 " "
+        Block@664..666
+          OpenBrace@664..665 "{"
+          CloseBrace@665..666 "}"
+      Whitespace@666..672 "\n\n    "
+      MethodDeclaration@672..714
+        Abstract@672..680 "abstract"
+        Whitespace@680..681 " "
+        Protected@681..690 "protected"
+        Whitespace@690..691 " "
+        Function@691..699 "function"
+        Whitespace@699..700 " "
+        Identifier@700..705 "audit"
+        ParameterList@705..707
+          OpenParenthesis@705..706 "("
+          CloseParenthesis@706..707 ")"
+        Colon@707..708 ":"
+        Whitespace@708..709 " "
+        NamedType@709..713
+          Name@709..713
+            Identifier@709..713 "void"
+        Semicolon@713..714 ";"
+      Whitespace@714..720 "\n\n    "
+      MethodDeclaration@720..775
+        Public@720..726 "public"
+        Whitespace@726..727 " "
+        Function@727..735 "function"
+        Whitespace@735..736 " "
+        Identifier@736..741 "count"
+        ParameterList@741..743
+          OpenParenthesis@741..742 "("
+          CloseParenthesis@742..743 ")"
+        Colon@743..744 ":"
+        Whitespace@744..745 " "
+        NamedType@745..748
+          Name@745..748
+            Identifier@745..748 "int"
+        Whitespace@748..749 " "
+        Block@749..775
+          OpenBrace@749..750 "{"
+          Whitespace@750..751 " "
+          ReturnStatement@751..773
+            Return@751..757 "return"
+            Whitespace@757..758 " "
+            MemberAccessExpression@758..772
+              VariableReference@758..763
+                Variable@758..763 "$this"
+              Arrow@763..765 "->"
+              MemberName@765..772
+                Identifier@765..772 "balance"
+            Semicolon@772..773 ";"
+          Whitespace@773..774 " "
+          CloseBrace@774..775 "}"
+      Whitespace@775..776 "\n"
+      CloseBrace@776..777 "}"
+  Whitespace@777..779 "\n\n"
+  EnumDeclaration@779..935
+    Enum@779..783 "enum"
+    Whitespace@783..784 " "
+    Identifier@784..792 "Currency"
+    Colon@792..793 ":"
+    Whitespace@793..794 " "
+    NamedType@794..800
+      Name@794..800
+        Identifier@794..800 "string"
+    Whitespace@800..801 "\n"
+    MemberList@801..935
+      OpenBrace@801..802 "{"
+      Whitespace@802..807 "\n    "
+      EnumCase@807..825
+        Case@807..811 "case"
+        Whitespace@811..812 " "
+        Identifier@812..816 "Euro"
+        Whitespace@816..817 " "
+        Equals@817..818 "="
+        Whitespace@818..819 " "
+        Literal@819..824
+          SingleQuotedString@819..824 "'EUR'"
+        Semicolon@824..825 ";"
+      Whitespace@825..831 "\n\n    "
+      MethodDeclaration@831..933
+        Public@831..837 "public"
+        Whitespace@837..838 " "
+        Function@838..846 "function"
+        Whitespace@846..847 " "
+        Identifier@847..853 "symbol"
+        ParameterList@853..855
+          OpenParenthesis@853..854 "("
+          CloseParenthesis@854..855 ")"
+        Colon@855..856 ":"
+        Whitespace@856..857 " "
+        NamedType@857..863
+          Name@857..863
+            Identifier@857..863 "string"
+        Whitespace@863..868 "\n    "
+        Block@868..933
+          OpenBrace@868..869 "{"
+          Whitespace@869..878 "\n        "
+          ReturnStatement@878..927
+            Return@878..884 "return"
+            Whitespace@884..885 " "
+            MatchExpression@885..926
+              Match@885..890 "match"
+              Whitespace@890..891 " "
+              OpenParenthesis@891..892 "("
+              VariableReference@892..897
+                Variable@892..897 "$this"
+              CloseParenthesis@897..898 ")"
+              Whitespace@898..899 " "
+              OpenBrace@899..900 "{"
+              Whitespace@900..901 " "
+              MatchArm@901..924
+                ScopedAccessExpression@901..915
+                  NameExpression@901..909
+                    Name@901..909
+                      Identifier@901..909 "Currency"
+                  ColonColon@909..911 "::"
+                  MemberName@911..915
+                    Identifier@911..915 "Euro"
+                Whitespace@915..916 " "
+                FatArrow@916..918 "=>"
+                Whitespace@918..919 " "
+                Literal@919..924
+                  SingleQuotedString@919..924 "'€'"
+              Whitespace@924..925 " "
+              CloseBrace@925..926 "}"
+            Semicolon@926..927 ";"
+          Whitespace@927..932 "\n    "
+          CloseBrace@932..933 "}"
+      Whitespace@933..934 "\n"
+      CloseBrace@934..935 "}"
+  Whitespace@935..936 "\n"

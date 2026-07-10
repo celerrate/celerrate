@@ -107,11 +107,24 @@ fn pathological_dollar_chains_trip_the_guard_without_panicking() {
 }
 
 #[test]
-fn a_refused_expression_start_still_advances() {
-    // `namespace` not followed by `\` is a declaration keyword this
-    // plan does not parse; the statement loop must not livelock on it.
+fn a_bare_namespace_dispatches_as_a_declaration() {
+    // The statement dispatcher routes bare `namespace` (no following
+    // `\`) to the declaration grammar, so the source parses into two
+    // clean, distinct statements. `namespace` no longer reaches
+    // `expression_statement`'s refusal-recovery branch (an expression
+    // start the expression grammar refuses, wrapped and consumed);
+    // that branch is reachable again from other source text (bare
+    // `enum`, pinned in `declarations_enums.rs`) and is covered
+    // directly by `a_refused_expression_start_is_wrapped_and_consumed`
+    // in `src/parser/grammar/statements.rs`.
     let parse = support::parse_verified("<?php namespace Foo; $x;");
-    assert!(!parse.diagnostics().is_empty());
+    assert!(parse.diagnostics().is_empty());
+    assert!(
+        parse
+            .tree()
+            .children()
+            .any(|node| node.kind() == SyntaxKind::NamespaceDeclaration)
+    );
     assert!(
         parse
             .tree()

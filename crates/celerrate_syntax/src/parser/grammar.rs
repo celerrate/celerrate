@@ -3,10 +3,13 @@
 
 use crate::syntax_kind::SyntaxKind;
 
-use super::{CompletedMarker, Parser};
+use super::{CompletedMarker, Marker, Parser};
 
+mod attributes;
+mod declarations;
 mod expressions;
 mod statements;
+mod types;
 
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();

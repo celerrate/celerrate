@@ -8,7 +8,7 @@
 use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;
 
-use super::{CompletedMarker, Parser};
+use super::{CompletedMarker, Marker, Parser};
 
 // One constant per level of the precedence table (see the plan's
 // authoritative table). Declared as each task consumes them, so the
@@ -164,6 +164,9 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Match
             | SyntaxKind::Function
             | SyntaxKind::Fn
+            | SyntaxKind::Readonly
+            | SyntaxKind::Enum
+            | SyntaxKind::AttributeOpen
     )
 }
 
@@ -409,7 +412,7 @@ fn starts_argument(parser: &mut Parser) -> bool {
 /// missing unless the list sits at a legitimate boundary (its closer,
 /// a statement boundary, end of input). Shared by every
 /// comma-separated list of this plan.
-fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
+pub(super) fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
     if parser.eat(SyntaxKind::Comma) {
         return;
     }
@@ -696,16 +699,48 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             name(parser);
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
-        Some(SyntaxKind::Function | SyntaxKind::Fn) => Some(closure_or_arrow_function(parser)),
+        Some(SyntaxKind::Function | SyntaxKind::Fn) => {
+            let marker = parser.start();
+            Some(closure_or_arrow_function(parser, marker))
+        }
         Some(SyntaxKind::Static)
             if matches!(parser.nth(1), Some(SyntaxKind::Function | SyntaxKind::Fn)) =>
         {
-            Some(closure_or_arrow_function(parser))
+            let marker = parser.start();
+            Some(closure_or_arrow_function(parser, marker))
+        }
+        // Attributes at expression position decorate a closure or an
+        // arrow function; anything else behind them is wreckage (Zend
+        // rejects it too).
+        Some(SyntaxKind::AttributeOpen) => {
+            let marker = parser.start();
+            super::attributes::attribute_groups(parser);
+            match parser.current() {
+                Some(SyntaxKind::Function | SyntaxKind::Fn | SyntaxKind::Static) => {
+                    Some(closure_or_arrow_function(parser, marker))
+                }
+                _ => {
+                    parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
+                    Some(marker.complete(parser, SyntaxKind::ErrorNode))
+                }
+            }
         }
         // `static` as a scoped-access subject (`static::create()`).
         Some(SyntaxKind::Static) => {
             let marker = parser.start();
             parser.bump();
+            Some(marker.complete(parser, SyntaxKind::NameExpression))
+        }
+        // Zend keeps `enum` and `readonly` callable as plain function
+        // names for backward compatibility: directly followed by `(`
+        // they are call targets, never declaration keywords.
+        Some(SyntaxKind::Enum | SyntaxKind::Readonly)
+            if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) =>
+        {
+            let marker = parser.start();
+            let name_marker = parser.start();
+            parser.bump();
+            name_marker.complete(parser, SyntaxKind::Name);
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
         Some(SyntaxKind::OpenParenthesis) => Some(parenthesized_expression(parser)),
@@ -758,9 +793,27 @@ fn new_expression(parser: &mut Parser) -> CompletedMarker {
         Some(SyntaxKind::OpenParenthesis) => {
             parenthesized_expression(parser);
         }
-        // `new class { ... }` (anonymous classes) belongs to the
-        // declarations plan; recovery keeps the tokens until then.
-        Some(SyntaxKind::Class) => error_element(parser),
+        // Zend keeps `readonly` callable as a plain function name for
+        // backward compatibility, even right after `new`: only
+        // `readonly class` is the anonymous-class form. This arm must
+        // precede the anonymous-class arm below so the `(` case takes
+        // precedence over it.
+        Some(SyntaxKind::Readonly) if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) => {
+            let name_marker = parser.start();
+            parser.bump();
+            name_marker.complete(parser, SyntaxKind::Name);
+        }
+        Some(
+            SyntaxKind::Class
+            | SyntaxKind::Readonly
+            | SyntaxKind::Final
+            | SyntaxKind::Abstract
+            | SyntaxKind::AttributeOpen,
+        ) => {
+            let class_marker = parser.start();
+            super::attributes::attribute_groups(parser);
+            super::declarations::anonymous_class(parser, class_marker);
+        }
         _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression),
     }
     if parser.at(SyntaxKind::OpenParenthesis) {
@@ -904,9 +957,12 @@ fn match_arm(parser: &mut Parser) {
 }
 
 /// `function`/`fn` at expression position, optionally preceded by
-/// `static`; the caller checked the shape.
-fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
-    let marker = parser.start();
+/// `static`; the caller checked the shape. Also reached from
+/// `declarations::declaration` when attributes turn out to decorate a
+/// closure rather than a declaration (`#[Pure] static fn () => ...;`
+/// as a bare statement): the marker there is opened before the
+/// attribute groups, exactly like every other declaration path.
+pub(super) fn closure_or_arrow_function(parser: &mut Parser, marker: Marker) -> CompletedMarker {
     parser.eat(SyntaxKind::Static);
     if parser.at(SyntaxKind::Function) {
         parser.bump();
@@ -916,7 +972,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
             closure_use_clause(parser);
         }
         if parser.eat(SyntaxKind::Colon) {
-            type_reference(parser);
+            super::types::type_expression(parser);
         }
         super::statements::block(parser);
         marker.complete(parser, SyntaxKind::ClosureExpression)
@@ -925,7 +981,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
         parser.eat(SyntaxKind::Ampersand); // by-reference return
         parameter_list(parser);
         if parser.eat(SyntaxKind::Colon) {
-            type_reference(parser);
+            super::types::type_expression(parser);
         }
         parser.expect(SyntaxKind::FatArrow);
         expression(parser);
@@ -933,11 +989,14 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
     }
 }
 
-/// `( parameter, ... )`. Progress is guaranteed without an explicit
-/// committed-position guard: `starts_parameter` only admits kinds that
-/// force `parameter` to consume at least one token before it can reach
-/// any refusable sub-parse (the default value), unlike `argument_list`
-/// where the element can be a bare, refusable expression.
+/// `( parameter, ... )`. Progress is enforced mechanically, with the
+/// same committed-position guard as `argument_list`: the nesting guard
+/// can refuse a parameter's type outright, without consuming a token,
+/// when this list sits deep inside a pathological chain of
+/// parenthesized expressions, and `starts_parameter` would re-admit
+/// that same unconsumed token forever. Each iteration records the
+/// position before parsing a parameter and, if it is unchanged
+/// afterward, forces an `error_element` bump.
 pub(super) fn parameter_list(parser: &mut Parser) {
     let marker = parser.start();
     if parser.at(SyntaxKind::OpenParenthesis) {
@@ -950,8 +1009,12 @@ pub(super) fn parameter_list(parser: &mut Parser) {
                 error_element(parser);
                 continue;
             }
+            let position_before_parameter = parser.position();
             parameter(parser);
             expect_list_separator(parser, SyntaxKind::CloseParenthesis);
+            if parser.position() == position_before_parameter {
+                error_element(parser);
+            }
         }
         parser.expect(SyntaxKind::CloseParenthesis);
     } else {
@@ -974,17 +1037,32 @@ fn starts_parameter(parser: &mut Parser) -> bool {
                 | SyntaxKind::Array
                 | SyntaxKind::Callable
                 | SyntaxKind::Static
+                | SyntaxKind::OpenParenthesis
+                | SyntaxKind::Public
+                | SyntaxKind::Protected
+                | SyntaxKind::Private
+                | SyntaxKind::Readonly
+                | SyntaxKind::Abstract
+                | SyntaxKind::Final
+                | SyntaxKind::Var
+                | SyntaxKind::AttributeOpen
         )
     )
 }
 
 fn parameter(parser: &mut Parser) {
     let marker = parser.start();
+    super::attributes::attribute_groups(parser);
+    // Constructor promotion accepts every member modifier (php-src's
+    // `optional_cpp_modifiers` is the same grammar as a class member's
+    // modifiers); which modifiers are legal on which parameters is
+    // semantic.
+    super::declarations::member_modifiers(parser);
     if !matches!(
         parser.current(),
         Some(SyntaxKind::Variable | SyntaxKind::Ampersand | SyntaxKind::Ellipsis)
     ) {
-        type_reference(parser);
+        super::types::type_expression(parser);
     }
     parser.eat(SyntaxKind::Ampersand);
     parser.eat(SyntaxKind::Ellipsis);
@@ -992,45 +1070,13 @@ fn parameter(parser: &mut Parser) {
     if parser.eat(SyntaxKind::Equals) {
         expression(parser);
     }
+    if parser.at(SyntaxKind::OpenBrace) {
+        // Hooks on a promoted constructor property (8.4); legality is
+        // semantic. Unreachable for an ordinary closing parameter: the
+        // list already stopped at `)`.
+        super::declarations::property_hook_list(parser);
+    }
     marker.complete(parser, SyntaxKind::Parameter);
-}
-
-/// One optionally-nullable named type (`int`, `?\Foo\Bar`, `callable`,
-/// `array`, `static`). Union, intersection, and DNF forms arrive with
-/// the declarations plan, which replaces this rule.
-///
-/// The qualified-name tokens are bumped directly, not through `name`:
-/// `name` wraps them in their own `Name` node (as `NameExpression`
-/// needs, to keep a name a reusable, independently-addressable unit),
-/// but a `TypeReference` has no such second consumer, so the tokens sit
-/// directly under it.
-pub(super) fn type_reference(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.eat(SyntaxKind::Question);
-    match parser.current() {
-        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace) => {
-            qualified_type_name(parser);
-        }
-        Some(kind) if kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_current(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
-    marker.complete(parser, SyntaxKind::TypeReference);
-}
-
-/// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`, bumped directly under the
-/// caller's node. Mirrors `name`'s token sequence without its `Name`
-/// wrapper.
-fn qualified_type_name(parser: &mut Parser) {
-    if parser.eat(SyntaxKind::Namespace) {
-        parser.expect(SyntaxKind::Backslash);
-    } else {
-        parser.eat(SyntaxKind::Backslash);
-    }
-    parser.expect(SyntaxKind::Identifier);
-    while parser.at(SyntaxKind::Backslash) && parser.nth(1) == Some(SyntaxKind::Identifier) {
-        parser.bump();
-        parser.bump();
-    }
 }
 
 /// `use ( variables )` on a closure. Progress is guaranteed without an

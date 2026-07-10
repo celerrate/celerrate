@@ -1,0 +1,165 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_class_like.php
+---
+SourceFile@0..311
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  ClassDeclaration@7..75
+    Abstract@7..15 "abstract"
+    Whitespace@15..16 " "
+    Class@16..21 "class"
+    Whitespace@21..22 " "
+    Identifier@22..26 "Base"
+    Whitespace@26..27 " "
+    ExtendsClause@27..39
+      Extends@27..34 "extends"
+      Whitespace@34..35 " "
+      Name@35..39
+        Identifier@35..39 "Root"
+    Whitespace@39..40 " "
+    ImplementsClause@40..72
+      Implements@40..50 "implements"
+      Whitespace@50..51 " "
+      Name@51..60
+        Identifier@51..60 "Countable"
+      Comma@60..61 ","
+      Whitespace@61..62 " "
+      Name@62..72
+        Identifier@62..72 "Stringable"
+    Whitespace@72..73 " "
+    MemberList@73..75
+      OpenBrace@73..74 "{"
+      CloseBrace@74..75 "}"
+  Whitespace@75..77 "\n\n"
+  ClassDeclaration@77..106
+    Final@77..82 "final"
+    Whitespace@82..83 " "
+    Readonly@83..91 "readonly"
+    Whitespace@91..92 " "
+    Class@92..97 "class"
+    Whitespace@97..98 " "
+    Identifier@98..103 "Value"
+    Whitespace@103..104 " "
+    MemberList@104..106
+      OpenBrace@104..105 "{"
+      CloseBrace@105..106 "}"
+  Whitespace@106..108 "\n\n"
+  InterfaceDeclaration@108..156
+    Interface@108..117 "interface"
+    Whitespace@117..118 " "
+    Identifier@118..123 "Shape"
+    Whitespace@123..124 " "
+    ExtendsClause@124..153
+      Extends@124..131 "extends"
+      Whitespace@131..132 " "
+      Name@132..139
+        Identifier@132..139 "HasArea"
+      Comma@139..140 ","
+      Whitespace@140..141 " "
+      Name@141..153
+        Identifier@141..153 "HasPerimeter"
+    Whitespace@153..154 " "
+    MemberList@154..156
+      OpenBrace@154..155 "{"
+      CloseBrace@155..156 "}"
+  Whitespace@156..158 "\n\n"
+  TraitDeclaration@158..173
+    Trait@158..163 "trait"
+    Whitespace@163..164 " "
+    Identifier@164..170 "Greets"
+    Whitespace@170..171 " "
+    MemberList@171..173
+      OpenBrace@171..172 "{"
+      CloseBrace@172..173 "}"
+  Whitespace@173..175 "\n\n"
+  ClassDeclaration@175..188
+    Class@175..180 "class"
+    Whitespace@180..181 " "
+    List@181..185 "List"
+    Whitespace@185..186 " "
+    MemberList@186..188
+      OpenBrace@186..187 "{"
+      CloseBrace@187..188 "}"
+  Whitespace@188..190 "\n\n"
+  ExpressionStatement@190..260
+    AssignmentExpression@190..259
+      VariableReference@190..199
+        Variable@190..199 "$instance"
+      Whitespace@199..200 " "
+      Equals@200..201 "="
+      Whitespace@201..202 " "
+      NewExpression@202..259
+        New@202..205 "new"
+        Whitespace@205..206 " "
+        ClassDeclaration@206..259
+          Class@206..211 "class"
+          ArgumentList@211..214
+            OpenParenthesis@211..212 "("
+            Argument@212..213
+              Literal@212..213
+                IntegerLiteral@212..213 "1"
+            CloseParenthesis@213..214 ")"
+          Whitespace@214..215 " "
+          ExtendsClause@215..227
+            Extends@215..222 "extends"
+            Whitespace@222..223 " "
+            Name@223..227
+              Identifier@223..227 "Base"
+          Whitespace@227..228 " "
+          MemberList@228..259
+            OpenBrace@228..229 "{"
+            Whitespace@229..234 "\n    "
+            PropertyDeclaration@234..257
+              Public@234..240 "public"
+              Whitespace@240..241 " "
+              NamedType@241..244
+                Name@241..244
+                  Identifier@241..244 "int"
+              Whitespace@244..245 " "
+              PropertyElement@245..256
+                Variable@245..252 "$inline"
+                Whitespace@252..253 " "
+                Equals@253..254 "="
+                Whitespace@254..255 " "
+                Literal@255..256
+                  IntegerLiteral@255..256 "0"
+              Semicolon@256..257 ";"
+            Whitespace@257..258 "\n"
+            CloseBrace@258..259 "}"
+    Semicolon@259..260 ";"
+  Whitespace@260..262 "\n\n"
+  ExpressionStatement@262..292
+    AssignmentExpression@262..291
+      VariableReference@262..267
+        Variable@262..267 "$flag"
+      Whitespace@267..268 " "
+      Equals@268..269 "="
+      Whitespace@269..270 " "
+      NewExpression@270..291
+        New@270..273 "new"
+        Whitespace@273..274 " "
+        ClassDeclaration@274..291
+          Readonly@274..282 "readonly"
+          Whitespace@282..283 " "
+          Class@283..288 "class"
+          Whitespace@288..289 " "
+          MemberList@289..291
+            OpenBrace@289..290 "{"
+            CloseBrace@290..291 "}"
+    Semicolon@291..292 ";"
+  Whitespace@292..294 "\n\n"
+  ExpressionStatement@294..310
+    CallExpression@294..309
+      NameExpression@294..302
+        Name@294..302
+          Readonly@294..302 "readonly"
+      ArgumentList@302..309
+        OpenParenthesis@302..303 "("
+        Argument@303..308
+          VariableReference@303..308
+            Variable@303..308 "$flag"
+        CloseParenthesis@308..309 ")"
+    Semicolon@309..310 ";"
+  Whitespace@310..311 "\n"
