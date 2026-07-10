@@ -360,6 +360,14 @@ syntax_kinds! {
     BreakStatement,
     /// `continue;` or `continue level;`; level validity is semantic.
     ContinueStatement,
+    /// `global $a, $b;`.
+    GlobalStatement,
+    /// `static $a = 1, $b;`, the function-static declaration.
+    StaticStatement,
+    /// One declared static: the variable and its optional initializer.
+    StaticVariable,
+    /// `unset( targets );`.
+    UnsetStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

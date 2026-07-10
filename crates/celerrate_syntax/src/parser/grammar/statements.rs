@@ -6,7 +6,9 @@ use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;
 
 use super::Parser;
-use super::expressions::{error_element, expression, starts_expression};
+use super::expressions::{
+    argument_list, error_element, expression, simple_variable, starts_expression,
+};
 
 pub(super) fn statement(parser: &mut Parser) {
     if !parser.enter_nesting() {
@@ -35,6 +37,11 @@ fn dispatch_statement(parser: &mut Parser) {
         }
         Some(SyntaxKind::Continue) => {
             keyword_optional_expression_statement(parser, SyntaxKind::ContinueStatement)
+        }
+        Some(SyntaxKind::Global) => global_statement(parser),
+        Some(SyntaxKind::Unset) => unset_statement(parser),
+        Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
+            static_statement(parser)
         }
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
@@ -139,6 +146,63 @@ fn terminate_statement(parser: &mut Parser) {
         return;
     }
     parser.diagnose_missing(ParserDiagnosticKind::ExpectedSemicolon);
+}
+
+/// `global $a, $$b;`. Terminates: each iteration either consumed a
+/// variable form or breaks; the comma is consumed before looping.
+fn global_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `global`
+    loop {
+        if simple_variable(parser).is_none() {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Variable));
+            break;
+        }
+        if !parser.eat(SyntaxKind::Comma) {
+            break;
+        }
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::GlobalStatement);
+}
+
+/// `static $a = 1, $b;`: dispatched only when `static` is directly
+/// followed by a variable; `static::`, `static function`, and
+/// `static fn` stay expressions.
+fn static_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `static`
+    loop {
+        if !parser.at(SyntaxKind::Variable) {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Variable));
+            break;
+        }
+        let variable = parser.start();
+        parser.bump();
+        if parser.eat(SyntaxKind::Equals) {
+            expression(parser);
+        }
+        variable.complete(parser, SyntaxKind::StaticVariable);
+        if !parser.eat(SyntaxKind::Comma) {
+            break;
+        }
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::StaticStatement);
+}
+
+/// `unset( targets );`. The shared argument list brings its recovery;
+/// which targets are unsettable is semantic.
+fn unset_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `unset`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        argument_list(parser);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::UnsetStatement);
 }
 
 #[cfg(test)]

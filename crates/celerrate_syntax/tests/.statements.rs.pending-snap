@@ -1,0 +1,33 @@
+{"run_id":"1783704956-887432000","line":124,"new":{"module_name":"statements","snapshot_name":"static_variables_declare_with_optional_initializers","metadata":{"source":"crates/celerrate_syntax/tests/statements.rs","assertion_line":124,"expression":"render_statement(\"static $count = 0, $names;\")"},"snapshot":"ExpressionStatement\n  NameExpression\n    Static \"static\""},"old":{"module_name":"statements","metadata":{},"snapshot":"StaticStatement\n  Static \"static\"\n  StaticVariable\n    Variable \"$count\"\n    Equals \"=\"\n    Literal\n      IntegerLiteral \"0\"\n  Comma \",\"\n  StaticVariable\n    Variable \"$names\"\n  Semicolon \";\""}}
+{"run_id":"1783704956-887432000","line":100,"new":{"module_name":"statements","snapshot_name":"global_lists_variables","metadata":{"source":"crates/celerrate_syntax/tests/statements.rs","assertion_line":100,"expression":"render_statement(\"global $configuration, $$indirect;\")"},"snapshot":"ErrorNode\n  Global \"global\""},"old":{"module_name":"statements","metadata":{},"snapshot":"GlobalStatement\n  Global \"global\"\n  VariableReference\n    Variable \"$configuration\"\n  Comma \",\"\n  DynamicVariableExpression\n    Dollar \"$\"\n    VariableReference\n      Variable \"$indirect\"\n  Semicolon \";\""}}
+{"run_id":"1783704956-887432000","line":164,"new":{"module_name":"statements","snapshot_name":"unset_takes_a_parenthesized_list","metadata":{"source":"crates/celerrate_syntax/tests/statements.rs","assertion_line":164,"expression":"render_statement(\"unset($map['key'], $other);\")"},"snapshot":"ErrorNode\n  Unset \"unset\""},"old":{"module_name":"statements","metadata":{},"snapshot":"UnsetStatement\n  Unset \"unset\"\n  ArgumentList\n    OpenParenthesis \"(\"\n    Argument\n      IndexExpression\n        VariableReference\n          Variable \"$map\"\n        OpenBracket \"[\"\n        Literal\n          SingleQuotedString \"'key'\"\n        CloseBracket \"]\"\n    Comma \",\"\n    Argument\n      VariableReference\n        Variable \"$other\"\n    CloseParenthesis \")\"\n  Semicolon \";\""}}
+{"run_id":"1783705051-500889000","line":77,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":19,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":62,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":141,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":100,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":164,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":53,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":11,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":124,"new":null,"old":null}
+{"run_id":"1783705051-500889000","line":84,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":53,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":100,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":77,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":11,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":141,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":84,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":19,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":164,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":62,"new":null,"old":null}
+{"run_id":"1783705055-687726000","line":124,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":124,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":141,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":53,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":77,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":100,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":11,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":19,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":164,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":62,"new":null,"old":null}
+{"run_id":"1783705073-343461000","line":84,"new":null,"old":null}

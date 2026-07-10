@@ -94,3 +94,99 @@ fn a_missing_statement_terminator_is_diagnosed() {
         parser_diagnostics("<?php return 1").contains(&ParserDiagnosticKind::ExpectedSemicolon)
     );
 }
+
+#[test]
+fn global_lists_variables() {
+    insta::assert_snapshot!(render_statement("global $configuration, $$indirect;"), @r#"
+    GlobalStatement
+      Global "global"
+      VariableReference
+        Variable "$configuration"
+      Comma ","
+      DynamicVariableExpression
+        Dollar "$"
+        VariableReference
+          Variable "$indirect"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn global_without_a_variable_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php global;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Variable))
+    );
+}
+
+#[test]
+fn static_variables_declare_with_optional_initializers() {
+    insta::assert_snapshot!(render_statement("static $count = 0, $names;"), @r#"
+    StaticStatement
+      Static "static"
+      StaticVariable
+        Variable "$count"
+        Equals "="
+        Literal
+          IntegerLiteral "0"
+      Comma ","
+      StaticVariable
+        Variable "$names"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn static_scoped_access_stays_an_expression_statement() {
+    insta::assert_snapshot!(render_statement("static::create();"), @r#"
+    ExpressionStatement
+      CallExpression
+        ScopedAccessExpression
+          NameExpression
+            Static "static"
+          ColonColon "::"
+          MemberName
+            Identifier "create"
+        ArgumentList
+          OpenParenthesis "("
+          CloseParenthesis ")"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_static_closure_stays_an_expression_statement() {
+    assert!(parser_diagnostics("<?php static fn () => 1;").is_empty());
+}
+
+#[test]
+fn unset_takes_a_parenthesized_list() {
+    insta::assert_snapshot!(render_statement("unset($map['key'], $other);"), @r#"
+    UnsetStatement
+      Unset "unset"
+      ArgumentList
+        OpenParenthesis "("
+        Argument
+          IndexExpression
+            VariableReference
+              Variable "$map"
+            OpenBracket "["
+            Literal
+              SingleQuotedString "'key'"
+            CloseBracket "]"
+        Comma ","
+        Argument
+          VariableReference
+            Variable "$other"
+        CloseParenthesis ")"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn unset_without_parentheses_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php unset;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis))
+    );
+}

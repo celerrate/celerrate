@@ -439,7 +439,7 @@ fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
 /// always consume would let such a case spin forever; instead each
 /// iteration records the position before parsing an element and, if it
 /// is unchanged afterward, forces an `error_element` bump.
-fn argument_list(parser: &mut Parser) {
+pub(super) fn argument_list(parser: &mut Parser) {
     let marker = parser.start();
     parser.expect(SyntaxKind::OpenParenthesis);
     while !parser.at(SyntaxKind::CloseParenthesis) && !parser.at_end() {
@@ -1094,7 +1094,7 @@ fn name(parser: &mut Parser) -> CompletedMarker {
 /// `$name`, `$$name`, `${expression}`: the dynamic forms recurse, so
 /// the nesting guard applies. Returns `None` without consuming when
 /// the current token is not a variable form.
-fn simple_variable(parser: &mut Parser) -> Option<CompletedMarker> {
+pub(super) fn simple_variable(parser: &mut Parser) -> Option<CompletedMarker> {
     match parser.current() {
         Some(SyntaxKind::Variable) => {
             let marker = parser.start();
