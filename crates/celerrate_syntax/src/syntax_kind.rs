@@ -398,6 +398,13 @@ syntax_kinds! {
     /// included; the body ends where the next section (or the switch)
     /// begins, so an empty body is a fallthrough.
     SwitchCase,
+    /// `try block`, then catch clauses and an optional finally.
+    TryStatement,
+    /// `catch (Type | Type $variable) block`; the variable is optional
+    /// since PHP 8.0.
+    CatchClause,
+    /// `finally block`.
+    FinallyClause,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

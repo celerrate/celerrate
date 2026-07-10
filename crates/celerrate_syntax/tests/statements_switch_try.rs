@@ -2,7 +2,7 @@
 
 mod support;
 
-use celerrate_syntax::ParserDiagnosticKind;
+use celerrate_syntax::{ParserDiagnosticKind, SyntaxKind};
 use support::{parser_diagnostics, render_statement};
 
 #[test]
@@ -62,4 +62,55 @@ fn an_alternative_switch_closes_with_endswitch() {
 fn junk_between_cases_is_wrapped_and_consumed() {
     let diagnostics = parser_diagnostics("<?php switch ($x) { junk case 1: echo 1; }");
     assert!(diagnostics.contains(&ParserDiagnosticKind::UnexpectedToken));
+}
+
+#[test]
+fn try_catch_finally_holds_clauses() {
+    insta::assert_snapshot!(
+        render_statement("try { } catch (LogicException | \\RuntimeException $error) { } finally { }"),
+        @r#"
+    TryStatement
+      Try "try"
+      Block
+        OpenBrace "{"
+        CloseBrace "}"
+      CatchClause
+        Catch "catch"
+        OpenParenthesis "("
+        Name
+          Identifier "LogicException"
+        Pipe "|"
+        Name
+          Backslash "\\"
+          Identifier "RuntimeException"
+        VariableReference
+          Variable "$error"
+        CloseParenthesis ")"
+        Block
+          OpenBrace "{"
+          CloseBrace "}"
+      FinallyClause
+        Finally "finally"
+        Block
+          OpenBrace "{"
+          CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn catch_variables_are_optional_since_php_8() {
+    assert!(parser_diagnostics("<?php try { } catch (Throwable) { }").is_empty());
+}
+
+#[test]
+fn finally_alone_satisfies_a_try() {
+    assert!(parser_diagnostics("<?php try { } finally { }").is_empty());
+}
+
+#[test]
+fn a_bare_try_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php try { }")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Catch))
+    );
 }

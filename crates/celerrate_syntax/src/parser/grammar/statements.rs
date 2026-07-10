@@ -7,7 +7,7 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::Parser;
 use super::expressions::{
-    argument_list, error_element, expression, simple_variable, starts_expression,
+    argument_list, error_element, expression, name, simple_variable, starts_expression,
 };
 
 pub(super) fn statement(parser: &mut Parser) {
@@ -47,6 +47,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::For) => for_statement(parser),
         Some(SyntaxKind::Foreach) => foreach_statement(parser),
         Some(SyntaxKind::Switch) => switch_statement(parser),
+        Some(SyntaxKind::Try) => try_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -478,6 +479,52 @@ fn switch_case_separator(parser: &mut Parser) {
     if !parser.eat(SyntaxKind::Colon) && !parser.eat(SyntaxKind::Semicolon) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Colon));
     }
+}
+
+fn try_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `try`
+    block(parser);
+    let mut caught = false;
+    while parser.at(SyntaxKind::Catch) {
+        caught = true;
+        catch_clause(parser);
+    }
+    if parser.at(SyntaxKind::Finally) {
+        let clause = parser.start();
+        parser.bump();
+        block(parser);
+        clause.complete(parser, SyntaxKind::FinallyClause);
+    } else if !caught {
+        // Zend rejects `try` without a single catch or finally.
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Catch));
+    }
+    marker.complete(parser, SyntaxKind::TryStatement);
+}
+
+fn catch_clause(parser: &mut Parser) {
+    let clause = parser.start();
+    parser.bump(); // `catch`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        // `A | B\C`: qualified names separated by pipes. `name`
+        // self-recovers (diagnoses a missing identifier) on absence,
+        // and each loop iteration consumed its pipe: progress holds.
+        name(parser);
+        while parser.eat(SyntaxKind::Pipe) {
+            name(parser);
+        }
+        if parser.at(SyntaxKind::Variable) {
+            let variable = parser.start();
+            parser.bump();
+            variable.complete(parser, SyntaxKind::VariableReference);
+        }
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    block(parser);
+    clause.complete(parser, SyntaxKind::CatchClause);
 }
 
 #[cfg(test)]

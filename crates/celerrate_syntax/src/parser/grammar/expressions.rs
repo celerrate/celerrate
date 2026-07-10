@@ -1076,7 +1076,7 @@ fn closure_use_clause(parser: &mut Parser) {
 /// lexes each qualified form as a single token, which forbids interior
 /// whitespace; the trivia-free token view cannot see adjacency, so
 /// spaced segments parse here and adjacency is judged upstairs.
-fn name(parser: &mut Parser) -> CompletedMarker {
+pub(super) fn name(parser: &mut Parser) -> CompletedMarker {
     let marker = parser.start();
     if parser.eat(SyntaxKind::Namespace) {
         parser.expect(SyntaxKind::Backslash);
