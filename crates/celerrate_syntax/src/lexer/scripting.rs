@@ -14,6 +14,13 @@ pub(crate) fn is_name_continue(character: char) -> bool {
     is_name_start(character) || character.is_ascii_digit()
 }
 
+/// Zend's whitespace is exactly these four characters. Notably, form
+/// feed (U+000C) is not one of them: in PHP code it lexes as an
+/// unexpected character.
+fn is_php_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r')
+}
+
 /// A radix prefix counts only when a digit of that radix follows: "0x"
 /// alone or "0xyz" lexes as the integer zero then a name, as in Zend.
 fn starts_with_radix_prefix(rest: &str, prefix: &str, is_digit: impl Fn(char) -> bool) -> bool {
@@ -27,9 +34,8 @@ impl Lexer<'_> {
             return;
         };
         match character {
-            character if character.is_ascii_whitespace() => {
-                self.cursor
-                    .eat_while(|character| character.is_ascii_whitespace());
+            character if is_php_whitespace(character) => {
+                self.cursor.eat_while(is_php_whitespace);
                 self.emit(SyntaxKind::Whitespace);
             }
             '?' if self.cursor.rest().starts_with("?>") => self.lex_close_tag(),
@@ -264,7 +270,7 @@ impl Lexer<'_> {
         let rest = self.cursor.rest();
         let is_docblock = rest
             .strip_prefix("/**")
-            .is_some_and(|after| after.starts_with(|c: char| c.is_ascii_whitespace()));
+            .is_some_and(|after| after.starts_with(is_php_whitespace));
         self.cursor.bump_bytes(2);
         match self.cursor.rest().find("*/") {
             Some(terminator_position) => {

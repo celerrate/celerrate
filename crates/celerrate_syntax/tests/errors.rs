@@ -46,3 +46,35 @@ fn degenerate_input_terminates_and_stays_lossless() {
     assert_eq!(tokens.len(), 302);
     assert_eq!(diagnostics.len(), 300);
 }
+
+#[test]
+fn form_feed_is_not_whitespace_in_scripting_mode() {
+    // Zend's whitespace is space, tab, \n, and \r only; a form feed in
+    // PHP code is an unexpected character.
+    let (tokens, diagnostics) = lex_verified("<?php \u{C};");
+    assert_eq!(
+        tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
+        [OpenTag, Whitespace, Error, Semicolon]
+    );
+    let diagnostic = diagnostics.first().copied().expect("one diagnostic");
+    assert_eq!(diagnostic.kind, LexerDiagnosticKind::UnexpectedCharacter);
+    assert_eq!(u32::from(diagnostic.range.start()), 6);
+}
+
+#[test]
+fn form_feed_stays_ordinary_content_outside_scripting() {
+    let (tokens, diagnostics) = lex_verified("a\u{C}b<?php '\u{C}' ?>\u{C}");
+    assert_eq!(
+        tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
+        [
+            InlineHtml,
+            OpenTag,
+            Whitespace,
+            SingleQuotedString,
+            Whitespace,
+            CloseTag,
+            InlineHtml,
+        ]
+    );
+    assert!(diagnostics.is_empty());
+}
