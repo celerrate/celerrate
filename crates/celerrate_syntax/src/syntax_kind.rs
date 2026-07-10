@@ -1,18 +1,35 @@
-/// Every kind of token in PHP source text.
-///
-/// One vocabulary shared by the whole syntax layer, `#[repr(u16)]` so a
-/// future rowan-style tree can store it directly. Token kinds only for
-/// now; the parser part appends node kinds after them.
-///
-/// Keywords each get their own kind, resolved case-insensitively by the
-/// lexer. Semi-reserved uses (`$object->list()`, `const FOR = 1;`,
-/// `enum` as a plain name) are the parser's business: it re-treats
-/// keyword kinds as identifiers where the grammar allows. `true`,
-/// `false`, `null`, `self`, `parent`, and the magic constants are plain
-/// identifiers, resolved semantically.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-#[repr(u16)]
-pub enum SyntaxKind {
+/// Declares `SyntaxKind` and derives the raw `u16` conversion from the
+/// same variant list, so the enum and the conversion can never drift
+/// apart: `ALL` mirrors the declaration order, and declaration order is
+/// discriminant order.
+macro_rules! syntax_kinds {
+    ( $( $(#[$attribute:meta])* $variant:ident, )* ) => {
+        /// Every kind of token and node in PHP syntax.
+        ///
+        /// One vocabulary shared by the whole syntax layer, `#[repr(u16)]`
+        /// so the rowan tree stores it directly. Token kinds first, node
+        /// kinds after them.
+        ///
+        /// Keywords each get their own kind, resolved case-insensitively by
+        /// the lexer. Semi-reserved uses (`$object->list()`, `const FOR = 1;`,
+        /// `enum` as a plain name) are the parser's business: it re-treats
+        /// keyword kinds as identifiers where the grammar allows. `true`,
+        /// `false`, `null`, `self`, `parent`, and the magic constants are
+        /// plain identifiers, resolved semantically.
+        #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+        #[repr(u16)]
+        pub enum SyntaxKind {
+            $( $(#[$attribute])* $variant, )*
+        }
+
+        impl SyntaxKind {
+            /// Every kind, in declaration (and therefore discriminant) order.
+            const ALL: &'static [SyntaxKind] = &[ $(SyntaxKind::$variant,)* ];
+        }
+    };
+}
+
+syntax_kinds! {
     // Trivia.
     Whitespace,
     /// `//` and `#` comments, up to the end of the line or a `?>`.
@@ -212,6 +229,22 @@ pub enum SyntaxKind {
 
     /// A character no rule accepts.
     Error,
+
+    // Node kinds, appended after every token kind and hand-maintained
+    // until the ungrammar code generation of a later plan takes
+    // ownership of this list.
+    /// The root node: one parsed PHP file.
+    SourceFile,
+    /// `echo expression, expression;`.
+    EchoStatement,
+    /// An expression used as a statement, terminator included.
+    ExpressionStatement,
+    /// A literal expression: integer, float, or single-quoted string.
+    Literal,
+    /// A `$variable` used as an expression.
+    VariableReference,
+    /// Recovery wreckage: tokens no grammar rule accepted.
+    ErrorNode,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
@@ -219,6 +252,17 @@ pub enum SyntaxKind {
 const LONGEST_KEYWORD_LENGTH: usize = 12;
 
 impl SyntaxKind {
+    /// The inverse of [`SyntaxKind::into_raw`]. Total and panic-free:
+    /// out-of-range values return `None`.
+    pub fn from_raw(raw: u16) -> Option<Self> {
+        Self::ALL.get(usize::from(raw)).copied()
+    }
+
+    /// The `u16` the tree stores; the discriminant.
+    pub fn into_raw(self) -> u16 {
+        self as u16
+    }
+
     /// Whether this token carries no syntactic meaning (whitespace,
     /// comments, shebang). Trivia stay in the stream; this classifier is
     /// how upper layers skip them.
