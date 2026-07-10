@@ -1,0 +1,164 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_enums.php
+---
+SourceFile@0..343
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  EnumDeclaration@7..57
+    Enum@7..11 "enum"
+    Whitespace@11..12 " "
+    Identifier@12..21 "Direction"
+    Whitespace@21..22 " "
+    MemberList@22..57
+      OpenBrace@22..23 "{"
+      Whitespace@23..28 "\n    "
+      EnumCase@28..39
+        Case@28..32 "case"
+        Whitespace@32..33 " "
+        Identifier@33..38 "North"
+        Semicolon@38..39 ";"
+      Whitespace@39..44 "\n    "
+      EnumCase@44..55
+        Case@44..48 "case"
+        Whitespace@48..49 " "
+        Identifier@49..54 "South"
+        Semicolon@54..55 ";"
+      Whitespace@55..56 "\n"
+      CloseBrace@56..57 "}"
+  Whitespace@57..59 "\n\n"
+  EnumDeclaration@59..332
+    Enum@59..63 "enum"
+    Whitespace@63..64 " "
+    Identifier@64..68 "Suit"
+    Colon@68..69 ":"
+    Whitespace@69..70 " "
+    NamedType@70..76
+      Name@70..76
+        Identifier@70..76 "string"
+    Whitespace@76..77 " "
+    ImplementsClause@77..96
+      Implements@77..87 "implements"
+      Whitespace@87..88 " "
+      Name@88..96
+        Identifier@88..96 "HasColor"
+    Whitespace@96..97 " "
+    MemberList@97..332
+      OpenBrace@97..98 "{"
+      Whitespace@98..103 "\n    "
+      EnumCase@103..121
+        Case@103..107 "case"
+        Whitespace@107..108 " "
+        Identifier@108..114 "Hearts"
+        Whitespace@114..115 " "
+        Equals@115..116 "="
+        Whitespace@116..117 " "
+        Literal@117..120
+          SingleQuotedString@117..120 "'H'"
+        Semicolon@120..121 ";"
+      Whitespace@121..126 "\n    "
+      EnumCase@126..144
+        Case@126..130 "case"
+        Whitespace@130..131 " "
+        Identifier@131..137 "Spades"
+        Whitespace@137..138 " "
+        Equals@138..139 "="
+        Whitespace@139..140 " "
+        Literal@140..143
+          SingleQuotedString@140..143 "'S'"
+        Semicolon@143..144 ";"
+      Whitespace@144..150 "\n\n    "
+      ConstantDeclaration@150..171
+        Const@150..155 "const"
+        Whitespace@155..156 " "
+        ConstantElement@156..170
+          Identifier@156..164 "WILDCARD"
+          Whitespace@164..165 " "
+          Equals@165..166 "="
+          Whitespace@166..167 " "
+          Literal@167..170
+            SingleQuotedString@167..170 "'*'"
+        Semicolon@170..171 ";"
+      Whitespace@171..177 "\n\n    "
+      MethodDeclaration@177..330
+        Public@177..183 "public"
+        Whitespace@183..184 " "
+        Function@184..192 "function"
+        Whitespace@192..193 " "
+        Identifier@193..198 "color"
+        ParameterList@198..200
+          OpenParenthesis@198..199 "("
+          CloseParenthesis@199..200 ")"
+        Colon@200..201 ":"
+        Whitespace@201..202 " "
+        NamedType@202..208
+          Name@202..208
+            Identifier@202..208 "string"
+        Whitespace@208..209 " "
+        Block@209..330
+          OpenBrace@209..210 "{"
+          Whitespace@210..219 "\n        "
+          ReturnStatement@219..324
+            Return@219..225 "return"
+            Whitespace@225..226 " "
+            MatchExpression@226..323
+              Match@226..231 "match"
+              Whitespace@231..232 " "
+              OpenParenthesis@232..233 "("
+              VariableReference@233..238
+                Variable@233..238 "$this"
+              CloseParenthesis@238..239 ")"
+              Whitespace@239..240 " "
+              OpenBrace@240..241 "{"
+              Whitespace@241..254 "\n            "
+              MatchArm@254..275
+                ScopedAccessExpression@254..266
+                  NameExpression@254..258
+                    Name@254..258
+                      Identifier@254..258 "Suit"
+                  ColonColon@258..260 "::"
+                  MemberName@260..266
+                    Identifier@260..266 "Hearts"
+                Whitespace@266..267 " "
+                FatArrow@267..269 "=>"
+                Whitespace@269..270 " "
+                Literal@270..275
+                  SingleQuotedString@270..275 "'red'"
+              Comma@275..276 ","
+              Whitespace@276..289 "\n            "
+              MatchArm@289..312
+                ScopedAccessExpression@289..301
+                  NameExpression@289..293
+                    Name@289..293
+                      Identifier@289..293 "Suit"
+                  ColonColon@293..295 "::"
+                  MemberName@295..301
+                    Identifier@295..301 "Spades"
+                Whitespace@301..302 " "
+                FatArrow@302..304 "=>"
+                Whitespace@304..305 " "
+                Literal@305..312
+                  SingleQuotedString@305..312 "'black'"
+              Comma@312..313 ","
+              Whitespace@313..322 "\n        "
+              CloseBrace@322..323 "}"
+            Semicolon@323..324 ";"
+          Whitespace@324..329 "\n    "
+          CloseBrace@329..330 "}"
+      Whitespace@330..331 "\n"
+      CloseBrace@331..332 "}"
+  Whitespace@332..334 "\n\n"
+  ExpressionStatement@334..342
+    CallExpression@334..341
+      NameExpression@334..338
+        Name@334..338
+          Enum@334..338 "enum"
+      ArgumentList@338..341
+        OpenParenthesis@338..339 "("
+        Argument@339..340
+          Literal@339..340
+            IntegerLiteral@339..340 "1"
+        CloseParenthesis@340..341 ")"
+    Semicolon@341..342 ";"
+  Whitespace@342..343 "\n"

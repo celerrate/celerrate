@@ -1,0 +1,165 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_top_level.php
+---
+SourceFile@0..309
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  NamespaceDeclaration@7..28
+    Namespace@7..16 "namespace"
+    Whitespace@16..17 " "
+    Name@17..27
+      Identifier@17..20 "App"
+      Backslash@20..21 "\\"
+      Identifier@21..27 "Domain"
+    Semicolon@27..28 ";"
+  Whitespace@28..30 "\n\n"
+  UseDeclaration@30..46
+    Use@30..33 "use"
+    Whitespace@33..34 " "
+    UseClause@34..45
+      Name@34..45
+        Identifier@34..37 "App"
+        Backslash@37..38 "\\"
+        Identifier@38..45 "Service"
+    Semicolon@45..46 ";"
+  Whitespace@46..47 "\n"
+  UseDeclaration@47..102
+    Use@47..50 "use"
+    Whitespace@50..51 " "
+    UseClause@51..101
+      Name@51..54
+        Identifier@51..54 "App"
+      UseGroup@54..101
+        Backslash@54..55 "\\"
+        OpenBrace@55..56 "{"
+        UseClause@56..69
+          Name@56..62
+            Identifier@56..62 "Helper"
+          Whitespace@62..63 " "
+          As@63..65 "as"
+          Whitespace@65..66 " "
+          Identifier@66..69 "Aid"
+        Comma@69..70 ","
+        Whitespace@70..71 " "
+        UseClause@71..86
+          Function@71..79 "function"
+          Whitespace@79..80 " "
+          Name@80..86
+            Identifier@80..86 "helper"
+        Comma@86..87 ","
+        Whitespace@87..88 " "
+        UseClause@88..99
+          Const@88..93 "const"
+          Whitespace@93..94 " "
+          Name@94..99
+            Identifier@94..99 "LIMIT"
+        Comma@99..100 ","
+        CloseBrace@100..101 "}"
+    Semicolon@101..102 ";"
+  Whitespace@102..103 "\n"
+  UseDeclaration@103..133
+    Use@103..106 "use"
+    Whitespace@106..107 " "
+    Function@107..115 "function"
+    Whitespace@115..116 " "
+    UseClause@116..132
+      Name@116..122
+        Identifier@116..122 "strlen"
+      Whitespace@122..123 " "
+      As@123..125 "as"
+      Whitespace@125..126 " "
+      Identifier@126..132 "length"
+    Semicolon@132..133 ";"
+  Whitespace@133..134 "\n"
+  UseDeclaration@134..165
+    Use@134..137 "use"
+    Whitespace@137..138 " "
+    Const@138..143 "const"
+    Whitespace@143..144 " "
+    UseClause@144..151
+      Name@144..151
+        Identifier@144..151 "PHP_EOL"
+    Comma@151..152 ","
+    Whitespace@152..153 " "
+    UseClause@153..164
+      Name@153..164
+        Identifier@153..164 "PHP_INT_MAX"
+    Semicolon@164..165 ";"
+  Whitespace@165..167 "\n\n"
+  ConstantDeclaration@167..205
+    Const@167..172 "const"
+    Whitespace@172..173 " "
+    ConstantElement@173..191
+      Identifier@173..181 "GREETING"
+      Whitespace@181..182 " "
+      Equals@182..183 "="
+      Whitespace@183..184 " "
+      Literal@184..191
+        SingleQuotedString@184..191 "'hello'"
+    Comma@191..192 ","
+    Whitespace@192..193 " "
+    ConstantElement@193..204
+      Identifier@193..199 "ANSWER"
+      Whitespace@199..200 " "
+      Equals@200..201 "="
+      Whitespace@201..202 " "
+      Literal@202..204
+        IntegerLiteral@202..204 "42"
+    Semicolon@204..205 ";"
+  Whitespace@205..206 "\n"
+  ConstantDeclaration@206..229
+    Const@206..211 "const"
+    Whitespace@211..212 " "
+    NamedType@212..215
+      Name@212..215
+        Identifier@212..215 "int"
+    Whitespace@215..216 " "
+    ConstantElement@216..228
+      Identifier@216..223 "CEILING"
+      Whitespace@223..224 " "
+      Equals@224..225 "="
+      Whitespace@225..226 " "
+      Literal@226..228
+        IntegerLiteral@226..228 "10"
+    Semicolon@228..229 ";"
+  Whitespace@229..230 "\n"
+  ConstantDeclaration@230..258
+    Const@230..235 "const"
+    Whitespace@235..236 " "
+    ConstantElement@236..257
+      For@236..239 "FOR"
+      Whitespace@239..240 " "
+      Equals@240..241 "="
+      Whitespace@241..242 " "
+      Literal@242..257
+        SingleQuotedString@242..257 "'semi-reserved'"
+    Semicolon@257..258 ";"
+  Whitespace@258..260 "\n\n"
+  NamespaceDeclaration@260..308
+    Namespace@260..269 "namespace"
+    Whitespace@269..270 " "
+    Name@270..279
+      Identifier@270..273 "App"
+      Backslash@273..274 "\\"
+      Identifier@274..279 "Other"
+    Whitespace@279..280 " "
+    Block@280..308
+      OpenBrace@280..281 "{"
+      Whitespace@281..286 "\n    "
+      ConstantDeclaration@286..306
+        Const@286..291 "const"
+        Whitespace@291..292 " "
+        ConstantElement@292..305
+          Identifier@292..298 "NESTED"
+          Whitespace@298..299 " "
+          Equals@299..300 "="
+          Whitespace@300..301 " "
+          NameExpression@301..305
+            Name@301..305
+              Identifier@301..305 "true"
+        Semicolon@305..306 ";"
+      Whitespace@306..307 "\n"
+      CloseBrace@307..308 "}"
+  Whitespace@308..309 "\n"

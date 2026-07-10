@@ -1,0 +1,260 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/declarations_attributes.php
+---
+SourceFile@0..460
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  ClassDeclaration@7..59
+    AttributeGroup@7..44
+      AttributeOpen@7..9 "#["
+      Attribute@9..43
+        Name@9..18
+          Identifier@9..18 "Attribute"
+        ArgumentList@18..43
+          OpenParenthesis@18..19 "("
+          Argument@19..42
+            ScopedAccessExpression@19..42
+              NameExpression@19..28
+                Name@19..28
+                  Identifier@19..28 "Attribute"
+              ColonColon@28..30 "::"
+              MemberName@30..42
+                Identifier@30..42 "TARGET_CLASS"
+          CloseParenthesis@42..43 ")"
+      CloseBracket@43..44 "]"
+    Whitespace@44..45 "\n"
+    Class@45..50 "class"
+    Whitespace@50..51 " "
+    Identifier@51..56 "Route"
+    Whitespace@56..57 " "
+    MemberList@57..59
+      OpenBrace@57..58 "{"
+      CloseBrace@58..59 "}"
+  Whitespace@59..61 "\n\n"
+  ClassDeclaration@61..309
+    AttributeGroup@61..96
+      AttributeOpen@61..63 "#["
+      Attribute@63..95
+        Name@63..68
+          Identifier@63..68 "Route"
+        ArgumentList@68..95
+          OpenParenthesis@68..69 "("
+          Argument@69..76
+            Literal@69..76
+              SingleQuotedString@69..76 "'/home'"
+          Comma@76..77 ","
+          Whitespace@77..78 " "
+          Argument@78..94
+            Identifier@78..85 "methods"
+            Colon@85..86 ":"
+            Whitespace@86..87 " "
+            ArrayExpression@87..94
+              OpenBracket@87..88 "["
+              ArrayElement@88..93
+                Literal@88..93
+                  SingleQuotedString@88..93 "'GET'"
+              CloseBracket@93..94 "]"
+          CloseParenthesis@94..95 ")"
+      CloseBracket@95..96 "]"
+    Whitespace@96..97 "\n"
+    AttributeGroup@97..110
+      AttributeOpen@97..99 "#["
+      Attribute@99..109
+        Name@99..109
+          Identifier@99..109 "Deprecated"
+      CloseBracket@109..110 "]"
+    Whitespace@110..111 "\n"
+    Final@111..116 "final"
+    Whitespace@116..117 " "
+    Class@117..122 "class"
+    Whitespace@122..123 " "
+    Identifier@123..137 "HomeController"
+    Whitespace@137..138 " "
+    MemberList@138..309
+      OpenBrace@138..139 "{"
+      Whitespace@139..144 "\n    "
+      MethodDeclaration@144..228
+        AttributeGroup@144..155
+          AttributeOpen@144..146 "#["
+          Attribute@146..154
+            Name@146..154
+              Identifier@146..154 "Override"
+          CloseBracket@154..155 "]"
+        Whitespace@155..160 "\n    "
+        Public@160..166 "public"
+        Whitespace@166..167 " "
+        Function@167..175 "function"
+        Whitespace@175..176 " "
+        Identifier@176..182 "handle"
+        ParameterList@182..219
+          OpenParenthesis@182..183 "("
+          Parameter@183..218
+            AttributeGroup@183..204
+              AttributeOpen@183..185 "#["
+              Attribute@185..203
+                Name@185..203
+                  Identifier@185..203 "SensitiveParameter"
+              CloseBracket@203..204 "]"
+            Whitespace@204..205 " "
+            NamedType@205..211
+              Name@205..211
+                Identifier@205..211 "string"
+            Whitespace@211..212 " "
+            Variable@212..218 "$token"
+          CloseParenthesis@218..219 ")"
+        Colon@219..220 ":"
+        Whitespace@220..221 " "
+        NamedType@221..225
+          Name@221..225
+            Identifier@221..225 "void"
+        Whitespace@225..226 " "
+        Block@226..228
+          OpenBrace@226..227 "{"
+          CloseBrace@227..228 "}"
+      Whitespace@228..234 "\n\n    "
+      ConstantDeclaration@234..265
+        AttributeGroup@234..243
+          AttributeOpen@234..236 "#["
+          Attribute@236..242
+            Name@236..242
+              Identifier@236..242 "Marker"
+          CloseBracket@242..243 "]"
+        Whitespace@243..248 "\n    "
+        Const@248..253 "const"
+        Whitespace@253..254 " "
+        ConstantElement@254..264
+          Identifier@254..260 "MAPPED"
+          Whitespace@260..261 " "
+          Equals@261..262 "="
+          Whitespace@262..263 " "
+          Literal@263..264
+            IntegerLiteral@263..264 "1"
+        Semicolon@264..265 ";"
+      Whitespace@265..271 "\n\n    "
+      PropertyDeclaration@271..307
+        AttributeGroup@271..280
+          AttributeOpen@271..273 "#["
+          Attribute@273..279
+            Name@273..279
+              Identifier@273..279 "Marker"
+          CloseBracket@279..280 "]"
+        Whitespace@280..285 "\n    "
+        Public@285..291 "public"
+        Whitespace@291..292 " "
+        NamedType@292..295
+          Name@292..295
+            Identifier@292..295 "int"
+        Whitespace@295..296 " "
+        PropertyElement@296..306
+          Variable@296..302 "$count"
+          Whitespace@302..303 " "
+          Equals@303..304 "="
+          Whitespace@304..305 " "
+          Literal@305..306
+            IntegerLiteral@305..306 "0"
+        Semicolon@306..307 ";"
+      Whitespace@307..308 "\n"
+      CloseBrace@308..309 "}"
+  Whitespace@309..311 "\n\n"
+  EnumDeclaration@311..368
+    Enum@311..315 "enum"
+    Whitespace@315..316 " "
+    Identifier@316..321 "Level"
+    Whitespace@321..322 " "
+    MemberList@322..368
+      OpenBrace@322..323 "{"
+      Whitespace@323..328 "\n    "
+      EnumCase@328..366
+        AttributeGroup@328..352
+          AttributeOpen@328..330 "#["
+          Attribute@330..351
+            Name@330..341
+              Identifier@330..341 "Description"
+            ArgumentList@341..351
+              OpenParenthesis@341..342 "("
+              Argument@342..350
+                Literal@342..350
+                  SingleQuotedString@342..350 "'lowest'"
+              CloseParenthesis@350..351 ")"
+          CloseBracket@351..352 "]"
+        Whitespace@352..357 "\n    "
+        Case@357..361 "case"
+        Whitespace@361..362 " "
+        Identifier@362..365 "Low"
+        Semicolon@365..366 ";"
+      Whitespace@366..367 "\n"
+      CloseBrace@367..368 "}"
+  Whitespace@368..370 "\n\n"
+  ExpressionStatement@370..423
+    AssignmentExpression@370..422
+      VariableReference@370..378
+        Variable@370..378 "$handler"
+      Whitespace@378..379 " "
+      Equals@379..380 "="
+      Whitespace@380..381 " "
+      ArrowFunctionExpression@381..422
+        AttributeGroup@381..388
+          AttributeOpen@381..383 "#["
+          Attribute@383..387
+            Name@383..387
+              Identifier@383..387 "Pure"
+          CloseBracket@387..388 "]"
+        Whitespace@388..389 " "
+        Static@389..395 "static"
+        Whitespace@395..396 " "
+        Fn@396..398 "fn"
+        Whitespace@398..399 " "
+        ParameterList@399..407
+          OpenParenthesis@399..400 "("
+          Parameter@400..406
+            NamedType@400..403
+              Name@400..403
+                Identifier@400..403 "int"
+            Whitespace@403..404 " "
+            Variable@404..406 "$x"
+          CloseParenthesis@406..407 ")"
+        Colon@407..408 ":"
+        Whitespace@408..409 " "
+        NamedType@409..412
+          Name@409..412
+            Identifier@409..412 "int"
+        Whitespace@412..413 " "
+        FatArrow@413..415 "=>"
+        Whitespace@415..416 " "
+        BinaryExpression@416..422
+          VariableReference@416..418
+            Variable@416..418 "$x"
+          Whitespace@418..419 " "
+          Star@419..420 "*"
+          Whitespace@420..421 " "
+          Literal@421..422
+            IntegerLiteral@421..422 "2"
+    Semicolon@422..423 ";"
+  Whitespace@423..424 "\n"
+  ExpressionStatement@424..459
+    AssignmentExpression@424..458
+      VariableReference@424..433
+        Variable@424..433 "$instance"
+      Whitespace@433..434 " "
+      Equals@434..435 "="
+      Whitespace@435..436 " "
+      NewExpression@436..458
+        New@436..439 "new"
+        Whitespace@439..440 " "
+        ClassDeclaration@440..458
+          AttributeGroup@440..449
+            AttributeOpen@440..442 "#["
+            Attribute@442..448
+              Name@442..448
+                Identifier@442..448 "Marker"
+            CloseBracket@448..449 "]"
+          Whitespace@449..450 " "
+          Class@450..455 "class"
+          Whitespace@455..456 " "
+          MemberList@456..458
+            OpenBrace@456..457 "{"
+            CloseBrace@457..458 "}"
+    Semicolon@458..459 ";"
+  Whitespace@459..460 "\n"

@@ -1,0 +1,167 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/recovery_declarations.php
+---
+SourceFile@0..262
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  ClassDeclaration@7..89
+    Class@7..12 "class"
+    Whitespace@12..13 " "
+    Identifier@13..19 "Broken"
+    Whitespace@19..20 " "
+    MemberList@20..89
+      OpenBrace@20..21 "{"
+      Whitespace@21..26 "\n    "
+      PropertyDeclaration@26..36
+        Public@26..32 "public"
+        Whitespace@32..33 " "
+        NamedType@33..36
+          Name@33..36
+            Identifier@33..36 "int"
+      Whitespace@36..37 " "
+      ErrorNode@37..38
+        Equals@37..38 "="
+      Whitespace@38..39 " "
+      ErrorNode@39..40
+        IntegerLiteral@39..40 "5"
+      ErrorNode@40..41
+        Semicolon@40..41 ";"
+      Whitespace@41..46 "\n    "
+      MethodDeclaration@46..60
+        Function@46..54 "function"
+        Whitespace@54..55 " "
+        ParameterList@55..57
+          OpenParenthesis@55..56 "("
+          CloseParenthesis@56..57 ")"
+        Whitespace@57..58 " "
+        Block@58..60
+          OpenBrace@58..59 "{"
+          CloseBrace@59..60 "}"
+      Whitespace@60..65 "\n    "
+      ConstantDeclaration@65..70
+        Const@65..70 "const"
+      Whitespace@70..71 " "
+      ErrorNode@71..72
+        Equals@71..72 "="
+      Whitespace@72..73 " "
+      ErrorNode@73..74
+        IntegerLiteral@73..74 "3"
+      ErrorNode@74..75
+        Semicolon@74..75 ";"
+      Whitespace@75..80 "\n    "
+      ErrorNode@80..86
+        Public@80..86 "public"
+      ErrorNode@86..87
+        Semicolon@86..87 ";"
+      Whitespace@87..88 "\n"
+      CloseBrace@88..89 "}"
+  Whitespace@89..91 "\n\n"
+  InterfaceDeclaration@91..144
+    Interface@91..100 "interface"
+    Whitespace@100..101 " "
+    Identifier@101..105 "Half"
+    Whitespace@105..106 " "
+    MemberList@106..144
+      OpenBrace@106..107 "{"
+      Whitespace@107..112 "\n    "
+      MethodDeclaration@112..142
+        Public@112..118 "public"
+        Whitespace@118..119 " "
+        Function@119..127 "function"
+        Whitespace@127..128 " "
+        Identifier@128..137 "signature"
+        ParameterList@137..139
+          OpenParenthesis@137..138 "("
+          CloseParenthesis@138..139 ")"
+        Colon@139..140 ":"
+        Whitespace@140..141 " "
+        Semicolon@141..142 ";"
+      Whitespace@142..143 "\n"
+      CloseBrace@143..144 "}"
+  Whitespace@144..146 "\n\n"
+  EnumDeclaration@146..174
+    Enum@146..150 "enum"
+    Whitespace@150..151 " "
+    Identifier@151..161 "Unfinished"
+    Whitespace@161..162 " "
+    MemberList@162..174
+      OpenBrace@162..163 "{"
+      Whitespace@163..168 "\n    "
+      EnumCase@168..172
+        Case@168..172 "case"
+      Whitespace@172..173 "\n"
+      CloseBrace@173..174 "}"
+  Whitespace@174..176 "\n\n"
+  UseDeclaration@176..194
+    Use@176..179 "use"
+    Whitespace@179..180 " "
+    UseClause@180..193
+      Name@180..183
+        Identifier@180..183 "App"
+      UseGroup@183..193
+        Backslash@183..184 "\\"
+        OpenBrace@184..185 "{"
+        UseClause@185..193
+          Name@185..193
+            Identifier@185..193 "Unclosed"
+    Semicolon@193..194 ";"
+  Whitespace@194..195 "\n"
+  ClassDeclaration@195..216
+    Class@195..200 "class"
+    Whitespace@200..201 " "
+    ExtendsClause@201..213
+      Extends@201..208 "extends"
+      Whitespace@208..209 " "
+      Name@209..213
+        Identifier@209..213 "Base"
+    Whitespace@213..214 " "
+    MemberList@214..216
+      OpenBrace@214..215 "{"
+      CloseBrace@215..216 "}"
+  Whitespace@216..217 "\n"
+  ErrorNode@217..225
+    Abstract@217..225 "abstract"
+  Whitespace@225..226 " "
+  ExpressionStatement@226..228
+    Literal@226..227
+      IntegerLiteral@226..227 "1"
+    Semicolon@227..228 ";"
+  Whitespace@228..229 "\n"
+  ErrorNode@229..240
+    AttributeGroup@229..240
+      AttributeOpen@229..231 "#["
+      Attribute@231..239
+        Name@231..239
+          Identifier@231..239 "Dangling"
+      CloseBracket@239..240 "]"
+  Whitespace@240..241 " "
+  EchoStatement@241..261
+    Echo@241..245 "echo"
+    Whitespace@245..246 " "
+    Literal@246..260
+      SingleQuotedString@246..260 "'still parses'"
+    Semicolon@260..261 ";"
+  Whitespace@261..262 "\n"
+---
+Parser(Expected(Variable)) @ 36..36
+Parser(ExpectedSemicolon) @ 36..36
+Parser(UnexpectedToken) @ 37..38
+Parser(UnexpectedToken) @ 39..40
+Parser(UnexpectedToken) @ 40..41
+Parser(Expected(Identifier)) @ 54..54
+Parser(Expected(Identifier)) @ 70..70
+Parser(ExpectedSemicolon) @ 70..70
+Parser(UnexpectedToken) @ 71..72
+Parser(UnexpectedToken) @ 73..74
+Parser(UnexpectedToken) @ 74..75
+Parser(ExpectedDeclaration) @ 86..87
+Parser(UnexpectedToken) @ 86..87
+Parser(ExpectedType) @ 141..142
+Parser(Expected(Identifier)) @ 172..172
+Parser(ExpectedSemicolon) @ 172..172
+Parser(Expected(CloseBrace)) @ 193..193
+Parser(Expected(Identifier)) @ 200..200
+Parser(Expected(Class)) @ 225..225
+Parser(ExpectedDeclaration) @ 241..245
