@@ -5,6 +5,7 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::{CompletedMarker, Marker, Parser};
 
+mod attributes;
 mod declarations;
 mod expressions;
 mod statements;

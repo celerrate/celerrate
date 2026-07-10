@@ -482,6 +482,10 @@ syntax_kinds! {
     /// One hook: optional `final`, optional `&`, the name, an optional
     /// parameter list, then `;`, `=> expression;`, or a block.
     PropertyHook,
+    /// `#[Attribute(arguments), Other]`: one bracketed group.
+    AttributeGroup,
+    /// One attribute inside a group: a name and optional arguments.
+    Attribute,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

@@ -76,6 +76,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Enum) if parser.nth(1) == Some(SyntaxKind::Identifier) => {
             super::declarations::declaration(parser)
         }
+        Some(SyntaxKind::AttributeOpen) => super::declarations::declaration(parser),
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}

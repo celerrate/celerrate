@@ -20,9 +20,25 @@ use super::{Marker, Parser};
 /// later task), never at a standstill.
 pub(super) fn declaration(parser: &mut Parser) {
     let marker = parser.start();
+    super::attributes::attribute_groups(parser);
     match parser.current() {
         Some(SyntaxKind::Function) if at_function_declaration(parser) => {
             function_declaration(parser, marker);
+        }
+        // `#[...]` behind a closure or an arrow function, not a
+        // declaration: only reachable behind attribute groups (a bare
+        // `function (...) {}` or `fn (...) => ...` at statement level
+        // is routed to `expression_statement` directly, never here).
+        // The closure keeps the groups as its own leading children;
+        // wrapped in an `ExpressionStatement` so it terminates like any
+        // other expression statement, with a trailing `;`.
+        Some(SyntaxKind::Function | SyntaxKind::Fn) => {
+            attributed_closure_statement(parser, marker);
+        }
+        Some(SyntaxKind::Static)
+            if matches!(parser.nth(1), Some(SyntaxKind::Function | SyntaxKind::Fn)) =>
+        {
+            attributed_closure_statement(parser, marker);
         }
         Some(SyntaxKind::Const) => constant_declaration(parser, marker),
         Some(SyntaxKind::Namespace) if parser.nth(1) != Some(SyntaxKind::Backslash) => {
@@ -43,6 +59,18 @@ pub(super) fn declaration(parser: &mut Parser) {
         }
         None => marker.abandon(parser),
     }
+}
+
+/// The closure/arrow-function tail of an attribute-led statement:
+/// completes `marker` as the closure itself (the groups stay its
+/// leading children), then wraps it in an `ExpressionStatement` so the
+/// trailing `;` is consumed the same way any other expression
+/// statement consumes it.
+fn attributed_closure_statement(parser: &mut Parser, marker: Marker) {
+    let closure = super::expressions::closure_or_arrow_function(parser, marker);
+    let statement = closure.precede(parser);
+    terminate_statement(parser);
+    statement.complete(parser, SyntaxKind::ExpressionStatement);
 }
 
 /// `function` declares only when a name follows, with an optional `&`
@@ -389,6 +417,21 @@ fn member(parser: &mut Parser) {
             let marker = parser.start();
             modified_member(parser, marker);
         }
+        Some(SyntaxKind::AttributeOpen) => {
+            let marker = parser.start();
+            super::attributes::attribute_groups(parser);
+            match parser.current() {
+                Some(SyntaxKind::Case) => enum_case(parser, marker),
+                Some(kind) if starts_member(kind) => modified_member(parser, marker),
+                _ => {
+                    // Attribute groups with no member behind them: the
+                    // groups (consumed, so the list progresses) become
+                    // wreckage.
+                    parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
+                    marker.complete(parser, SyntaxKind::ErrorNode);
+                }
+            }
+        }
         Some(_) => error_element(parser),
         None => {}
     }
@@ -547,6 +590,7 @@ pub(super) fn property_hook_list(parser: &mut Parser) {
 /// combinations are legal is semantic.
 fn property_hook(parser: &mut Parser) {
     let marker = parser.start();
+    super::attributes::attribute_groups(parser);
     parser.eat(SyntaxKind::Final); // the one modifier hooks admit today
     parser.eat(SyntaxKind::Ampersand); // by-reference `get`
     match parser.current() {

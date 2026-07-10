@@ -8,7 +8,7 @@
 use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;
 
-use super::{CompletedMarker, Parser};
+use super::{CompletedMarker, Marker, Parser};
 
 // One constant per level of the precedence table (see the plan's
 // authoritative table). Declared as each task consumes them, so the
@@ -166,6 +166,7 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Fn
             | SyntaxKind::Readonly
             | SyntaxKind::Enum
+            | SyntaxKind::AttributeOpen
     )
 }
 
@@ -698,11 +699,31 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             name(parser);
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
-        Some(SyntaxKind::Function | SyntaxKind::Fn) => Some(closure_or_arrow_function(parser)),
+        Some(SyntaxKind::Function | SyntaxKind::Fn) => {
+            let marker = parser.start();
+            Some(closure_or_arrow_function(parser, marker))
+        }
         Some(SyntaxKind::Static)
             if matches!(parser.nth(1), Some(SyntaxKind::Function | SyntaxKind::Fn)) =>
         {
-            Some(closure_or_arrow_function(parser))
+            let marker = parser.start();
+            Some(closure_or_arrow_function(parser, marker))
+        }
+        // Attributes at expression position decorate a closure or an
+        // arrow function; anything else behind them is wreckage (Zend
+        // rejects it too).
+        Some(SyntaxKind::AttributeOpen) => {
+            let marker = parser.start();
+            super::attributes::attribute_groups(parser);
+            match parser.current() {
+                Some(SyntaxKind::Function | SyntaxKind::Fn | SyntaxKind::Static) => {
+                    Some(closure_or_arrow_function(parser, marker))
+                }
+                _ => {
+                    parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
+                    Some(marker.complete(parser, SyntaxKind::ErrorNode))
+                }
+            }
         }
         // `static` as a scoped-access subject (`static::create()`).
         Some(SyntaxKind::Static) => {
@@ -773,9 +794,14 @@ fn new_expression(parser: &mut Parser) -> CompletedMarker {
             parenthesized_expression(parser);
         }
         Some(
-            SyntaxKind::Class | SyntaxKind::Readonly | SyntaxKind::Final | SyntaxKind::Abstract,
+            SyntaxKind::Class
+            | SyntaxKind::Readonly
+            | SyntaxKind::Final
+            | SyntaxKind::Abstract
+            | SyntaxKind::AttributeOpen,
         ) => {
             let class_marker = parser.start();
+            super::attributes::attribute_groups(parser);
             super::declarations::anonymous_class(parser, class_marker);
         }
         _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression),
@@ -921,9 +947,12 @@ fn match_arm(parser: &mut Parser) {
 }
 
 /// `function`/`fn` at expression position, optionally preceded by
-/// `static`; the caller checked the shape.
-fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
-    let marker = parser.start();
+/// `static`; the caller checked the shape. Also reached from
+/// `declarations::declaration` when attributes turn out to decorate a
+/// closure rather than a declaration (`#[Pure] static fn () => ...;`
+/// as a bare statement): the marker there is opened before the
+/// attribute groups, exactly like every other declaration path.
+pub(super) fn closure_or_arrow_function(parser: &mut Parser, marker: Marker) -> CompletedMarker {
     parser.eat(SyntaxKind::Static);
     if parser.at(SyntaxKind::Function) {
         parser.bump();
@@ -1003,12 +1032,14 @@ fn starts_parameter(parser: &mut Parser) -> bool {
                 | SyntaxKind::Protected
                 | SyntaxKind::Private
                 | SyntaxKind::Readonly
+                | SyntaxKind::AttributeOpen
         )
     )
 }
 
 fn parameter(parser: &mut Parser) {
     let marker = parser.start();
+    super::attributes::attribute_groups(parser);
     super::declarations::promotion_modifiers(parser);
     if !matches!(
         parser.current(),
