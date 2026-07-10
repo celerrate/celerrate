@@ -5,14 +5,12 @@ use celerrate_source::TextSize;
 /// A char cursor over the source with bounded lookahead and token-length
 /// accounting. All arithmetic is in bytes; no indexing anywhere, only
 /// iterator consumption and `str` prefix operations on [`rest`](Self::rest).
-#[allow(dead_code)]
 pub(crate) struct Cursor<'source> {
     characters: Chars<'source>,
     /// The unconsumed input as it was when the current token started.
     rest_at_token_start: &'source str,
 }
 
-#[allow(dead_code)]
 impl<'source> Cursor<'source> {
     pub(crate) fn new(source: &'source str) -> Self {
         Self {
@@ -25,6 +23,9 @@ impl<'source> Cursor<'source> {
         self.characters.clone().next()
     }
 
+    // Not yet called from lexer production code: two-character lookahead
+    // is needed starting with the scripting operators task.
+    #[allow(dead_code)]
     pub(crate) fn peek_second(&self) -> Option<char> {
         let mut lookahead = self.characters.clone();
         lookahead.next();
@@ -75,6 +76,9 @@ impl<'source> Cursor<'source> {
     }
 
     /// The text consumed since the current token started.
+    // Only reachable production caller today is `Lexer::at_line_start`,
+    // itself unused until the heredoc task; kept warning-free until then.
+    #[allow(dead_code)]
     pub(crate) fn pending_text(&self) -> &'source str {
         self.rest_at_token_start
             .get(..self.pending_byte_length())
