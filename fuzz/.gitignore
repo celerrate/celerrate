@@ -2,3 +2,7 @@ target/
 artifacts/
 coverage/
 Cargo.lock
+
+# corpus/lex holds the committed seed inputs. Local fuzzing writes the
+# entries it discovers into the same directory: review them and commit
+# the interesting ones deliberately, never wholesale.
