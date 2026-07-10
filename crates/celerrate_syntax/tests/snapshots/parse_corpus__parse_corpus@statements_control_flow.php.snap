@@ -1,0 +1,319 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/statements_control_flow.php
+---
+SourceFile@0..435
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  IfStatement@7..102
+    If@7..9 "if"
+    Whitespace@9..10 " "
+    OpenParenthesis@10..11 "("
+    VariableReference@11..17
+      Variable@11..17 "$ready"
+    CloseParenthesis@17..18 ")"
+    Whitespace@18..19 " "
+    Block@19..37
+      OpenBrace@19..20 "{"
+      Whitespace@20..25 "\n    "
+      EchoStatement@25..35
+        Echo@25..29 "echo"
+        Whitespace@29..30 " "
+        Literal@30..34
+          SingleQuotedString@30..34 "'go'"
+        Semicolon@34..35 ";"
+      Whitespace@35..36 "\n"
+      CloseBrace@36..37 "}"
+    Whitespace@37..38 " "
+    ElseIfClause@38..76
+      ElseIf@38..44 "elseif"
+      Whitespace@44..45 " "
+      OpenParenthesis@45..46 "("
+      VariableReference@46..54
+        Variable@46..54 "$waiting"
+      CloseParenthesis@54..55 ")"
+      Whitespace@55..56 " "
+      Block@56..76
+        OpenBrace@56..57 "{"
+        Whitespace@57..62 "\n    "
+        EchoStatement@62..74
+          Echo@62..66 "echo"
+          Whitespace@66..67 " "
+          Literal@67..73
+            SingleQuotedString@67..73 "'hold'"
+          Semicolon@73..74 ";"
+        Whitespace@74..75 "\n"
+        CloseBrace@75..76 "}"
+    Whitespace@76..77 " "
+    ElseClause@77..102
+      Else@77..81 "else"
+      Whitespace@81..82 " "
+      Block@82..102
+        OpenBrace@82..83 "{"
+        Whitespace@83..88 "\n    "
+        EchoStatement@88..100
+          Echo@88..92 "echo"
+          Whitespace@92..93 " "
+          Literal@93..99
+            SingleQuotedString@93..99 "'stop'"
+          Semicolon@99..100 ";"
+        Whitespace@100..101 "\n"
+        CloseBrace@101..102 "}"
+  Whitespace@102..104 "\n\n"
+  IfStatement@104..140
+    If@104..106 "if"
+    Whitespace@106..107 " "
+    OpenParenthesis@107..108 "("
+    VariableReference@108..110
+      Variable@108..110 "$a"
+    CloseParenthesis@110..111 ")"
+    Whitespace@111..112 " "
+    IfStatement@112..140
+      If@112..114 "if"
+      Whitespace@114..115 " "
+      OpenParenthesis@115..116 "("
+      VariableReference@116..118
+        Variable@116..118 "$b"
+      CloseParenthesis@118..119 ")"
+      Whitespace@119..120 " "
+      EchoStatement@120..127
+        Echo@120..124 "echo"
+        Whitespace@124..125 " "
+        Literal@125..126
+          IntegerLiteral@125..126 "1"
+        Semicolon@126..127 ";"
+      Whitespace@127..128 " "
+      ElseClause@128..140
+        Else@128..132 "else"
+        Whitespace@132..133 " "
+        EchoStatement@133..140
+          Echo@133..137 "echo"
+          Whitespace@137..138 " "
+          Literal@138..139
+            IntegerLiteral@138..139 "2"
+          Semicolon@139..140 ";"
+  Whitespace@140..142 "\n\n"
+  ExpressionStatement@142..149
+    AssignmentExpression@142..148
+      VariableReference@142..144
+        Variable@142..144 "$i"
+      Whitespace@144..145 " "
+      Equals@145..146 "="
+      Whitespace@146..147 " "
+      Literal@147..148
+        IntegerLiteral@147..148 "0"
+    Semicolon@148..149 ";"
+  Whitespace@149..150 "\n"
+  WhileStatement@150..178
+    While@150..155 "while"
+    Whitespace@155..156 " "
+    OpenParenthesis@156..157 "("
+    BinaryExpression@157..163
+      VariableReference@157..159
+        Variable@157..159 "$i"
+      Whitespace@159..160 " "
+      Less@160..161 "<"
+      Whitespace@161..162 " "
+      Literal@162..163
+        IntegerLiteral@162..163 "3"
+    CloseParenthesis@163..164 ")"
+    Whitespace@164..165 " "
+    Block@165..178
+      OpenBrace@165..166 "{"
+      Whitespace@166..171 "\n    "
+      ExpressionStatement@171..176
+        PostfixExpression@171..175
+          VariableReference@171..173
+            Variable@171..173 "$i"
+          PlusPlus@173..175 "++"
+        Semicolon@175..176 ";"
+      Whitespace@176..177 "\n"
+      CloseBrace@177..178 "}"
+  Whitespace@178..180 "\n\n"
+  DoWhileStatement@180..212
+    Do@180..182 "do"
+    Whitespace@182..183 " "
+    Block@183..196
+      OpenBrace@183..184 "{"
+      Whitespace@184..189 "\n    "
+      ExpressionStatement@189..194
+        PostfixExpression@189..193
+          VariableReference@189..191
+            Variable@189..191 "$i"
+          MinusMinus@191..193 "--"
+        Semicolon@193..194 ";"
+      Whitespace@194..195 "\n"
+      CloseBrace@195..196 "}"
+    Whitespace@196..197 " "
+    While@197..202 "while"
+    Whitespace@202..203 " "
+    OpenParenthesis@203..204 "("
+    BinaryExpression@204..210
+      VariableReference@204..206
+        Variable@204..206 "$i"
+      Whitespace@206..207 " "
+      Greater@207..208 ">"
+      Whitespace@208..209 " "
+      Literal@209..210
+        IntegerLiteral@209..210 "0"
+    CloseParenthesis@210..211 ")"
+    Semicolon@211..212 ";"
+  Whitespace@212..214 "\n\n"
+  ForStatement@214..272
+    For@214..217 "for"
+    Whitespace@217..218 " "
+    OpenParenthesis@218..219 "("
+    ForExpressionList@219..233
+      AssignmentExpression@219..225
+        VariableReference@219..221
+          Variable@219..221 "$j"
+        Whitespace@221..222 " "
+        Equals@222..223 "="
+        Whitespace@223..224 " "
+        Literal@224..225
+          IntegerLiteral@224..225 "0"
+      Comma@225..226 ","
+      Whitespace@226..227 " "
+      AssignmentExpression@227..233
+        VariableReference@227..229
+          Variable@227..229 "$k"
+        Whitespace@229..230 " "
+        Equals@230..231 "="
+        Whitespace@231..232 " "
+        Literal@232..233
+          IntegerLiteral@232..233 "9"
+    Semicolon@233..234 ";"
+    Whitespace@234..235 " "
+    ForExpressionList@235..242
+      BinaryExpression@235..242
+        VariableReference@235..237
+          Variable@235..237 "$j"
+        Whitespace@237..238 " "
+        Less@238..239 "<"
+        Whitespace@239..240 " "
+        VariableReference@240..242
+          Variable@240..242 "$k"
+    Semicolon@242..243 ";"
+    Whitespace@243..244 " "
+    ForExpressionList@244..254
+      PostfixExpression@244..248
+        VariableReference@244..246
+          Variable@244..246 "$j"
+        PlusPlus@246..248 "++"
+      Comma@248..249 ","
+      Whitespace@249..250 " "
+      PostfixExpression@250..254
+        VariableReference@250..252
+          Variable@250..252 "$k"
+        MinusMinus@252..254 "--"
+    CloseParenthesis@254..255 ")"
+    Whitespace@255..256 " "
+    Block@256..272
+      OpenBrace@256..257 "{"
+      Whitespace@257..262 "\n    "
+      EchoStatement@262..270
+        Echo@262..266 "echo"
+        Whitespace@266..267 " "
+        VariableReference@267..269
+          Variable@267..269 "$j"
+        Semicolon@269..270 ";"
+      Whitespace@270..271 "\n"
+      CloseBrace@271..272 "}"
+  Whitespace@272..274 "\n\n"
+  ForeachStatement@274..319
+    Foreach@274..281 "foreach"
+    Whitespace@281..282 " "
+    OpenParenthesis@282..283 "("
+    VariableReference@283..289
+      Variable@283..289 "$items"
+    Whitespace@289..290 " "
+    As@290..292 "as"
+    Whitespace@292..293 " "
+    VariableReference@293..298
+      Variable@293..298 "$item"
+    CloseParenthesis@298..299 ")"
+    Whitespace@299..300 " "
+    Block@300..319
+      OpenBrace@300..301 "{"
+      Whitespace@301..306 "\n    "
+      EchoStatement@306..317
+        Echo@306..310 "echo"
+        Whitespace@310..311 " "
+        VariableReference@311..316
+          Variable@311..316 "$item"
+        Semicolon@316..317 ";"
+      Whitespace@317..318 "\n"
+      CloseBrace@318..319 "}"
+  Whitespace@319..321 "\n\n"
+  ForeachStatement@321..384
+    Foreach@321..328 "foreach"
+    Whitespace@328..329 " "
+    OpenParenthesis@329..330 "("
+    VariableReference@330..334
+      Variable@330..334 "$map"
+    Whitespace@334..335 " "
+    As@335..337 "as"
+    Whitespace@337..338 " "
+    VariableReference@338..342
+      Variable@338..342 "$key"
+    Whitespace@342..343 " "
+    FatArrow@343..345 "=>"
+    Whitespace@345..346 " "
+    ArrayExpression@346..364
+      OpenBracket@346..347 "["
+      ArrayElement@347..353
+        VariableReference@347..353
+          Variable@347..353 "$first"
+      Comma@353..354 ","
+      Whitespace@354..355 " "
+      ArrayElement@355..363
+        Ampersand@355..356 "&"
+        VariableReference@356..363
+          Variable@356..363 "$second"
+      CloseBracket@363..364 "]"
+    CloseParenthesis@364..365 ")"
+    Whitespace@365..366 " "
+    Block@366..384
+      OpenBrace@366..367 "{"
+      Whitespace@367..372 "\n    "
+      EchoStatement@372..382
+        Echo@372..376 "echo"
+        Whitespace@376..377 " "
+        VariableReference@377..381
+          Variable@377..381 "$key"
+        Semicolon@381..382 ";"
+      Whitespace@382..383 "\n"
+      CloseBrace@383..384 "}"
+  Whitespace@384..386 "\n\n"
+  ForeachStatement@386..434
+    Foreach@386..393 "foreach"
+    Whitespace@393..394 " "
+    OpenParenthesis@394..395 "("
+    VariableReference@395..401
+      Variable@395..401 "$queue"
+    Whitespace@401..402 " "
+    As@402..404 "as"
+    Whitespace@404..405 " "
+    Ampersand@405..406 "&"
+    VariableReference@406..411
+      Variable@406..411 "$task"
+    CloseParenthesis@411..412 ")"
+    Whitespace@412..413 " "
+    Block@413..434
+      OpenBrace@413..414 "{"
+      Whitespace@414..419 "\n    "
+      ExpressionStatement@419..432
+        AssignmentExpression@419..431
+          VariableReference@419..424
+            Variable@419..424 "$task"
+          Whitespace@424..425 " "
+          Equals@425..426 "="
+          Whitespace@426..427 " "
+          NameExpression@427..431
+            Name@427..431
+              Identifier@427..431 "null"
+        Semicolon@431..432 ";"
+      Whitespace@432..433 "\n"
+      CloseBrace@433..434 "}"
+  Whitespace@434..435 "\n"
