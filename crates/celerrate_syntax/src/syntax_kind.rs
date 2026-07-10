@@ -254,6 +254,12 @@ syntax_kinds! {
     /// One binary operation: left operand, operator token, right operand.
     /// The operator token distinguishes `+` from `instanceof` from `|>`.
     BinaryExpression,
+    /// A prefix operation: `!`, `~`, unary `+`/`-`, `@`, `++`, `--`.
+    PrefixExpression,
+    /// A postfix operation: `++`, `--`.
+    PostfixExpression,
+    /// A cast: the single cast token, then the operand.
+    CastExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

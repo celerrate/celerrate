@@ -31,7 +31,9 @@ const CONCATENATION_LEVEL: u8 = 20;
 const SHIFT_LEVEL: u8 = 21;
 const ADDITIVE_LEVEL: u8 = 22;
 const MULTIPLICATIVE_LEVEL: u8 = 23;
+const LOGICAL_NOT_LEVEL: u8 = 24;
 const INSTANCEOF_LEVEL: u8 = 25;
+const UNARY_LEVEL: u8 = 26;
 const POWER_LEVEL: u8 = 27;
 
 fn left_binding_power(level: u8) -> u8 {
@@ -92,6 +94,20 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::SingleQuotedString
             | SyntaxKind::Variable
             | SyntaxKind::OpenParenthesis
+            | SyntaxKind::Bang
+            | SyntaxKind::Tilde
+            | SyntaxKind::Plus
+            | SyntaxKind::Minus
+            | SyntaxKind::PlusPlus
+            | SyntaxKind::MinusMinus
+            | SyntaxKind::At
+            | SyntaxKind::IntCast
+            | SyntaxKind::BoolCast
+            | SyntaxKind::FloatCast
+            | SyntaxKind::StringCast
+            | SyntaxKind::BinaryCast
+            | SyntaxKind::ArrayCast
+            | SyntaxKind::ObjectCast
     )
 }
 
@@ -143,16 +159,57 @@ fn binary_loop(parser: &mut Parser, minimum_power: u8) -> Option<CompletedMarker
     Some(left)
 }
 
-/// Prefix operators land here in task 4; until then this layer passes
-/// through.
 fn prefix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
-    postfix_expression(parser)
+    let Some(kind) = parser.current() else {
+        parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
+        return None;
+    };
+    let (node_kind, operand_power) = match kind {
+        SyntaxKind::Bang => (
+            SyntaxKind::PrefixExpression,
+            left_binding_power(LOGICAL_NOT_LEVEL),
+        ),
+        SyntaxKind::Plus
+        | SyntaxKind::Minus
+        | SyntaxKind::Tilde
+        | SyntaxKind::At
+        | SyntaxKind::PlusPlus
+        | SyntaxKind::MinusMinus => (
+            SyntaxKind::PrefixExpression,
+            left_binding_power(UNARY_LEVEL),
+        ),
+        SyntaxKind::IntCast
+        | SyntaxKind::BoolCast
+        | SyntaxKind::FloatCast
+        | SyntaxKind::StringCast
+        | SyntaxKind::BinaryCast
+        | SyntaxKind::ArrayCast
+        | SyntaxKind::ObjectCast => (SyntaxKind::CastExpression, left_binding_power(UNARY_LEVEL)),
+        _ => return postfix_expression(parser),
+    };
+    let marker = parser.start();
+    parser.bump();
+    // A missing operand is diagnosed downstream; the node completes
+    // regardless, partial trees are normal citizens.
+    expression_with_minimum_power(parser, operand_power);
+    Some(marker.complete(parser, node_kind))
 }
 
-/// Postfix chains land here (tasks 4, 7, 8); until then this layer
-/// passes through.
+/// The tightest tier: postfix wraps applied greedily around a primary.
+/// Tasks 7 and 8 add call, member, scoped, and index arms to this loop.
 fn postfix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
-    primary_expression(parser)
+    let mut left = primary_expression(parser)?;
+    loop {
+        left = match parser.current() {
+            Some(SyntaxKind::PlusPlus | SyntaxKind::MinusMinus) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                marker.complete(parser, SyntaxKind::PostfixExpression)
+            }
+            _ => break,
+        };
+    }
+    Some(left)
 }
 
 fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {

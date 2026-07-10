@@ -24,8 +24,9 @@ SourceFile@0..50
       IntegerLiteral@25..26 "2"
     Semicolon@26..27 ";"
   Whitespace@27..28 "\n"
-  ErrorNode@28..29
-    Plus@28..29 "+"
+  ExpressionStatement@28..29
+    PrefixExpression@28..29
+      Plus@28..29 "+"
   Whitespace@29..30 "\n"
   EchoStatement@30..50
     Echo@30..34 "echo"
@@ -35,6 +36,7 @@ SourceFile@0..50
 ---
 Parser(ExpectedExpression) @ 11..12
 Parser(ExpectedSemicolon) @ 19..19
-Parser(UnexpectedToken) @ 28..29
+Parser(ExpectedSemicolon) @ 29..29
+Parser(ExpectedExpression) @ 30..34
 Lexer(UnterminatedString) @ 35..36
 Parser(ExpectedSemicolon) @ 50..50

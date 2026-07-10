@@ -96,7 +96,7 @@ fn a_missing_semicolon_is_diagnosed_and_the_statement_completes() {
 
 #[test]
 fn an_unexpected_token_becomes_an_error_node_and_parsing_continues() {
-    let parse = support::parse_verified("<?php + echo 1;");
+    let parse = support::parse_verified("<?php ) echo 1;");
     let kinds: Vec<SyntaxKind> = parse.tree().children().map(|node| node.kind()).collect();
     assert_eq!(
         kinds,

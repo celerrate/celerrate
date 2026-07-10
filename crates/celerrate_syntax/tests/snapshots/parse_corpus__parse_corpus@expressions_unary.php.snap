@@ -1,0 +1,153 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_unary.php
+---
+SourceFile@0..187
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..14
+    PrefixExpression@6..13
+      Minus@6..7 "-"
+      BinaryExpression@7..13
+        Literal@7..8
+          IntegerLiteral@7..8 "2"
+        Whitespace@8..9 " "
+        StarStar@9..11 "**"
+        Whitespace@11..12 " "
+        Literal@12..13
+          IntegerLiteral@12..13 "3"
+    Semicolon@13..14 ";"
+  Whitespace@14..15 "\n"
+  ExpressionStatement@15..26
+    BinaryExpression@15..25
+      PrefixExpression@15..18
+        Bang@15..16 "!"
+        VariableReference@16..18
+          Variable@16..18 "$a"
+      Whitespace@18..19 " "
+      AmpersandAmpersand@19..21 "&&"
+      Whitespace@21..22 " "
+      PrefixExpression@22..25
+        Bang@22..23 "!"
+        VariableReference@23..25
+          Variable@23..25 "$b"
+    Semicolon@25..26 ";"
+  Whitespace@26..27 "\n"
+  ExpressionStatement@27..54
+    BinaryExpression@27..53
+      CastExpression@27..37
+        IntCast@27..32 "(int)"
+        Whitespace@32..33 " "
+        Literal@33..37
+          SingleQuotedString@33..37 "'42'"
+      Whitespace@37..38 " "
+      Plus@38..39 "+"
+      Whitespace@39..40 " "
+      CastExpression@40..53
+        FloatCast@40..47 "(float)"
+        Whitespace@47..48 " "
+        Literal@48..53
+          SingleQuotedString@48..53 "'1.5'"
+    Semicolon@53..54 ";"
+  Whitespace@54..55 "\n"
+  ExpressionStatement@55..68
+    CastExpression@55..67
+      BoolCast@55..61 "(bool)"
+      Whitespace@61..62 " "
+      VariableReference@62..67
+        Variable@62..67 "$flag"
+    Semicolon@67..68 ";"
+  Whitespace@68..69 "\n"
+  ExpressionStatement@69..98
+    BinaryExpression@69..97
+      CastExpression@69..80
+        StringCast@69..77 "(string)"
+        Whitespace@77..78 " "
+        Literal@78..80
+          IntegerLiteral@78..80 "42"
+      Whitespace@80..81 " "
+      Dot@81..82 "."
+      Whitespace@82..83 " "
+      CastExpression@83..97
+        BinaryCast@83..91 "(binary)"
+        Whitespace@91..92 " "
+        Literal@92..97
+          SingleQuotedString@92..97 "'raw'"
+    Semicolon@97..98 ";"
+  Whitespace@98..99 "\n"
+  ExpressionStatement@99..114
+    CastExpression@99..113
+      ArrayCast@99..106 "(array)"
+      Whitespace@106..107 " "
+      VariableReference@107..113
+        Variable@107..113 "$value"
+    Semicolon@113..114 ";"
+  Whitespace@114..115 "\n"
+  ExpressionStatement@115..129
+    CastExpression@115..128
+      ObjectCast@115..123 "(object)"
+      Whitespace@123..124 " "
+      VariableReference@124..128
+        Variable@124..128 "$map"
+    Semicolon@128..129 ";"
+  Whitespace@129..130 "\n"
+  ExpressionStatement@130..145
+    BinaryExpression@130..144
+      PrefixExpression@130..136
+        Tilde@130..131 "~"
+        VariableReference@131..136
+          Variable@131..136 "$mask"
+      Whitespace@136..137 " "
+      Pipe@137..138 "|"
+      Whitespace@138..139 " "
+      VariableReference@139..144
+        Variable@139..144 "$bits"
+    Semicolon@144..145 ";"
+  Whitespace@145..146 "\n"
+  ExpressionStatement@146..154
+    PrefixExpression@146..153
+      At@146..147 "@"
+      VariableReference@147..153
+        Variable@147..153 "$maybe"
+    Semicolon@153..154 ";"
+  Whitespace@154..155 "\n"
+  ExpressionStatement@155..160
+    PrefixExpression@155..159
+      PlusPlus@155..157 "++"
+      VariableReference@157..159
+        Variable@157..159 "$i"
+    Semicolon@159..160 ";"
+  Whitespace@160..161 "\n"
+  ExpressionStatement@161..166
+    PrefixExpression@161..165
+      MinusMinus@161..163 "--"
+      VariableReference@163..165
+        Variable@163..165 "$i"
+    Semicolon@165..166 ";"
+  Whitespace@166..167 "\n"
+  ExpressionStatement@167..179
+    BinaryExpression@167..178
+      PostfixExpression@167..171
+        VariableReference@167..169
+          Variable@167..169 "$i"
+        PlusPlus@169..171 "++"
+      Whitespace@171..172 " "
+      Plus@172..173 "+"
+      Whitespace@173..174 " "
+      PostfixExpression@174..178
+        VariableReference@174..176
+          Variable@174..176 "$i"
+        MinusMinus@176..178 "--"
+    Semicolon@178..179 ";"
+  Whitespace@179..180 "\n"
+  ExpressionStatement@180..186
+    PrefixExpression@180..185
+      Minus@180..181 "-"
+      Whitespace@181..182 " "
+      PrefixExpression@182..185
+        Minus@182..183 "-"
+        VariableReference@183..185
+          Variable@183..185 "$x"
+    Semicolon@185..186 ";"
+  Whitespace@186..187 "\n"

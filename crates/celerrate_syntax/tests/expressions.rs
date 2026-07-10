@@ -222,3 +222,87 @@ fn pathological_nesting_trips_the_guard_without_panicking() {
         SyntaxDiagnosticKind::Parser(ParserDiagnosticKind::NestingTooDeep)
     )));
 }
+
+#[test]
+fn power_binds_tighter_than_prefix_minus() {
+    insta::assert_snapshot!(support::render_expression("-2 ** 3"), @r#"
+    PrefixExpression
+      Minus "-"
+      BinaryExpression
+        Literal
+          IntegerLiteral "2"
+        StarStar "**"
+        Literal
+          IntegerLiteral "3"
+    "#);
+}
+
+#[test]
+fn logical_not_binds_tighter_than_boolean_and() {
+    insta::assert_snapshot!(support::render_expression("!$a && $b"), @r#"
+    BinaryExpression
+      PrefixExpression
+        Bang "!"
+        VariableReference
+          Variable "$a"
+      AmpersandAmpersand "&&"
+      VariableReference
+        Variable "$b"
+    "#);
+}
+
+#[test]
+fn a_cast_is_a_single_token_prefix() {
+    insta::assert_snapshot!(support::render_expression("(int) $x + 1"), @r#"
+    BinaryExpression
+      CastExpression
+        IntCast "(int)"
+        VariableReference
+          Variable "$x"
+      Plus "+"
+      Literal
+        IntegerLiteral "1"
+    "#);
+}
+
+#[test]
+fn increment_works_prefix_and_postfix() {
+    insta::assert_snapshot!(support::render_expression("++$i"), @r#"
+    PrefixExpression
+      PlusPlus "++"
+      VariableReference
+        Variable "$i"
+    "#);
+    insta::assert_snapshot!(support::render_expression("$i++"), @r#"
+    PostfixExpression
+      VariableReference
+        Variable "$i"
+      PlusPlus "++"
+    "#);
+}
+
+#[test]
+fn error_suppression_wraps_its_operand() {
+    insta::assert_snapshot!(support::render_expression("@$x + 1"), @r#"
+    BinaryExpression
+      PrefixExpression
+        At "@"
+        VariableReference
+          Variable "$x"
+      Plus "+"
+      Literal
+        IntegerLiteral "1"
+    "#);
+}
+
+#[test]
+fn prefix_operators_nest() {
+    insta::assert_snapshot!(support::render_expression("- -$x"), @r#"
+    PrefixExpression
+      Minus "-"
+      PrefixExpression
+        Minus "-"
+        VariableReference
+          Variable "$x"
+    "#);
+}
