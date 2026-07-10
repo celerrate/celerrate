@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 celerrate_source = { path = "../celerrate_source" }
+rowan = { workspace = true }
 text-size = { workspace = true }
 
 [dev-dependencies]

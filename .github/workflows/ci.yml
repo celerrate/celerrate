@@ -66,6 +66,7 @@ jobs:
       # The +nightly proxy overrides the repository's rust-toolchain.toml
       # pin, which would otherwise route the sanitizer build to stable.
       - run: cargo +nightly fuzz run lex -- -max_total_time=180
+      - run: cargo +nightly fuzz run parse -- -max_total_time=180
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4

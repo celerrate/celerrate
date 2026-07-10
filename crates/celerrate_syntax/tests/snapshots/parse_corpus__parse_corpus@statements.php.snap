@@ -1,0 +1,45 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/statements.php
+---
+SourceFile@0..61
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  EchoStatement@6..25
+    Echo@6..10 "echo"
+    Whitespace@10..11 " "
+    Literal@11..14
+      SingleQuotedString@11..14 "'a'"
+    Comma@14..15 ","
+    Whitespace@15..16 " "
+    Literal@16..19
+      SingleQuotedString@16..19 "'b'"
+    Comma@19..20 ","
+    Whitespace@20..21 " "
+    Literal@21..24
+      SingleQuotedString@21..24 "'c'"
+    Semicolon@24..25 ";"
+  Whitespace@25..26 "\n"
+  ExpressionStatement@26..32
+    VariableReference@26..31
+      Variable@26..31 "$user"
+    Semicolon@31..32 ";"
+  Whitespace@32..33 "\n"
+  EchoStatement@33..45
+    Echo@33..37 "echo"
+    Whitespace@37..38 " "
+    VariableReference@38..44
+      Variable@38..44 "$count"
+    Semicolon@44..45 ";"
+  Whitespace@45..46 "\n"
+  ExpressionStatement@46..50
+    Literal@46..49
+      FloatLiteral@46..49 "1.5"
+    Semicolon@49..50 ";"
+  Whitespace@50..51 "\n"
+  ExpressionStatement@51..60
+    Literal@51..59
+      SingleQuotedString@51..59 "'string'"
+    Semicolon@59..60 ";"
+  Whitespace@60..61 "\n"

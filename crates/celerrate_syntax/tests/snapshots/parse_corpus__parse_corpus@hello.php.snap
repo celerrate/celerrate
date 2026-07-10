@@ -1,0 +1,18 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/hello.php
+---
+SourceFile@0..64
+  InlineHtml@0..14 "<p>Before</p>\n"
+  OpenTag@14..19 "<?php"
+  Whitespace@19..21 "\n\n"
+  EchoStatement@21..46
+    Echo@21..25 "echo"
+    Whitespace@25..26 " "
+    Literal@26..45
+      SingleQuotedString@26..45 "'Hello, Celerrate!'"
+    Semicolon@45..46 ";"
+  Whitespace@46..48 "\n\n"
+  CloseTag@48..51 "?>\n"
+  InlineHtml@51..64 "<p>After</p>\n"
