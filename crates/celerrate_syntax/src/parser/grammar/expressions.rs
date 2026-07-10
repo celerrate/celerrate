@@ -161,6 +161,7 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::IncludeOnce
             | SyntaxKind::Require
             | SyntaxKind::RequireOnce
+            | SyntaxKind::Match
     )
 }
 
@@ -720,6 +721,7 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             }
             Some(marker.complete(parser, SyntaxKind::ExitExpression))
         }
+        Some(SyntaxKind::Match) => Some(match_expression(parser)),
         _ => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
             None
@@ -801,6 +803,89 @@ fn parenthesized_expression(parser: &mut Parser) -> CompletedMarker {
     expression(parser);
     parser.expect(SyntaxKind::CloseParenthesis);
     marker.complete(parser, SyntaxKind::ParenthesizedExpression)
+}
+
+/// `match (subject) { arms }`. Same recovery contract as the other
+/// delimited lists: unexpected tokens are wrapped and consumed; `;`,
+/// `?>`, and end of input abort.
+///
+/// Progress is enforced mechanically, not only by convention, for the
+/// same reason `argument_list` needs it: the nesting guard
+/// (`Parser::enter_nesting`) can refuse an arm's condition expression
+/// outright, without consuming a token, when it fires while this very
+/// loop is itself nested deep inside a pathological chain of
+/// parenthesized expressions inside the condition (the leftover,
+/// unconsumed `(` surfaces through the postfix loop at every level that
+/// chain unwinds through, not only at the top, so this loop can be
+/// entered again while the nesting budget is still exhausted). Trusting
+/// `match_arm` to always consume would let such a case spin forever;
+/// instead each iteration records the position before parsing an arm
+/// and, if it is unchanged afterward, forces an `error_element` bump.
+fn match_expression(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // `match`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        expression(parser);
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    if parser.at(SyntaxKind::OpenBrace) {
+        parser.bump();
+        while !parser.at(SyntaxKind::CloseBrace) && !parser.at_end() {
+            if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+                break;
+            }
+            if parser.at(SyntaxKind::Default) || parser.current().is_some_and(starts_expression) {
+                let position_before_arm = parser.position();
+                match_arm(parser);
+                expect_list_separator(parser, SyntaxKind::CloseBrace);
+                if parser.position() == position_before_arm {
+                    error_element(parser);
+                }
+            } else {
+                error_element(parser);
+                continue;
+            }
+        }
+        parser.expect(SyntaxKind::CloseBrace);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace));
+    }
+    marker.complete(parser, SyntaxKind::MatchExpression)
+}
+
+/// One arm: a condition list (or `default`), `=>`, the body.
+///
+/// Progress in the condition-list loop is enforced for the same reason
+/// as `match_expression`'s arm loop: the nesting guard can refuse a
+/// later condition's expression outright, without consuming a token, so
+/// each iteration records the position before parsing a condition and,
+/// if it is unchanged afterward, forces an `error_element` bump.
+fn match_arm(parser: &mut Parser) {
+    let marker = parser.start();
+    if !parser.eat(SyntaxKind::Default) {
+        // Conditions: comma-separated full expressions, up to the `=>`.
+        // Any comma before the arrow separates conditions; arm-level
+        // commas only occur after the body.
+        expression(parser);
+        while parser.at(SyntaxKind::Comma) {
+            parser.bump();
+            if parser.at(SyntaxKind::FatArrow) {
+                // A trailing comma in the condition list.
+                break;
+            }
+            let position_before_condition = parser.position();
+            expression(parser);
+            if parser.position() == position_before_condition {
+                error_element(parser);
+            }
+        }
+    }
+    parser.expect(SyntaxKind::FatArrow);
+    expression(parser);
+    marker.complete(parser, SyntaxKind::MatchArm);
 }
 
 /// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`: one `Name` node. Zend

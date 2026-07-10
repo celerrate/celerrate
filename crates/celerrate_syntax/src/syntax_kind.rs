@@ -331,6 +331,10 @@ syntax_kinds! {
     /// `include`, `include_once`, `require`, `require_once`; the
     /// keyword token distinguishes them.
     IncludeExpression,
+    /// `match ( subject ) { arms }`.
+    MatchExpression,
+    /// One arm: a condition list (or `default`), `=>`, the body.
+    MatchArm,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

@@ -1,0 +1,192 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_match.php
+---
+SourceFile@0..343
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..105
+    MatchExpression@6..104
+      Match@6..11 "match"
+      Whitespace@11..12 " "
+      OpenParenthesis@12..13 "("
+      VariableReference@13..20
+        Variable@13..20 "$status"
+      CloseParenthesis@20..21 ")"
+      Whitespace@21..22 " "
+      OpenBrace@22..23 "{"
+      Whitespace@23..28 "\n    "
+      MatchArm@28..49
+        Literal@28..31
+          IntegerLiteral@28..31 "200"
+        Comma@31..32 ","
+        Whitespace@32..33 " "
+        Literal@33..36
+          IntegerLiteral@33..36 "204"
+        Whitespace@36..37 " "
+        FatArrow@37..39 "=>"
+        Whitespace@39..40 " "
+        Literal@40..49
+          SingleQuotedString@40..49 "'success'"
+      Comma@49..50 ","
+      Whitespace@50..55 "\n    "
+      MatchArm@55..77
+        Literal@55..58
+          IntegerLiteral@55..58 "301"
+        Comma@58..59 ","
+        Whitespace@59..60 " "
+        Literal@60..63
+          IntegerLiteral@60..63 "302"
+        Whitespace@63..64 " "
+        FatArrow@64..66 "=>"
+        Whitespace@66..67 " "
+        Literal@67..77
+          SingleQuotedString@67..77 "'redirect'"
+      Comma@77..78 ","
+      Whitespace@78..83 "\n    "
+      MatchArm@83..101
+        Default@83..90 "default"
+        Whitespace@90..91 " "
+        FatArrow@91..93 "=>"
+        Whitespace@93..94 " "
+        Literal@94..101
+          SingleQuotedString@94..101 "'other'"
+      Comma@101..102 ","
+      Whitespace@102..103 "\n"
+      CloseBrace@103..104 "}"
+    Semicolon@104..105 ";"
+  Whitespace@105..106 "\n"
+  ExpressionStatement@106..211
+    AssignmentExpression@106..210
+      VariableReference@106..112
+        Variable@106..112 "$label"
+      Whitespace@112..113 " "
+      Equals@113..114 "="
+      Whitespace@114..115 " "
+      MatchExpression@115..210
+        Match@115..120 "match"
+        Whitespace@120..121 " "
+        OpenParenthesis@121..122 "("
+        NameExpression@122..126
+          Name@122..126
+            Identifier@122..126 "true"
+        CloseParenthesis@126..127 ")"
+        Whitespace@127..128 " "
+        OpenBrace@128..129 "{"
+        Whitespace@129..134 "\n    "
+        MatchArm@134..156
+          BinaryExpression@134..144
+            VariableReference@134..138
+              Variable@134..138 "$age"
+            Whitespace@138..139 " "
+            GreaterEquals@139..141 ">="
+            Whitespace@141..142 " "
+            Literal@142..144
+              IntegerLiteral@142..144 "65"
+          Whitespace@144..145 " "
+          FatArrow@145..147 "=>"
+          Whitespace@147..148 " "
+          Literal@148..156
+            SingleQuotedString@148..156 "'senior'"
+        Comma@156..157 ","
+        Whitespace@157..162 "\n    "
+        MatchArm@162..183
+          BinaryExpression@162..172
+            VariableReference@162..166
+              Variable@162..166 "$age"
+            Whitespace@166..167 " "
+            GreaterEquals@167..169 ">="
+            Whitespace@169..170 " "
+            Literal@170..172
+              IntegerLiteral@170..172 "18"
+          Whitespace@172..173 " "
+          FatArrow@173..175 "=>"
+          Whitespace@175..176 " "
+          Literal@176..183
+            SingleQuotedString@176..183 "'adult'"
+        Comma@183..184 ","
+        Whitespace@184..189 "\n    "
+        MatchArm@189..207
+          Default@189..196 "default"
+          Whitespace@196..197 " "
+          FatArrow@197..199 "=>"
+          Whitespace@199..200 " "
+          Literal@200..207
+            SingleQuotedString@200..207 "'minor'"
+        Comma@207..208 ","
+        Whitespace@208..209 "\n"
+        CloseBrace@209..210 "}"
+    Semicolon@210..211 ";"
+  Whitespace@211..212 "\n"
+  ExpressionStatement@212..226
+    MatchExpression@212..225
+      Match@212..217 "match"
+      Whitespace@217..218 " "
+      OpenParenthesis@218..219 "("
+      VariableReference@219..221
+        Variable@219..221 "$x"
+      CloseParenthesis@221..222 ")"
+      Whitespace@222..223 " "
+      OpenBrace@223..224 "{"
+      CloseBrace@224..225 "}"
+    Semicolon@225..226 ";"
+  Whitespace@226..227 "\n"
+  ExpressionStatement@227..342
+    AssignmentExpression@227..341
+      VariableReference@227..234
+        Variable@227..234 "$nested"
+      Whitespace@234..235 " "
+      Equals@235..236 "="
+      Whitespace@236..237 " "
+      MatchExpression@237..341
+        Match@237..242 "match"
+        Whitespace@242..243 " "
+        OpenParenthesis@243..244 "("
+        VariableReference@244..250
+          Variable@244..250 "$outer"
+        CloseParenthesis@250..251 ")"
+        Whitespace@251..252 " "
+        OpenBrace@252..253 "{"
+        Whitespace@253..258 "\n    "
+        MatchArm@258..312
+          Literal@258..259
+            IntegerLiteral@258..259 "1"
+          Whitespace@259..260 " "
+          FatArrow@260..262 "=>"
+          Whitespace@262..263 " "
+          MatchExpression@263..312
+            Match@263..268 "match"
+            Whitespace@268..269 " "
+            OpenParenthesis@269..270 "("
+            VariableReference@270..276
+              Variable@270..276 "$inner"
+            CloseParenthesis@276..277 ")"
+            Whitespace@277..278 " "
+            OpenBrace@278..279 "{"
+            Whitespace@279..288 "\n        "
+            MatchArm@288..305
+              Default@288..295 "default"
+              Whitespace@295..296 " "
+              FatArrow@296..298 "=>"
+              Whitespace@298..299 " "
+              Literal@299..305
+                SingleQuotedString@299..305 "'deep'"
+            Comma@305..306 ","
+            Whitespace@306..311 "\n    "
+            CloseBrace@311..312 "}"
+        Comma@312..313 ","
+        Whitespace@313..318 "\n    "
+        MatchArm@318..338
+          Default@318..325 "default"
+          Whitespace@325..326 " "
+          FatArrow@326..328 "=>"
+          Whitespace@328..329 " "
+          Literal@329..338
+            SingleQuotedString@329..338 "'shallow'"
+        Comma@338..339 ","
+        Whitespace@339..340 "\n"
+        CloseBrace@340..341 "}"
+    Semicolon@341..342 ";"
+  Whitespace@342..343 "\n"

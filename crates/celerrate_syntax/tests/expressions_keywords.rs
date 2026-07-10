@@ -252,3 +252,87 @@ fn include_swallows_its_whole_operand() {
     "#);
     assert!(parser_diagnostics("<?php require_once __DIR__ . '/bootstrap.php';").is_empty());
 }
+
+#[test]
+fn match_holds_arms_with_condition_lists_and_default() {
+    insta::assert_snapshot!(
+        support::render_expression("match ($status) { 1, 2 => 'low', default => 'other' }"),
+        @r#"
+    MatchExpression
+      Match "match"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$status"
+      CloseParenthesis ")"
+      OpenBrace "{"
+      MatchArm
+        Literal
+          IntegerLiteral "1"
+        Comma ","
+        Literal
+          IntegerLiteral "2"
+        FatArrow "=>"
+        Literal
+          SingleQuotedString "'low'"
+      Comma ","
+      MatchArm
+        Default "default"
+        FatArrow "=>"
+        Literal
+          SingleQuotedString "'other'"
+      CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn match_accepts_empty_bodies_and_trailing_commas() {
+    assert!(parser_diagnostics("<?php match ($x) {};").is_empty());
+    assert!(parser_diagnostics("<?php match ($x) { 1 => 'a', };").is_empty());
+    assert!(parser_diagnostics("<?php match ($x) { 1, => 'a' };").is_empty());
+}
+
+#[test]
+fn match_conditions_are_full_expressions() {
+    assert!(
+        parser_diagnostics("<?php match (true) { $age >= 18 => 'adult', default => 'minor' };")
+            .is_empty()
+    );
+    assert!(parser_diagnostics("<?php $r = match ($x) { f($x) => g($x) };").is_empty());
+}
+
+#[test]
+fn a_match_arm_missing_its_arrow_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php match ($x) { 1 'a' };")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::FatArrow))
+    );
+}
+
+#[test]
+fn garbage_inside_match_is_wrapped_and_the_tree_survives() {
+    let parse = support::parse_verified("<?php match ($x) { => 'a', 2 => 'b' };");
+    assert!(!parse.diagnostics().is_empty());
+    assert!(
+        parse
+            .tree()
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::MatchExpression)
+    );
+}
+
+#[test]
+fn pathological_nesting_inside_a_match_arm_condition_terminates() {
+    // Deeply nested parentheses inside a match arm's condition list can
+    // exhaust the nesting guard while `match_expression`'s own arm loop
+    // is still active (the leftover `(` tokens surface through the
+    // postfix loop at every unwinding level, not only at the top).
+    // Without a mechanical progress guarantee in the arm loop itself,
+    // this spins forever; the assertion that matters here is that this
+    // test completes.
+    let source = format!("<?php match ($x) {{ {}1 => 2 }};", "(".repeat(300));
+    let parse = support::parse_verified(&source);
+    assert!(parse.diagnostics().iter().any(|diagnostic| matches!(
+        diagnostic.kind,
+        SyntaxDiagnosticKind::Parser(ParserDiagnosticKind::NestingTooDeep)
+    )));
+}
