@@ -622,4 +622,54 @@ mod tests {
             .count();
         assert_eq!(no_progress_count, 1, "exactly one NoProgress diagnostic");
     }
+
+    #[test]
+    fn a_refused_expression_start_is_wrapped_and_consumed() {
+        // `expression_statement`'s refusal branch: `expression()` can
+        // return `None` on a token the dispatcher vetted as an
+        // expression start (bare `namespace` here: the primary rule
+        // requires a following `\`). The branch must keep the
+        // statement loop advancing: diagnose, consume exactly that one
+        // token, and wrap it in an `ErrorNode`. No dispatcher arm
+        // currently routes such a token here (bare `namespace` now
+        // dispatches as a namespace declaration), so this drives the
+        // rule directly; the enum dispatch of a later task makes the
+        // branch reachable from source text again.
+        let source = "<?php namespace + 1;";
+        let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
+        let mut parser = Parser::new(TokenSource::new(&tokens));
+        let root = parser.start();
+        parser.bump(); // `<?php`
+        super::expression_statement(&mut parser);
+        assert_eq!(
+            parser.current(),
+            Some(SyntaxKind::Plus),
+            "exactly the refused `namespace` token must be consumed"
+        );
+        assert!(
+            parser
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ParserDiagnosticKind::ExpectedExpression),
+            "the refusal must carry its ExpectedExpression diagnostic"
+        );
+        root.complete(&mut parser, SyntaxKind::SourceFile);
+        parser.recover_unconsumed_tail();
+        let tree = SyntaxNode::new_root(crate::tree::builder::build_tree(
+            source,
+            &tokens,
+            parser.events,
+        ));
+        assert_eq!(
+            tree.text().to_string(),
+            source,
+            "the tree must stay lossless around the wrapped token"
+        );
+        assert!(
+            tree.children()
+                .any(|node| node.kind() == SyntaxKind::ErrorNode
+                    && node.text().to_string().contains("namespace")),
+            "the refused token must sit wrapped in an ErrorNode"
+        );
+    }
 }
