@@ -793,6 +793,16 @@ fn new_expression(parser: &mut Parser) -> CompletedMarker {
         Some(SyntaxKind::OpenParenthesis) => {
             parenthesized_expression(parser);
         }
+        // Zend keeps `readonly` callable as a plain function name for
+        // backward compatibility, even right after `new`: only
+        // `readonly class` is the anonymous-class form. This arm must
+        // precede the anonymous-class arm below so the `(` case takes
+        // precedence over it.
+        Some(SyntaxKind::Readonly) if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) => {
+            let name_marker = parser.start();
+            parser.bump();
+            name_marker.complete(parser, SyntaxKind::Name);
+        }
         Some(
             SyntaxKind::Class
             | SyntaxKind::Readonly

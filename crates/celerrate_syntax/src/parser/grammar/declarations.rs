@@ -53,11 +53,16 @@ pub(super) fn declaration(parser: &mut Parser) {
         Some(SyntaxKind::Enum) if parser.nth(1) == Some(SyntaxKind::Identifier) => {
             enum_declaration(parser, marker);
         }
-        Some(_) => {
+        // No declaration-shaped token here: either a genuinely
+        // unexpected token, or end of input right after attribute
+        // groups (`#[A]` with nothing behind it). Either way the
+        // groups may already be consumed, so they become wreckage
+        // rather than splicing silently into the parent; `diagnose_current`
+        // is zero-width after the last token when at end of input.
+        _ => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
             marker.complete(parser, SyntaxKind::ErrorNode);
         }
-        None => marker.abandon(parser),
     }
 }
 

@@ -144,3 +144,14 @@ fn an_unterminated_group_is_diagnosed_and_recovers() {
         "got {diagnostics:?}"
     );
 }
+
+#[test]
+fn a_dangling_attribute_group_at_end_of_input_is_diagnosed() {
+    // No declaration follows the group; it must not splice silently
+    // into `SourceFile` with no diagnostic.
+    let diagnostics = parser_diagnostics("<?php #[A]");
+    assert!(
+        diagnostics.contains(&ParserDiagnosticKind::ExpectedDeclaration),
+        "got {diagnostics:?}"
+    );
+}

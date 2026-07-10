@@ -119,6 +119,14 @@ fn a_readonly_anonymous_class_parses() {
 }
 
 #[test]
+fn new_readonly_with_a_call_stays_a_plain_new_target() {
+    // Zend backward compatibility: `readonly` directly followed by `(`
+    // is a call target, even right after `new`; only `readonly class`
+    // routes to the anonymous-class form.
+    assert_eq!(parser_diagnostics("<?php $x = new readonly(1);"), vec![]);
+}
+
+#[test]
 fn readonly_stays_callable_as_a_function_name() {
     // Zend backward compatibility: `readonly` is not reserved as a
     // function name.
