@@ -50,6 +50,11 @@ pub enum ParserDiagnosticKind {
     /// rejects (`1 < 2 < 3`, unparenthesized ternary chains, double
     /// `instanceof`). Parsed left-associatively anyway.
     NonAssociativeOperator,
+    /// The parser stopped consuming input: an internal grammar loop made
+    /// no progress within its step budget. The remaining tokens are
+    /// preserved in an `ErrorNode`. Reaching this is a parser bug, kept
+    /// survivable by design.
+    NoProgress,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

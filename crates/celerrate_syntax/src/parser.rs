@@ -21,6 +21,10 @@ use token_source::TokenSource;
 pub(crate) fn run(tokens: &[crate::token::Token]) -> (Vec<Event>, Vec<ParserDiagnostic>) {
     let mut parser = Parser::new(TokenSource::new(tokens));
     grammar::source_file(&mut parser);
+    // Defense in depth, behind every per-loop guard the grammar already
+    // carries: unreachable on a legitimate parse, since the grammar
+    // consumes every token on every corpus input.
+    parser.recover_unconsumed_tail();
     (parser.events, parser.diagnostics)
 }
 
@@ -30,6 +34,13 @@ struct Parser {
     events: Vec<Event>,
     diagnostics: Vec<ParserDiagnostic>,
     nesting_depth: u32,
+    /// Steps observed since the last consumed token; see
+    /// `MAXIMUM_STEPS_WITHOUT_PROGRESS`.
+    steps_without_progress: u32,
+    /// Latched once the step budget is exceeded: `current` and `nth`
+    /// report `None` for the rest of the parse, regardless of what the
+    /// token stream actually holds.
+    fuse_blown: bool,
 }
 
 impl Parser {
@@ -40,14 +51,38 @@ impl Parser {
             events: Vec::new(),
             diagnostics: Vec::new(),
             nesting_depth: 0,
+            steps_without_progress: 0,
+            fuse_blown: false,
         }
     }
 
-    fn current(&self) -> Option<SyntaxKind> {
+    /// Far beyond any legitimate lookahead or diagnose-without-consuming
+    /// work between two token consumptions (nesting is already capped at
+    /// 128); a counter past this budget means a grammar loop is stuck.
+    const MAXIMUM_STEPS_WITHOUT_PROGRESS: u32 = 4_096;
+
+    /// Counts one step without progress; blows the fuse once the budget
+    /// is exceeded. Cheap once blown: the counter stops moving, so this
+    /// never overflows no matter how long the stuck loop keeps spinning.
+    fn observe(&mut self) {
+        if self.fuse_blown {
+            return;
+        }
+        self.steps_without_progress += 1;
+        if self.steps_without_progress > Self::MAXIMUM_STEPS_WITHOUT_PROGRESS {
+            self.fuse_blown = true;
+        }
+    }
+
+    fn current(&mut self) -> Option<SyntaxKind> {
+        self.observe();
+        if self.fuse_blown {
+            return None;
+        }
         self.source.kind(self.position)
     }
 
-    fn at(&self, kind: SyntaxKind) -> bool {
+    fn at(&mut self, kind: SyntaxKind) -> bool {
         self.current() == Some(kind)
     }
 
@@ -63,6 +98,7 @@ impl Parser {
         }
         self.position += 1;
         self.events.push(Event::Token);
+        self.steps_without_progress = 0;
     }
 
     fn start(&mut self) -> Marker {
@@ -103,7 +139,11 @@ impl Parser {
     /// levels is far beyond real code and well inside default stacks.
     const MAXIMUM_NESTING_DEPTH: u32 = 128;
 
-    fn nth(&self, offset: usize) -> Option<SyntaxKind> {
+    fn nth(&mut self, offset: usize) -> Option<SyntaxKind> {
+        self.observe();
+        if self.fuse_blown {
+            return None;
+        }
         self.source.kind(self.position + offset)
     }
 
@@ -144,6 +184,54 @@ impl Parser {
 
     fn leave_nesting(&mut self) {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
+    }
+
+    /// The fuse only silences `current`/`nth`; the underlying position
+    /// and token source stay valid behind it. Only `recover_unconsumed_tail`
+    /// may reach past the fuse this way, to find where the true
+    /// remainder of the stream begins once the grammar has unwound.
+    fn raw_range(&self, position: usize) -> Option<TextRange> {
+        self.source.range(position)
+    }
+
+    /// The lossless backstop, run once the grammar has returned and its
+    /// event stream is otherwise finalized. On every legitimate parse
+    /// the grammar already consumed every token, so this is a no-op;
+    /// it exists only for the case a grammar loop got stuck, the fuse
+    /// blew, and `current`/`nth` silenced the true remainder of the
+    /// stream from the grammar. Splices a single `ErrorNode` over that
+    /// remainder just before the outermost node's closing event, so the
+    /// tree stays single-rooted, and pushes exactly one `NoProgress`
+    /// diagnostic: losing those tokens instead would violate the
+    /// lossless invariant that a parser bug must never break.
+    fn recover_unconsumed_tail(&mut self) {
+        if self.at_end() {
+            return;
+        }
+        let start = self
+            .raw_range(self.position)
+            .map(TextRange::start)
+            .unwrap_or_else(|| self.previous_end());
+        // Reopen the outermost node's tail: pop its closing event, splice
+        // the recovery node in as its last child, then restore the
+        // closing event so the tree keeps exactly one root.
+        let outer_close = self.events.pop();
+        debug_assert!(
+            matches!(outer_close, Some(Event::Finish)),
+            "the backstop reopens the outermost node, so the final event must be its Finish"
+        );
+        let marker = self.start();
+        while !self.at_end() {
+            self.bump();
+        }
+        marker.complete(self, SyntaxKind::ErrorNode);
+        if let Some(event) = outer_close {
+            self.events.push(event);
+        }
+        self.diagnostics.push(ParserDiagnostic {
+            kind: ParserDiagnosticKind::NoProgress,
+            range: TextRange::new(start, self.previous_end()),
+        });
     }
 }
 
@@ -211,6 +299,7 @@ impl CompletedMarker {
 #[cfg(test)]
 mod tests {
     use crate::syntax_kind::SyntaxKind;
+    use crate::tree::SyntaxNode;
 
     use super::*;
 
@@ -306,7 +395,7 @@ mod tests {
 
     #[test]
     fn nth_looks_ahead_without_consuming() {
-        let parser = parser_over("<?php echo 1;");
+        let mut parser = parser_over("<?php echo 1;");
         assert_eq!(parser.nth(0), Some(SyntaxKind::OpenTag));
         assert_eq!(parser.nth(1), Some(SyntaxKind::Echo));
         assert_eq!(parser.nth(2), Some(SyntaxKind::IntegerLiteral));
@@ -347,5 +436,56 @@ mod tests {
         // Leaving frees capacity again: recovery paths keep parsing.
         parser.leave_nesting();
         assert!(parser.enter_nesting());
+    }
+
+    #[test]
+    fn the_fuse_blows_after_the_step_budget_and_the_backstop_recovers_losslessly() {
+        let source = "<?php echo 1;";
+        let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
+        let mut parser = Parser::new(token_source::TokenSource::new(&tokens));
+        // A stuck loop: observe `current` without ever bumping.
+        for _ in 0..=Parser::MAXIMUM_STEPS_WITHOUT_PROGRESS {
+            parser.current();
+        }
+        assert_eq!(parser.current(), None, "the fuse must have blown");
+        assert!(!parser.at_end(), "real tokens must still remain unconsumed");
+        // The grammar sees end of input and unwinds normally, exactly as
+        // `run` drives it.
+        grammar::source_file(&mut parser);
+        parser.recover_unconsumed_tail();
+        let tree = SyntaxNode::new_root(crate::tree::builder::build_tree(
+            source,
+            &tokens,
+            parser.events,
+        ));
+        assert_eq!(
+            tree.text().to_string(),
+            source,
+            "the tree must stay lossless even after the fuse blows"
+        );
+        let no_progress_count = parser
+            .diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.kind == ParserDiagnosticKind::NoProgress)
+            .count();
+        assert_eq!(no_progress_count, 1, "exactly one NoProgress diagnostic");
+        assert!(
+            tree.descendants()
+                .any(|node| node.kind() == SyntaxKind::ErrorNode),
+            "the recovered remainder must sit under an ErrorNode"
+        );
+    }
+
+    #[test]
+    fn a_legitimate_parse_never_trips_the_fuse() {
+        let source = "<?php echo 1 + 2 * (3 - $x) ?? f(name: 1, ...$rest), $f(1)(2), $a instanceof Foo\\Bar, ${'a' . 'b'};";
+        let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
+        let (_events, diagnostics) = run(&tokens);
+        assert!(
+            !diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.kind == ParserDiagnosticKind::NoProgress),
+            "a legitimate parse must never trip the fuse"
+        );
     }
 }

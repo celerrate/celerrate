@@ -291,7 +291,7 @@ pub(super) fn error_element(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::ErrorNode);
 }
 
-fn starts_argument(parser: &Parser) -> bool {
+fn starts_argument(parser: &mut Parser) -> bool {
     parser.current().is_some_and(|kind| {
         starts_expression(kind)
             || kind == SyntaxKind::Ellipsis
