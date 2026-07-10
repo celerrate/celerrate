@@ -18,6 +18,11 @@ use super::{CompletedMarker, Parser};
 const LOGICAL_OR_LEVEL: u8 = 1;
 const LOGICAL_XOR_LEVEL: u8 = 2;
 const LOGICAL_AND_LEVEL: u8 = 3;
+const PRINT_LEVEL: u8 = 4;
+const YIELD_LEVEL: u8 = 5;
+const YIELD_FROM_LEVEL: u8 = 6;
+const THROW_LEVEL: u8 = 7;
+const INCLUDE_LEVEL: u8 = 8;
 const ASSIGNMENT_LEVEL: u8 = 9;
 const TERNARY_LEVEL: u8 = 10;
 const COALESCE_LEVEL: u8 = 11;
@@ -148,6 +153,14 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Empty
             | SyntaxKind::Eval
             | SyntaxKind::Exit
+            | SyntaxKind::Print
+            | SyntaxKind::Throw
+            | SyntaxKind::Yield
+            | SyntaxKind::YieldFrom
+            | SyntaxKind::Include
+            | SyntaxKind::IncludeOnce
+            | SyntaxKind::Require
+            | SyntaxKind::RequireOnce
     )
 }
 
@@ -249,6 +262,7 @@ fn prefix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             expression_with_minimum_power(parser, left_binding_power(CLONE_LEVEL));
             return Some(marker.complete(parser, SyntaxKind::CloneExpression));
         }
+        SyntaxKind::Yield => return Some(yield_expression(parser)),
         SyntaxKind::Bang => (
             SyntaxKind::PrefixExpression,
             left_binding_power(LOGICAL_NOT_LEVEL),
@@ -269,6 +283,19 @@ fn prefix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
         | SyntaxKind::BinaryCast
         | SyntaxKind::ArrayCast
         | SyntaxKind::ObjectCast => (SyntaxKind::CastExpression, left_binding_power(UNARY_LEVEL)),
+        SyntaxKind::Print => (SyntaxKind::PrintExpression, left_binding_power(PRINT_LEVEL)),
+        SyntaxKind::Throw => (SyntaxKind::ThrowExpression, left_binding_power(THROW_LEVEL)),
+        SyntaxKind::Include
+        | SyntaxKind::IncludeOnce
+        | SyntaxKind::Require
+        | SyntaxKind::RequireOnce => (
+            SyntaxKind::IncludeExpression,
+            left_binding_power(INCLUDE_LEVEL),
+        ),
+        SyntaxKind::YieldFrom => (
+            SyntaxKind::YieldExpression,
+            left_binding_power(YIELD_FROM_LEVEL),
+        ),
         _ => return postfix_expression(parser),
     };
     let marker = parser.start();
@@ -277,6 +304,20 @@ fn prefix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
     // regardless, partial trees are normal citizens.
     expression_with_minimum_power(parser, operand_power);
     Some(marker.complete(parser, node_kind))
+}
+
+/// `yield`, `yield value`, `yield key => value`. The operand is
+/// optional: a bare `yield` is a complete expression.
+fn yield_expression(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // `yield`
+    if parser.current().is_some_and(starts_expression) {
+        expression_with_minimum_power(parser, left_binding_power(YIELD_LEVEL));
+        if parser.eat(SyntaxKind::FatArrow) {
+            expression_with_minimum_power(parser, left_binding_power(YIELD_LEVEL));
+        }
+    }
+    marker.complete(parser, SyntaxKind::YieldExpression)
 }
 
 /// The tightest tier: postfix wraps applied greedily around a primary.

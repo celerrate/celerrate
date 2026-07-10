@@ -322,6 +322,15 @@ syntax_kinds! {
     EvalExpression,
     /// `exit` / `die`, with an optional argument list since 8.4.
     ExitExpression,
+    /// `print operand`.
+    PrintExpression,
+    /// `throw operand`, an expression since PHP 8.0.
+    ThrowExpression,
+    /// `yield`, `yield value`, `yield key => value`, `yield from source`.
+    YieldExpression,
+    /// `include`, `include_once`, `require`, `require_once`; the
+    /// keyword token distinguishes them.
+    IncludeExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

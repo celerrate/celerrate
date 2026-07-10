@@ -161,3 +161,94 @@ fn exit_and_die_take_optional_arguments() {
     assert!(parser_diagnostics("<?php die;").is_empty());
     assert!(parser_diagnostics("<?php $code = $failed ? exit(1) : 0;").is_empty());
 }
+
+#[test]
+fn print_is_a_low_prefix_expression() {
+    insta::assert_snapshot!(support::render_expression("print 'x' . 'y'"), @r#"
+    PrintExpression
+      Print "print"
+      BinaryExpression
+        Literal
+          SingleQuotedString "'x'"
+        Dot "."
+        Literal
+          SingleQuotedString "'y'"
+    "#);
+    assert!(parser_diagnostics("<?php $ok = print 'x';").is_empty());
+}
+
+#[test]
+fn throw_works_as_a_coalesce_fallback() {
+    insta::assert_snapshot!(support::render_expression("$x ?? throw new Error('missing')"), @r#"
+    BinaryExpression
+      VariableReference
+        Variable "$x"
+      QuestionQuestion "??"
+      ThrowExpression
+        Throw "throw"
+        NewExpression
+          New "new"
+          Name
+            Identifier "Error"
+          ArgumentList
+            OpenParenthesis "("
+            Argument
+              Literal
+                SingleQuotedString "'missing'"
+            CloseParenthesis ")"
+    "#);
+}
+
+#[test]
+fn yield_covers_bare_value_and_keyed_forms() {
+    assert!(parser_diagnostics("<?php yield;").is_empty());
+    assert!(parser_diagnostics("<?php yield $value;").is_empty());
+    insta::assert_snapshot!(support::render_expression("yield $key => $value"), @r#"
+    YieldExpression
+      Yield "yield"
+      VariableReference
+        Variable "$key"
+      FatArrow "=>"
+      VariableReference
+        Variable "$value"
+    "#);
+}
+
+#[test]
+fn yield_from_delegates_a_whole_generator() {
+    insta::assert_snapshot!(support::render_expression("yield from $generator"), @r#"
+    YieldExpression
+      YieldFrom "yield from"
+      VariableReference
+        Variable "$generator"
+    "#);
+}
+
+#[test]
+fn yield_binds_tighter_than_the_word_operators() {
+    insta::assert_snapshot!(support::render_expression("yield $a and $b"), @r#"
+    BinaryExpression
+      YieldExpression
+        Yield "yield"
+        VariableReference
+          Variable "$a"
+      And "and"
+      VariableReference
+        Variable "$b"
+    "#);
+}
+
+#[test]
+fn include_swallows_its_whole_operand() {
+    insta::assert_snapshot!(support::render_expression("include $path . '.php'"), @r#"
+    IncludeExpression
+      Include "include"
+      BinaryExpression
+        VariableReference
+          Variable "$path"
+        Dot "."
+        Literal
+          SingleQuotedString "'.php'"
+    "#);
+    assert!(parser_diagnostics("<?php require_once __DIR__ . '/bootstrap.php';").is_empty());
+}
