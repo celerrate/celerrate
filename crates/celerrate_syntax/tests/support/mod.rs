@@ -34,7 +34,7 @@ pub fn kinds(source: &str) -> Vec<SyntaxKind> {
         .collect()
 }
 
-#[allow(dead_code)] // utility function reserved for future tests
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
 pub fn texts(source: &str) -> Vec<(SyntaxKind, String)> {
     let (tokens, _diagnostics) = lex_verified(source);
     let mut offset = 0usize;
