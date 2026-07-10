@@ -40,6 +40,11 @@ impl Lexer<'_> {
             {
                 self.lex_number()
             }
+            '\'' => self.lex_single_quoted_string(),
+            'b' | 'B' if self.cursor.peek_second() == Some('\'') => {
+                self.cursor.bump();
+                self.lex_single_quoted_string();
+            }
             character if is_name_start(character) => self.lex_name(),
             '(' => self.lex_parenthesis_or_cast(),
             '{' => self.lex_open_brace(),

@@ -82,16 +82,22 @@ impl<'source> Cursor<'source> {
             .unwrap_or_default()
     }
 
+    /// Byte length consumed so far in the current token, without
+    /// finishing it. Lets diagnostics point inside a token being built.
+    pub(crate) fn pending_length(&self) -> TextSize {
+        u32::try_from(self.pending_byte_length())
+            .map(TextSize::from)
+            .unwrap_or_else(|_| TextSize::from(u32::MAX))
+    }
+
     /// Finishes the current token: returns its byte length and starts the
     /// next one. Inputs are within the 4 GiB `TextSize` cap
     /// (`SourceText` guarantees it); the conversion saturates defensively
     /// rather than failing.
     pub(crate) fn take_length(&mut self) -> TextSize {
-        let length = self.pending_byte_length();
+        let length = self.pending_length();
         self.rest_at_token_start = self.rest();
-        u32::try_from(length)
-            .map(TextSize::from)
-            .unwrap_or_else(|_| TextSize::from(u32::MAX))
+        length
     }
 }
 

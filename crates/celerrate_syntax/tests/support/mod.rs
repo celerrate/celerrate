@@ -26,6 +26,7 @@ pub fn lex_verified(source: &str) -> (Vec<Token>, Vec<LexerDiagnostic>) {
     (tokens, diagnostics)
 }
 
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
 pub fn kinds(source: &str) -> Vec<SyntaxKind> {
     lex_verified(source)
         .0

@@ -7,6 +7,7 @@ use crate::token::Token;
 
 mod inline_html;
 mod scripting;
+mod strings;
 
 /// Lexes decoded PHP source text into a lossless token stream plus
 /// structured diagnostics. Always terminates, never fails: degenerate
