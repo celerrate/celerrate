@@ -18,6 +18,8 @@ use super::{CompletedMarker, Parser};
 const LOGICAL_OR_LEVEL: u8 = 1;
 const LOGICAL_XOR_LEVEL: u8 = 2;
 const LOGICAL_AND_LEVEL: u8 = 3;
+const ASSIGNMENT_LEVEL: u8 = 9;
+const TERNARY_LEVEL: u8 = 10;
 const COALESCE_LEVEL: u8 = 11;
 const BOOLEAN_OR_LEVEL: u8 = 12;
 const BOOLEAN_AND_LEVEL: u8 = 13;
@@ -47,6 +49,26 @@ enum Associativity {
     /// Zend rejects same-level chains; we parse them left-associatively
     /// and diagnose.
     NonAssociative,
+}
+
+fn is_assignment_operator(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::Equals
+            | SyntaxKind::PlusEquals
+            | SyntaxKind::MinusEquals
+            | SyntaxKind::StarEquals
+            | SyntaxKind::SlashEquals
+            | SyntaxKind::DotEquals
+            | SyntaxKind::PercentEquals
+            | SyntaxKind::StarStarEquals
+            | SyntaxKind::AmpersandEquals
+            | SyntaxKind::PipeEquals
+            | SyntaxKind::CaretEquals
+            | SyntaxKind::LessLessEquals
+            | SyntaxKind::GreaterGreaterEquals
+            | SyntaxKind::QuestionQuestionEquals
+    )
 }
 
 /// The binary operator table. Returns the level and associativity, or
@@ -134,6 +156,44 @@ fn binary_loop(parser: &mut Parser, minimum_power: u8) -> Option<CompletedMarker
     // is a chain Zend rejects.
     let mut previous_power: Option<u8> = None;
     while let Some(kind) = parser.current() {
+        if is_assignment_operator(kind) {
+            let power = left_binding_power(ASSIGNMENT_LEVEL);
+            if power < minimum_power {
+                break;
+            }
+            let marker = left.precede(parser);
+            parser.bump();
+            if kind == SyntaxKind::Equals {
+                // `= &$value` assigns by reference.
+                parser.eat(SyntaxKind::Ampersand);
+            }
+            expression_with_minimum_power(parser, power - 1);
+            left = marker.complete(parser, SyntaxKind::AssignmentExpression);
+            previous_power = Some(power);
+            continue;
+        }
+        if kind == SyntaxKind::Question {
+            let power = left_binding_power(TERNARY_LEVEL);
+            if power < minimum_power {
+                break;
+            }
+            // Zend rejects unparenthesized ternary chains since 8.0.
+            if previous_power == Some(power) {
+                parser.diagnose_current(ParserDiagnosticKind::NonAssociativeOperator);
+            }
+            let marker = left.precede(parser);
+            parser.bump();
+            if !parser.at(SyntaxKind::Colon) {
+                // The middle operand is a full expression, as in Zend's
+                // `expr '?' expr ':' expr`.
+                expression(parser);
+            }
+            parser.expect(SyntaxKind::Colon);
+            expression_with_minimum_power(parser, power + 1);
+            left = marker.complete(parser, SyntaxKind::TernaryExpression);
+            previous_power = Some(power);
+            continue;
+        }
         let Some((level, associativity)) = binary_operator(kind) else {
             break;
         };

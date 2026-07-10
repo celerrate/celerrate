@@ -306,3 +306,124 @@ fn prefix_operators_nest() {
           Variable "$x"
     "#);
 }
+
+#[test]
+fn assignment_associates_right() {
+    insta::assert_snapshot!(support::render_expression("$a = $b = 1"), @r#"
+    AssignmentExpression
+      VariableReference
+        Variable "$a"
+      Equals "="
+      AssignmentExpression
+        VariableReference
+          Variable "$b"
+        Equals "="
+        Literal
+          IntegerLiteral "1"
+    "#);
+}
+
+#[test]
+fn compound_assignment_operators_parse() {
+    insta::assert_snapshot!(support::render_expression("$x ??= 1"), @r#"
+    AssignmentExpression
+      VariableReference
+        Variable "$x"
+      QuestionQuestionEquals "??="
+      Literal
+        IntegerLiteral "1"
+    "#);
+}
+
+#[test]
+fn assignment_by_reference_keeps_the_ampersand() {
+    insta::assert_snapshot!(support::render_expression("$a = &$b"), @r#"
+    AssignmentExpression
+      VariableReference
+        Variable "$a"
+      Equals "="
+      Ampersand "&"
+      VariableReference
+        Variable "$b"
+    "#);
+}
+
+#[test]
+fn the_ternary_parses_long_and_short_forms() {
+    insta::assert_snapshot!(support::render_expression("$a ? 'y' : 'n'"), @r#"
+    TernaryExpression
+      VariableReference
+        Variable "$a"
+      Question "?"
+      Literal
+        SingleQuotedString "'y'"
+      Colon ":"
+      Literal
+        SingleQuotedString "'n'"
+    "#);
+    insta::assert_snapshot!(support::render_expression("$a ?: 'n'"), @r#"
+    TernaryExpression
+      VariableReference
+        Variable "$a"
+      Question "?"
+      Colon ":"
+      Literal
+        SingleQuotedString "'n'"
+    "#);
+}
+
+#[test]
+fn coalesce_binds_tighter_than_the_ternary() {
+    insta::assert_snapshot!(support::render_expression("$a ?? $b ? 1 : 2"), @r#"
+    TernaryExpression
+      BinaryExpression
+        VariableReference
+          Variable "$a"
+        QuestionQuestion "??"
+        VariableReference
+          Variable "$b"
+      Question "?"
+      Literal
+        IntegerLiteral "1"
+      Colon ":"
+      Literal
+        IntegerLiteral "2"
+    "#);
+}
+
+#[test]
+fn assignment_binds_looser_than_the_ternary() {
+    insta::assert_snapshot!(support::render_expression("$a = $b ? 1 : 2"), @r#"
+    AssignmentExpression
+      VariableReference
+        Variable "$a"
+      Equals "="
+      TernaryExpression
+        VariableReference
+          Variable "$b"
+        Question "?"
+        Literal
+          IntegerLiteral "1"
+        Colon ":"
+        Literal
+          IntegerLiteral "2"
+    "#);
+}
+
+#[test]
+fn an_unparenthesized_ternary_chain_is_diagnosed() {
+    // A compile error in Zend since 8.0; parsed left-associatively here.
+    let diagnostics = parser_diagnostics("<?php $a ? 1 : $b ? 2 : 3;");
+    assert_eq!(
+        diagnostics,
+        vec![ParserDiagnosticKind::NonAssociativeOperator]
+    );
+}
+
+#[test]
+fn a_ternary_missing_its_colon_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php $a ? 1;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Colon))
+    );
+}

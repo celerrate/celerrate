@@ -260,6 +260,12 @@ syntax_kinds! {
     PostfixExpression,
     /// A cast: the single cast token, then the operand.
     CastExpression,
+    /// `condition ? middle : third`; the short form `?:` has no middle.
+    TernaryExpression,
+    /// `target = value` and the compound forms; `= &value` keeps its
+    /// ampersand as a token child. Whether the target is assignable is
+    /// a semantic judgment.
+    AssignmentExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
