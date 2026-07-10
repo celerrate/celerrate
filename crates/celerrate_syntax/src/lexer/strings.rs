@@ -1,6 +1,8 @@
 use crate::diagnostic::LexerDiagnosticKind;
-use crate::lexer::Lexer;
+use crate::lexer::{Lexer, Mode};
 use crate::syntax_kind::SyntaxKind;
+
+use super::scripting::{is_name_continue, is_name_start};
 
 impl Lexer<'_> {
     /// A whole `'...'` string as one token: no interpolation exists in
@@ -26,5 +28,169 @@ impl Lexer<'_> {
             }
         }
         self.emit(SyntaxKind::SingleQuotedString);
+    }
+
+    pub(super) fn lex_double_quote_delimiter(&mut self) {
+        let opening = self.token_start();
+        self.cursor.eat('"');
+        self.emit(SyntaxKind::DoubleQuote);
+        self.push_mode(Mode::DoubleQuotedString { opening });
+    }
+
+    pub(super) fn lex_backtick_delimiter(&mut self) {
+        let opening = self.token_start();
+        self.cursor.eat('`');
+        self.emit(SyntaxKind::Backtick);
+        self.push_mode(Mode::Backtick { opening });
+    }
+
+    pub(super) fn lex_double_quoted(&mut self) {
+        if self.cursor.eat('"') {
+            self.emit(SyntaxKind::DoubleQuote);
+            self.pop_mode();
+            return;
+        }
+        if self.lex_interpolation() {
+            return;
+        }
+        self.lex_interpolated_fragment(Some('"'));
+    }
+
+    pub(super) fn lex_backtick(&mut self) {
+        if self.cursor.eat('`') {
+            self.emit(SyntaxKind::Backtick);
+            self.pop_mode();
+            return;
+        }
+        if self.lex_interpolation() {
+            return;
+        }
+        self.lex_interpolated_fragment(Some('`'));
+    }
+
+    /// Handles the three interpolation openers when the cursor sits on
+    /// one; returns false when the current character is plain content.
+    /// `${` and `{$` push a scripting mode tagged with the opener's
+    /// offset so end-of-input can report an unterminated interpolation;
+    /// the matching `}` pops it through the ordinary brace rule.
+    pub(super) fn lex_interpolation(&mut self) -> bool {
+        let rest = self.cursor.rest();
+        if rest.starts_with("${") {
+            let opening = self.token_start();
+            self.cursor.bump_bytes(2);
+            self.emit(SyntaxKind::DollarOpenBrace);
+            self.push_mode(Mode::Scripting {
+                opened_by_interpolation_at: Some(opening),
+            });
+            return true;
+        }
+        if self.cursor.peek() == Some('$') && self.cursor.peek_second().is_some_and(is_name_start) {
+            self.lex_string_variable();
+            return true;
+        }
+        if rest.starts_with("{$") {
+            let opening = self.token_start();
+            self.cursor.eat('{');
+            self.emit(SyntaxKind::OpenBrace);
+            self.push_mode(Mode::Scripting {
+                opened_by_interpolation_at: Some(opening),
+            });
+            return true;
+        }
+        false
+    }
+
+    /// `$name` plus at most one simple suffix, as in Zend's simple
+    /// interpolation: `->prop` or `?->prop` (one level only), or a
+    /// bracketed offset, which switches to the `VariableOffset` mode.
+    fn lex_string_variable(&mut self) {
+        self.cursor.eat('$');
+        self.cursor.eat_while(is_name_continue);
+        self.emit(SyntaxKind::Variable);
+        let rest = self.cursor.rest();
+        if let Some(after_arrow) = rest.strip_prefix("->") {
+            if after_arrow.starts_with(is_name_start) {
+                self.cursor.bump_bytes(2);
+                self.emit(SyntaxKind::Arrow);
+                self.cursor.eat_while(is_name_continue);
+                self.emit(SyntaxKind::Identifier);
+            }
+        } else if let Some(after_arrow) = rest.strip_prefix("?->") {
+            if after_arrow.starts_with(is_name_start) {
+                self.cursor.bump_bytes(3);
+                self.emit(SyntaxKind::NullsafeArrow);
+                self.cursor.eat_while(is_name_continue);
+                self.emit(SyntaxKind::Identifier);
+            }
+        } else if rest.starts_with('[') {
+            self.cursor.eat('[');
+            self.emit(SyntaxKind::OpenBracket);
+            self.push_mode(Mode::VariableOffset);
+        }
+    }
+
+    /// One step inside `$var[...]`: an offset atom, the closing
+    /// bracket, or (on anything unrecognized) a bare pop so the
+    /// enclosing string mode takes over at this character. The pop
+    /// consumes nothing but strictly shrinks the mode stack, so
+    /// progress is preserved.
+    pub(super) fn lex_variable_offset(&mut self) {
+        match self.cursor.peek() {
+            Some(']') => {
+                self.cursor.eat(']');
+                self.emit(SyntaxKind::CloseBracket);
+                self.pop_mode();
+            }
+            Some('-') => {
+                self.cursor.eat('-');
+                self.emit(SyntaxKind::Minus);
+            }
+            Some(character) if character.is_ascii_digit() => {
+                self.cursor.eat_while(|c| c.is_ascii_digit());
+                self.emit(SyntaxKind::IntegerLiteral);
+            }
+            Some('$') if self.cursor.peek_second().is_some_and(is_name_start) => {
+                self.cursor.eat('$');
+                self.cursor.eat_while(is_name_continue);
+                self.emit(SyntaxKind::Variable);
+            }
+            Some(character) if is_name_start(character) => {
+                self.cursor.eat_while(is_name_continue);
+                self.emit(SyntaxKind::Identifier);
+            }
+            _ => self.pop_mode(),
+        }
+    }
+
+    /// A literal run: consumes up to (not including) the terminator, an
+    /// interpolation opener, or the end of input. `\` escapes the next
+    /// character, so `\"`, `\$`, and `\\` stay in the fragment. Always
+    /// consumes at least one character: the callers only reach here
+    /// after excluding the terminator and the openers at the current
+    /// position.
+    pub(super) fn lex_interpolated_fragment(&mut self, terminator: Option<char>) {
+        while let Some(character) = self.cursor.peek() {
+            if Some(character) == terminator {
+                break;
+            }
+            if character == '\\' {
+                self.cursor.bump();
+                self.cursor.bump();
+                continue;
+            }
+            if character == '$'
+                && self
+                    .cursor
+                    .peek_second()
+                    .is_some_and(|next| is_name_start(next) || next == '{')
+            {
+                break;
+            }
+            if character == '{' && self.cursor.peek_second() == Some('$') {
+                break;
+            }
+            self.cursor.bump();
+        }
+        self.emit(SyntaxKind::StringFragment);
     }
 }

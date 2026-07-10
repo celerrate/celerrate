@@ -21,9 +21,6 @@ pub fn lex(source: &str) -> (Vec<Token>, Vec<LexerDiagnostic>) {
 
 /// The lexer's current context. `Copy`: label and opening positions are
 /// ranges into the source, not owned strings.
-// The string-mode variants are not constructed until Tasks 9 to 11; they
-// ship now so the dispatch loop in `run` never needs reshaping.
-#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Mode {
     /// Outside PHP tags; the initial mode.
@@ -39,9 +36,13 @@ enum Mode {
     /// Inside `` `...` ``.
     Backtick { opening: TextSize },
     /// Inside a heredoc body; `start` is the `<<<LABEL` token's range and
-    /// `label` the range of the bare label text within it.
+    /// `label` the range of the bare label text within it. Not
+    /// constructed until Task 11.
+    #[allow(dead_code)]
     Heredoc { start: TextRange, label: TextRange },
-    /// Inside a nowdoc body (no interpolation).
+    /// Inside a nowdoc body (no interpolation). Not constructed until
+    /// Task 11.
+    #[allow(dead_code)]
     Nowdoc { start: TextRange, label: TextRange },
     /// Inside the `[...]` offset of a simple string interpolation.
     VariableOffset,
@@ -80,13 +81,11 @@ impl<'source> Lexer<'source> {
             match self.current_mode() {
                 Mode::InlineHtml => self.lex_inline_html(),
                 Mode::Scripting { .. } => self.lex_scripting(),
-                // The string modes arrive in later tasks; until then the
-                // dispatch loop only ever sees the two modes above.
-                Mode::DoubleQuotedString { .. }
-                | Mode::Backtick { .. }
-                | Mode::Heredoc { .. }
-                | Mode::Nowdoc { .. }
-                | Mode::VariableOffset => self.lex_unexpected_character(),
+                Mode::DoubleQuotedString { .. } => self.lex_double_quoted(),
+                Mode::Backtick { .. } => self.lex_backtick(),
+                // Heredoc bodies arrive in Task 11.
+                Mode::Heredoc { .. } | Mode::Nowdoc { .. } => self.lex_unexpected_character(),
+                Mode::VariableOffset => self.lex_variable_offset(),
             }
         }
         self.flush_open_modes();

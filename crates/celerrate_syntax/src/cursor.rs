@@ -23,9 +23,6 @@ impl<'source> Cursor<'source> {
         self.characters.clone().next()
     }
 
-    // Not yet called from lexer production code: two-character lookahead
-    // is needed starting with the scripting operators task.
-    #[allow(dead_code)]
     pub(crate) fn peek_second(&self) -> Option<char> {
         let mut lookahead = self.characters.clone();
         lookahead.next();

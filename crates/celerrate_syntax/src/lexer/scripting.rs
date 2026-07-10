@@ -45,6 +45,12 @@ impl Lexer<'_> {
                 self.cursor.bump();
                 self.lex_single_quoted_string();
             }
+            '"' => self.lex_double_quote_delimiter(),
+            'b' | 'B' if self.cursor.peek_second() == Some('"') => {
+                self.cursor.bump();
+                self.lex_double_quote_delimiter();
+            }
+            '`' => self.lex_backtick_delimiter(),
             character if is_name_start(character) => self.lex_name(),
             '(' => self.lex_parenthesis_or_cast(),
             '{' => self.lex_open_brace(),
