@@ -472,6 +472,10 @@ syntax_kinds! {
     TraitPrecedence,
     /// `[A::]member as [visibility] [name];`.
     TraitAlias,
+    /// `enum Name: BackingType implements A { cases and members }`.
+    EnumDeclaration,
+    /// `case Name;` or `case Name = expression;`.
+    EnumCase,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

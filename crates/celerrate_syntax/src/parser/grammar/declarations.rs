@@ -34,6 +34,9 @@ pub(super) fn declaration(parser: &mut Parser) {
         ) => class_declaration(parser, marker),
         Some(SyntaxKind::Interface) => interface_declaration(parser, marker),
         Some(SyntaxKind::Trait) => trait_declaration(parser, marker),
+        Some(SyntaxKind::Enum) if parser.nth(1) == Some(SyntaxKind::Identifier) => {
+            enum_declaration(parser, marker);
+        }
         Some(_) => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
             marker.complete(parser, SyntaxKind::ErrorNode);
@@ -378,6 +381,10 @@ fn member_list(parser: &mut Parser) {
 fn member(parser: &mut Parser) {
     match parser.current() {
         Some(SyntaxKind::Use) => trait_use(parser),
+        Some(SyntaxKind::Case) => {
+            let marker = parser.start();
+            enum_case(parser, marker);
+        }
         Some(kind) if starts_member(kind) => {
             let marker = parser.start();
             modified_member(parser, marker);
@@ -616,4 +623,35 @@ fn adaptation_member_name(parser: &mut Parser) {
         Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
         _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
     }
+}
+
+/// `enum Name: BackingType implements A { ... }`. `enum` is not
+/// reserved: both dispatch sites verified a name follows, so
+/// `enum(...)` stays a call. Backing types other than `int` and
+/// `string` parse; arity is semantic.
+fn enum_declaration(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `enum`
+    parser.expect(SyntaxKind::Identifier);
+    if parser.eat(SyntaxKind::Colon) {
+        super::types::type_expression(parser);
+    }
+    heritage_clauses(parser);
+    member_list(parser);
+    marker.complete(parser, SyntaxKind::EnumDeclaration);
+}
+
+/// `case Name;` or `case Name = expression;`. Case names are
+/// semi-reserved; whether a case belongs here (enums only) and whether
+/// the value is required (backed enums) are semantic.
+fn enum_case(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `case`
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
+        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
+    if parser.eat(SyntaxKind::Equals) {
+        expression(parser);
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::EnumCase);
 }

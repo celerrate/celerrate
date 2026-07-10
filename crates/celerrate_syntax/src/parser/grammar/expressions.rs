@@ -165,6 +165,7 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Function
             | SyntaxKind::Fn
             | SyntaxKind::Readonly
+            | SyntaxKind::Enum
     )
 }
 
@@ -709,10 +710,12 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             parser.bump();
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
-        // Zend keeps `readonly` callable as a plain function name for
-        // backward compatibility: directly followed by `(` it is a
-        // call target, never a modifier.
-        Some(SyntaxKind::Readonly) if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) => {
+        // Zend keeps `enum` and `readonly` callable as plain function
+        // names for backward compatibility: directly followed by `(`
+        // they are call targets, never declaration keywords.
+        Some(SyntaxKind::Enum | SyntaxKind::Readonly)
+            if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) =>
+        {
             let marker = parser.start();
             let name_marker = parser.start();
             parser.bump();
