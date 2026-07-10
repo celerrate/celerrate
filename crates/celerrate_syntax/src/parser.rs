@@ -123,15 +123,26 @@ impl Parser {
             .source
             .range(self.position)
             .unwrap_or_else(|| TextRange::empty(self.previous_end()));
-        self.diagnostics.push(ParserDiagnostic { kind, range });
+        self.push_diagnostic(ParserDiagnostic { kind, range });
     }
 
     /// Marks something missing: zero-width at the previous token's end.
     fn diagnose_missing(&mut self, kind: ParserDiagnosticKind) {
-        self.diagnostics.push(ParserDiagnostic {
+        self.push_diagnostic(ParserDiagnostic {
             kind,
             range: TextRange::empty(self.previous_end()),
         });
+    }
+
+    /// Appends a diagnostic unless it repeats the previous one exactly.
+    /// Recovery that unwinds through many levels at one spot (an
+    /// exhausted nesting budget above all) re-diagnoses the same missing
+    /// token at the same offset once per level; one report suffices.
+    fn push_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
+        if self.diagnostics.last() == Some(&diagnostic) {
+            return;
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     /// Bounds recursive descent: degenerate nesting (`((((...`,
@@ -228,7 +239,7 @@ impl Parser {
         if let Some(event) = outer_close {
             self.events.push(event);
         }
-        self.diagnostics.push(ParserDiagnostic {
+        self.push_diagnostic(ParserDiagnostic {
             kind: ParserDiagnosticKind::NoProgress,
             range: TextRange::new(start, self.previous_end()),
         });
