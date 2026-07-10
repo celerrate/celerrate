@@ -289,6 +289,17 @@ fn embedded_statement(parser: &mut Parser) {
     super::statement_list_step(parser);
 }
 
+/// The alternative-syntax body shared by `while`, `for`, `foreach`,
+/// and `declare` once their `:` is consumed: the statement list, the
+/// closing keyword, the statement terminator. `if` and `switch` place
+/// clauses or case sections between the list and the closer, so they
+/// keep their own sequences.
+fn alternative_body(parser: &mut Parser, closing: SyntaxKind) {
+    statement_list(parser);
+    parser.expect(closing);
+    terminate_statement(parser);
+}
+
 fn if_statement(parser: &mut Parser) {
     let marker = parser.start();
     parser.bump(); // `if`
@@ -336,9 +347,7 @@ fn while_statement(parser: &mut Parser) {
     parser.bump(); // `while`
     parenthesized_condition(parser);
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndWhile);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndWhile);
     } else {
         embedded_statement(parser);
     }
@@ -370,9 +379,7 @@ fn for_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndFor);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndFor);
     } else {
         embedded_statement(parser);
     }
@@ -415,9 +422,7 @@ fn foreach_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndForeach);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndForeach);
     } else {
         embedded_statement(parser);
     }
@@ -558,9 +563,7 @@ fn declare_statement(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     if parser.eat(SyntaxKind::Colon) {
-        statement_list(parser);
-        parser.expect(SyntaxKind::EndDeclare);
-        terminate_statement(parser);
+        alternative_body(parser, SyntaxKind::EndDeclare);
     } else {
         embedded_statement(parser);
     }
