@@ -29,6 +29,7 @@ struct Parser {
     position: usize,
     events: Vec<Event>,
     diagnostics: Vec<ParserDiagnostic>,
+    nesting_depth: u32,
 }
 
 impl Parser {
@@ -38,6 +39,7 @@ impl Parser {
             position: 0,
             events: Vec::new(),
             diagnostics: Vec::new(),
+            nesting_depth: 0,
         }
     }
 
@@ -95,6 +97,50 @@ impl Parser {
             range: TextRange::empty(self.previous_end()),
         });
     }
+
+    /// Bounds recursive descent: degenerate nesting (`((((...`,
+    /// `$$$$...`) must stay a diagnostic, never a stack overflow. 128
+    /// levels is far beyond real code and well inside default stacks.
+    const MAXIMUM_NESTING_DEPTH: u32 = 128;
+
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    fn nth(&self, offset: usize) -> Option<SyntaxKind> {
+        self.source.kind(self.position + offset)
+    }
+
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    fn eat(&mut self, kind: SyntaxKind) -> bool {
+        if self.at(kind) {
+            self.bump();
+            return true;
+        }
+        false
+    }
+
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    fn expect(&mut self, kind: SyntaxKind) {
+        if !self.eat(kind) {
+            self.diagnose_missing(ParserDiagnosticKind::Expected(kind));
+        }
+    }
+
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    /// Returns false (and diagnoses, once per trip) instead of
+    /// recursing past the budget. Every recursive expression entry
+    /// point pairs this with `leave_nesting`.
+    fn enter_nesting(&mut self) -> bool {
+        if self.nesting_depth >= Self::MAXIMUM_NESTING_DEPTH {
+            self.diagnose_current(ParserDiagnosticKind::NestingTooDeep);
+            return false;
+        }
+        self.nesting_depth += 1;
+        true
+    }
+
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    fn leave_nesting(&mut self) {
+        self.nesting_depth = self.nesting_depth.saturating_sub(1);
+    }
 }
 
 /// An open node. Must be completed or abandoned; the tripwire makes a
@@ -119,7 +165,9 @@ impl Marker {
             *slot = Some(kind);
         }
         parser.events.push(Event::Finish);
-        CompletedMarker
+        CompletedMarker {
+            event_index: self.event_index,
+        }
     }
 
     fn abandon(mut self, parser: &mut Parser) {
@@ -136,9 +184,26 @@ impl Drop for Marker {
     }
 }
 
-/// A finished node. Grows `precede` (the forward-parent producer) with
-/// the expressions plan.
-struct CompletedMarker;
+/// A finished node: remembers where its `Start` event lives so a
+/// forward parent can wrap it retroactively.
+struct CompletedMarker {
+    event_index: usize,
+}
+
+impl CompletedMarker {
+    /// Opens a node that will enclose this completed one: the new
+    /// marker's `Start` is appended now, and this node's `Start` gains
+    /// a forward parent pointing at it (absolute event index), which
+    /// the builder replays outermost-first.
+    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
+    fn precede(self, parser: &mut Parser) -> Marker {
+        let marker = parser.start();
+        if let Some(Event::Start { forward_parent, .. }) = parser.events.get_mut(self.event_index) {
+            *forward_parent = Some(marker.event_index);
+        }
+        marker
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -206,5 +271,78 @@ mod tests {
                 range,
             }) if range.is_empty() && u32::from(range.start()) == 10
         ));
+    }
+
+    #[test]
+    fn precede_wraps_a_completed_node_through_a_forward_parent() {
+        let mut parser = parser_over("<?php 1");
+        parser.bump(); // <?php
+        let marker = parser.start();
+        parser.bump(); // 1
+        let completed = marker.complete(&mut parser, SyntaxKind::Literal);
+        let wrapper = completed.precede(&mut parser);
+        wrapper.complete(&mut parser, SyntaxKind::ExpressionStatement);
+        assert_eq!(
+            parser.events,
+            vec![
+                Event::Token,
+                Event::Start {
+                    kind: Some(SyntaxKind::Literal),
+                    forward_parent: Some(4),
+                },
+                Event::Token,
+                Event::Finish,
+                Event::Start {
+                    kind: Some(SyntaxKind::ExpressionStatement),
+                    forward_parent: None,
+                },
+                Event::Finish,
+            ],
+        );
+    }
+
+    #[test]
+    fn nth_looks_ahead_without_consuming() {
+        let parser = parser_over("<?php echo 1;");
+        assert_eq!(parser.nth(0), Some(SyntaxKind::OpenTag));
+        assert_eq!(parser.nth(1), Some(SyntaxKind::Echo));
+        assert_eq!(parser.nth(2), Some(SyntaxKind::IntegerLiteral));
+        assert_eq!(parser.nth(4), None);
+    }
+
+    #[test]
+    fn expect_bumps_or_diagnoses_a_missing_token() {
+        let mut parser = parser_over("<?php ;");
+        parser.expect(SyntaxKind::OpenTag);
+        parser.expect(SyntaxKind::Semicolon);
+        assert!(parser.diagnostics.is_empty());
+        parser.expect(SyntaxKind::CloseParenthesis);
+        assert!(matches!(
+            parser.diagnostics.first(),
+            Some(ParserDiagnostic {
+                kind: ParserDiagnosticKind::Expected(SyntaxKind::CloseParenthesis),
+                range,
+            }) if range.is_empty()
+        ));
+    }
+
+    #[test]
+    fn the_nesting_guard_refuses_past_the_limit_and_recovers() {
+        let mut parser = parser_over("<?php 1");
+        let mut entered = 0usize;
+        while parser.enter_nesting() {
+            entered += 1;
+            assert!(entered <= 1_000, "the guard must trip");
+        }
+        assert!(matches!(
+            parser.diagnostics.first(),
+            Some(ParserDiagnostic {
+                kind: ParserDiagnosticKind::NestingTooDeep,
+                ..
+            })
+        ));
+        // Leaving frees capacity again: recovery paths keep parsing.
+        parser.leave_nesting();
+        assert!(parser.enter_nesting());
     }
 }
