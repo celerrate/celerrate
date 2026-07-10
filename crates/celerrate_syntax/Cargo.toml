@@ -11,5 +11,8 @@ repository.workspace = true
 celerrate_source = { path = "../celerrate_source" }
 text-size = { workspace = true }
 
+[dev-dependencies]
+insta = { workspace = true }
+
 [lints]
 workspace = true
