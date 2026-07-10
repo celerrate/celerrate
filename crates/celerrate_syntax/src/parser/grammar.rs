@@ -56,9 +56,16 @@ fn echo_statement(parser: &mut Parser) {
 fn expression_statement(parser: &mut Parser) {
     let marker = parser.start();
     if expression(parser).is_none() {
-        // Unreachable through `statement`'s dispatch, but recovery must
-        // never leave an open marker or an empty node behind.
-        marker.abandon(parser);
+        // The dispatcher saw an expression start but the grammar
+        // refused (for example `namespace` without `\`). The refusal
+        // already carried its diagnostic; consume the token so the
+        // statement loop always advances.
+        if parser.at_end() {
+            marker.abandon(parser);
+            return;
+        }
+        parser.bump();
+        marker.complete(parser, SyntaxKind::ErrorNode);
         return;
     }
     terminate_statement(parser);

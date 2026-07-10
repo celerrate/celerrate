@@ -130,6 +130,11 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::BinaryCast
             | SyntaxKind::ArrayCast
             | SyntaxKind::ObjectCast
+            | SyntaxKind::Identifier
+            | SyntaxKind::Backslash
+            | SyntaxKind::Namespace
+            | SyntaxKind::Static
+            | SyntaxKind::Dollar
     )
 }
 
@@ -281,10 +286,23 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             parser.bump();
             Some(marker.complete(parser, SyntaxKind::Literal))
         }
-        Some(SyntaxKind::Variable) => {
+        Some(SyntaxKind::Variable | SyntaxKind::Dollar) => simple_variable(parser),
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash) => {
+            let marker = parser.start();
+            name(parser);
+            Some(marker.complete(parser, SyntaxKind::NameExpression))
+        }
+        Some(SyntaxKind::Namespace) if parser.nth(1) == Some(SyntaxKind::Backslash) => {
+            let marker = parser.start();
+            name(parser);
+            Some(marker.complete(parser, SyntaxKind::NameExpression))
+        }
+        // `static` as a scoped-access subject (`static::create()`).
+        // Static closures take a different arm in task 15.
+        Some(SyntaxKind::Static) => {
             let marker = parser.start();
             parser.bump();
-            Some(marker.complete(parser, SyntaxKind::VariableReference))
+            Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
         Some(SyntaxKind::OpenParenthesis) => Some(parenthesized_expression(parser)),
         _ => {
@@ -300,4 +318,58 @@ fn parenthesized_expression(parser: &mut Parser) -> CompletedMarker {
     expression(parser);
     parser.expect(SyntaxKind::CloseParenthesis);
     marker.complete(parser, SyntaxKind::ParenthesizedExpression)
+}
+
+/// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`: one `Name` node. Zend
+/// lexes each qualified form as a single token, which forbids interior
+/// whitespace; the trivia-free token view cannot see adjacency, so
+/// spaced segments parse here and adjacency is judged upstairs.
+fn name(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    if parser.eat(SyntaxKind::Namespace) {
+        parser.expect(SyntaxKind::Backslash);
+    } else {
+        parser.eat(SyntaxKind::Backslash);
+    }
+    parser.expect(SyntaxKind::Identifier);
+    while parser.at(SyntaxKind::Backslash) && parser.nth(1) == Some(SyntaxKind::Identifier) {
+        parser.bump();
+        parser.bump();
+    }
+    marker.complete(parser, SyntaxKind::Name)
+}
+
+/// `$name`, `$$name`, `${expression}`: the dynamic forms recurse, so
+/// the nesting guard applies. Returns `None` without consuming when
+/// the current token is not a variable form.
+fn simple_variable(parser: &mut Parser) -> Option<CompletedMarker> {
+    match parser.current() {
+        Some(SyntaxKind::Variable) => {
+            let marker = parser.start();
+            parser.bump();
+            Some(marker.complete(parser, SyntaxKind::VariableReference))
+        }
+        Some(SyntaxKind::Dollar) => {
+            if !parser.enter_nesting() {
+                return None;
+            }
+            let marker = parser.start();
+            parser.bump();
+            match parser.current() {
+                Some(SyntaxKind::OpenBrace) => {
+                    parser.bump();
+                    expression(parser);
+                    parser.expect(SyntaxKind::CloseBrace);
+                }
+                Some(SyntaxKind::Variable | SyntaxKind::Dollar) => {
+                    simple_variable(parser);
+                }
+                _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression),
+            }
+            let completed = marker.complete(parser, SyntaxKind::DynamicVariableExpression);
+            parser.leave_nesting();
+            Some(completed)
+        }
+        _ => None,
+    }
 }

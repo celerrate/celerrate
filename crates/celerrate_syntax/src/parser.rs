@@ -103,7 +103,6 @@ impl Parser {
     /// levels is far beyond real code and well inside default stacks.
     const MAXIMUM_NESTING_DEPTH: u32 = 128;
 
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     fn nth(&self, offset: usize) -> Option<SyntaxKind> {
         self.source.kind(self.position + offset)
     }

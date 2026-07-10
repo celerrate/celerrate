@@ -266,6 +266,12 @@ syntax_kinds! {
     /// ampersand as a token child. Whether the target is assignable is
     /// a semantic judgment.
     AssignmentExpression,
+    /// A possibly-qualified name: `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`.
+    Name,
+    /// A name used as an expression: a constant fetch or a callee.
+    NameExpression,
+    /// `$$name` and `${expression}`.
+    DynamicVariableExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

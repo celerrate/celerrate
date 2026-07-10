@@ -1,0 +1,104 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_names.php
+---
+SourceFile@0..156
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..14
+    NameExpression@6..13
+      Name@6..13
+        Identifier@6..13 "PHP_EOL"
+    Semicolon@13..14 ";"
+  Whitespace@14..15 "\n"
+  ExpressionStatement@15..24
+    NameExpression@15..23
+      Name@15..23
+        Backslash@15..16 "\\"
+        Identifier@16..19 "Foo"
+        Backslash@19..20 "\\"
+        Identifier@20..23 "Bar"
+    Semicolon@23..24 ";"
+  Whitespace@24..25 "\n"
+  ExpressionStatement@25..43
+    NameExpression@25..42
+      Name@25..42
+        Namespace@25..34 "namespace"
+        Backslash@34..35 "\\"
+        Identifier@35..42 "helpers"
+    Semicolon@42..43 ";"
+  Whitespace@43..44 "\n"
+  ExpressionStatement@44..56
+    NameExpression@44..55
+      Name@44..55
+        Identifier@44..47 "Foo"
+        Backslash@47..48 "\\"
+        Identifier@48..51 "Bar"
+        Backslash@51..52 "\\"
+        Identifier@52..55 "BAZ"
+    Semicolon@55..56 ";"
+  Whitespace@56..57 "\n"
+  ExpressionStatement@57..62
+    NameExpression@57..61
+      Name@57..61
+        Identifier@57..61 "true"
+    Semicolon@61..62 ";"
+  Whitespace@62..63 "\n"
+  ExpressionStatement@63..69
+    NameExpression@63..68
+      Name@63..68
+        Identifier@63..68 "false"
+    Semicolon@68..69 ";"
+  Whitespace@69..70 "\n"
+  ExpressionStatement@70..75
+    NameExpression@70..74
+      Name@70..74
+        Identifier@70..74 "null"
+    Semicolon@74..75 ";"
+  Whitespace@75..76 "\n"
+  ExpressionStatement@76..98
+    BinaryExpression@76..97
+      VariableReference@76..78
+        Variable@76..78 "$a"
+      Whitespace@78..79 " "
+      InstanceOf@79..89 "instanceof"
+      Whitespace@89..90 " "
+      NameExpression@90..97
+        Name@90..97
+          Identifier@90..93 "Foo"
+          Backslash@93..94 "\\"
+          Identifier@94..97 "Bar"
+    Semicolon@97..98 ";"
+  Whitespace@98..99 "\n"
+  ExpressionStatement@99..110
+    DynamicVariableExpression@99..109
+      Dollar@99..100 "$"
+      VariableReference@100..109
+        Variable@100..109 "$indirect"
+    Semicolon@109..110 ";"
+  Whitespace@110..111 "\n"
+  ExpressionStatement@111..130
+    DynamicVariableExpression@111..129
+      Dollar@111..112 "$"
+      DynamicVariableExpression@112..129
+        Dollar@112..113 "$"
+        VariableReference@113..129
+          Variable@113..129 "$doubly_indirect"
+    Semicolon@129..130 ";"
+  Whitespace@130..131 "\n"
+  ExpressionStatement@131..155
+    DynamicVariableExpression@131..154
+      Dollar@131..132 "$"
+      OpenBrace@132..133 "{"
+      BinaryExpression@133..153
+        Literal@133..143
+          SingleQuotedString@133..143 "'computed'"
+        Whitespace@143..144 " "
+        Dot@144..145 "."
+        Whitespace@145..146 " "
+        VariableReference@146..153
+          Variable@146..153 "$suffix"
+      CloseBrace@153..154 "}"
+    Semicolon@154..155 ";"
+  Whitespace@155..156 "\n"
