@@ -188,6 +188,24 @@ pub fn parser_diagnostics(source: &str) -> Vec<celerrate_syntax::ParserDiagnosti
         .collect()
 }
 
+/// Renders the first member of `<?php class Fixture { {member_source} }`
+/// as an indented tree, offsets and trivia omitted: the workhorse
+/// assertion of the member grammar tests.
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn render_member(member_source: &str) -> String {
+    let source = format!("<?php class Fixture {{ {member_source} }}");
+    let parse = parse_verified(&source);
+    let class_declaration = parse.tree().children().next().expect("a class declaration");
+    let member_list = class_declaration
+        .children()
+        .find(|node| node.kind() == SyntaxKind::MemberList)
+        .expect("a member list");
+    let member = member_list.children().next().expect("a first member");
+    let mut output = String::new();
+    render_element_without_offsets(&mut output, member.into(), 0);
+    output
+}
+
 /// Renders the return type of `<?php function fixture(): {type_source} {}`
 /// as an indented tree, offsets and trivia omitted: the workhorse
 /// assertion of the type grammar tests.

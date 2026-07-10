@@ -453,6 +453,12 @@ syntax_kinds! {
     ImplementsClause,
     /// `{ members }` of a class-like body.
     MemberList,
+    /// `public int $a = 1, $b;`: modifiers, optional type, then the
+    /// declarator elements.
+    PropertyDeclaration,
+    /// One `$name [= initializer]` element; a hooked property carries
+    /// its `PropertyHookList` here (a later task of this plan).
+    PropertyElement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

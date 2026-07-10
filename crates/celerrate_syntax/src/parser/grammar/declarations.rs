@@ -372,12 +372,128 @@ fn member_list(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::MemberList);
 }
 
-/// One class-body member. Tasks 6 through 10 grow this dispatch
-/// (properties, constants, methods, trait use, enum cases,
-/// attributes); until then everything is swept as wreckage.
+/// One class-body member. Tasks of this plan keep growing this
+/// dispatch; `member_list`'s position guard backstops any
+/// zero-consumption refusal path, so the arms may refuse freely.
 fn member(parser: &mut Parser) {
-    if parser.current().is_none() {
-        return;
+    match parser.current() {
+        Some(kind) if starts_member(kind) => {
+            let marker = parser.start();
+            modified_member(parser, marker);
+        }
+        Some(_) => error_element(parser),
+        None => {}
     }
-    error_element(parser);
+}
+
+/// Whether `kind` can start a modified member (a property, a
+/// constant, or — from the methods task on — a method).
+fn starts_member(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::Public
+            | SyntaxKind::Protected
+            | SyntaxKind::Private
+            | SyntaxKind::Static
+            | SyntaxKind::Abstract
+            | SyntaxKind::Final
+            | SyntaxKind::Readonly
+            | SyntaxKind::Var
+            | SyntaxKind::Const
+            | SyntaxKind::Variable
+    ) || super::types::starts_type(kind)
+}
+
+/// Modifiers, then the member they modify: a constant, a method
+/// (next task), or a property (optionally typed). The member's kind
+/// is decided by the first token after the modifiers.
+fn modified_member(parser: &mut Parser, marker: Marker) {
+    member_modifiers(parser);
+    match parser.current() {
+        Some(SyntaxKind::Const) => constant_declaration(parser, marker),
+        // A bare `$x;` member is a Zend parse error; parsing it as an
+        // unmodified property keeps it one analyzable unit.
+        Some(SyntaxKind::Variable) => property_declaration(parser, marker),
+        Some(kind) if super::types::starts_type(kind) => {
+            types_then_property(parser, marker);
+        }
+        _ => {
+            // Modifiers with nothing to modify (`public;`). At least
+            // one modifier token was consumed on this path, so the
+            // member list progresses.
+            parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
+            marker.complete(parser, SyntaxKind::ErrorNode);
+        }
+    }
+}
+
+/// The typed-property tail. The type parse can be refused by the
+/// nesting guard without consuming; `member_list`'s position guard
+/// covers that case.
+fn types_then_property(parser: &mut Parser, marker: Marker) {
+    super::types::type_expression(parser);
+    property_declaration(parser, marker);
+}
+
+/// `public`, `protected`, `private` (each optionally asymmetric:
+/// `private(set)`), `static`, `abstract`, `final`, `readonly`, `var`.
+/// Order, repetition, and combination are all judged upstairs; the
+/// parser accepts any sequence.
+fn member_modifiers(parser: &mut Parser) {
+    loop {
+        match parser.current() {
+            Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private) => {
+                parser.bump();
+                asymmetric_visibility_suffix(parser);
+            }
+            Some(
+                SyntaxKind::Static
+                | SyntaxKind::Abstract
+                | SyntaxKind::Final
+                | SyntaxKind::Readonly
+                | SyntaxKind::Var,
+            ) => parser.bump(),
+            _ => break,
+        }
+    }
+}
+
+/// The `(set)` of 8.4's asymmetric visibility, three flat tokens.
+/// Zend lexes `private(set)` as one token and thereby forbids interior
+/// whitespace; the trivia-free view cannot see adjacency, so spaced
+/// forms parse here and adjacency is judged upstairs (the same trade
+/// recorded on `name`). Only the exact `( identifier )` shape is
+/// taken: anything else belongs to the member that follows.
+fn asymmetric_visibility_suffix(parser: &mut Parser) {
+    if parser.at(SyntaxKind::OpenParenthesis)
+        && parser.nth(1) == Some(SyntaxKind::Identifier)
+        && parser.nth(2) == Some(SyntaxKind::CloseParenthesis)
+    {
+        parser.bump();
+        parser.bump();
+        parser.bump();
+    }
+}
+
+/// The declarators of one property: `$a = 1, $b;`. The caller consumed
+/// the modifiers and the optional type into `marker`. Terminates:
+/// every iteration bumps a variable or breaks.
+fn property_declaration(parser: &mut Parser, marker: Marker) {
+    loop {
+        if !parser.at(SyntaxKind::Variable) {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Variable));
+            break;
+        }
+        let element = parser.start();
+        parser.bump();
+        if parser.eat(SyntaxKind::Equals) {
+            expression(parser);
+        }
+        element.complete(parser, SyntaxKind::PropertyElement);
+        if !parser.eat(SyntaxKind::Comma) {
+            break;
+        }
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::PropertyDeclaration);
 }
