@@ -1,7 +1,7 @@
 //! Arbitrary bytes through `SourceText::from_bytes` then the full
 //! parsing pipeline. Invariants: no panic anywhere, the tree is
-//! lossless, and parsing terminates (libFuzzer's timeout catches
-//! hangs — guaranteed progress is the property under test).
+//! lossless, and parsing terminates (libFuzzer's timeout catches hangs;
+//! guaranteed progress is the property under test).
 
 #![no_main]
 

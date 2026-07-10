@@ -4,9 +4,9 @@
 //! Trivia attachment (spec section 2): pending trivia flush just before
 //! the next node or token starts, into the node open at that point, so
 //! trivia sit between siblings and a node's range starts at its first
-//! significant token. Losslessness is structural: every raw token is
-//! pushed exactly once, in order, and leftovers flush into the root
-//! before it closes — a parser bug can cost tree shape, never text.
+//! significant token. Losslessness is structural (every raw token is
+//! pushed exactly once, in order), and leftovers flush into the root
+//! before it closes; a parser bug can cost tree shape, never text.
 //!
 //! rowan requires exactly one top-level child when `finish()` runs and
 //! panics on an unmatched `finish_node()`. A parser bug (or, defensively,
@@ -35,9 +35,8 @@ pub(crate) fn build_tree(source: &str, tokens: &[Token], mut events: Vec<Event>)
         offset: TextSize::from(0),
     };
     let mut depth = 0usize;
-    // Set the first time a node opens; once it goes back to `false` at
-    // depth 0 it never flips back, so `root_opened && depth == 0` means
-    // the single root rowan allows has already closed.
+    // Set the first time a node opens and never cleared; `root_opened && depth == 0`
+    // means the single root rowan allows has already closed.
     let mut root_opened = false;
     let mut forward_kinds = Vec::new();
     for index in 0..events.len() {
@@ -199,7 +198,7 @@ mod tests {
         }
     }
 
-    /// `<?php echo 1;` — trivia (one space between tokens) must land in
+    /// `<?php echo 1;`: trivia (one space between tokens) must land in
     /// the source file, between siblings, never inside the statement's
     /// leading edge.
     #[test]

@@ -71,8 +71,8 @@ fn error_statement(parser: &mut Parser) {
 }
 
 /// PHP requires `;` after a statement except immediately before `?>`,
-/// where it is optional (end of input does not exempt it: Zend rejects
-/// that too, so we diagnose it — zero-width, after the last token).
+/// where it is optional. End of input does not exempt it (Zend rejects
+/// that too), so we diagnose it: zero-width, after the last token.
 fn terminate_statement(parser: &mut Parser) {
     if parser.at(SyntaxKind::Semicolon) {
         parser.bump();

@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use crate::syntax_kind::SyntaxKind;
 
 /// One step of tree construction, recorded by the parser and replayed
