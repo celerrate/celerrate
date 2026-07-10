@@ -107,6 +107,15 @@ impl Parser {
         self.source.kind(self.position + offset)
     }
 
+    /// The token cursor, exposed so a delimited-list loop (`argument_list`
+    /// and the shared list helpers it anchors) can prove it advances every
+    /// iteration: the nesting guard can refuse a sub-expression without
+    /// consuming a token, and a list loop that only trusts its element
+    /// rule to consume would spin forever on that refusal.
+    fn position(&self) -> usize {
+        self.position
+    }
+
     fn eat(&mut self, kind: SyntaxKind) -> bool {
         if self.at(kind) {
             self.bump();

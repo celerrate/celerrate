@@ -272,6 +272,14 @@ syntax_kinds! {
     NameExpression,
     /// `$$name` and `${expression}`.
     DynamicVariableExpression,
+    /// `( argument, ... )`, including the lone `...` of a first-class
+    /// callable.
+    ArgumentList,
+    /// One argument: optional `label:`, optional `...`, optional `&`,
+    /// then the expression.
+    Argument,
+    /// A call: the callee expression, then its argument list.
+    CallExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

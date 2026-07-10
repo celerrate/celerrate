@@ -10,7 +10,7 @@ use super::{CompletedMarker, Parser};
 
 mod expressions;
 
-use expressions::{expression, starts_expression};
+use expressions::{error_element, expression, starts_expression};
 
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();
@@ -75,10 +75,7 @@ fn expression_statement(parser: &mut Parser) {
 /// One token no rule accepts, wrapped and reported; the guaranteed
 /// progress of the statement loop.
 fn error_statement(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.diagnose_current(ParserDiagnosticKind::UnexpectedToken);
-    parser.bump();
-    marker.complete(parser, SyntaxKind::ErrorNode);
+    error_element(parser);
 }
 
 /// PHP requires `;` after a statement except immediately before `?>`,

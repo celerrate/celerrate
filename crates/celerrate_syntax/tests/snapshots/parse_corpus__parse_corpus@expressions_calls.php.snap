@@ -1,0 +1,147 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_calls.php
+---
+SourceFile@0..163
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..22
+    CallExpression@6..21
+      NameExpression@6..12
+        Name@6..12
+          Identifier@6..12 "strlen"
+      ArgumentList@12..21
+        OpenParenthesis@12..13 "("
+        Argument@13..20
+          Literal@13..20
+            SingleQuotedString@13..20 "'hello'"
+        CloseParenthesis@20..21 ")"
+    Semicolon@21..22 ";"
+  Whitespace@22..23 "\n"
+  ExpressionStatement@23..52
+    CallExpression@23..51
+      NameExpression@23..32
+        Name@23..32
+          Identifier@23..32 "array_map"
+      ArgumentList@32..51
+        OpenParenthesis@32..33 "("
+        Argument@33..42
+          VariableReference@33..42
+            Variable@33..42 "$callback"
+        Comma@42..43 ","
+        Whitespace@43..44 " "
+        Argument@44..50
+          VariableReference@44..50
+            Variable@44..50 "$items"
+        CloseParenthesis@50..51 ")"
+    Semicolon@51..52 ";"
+  Whitespace@52..53 "\n"
+  ExpressionStatement@53..81
+    CallExpression@53..80
+      NameExpression@53..54
+        Name@53..54
+          Identifier@53..54 "f"
+      ArgumentList@54..80
+        OpenParenthesis@54..55 "("
+        Argument@55..68
+          Identifier@55..59 "name"
+          Colon@59..60 ":"
+          Whitespace@60..61 " "
+          Literal@61..68
+            SingleQuotedString@61..68 "'value'"
+        Comma@68..69 ","
+        Whitespace@69..70 " "
+        Argument@70..78
+          Ellipsis@70..73 "..."
+          VariableReference@73..78
+            Variable@73..78 "$rest"
+        Comma@78..79 ","
+        CloseParenthesis@79..80 ")"
+    Semicolon@80..81 ";"
+  Whitespace@81..82 "\n"
+  ExpressionStatement@82..94
+    CallExpression@82..93
+      NameExpression@82..88
+        Name@82..88
+          Identifier@82..88 "strlen"
+      ArgumentList@88..93
+        OpenParenthesis@88..89 "("
+        Ellipsis@89..92 "..."
+        CloseParenthesis@92..93 ")"
+    Semicolon@93..94 ";"
+  Whitespace@94..95 "\n"
+  ExpressionStatement@95..111
+    CallExpression@95..110
+      CallExpression@95..107
+        VariableReference@95..104
+          Variable@95..104 "$callable"
+        ArgumentList@104..107
+          OpenParenthesis@104..105 "("
+          Argument@105..106
+            Literal@105..106
+              IntegerLiteral@105..106 "1"
+          CloseParenthesis@106..107 ")"
+      ArgumentList@107..110
+        OpenParenthesis@107..108 "("
+        Argument@108..109
+          Literal@108..109
+            IntegerLiteral@108..109 "2"
+        CloseParenthesis@109..110 ")"
+    Semicolon@110..111 ";"
+  Whitespace@111..112 "\n"
+  ExpressionStatement@112..125
+    CallExpression@112..124
+      NameExpression@112..120
+        Name@112..120
+          Backslash@112..113 "\\"
+          Identifier@113..116 "Foo"
+          Backslash@116..117 "\\"
+          Identifier@117..120 "bar"
+      ArgumentList@120..124
+        OpenParenthesis@120..121 "("
+        Argument@121..123
+          VariableReference@121..123
+            Variable@121..123 "$x"
+        CloseParenthesis@123..124 ")"
+    Semicolon@124..125 ";"
+  Whitespace@125..126 "\n"
+  ExpressionStatement@126..138
+    CallExpression@126..137
+      NameExpression@126..127
+        Name@126..127
+          Identifier@126..127 "g"
+      ArgumentList@127..137
+        OpenParenthesis@127..128 "("
+        Argument@128..136
+          Ampersand@128..129 "&"
+          VariableReference@129..136
+            Variable@129..136 "$legacy"
+        CloseParenthesis@136..137 ")"
+    Semicolon@137..138 ";"
+  Whitespace@138..139 "\n"
+  ExpressionStatement@139..162
+    CallExpression@139..161
+      NameExpression@139..140
+        Name@139..140
+          Identifier@139..140 "h"
+      ArgumentList@140..161
+        OpenParenthesis@140..141 "("
+        Argument@141..151
+          Default@141..148 "default"
+          Colon@148..149 ":"
+          Whitespace@149..150 " "
+          Literal@150..151
+            IntegerLiteral@150..151 "1"
+        Comma@151..152 ","
+        Whitespace@152..153 " "
+        Argument@153..160
+          List@153..157 "list"
+          Colon@157..158 ":"
+          Whitespace@158..159 " "
+          Literal@159..160
+            IntegerLiteral@159..160 "2"
+        CloseParenthesis@160..161 ")"
+    Semicolon@161..162 ";"
+  Whitespace@162..163 "\n"

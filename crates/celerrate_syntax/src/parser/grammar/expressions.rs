@@ -271,10 +271,114 @@ fn postfix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
                 parser.bump();
                 marker.complete(parser, SyntaxKind::PostfixExpression)
             }
+            Some(SyntaxKind::OpenParenthesis) => {
+                let marker = left.precede(parser);
+                argument_list(parser);
+                marker.complete(parser, SyntaxKind::CallExpression)
+            }
             _ => break,
         };
     }
     Some(left)
+}
+
+/// One token no rule accepts inside a delimited construct: wrapped,
+/// diagnosed, consumed, so every list loop makes progress.
+pub(super) fn error_element(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.diagnose_current(ParserDiagnosticKind::UnexpectedToken);
+    parser.bump();
+    marker.complete(parser, SyntaxKind::ErrorNode);
+}
+
+fn starts_argument(parser: &Parser) -> bool {
+    parser.current().is_some_and(|kind| {
+        starts_expression(kind)
+            || kind == SyntaxKind::Ellipsis
+            || kind == SyntaxKind::Ampersand
+            || (kind.is_keyword() && parser.nth(1) == Some(SyntaxKind::Colon))
+    })
+}
+
+/// After a list element: eat the separating comma, or diagnose one
+/// missing unless the list sits at a legitimate boundary (its closer,
+/// a statement boundary, end of input). Shared by every
+/// comma-separated list of this plan.
+fn expect_list_separator(parser: &mut Parser, closing: SyntaxKind) {
+    if parser.eat(SyntaxKind::Comma) {
+        return;
+    }
+    if parser.at(closing)
+        || parser.at(SyntaxKind::Semicolon)
+        || parser.at(SyntaxKind::CloseTag)
+        || parser.at_end()
+    {
+        return;
+    }
+    parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Comma));
+}
+
+/// `( argument, ... )`. The caller has already checked the opening
+/// parenthesis is there (or wants its absence diagnosed). Recovery: an
+/// unexpected token is wrapped and consumed; `;`, `?>`, and end of
+/// input abort the list so a runaway call cannot swallow the file.
+///
+/// Progress is enforced mechanically, not only by convention: the
+/// nesting guard (`Parser::enter_nesting`) can refuse an argument's
+/// expression outright, without consuming a token, when it fires while
+/// this very loop is itself nested deep inside a pathological chain of
+/// parenthesized expressions (the leftover, unconsumed `(` surfaces
+/// through the postfix loop at every level that chain unwinds through,
+/// not only at the top, so `argument_list` can be entered again while
+/// the nesting budget is still exhausted). Trusting `argument` to
+/// always consume would let such a case spin forever; instead each
+/// iteration records the position before parsing an element and, if it
+/// is unchanged afterward, forces an `error_element` bump.
+fn argument_list(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.expect(SyntaxKind::OpenParenthesis);
+    while !parser.at(SyntaxKind::CloseParenthesis) && !parser.at_end() {
+        if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+            break;
+        }
+        // `f(...)`: the first-class callable form, a lone ellipsis.
+        if parser.at(SyntaxKind::Ellipsis) && parser.nth(1) == Some(SyntaxKind::CloseParenthesis) {
+            parser.bump();
+            break;
+        }
+        if !starts_argument(parser) {
+            error_element(parser);
+            continue;
+        }
+        let position_before_element = parser.position();
+        argument(parser);
+        expect_list_separator(parser, SyntaxKind::CloseParenthesis);
+        if parser.position() == position_before_element {
+            error_element(parser);
+        }
+    }
+    parser.expect(SyntaxKind::CloseParenthesis);
+    marker.complete(parser, SyntaxKind::ArgumentList);
+}
+
+fn argument(parser: &mut Parser) {
+    let marker = parser.start();
+    // A named argument: `label:` where the label is an identifier or
+    // any keyword (semi-reserved, accepted wholesale). `::` cannot be
+    // confused with the label colon because it lexes as one token.
+    let at_label = parser
+        .current()
+        .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword())
+        && parser.nth(1) == Some(SyntaxKind::Colon);
+    if at_label {
+        parser.bump();
+        parser.bump();
+    }
+    parser.eat(SyntaxKind::Ellipsis);
+    // Call-site by-reference: removed from PHP, still analyzable.
+    parser.eat(SyntaxKind::Ampersand);
+    expression(parser);
+    marker.complete(parser, SyntaxKind::Argument);
 }
 
 fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
