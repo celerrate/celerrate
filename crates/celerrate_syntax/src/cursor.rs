@@ -76,9 +76,6 @@ impl<'source> Cursor<'source> {
     }
 
     /// The text consumed since the current token started.
-    // Only reachable production caller today is `Lexer::at_line_start`,
-    // itself unused until the heredoc task; kept warning-free until then.
-    #[allow(dead_code)]
     pub(crate) fn pending_text(&self) -> &'source str {
         self.rest_at_token_start
             .get(..self.pending_byte_length())
