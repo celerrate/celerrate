@@ -160,3 +160,30 @@ fn render_element_without_offsets(
         }
     }
 }
+
+/// Renders the first statement of `<?php {statement_source}` as an
+/// indented tree of node kinds and token texts, offsets and trivia
+/// omitted: the workhorse assertion of the statement grammar tests.
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn render_statement(statement_source: &str) -> String {
+    let source = format!("<?php {statement_source}");
+    let parse = parse_verified(&source);
+    let statement = parse.tree().children().next().expect("a first statement");
+    let mut output = String::new();
+    render_element_without_offsets(&mut output, statement.into(), 0);
+    output
+}
+
+/// The parser-side diagnostics of one parse, lexer findings filtered
+/// out, for structural assertions.
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn parser_diagnostics(source: &str) -> Vec<celerrate_syntax::ParserDiagnosticKind> {
+    parse_verified(source)
+        .diagnostics()
+        .iter()
+        .filter_map(|diagnostic| match diagnostic.kind {
+            celerrate_syntax::SyntaxDiagnosticKind::Parser(kind) => Some(kind),
+            celerrate_syntax::SyntaxDiagnosticKind::Lexer(_) => None,
+        })
+        .collect()
+}

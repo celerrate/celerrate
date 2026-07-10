@@ -9,12 +9,35 @@ use super::Parser;
 use super::expressions::{error_element, expression, starts_expression};
 
 pub(super) fn statement(parser: &mut Parser) {
+    if !parser.enter_nesting() {
+        // The budget refused the whole statement without consuming;
+        // wrap one token so every enclosing statement list keeps
+        // progressing (the same contract the expression lists use).
+        if parser.current().is_some() {
+            error_element(parser);
+        }
+        return;
+    }
+    dispatch_statement(parser);
+    parser.leave_nesting();
+}
+
+fn dispatch_statement(parser: &mut Parser) {
     match parser.current() {
+        Some(SyntaxKind::OpenBrace) => block(parser),
+        Some(SyntaxKind::Semicolon) => empty_statement(parser),
         Some(SyntaxKind::Echo) => echo_statement(parser),
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}
     }
+}
+
+/// A lone `;`: a complete statement in PHP.
+fn empty_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump();
+    marker.complete(parser, SyntaxKind::EmptyStatement);
 }
 
 /// Statements until end of input or the list's closing brace. The

@@ -352,6 +352,8 @@ syntax_kinds! {
     ClosureUseClause,
     /// `{ statements }`.
     Block,
+    /// A lone `;`.
+    EmptyStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

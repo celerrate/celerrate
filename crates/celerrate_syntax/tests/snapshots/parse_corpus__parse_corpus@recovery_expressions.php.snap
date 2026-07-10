@@ -118,11 +118,10 @@ SourceFile@0..172
     CastExpression@114..119
       IntCast@114..119 "(int)"
   Whitespace@119..120 " "
-  ErrorNode@120..121
+  Block@120..122
     OpenBrace@120..121 "{"
-  ErrorNode@121..122
     CloseBrace@121..122 "}"
-  ErrorNode@122..123
+  EmptyStatement@122..123
     Semicolon@122..123 ";"
   Whitespace@123..124 "\n"
   ExpressionStatement@124..134
@@ -173,9 +172,6 @@ Parser(Expected(OpenBrace)) @ 113..113
 Parser(ExpectedSemicolon) @ 113..113
 Parser(ExpectedSemicolon) @ 119..119
 Parser(ExpectedExpression) @ 120..121
-Parser(UnexpectedToken) @ 120..121
-Parser(UnexpectedToken) @ 121..122
-Parser(UnexpectedToken) @ 122..123
 Parser(ExpectedExpression) @ 133..134
 Parser(ExpectedExpression) @ 140..141
 Parser(ExpectedExpression) @ 152..153
