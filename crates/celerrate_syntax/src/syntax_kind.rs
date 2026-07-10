@@ -437,6 +437,22 @@ syntax_kinds! {
     UseClause,
     /// `\{ items }` of a grouped import.
     UseGroup,
+    /// `class Name extends B implements C, D { members }`, with
+    /// optional `abstract` / `final` / `readonly` modifiers. Anonymous
+    /// classes (`new class(...) { ... }`) share this kind and simply
+    /// have no name; their constructor arguments sit before the
+    /// heritage clauses.
+    ClassDeclaration,
+    /// `interface Name extends A, B { members }`.
+    InterfaceDeclaration,
+    /// `trait Name { members }`.
+    TraitDeclaration,
+    /// `extends` and its comma-separated names.
+    ExtendsClause,
+    /// `implements` and its comma-separated names.
+    ImplementsClause,
+    /// `{ members }` of a class-like body.
+    MemberList,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

@@ -164,6 +164,7 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Match
             | SyntaxKind::Function
             | SyntaxKind::Fn
+            | SyntaxKind::Readonly
     )
 }
 
@@ -708,6 +709,16 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             parser.bump();
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
+        // Zend keeps `readonly` callable as a plain function name for
+        // backward compatibility: directly followed by `(` it is a
+        // call target, never a modifier.
+        Some(SyntaxKind::Readonly) if parser.nth(1) == Some(SyntaxKind::OpenParenthesis) => {
+            let marker = parser.start();
+            let name_marker = parser.start();
+            parser.bump();
+            name_marker.complete(parser, SyntaxKind::Name);
+            Some(marker.complete(parser, SyntaxKind::NameExpression))
+        }
         Some(SyntaxKind::OpenParenthesis) => Some(parenthesized_expression(parser)),
         Some(SyntaxKind::New) => Some(new_expression(parser)),
         // The 8.5 function form; a primary, so postfix chains wrap it.
@@ -758,9 +769,12 @@ fn new_expression(parser: &mut Parser) -> CompletedMarker {
         Some(SyntaxKind::OpenParenthesis) => {
             parenthesized_expression(parser);
         }
-        // `new class { ... }` (anonymous classes) belongs to the
-        // declarations plan; recovery keeps the tokens until then.
-        Some(SyntaxKind::Class) => error_element(parser),
+        Some(
+            SyntaxKind::Class | SyntaxKind::Readonly | SyntaxKind::Final | SyntaxKind::Abstract,
+        ) => {
+            let class_marker = parser.start();
+            super::declarations::anonymous_class(parser, class_marker);
+        }
         _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression),
     }
     if parser.at(SyntaxKind::OpenParenthesis) {

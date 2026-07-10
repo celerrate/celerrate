@@ -7,7 +7,9 @@
 use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;
 
-use super::expressions::{error_element, expect_list_separator, expression, name, parameter_list};
+use super::expressions::{
+    argument_list, error_element, expect_list_separator, expression, name, parameter_list,
+};
 use super::statements::{block, terminate_statement};
 use super::{Marker, Parser};
 
@@ -27,6 +29,11 @@ pub(super) fn declaration(parser: &mut Parser) {
             namespace_declaration(parser, marker);
         }
         Some(SyntaxKind::Use) => use_declaration(parser, marker),
+        Some(
+            SyntaxKind::Class | SyntaxKind::Abstract | SyntaxKind::Final | SyntaxKind::Readonly,
+        ) => class_declaration(parser, marker),
+        Some(SyntaxKind::Interface) => interface_declaration(parser, marker),
+        Some(SyntaxKind::Trait) => trait_declaration(parser, marker),
         Some(_) => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
             marker.complete(parser, SyntaxKind::ErrorNode);
@@ -227,4 +234,150 @@ fn use_alias(parser: &mut Parser) {
         Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
         _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
     }
+}
+
+/// `abstract`, `final`, `readonly` before `class`, in any order and
+/// multiplicity; validity is semantic.
+fn class_modifiers(parser: &mut Parser) {
+    while matches!(
+        parser.current(),
+        Some(SyntaxKind::Abstract | SyntaxKind::Final | SyntaxKind::Readonly)
+    ) {
+        parser.bump();
+    }
+}
+
+fn class_declaration(parser: &mut Parser, marker: Marker) {
+    class_modifiers(parser);
+    if !parser.eat(SyntaxKind::Class) {
+        // Modifiers with no `class` behind them (`abstract 1;`): the
+        // modifiers become wreckage and the rest parses on its own.
+        // Progress holds: this path is only reachable behind at least
+        // one consumed token (a modifier, or attribute groups).
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Class));
+        marker.complete(parser, SyntaxKind::ErrorNode);
+        return;
+    }
+    class_like_name(parser);
+    heritage_clauses(parser);
+    member_list(parser);
+    marker.complete(parser, SyntaxKind::ClassDeclaration);
+}
+
+fn interface_declaration(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `interface`
+    class_like_name(parser);
+    heritage_clauses(parser);
+    member_list(parser);
+    marker.complete(parser, SyntaxKind::InterfaceDeclaration);
+}
+
+fn trait_declaration(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `trait`
+    class_like_name(parser);
+    heritage_clauses(parser);
+    member_list(parser);
+    marker.complete(parser, SyntaxKind::TraitDeclaration);
+}
+
+/// The declaration half of `new class(...) extends ... { ... }`: no
+/// name, optional constructor arguments between the keyword and the
+/// heritage clauses. Which modifiers an anonymous class allows
+/// (`readonly` since 8.3) is semantic.
+pub(super) fn anonymous_class(parser: &mut Parser, marker: Marker) {
+    class_modifiers(parser);
+    parser.expect(SyntaxKind::Class);
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        argument_list(parser);
+    }
+    heritage_clauses(parser);
+    member_list(parser);
+    marker.complete(parser, SyntaxKind::ClassDeclaration);
+}
+
+/// The declared name. Zend rejects keywords here; every keyword parses
+/// as the name anyway (`class List {}` stays one analyzable
+/// declaration) and reservation is judged upstairs — except `extends`
+/// and `implements`, which stay heritage clauses so a missing name
+/// cannot swallow them.
+fn class_like_name(parser: &mut Parser) {
+    match parser.current() {
+        Some(kind)
+            if (kind == SyntaxKind::Identifier || kind.is_keyword())
+                && !matches!(kind, SyntaxKind::Extends | SyntaxKind::Implements) =>
+        {
+            parser.bump();
+        }
+        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
+}
+
+/// `extends ...` then `implements ...`, each optional. One shared rule
+/// for every class-like: an interface with `implements` or a trait
+/// with either clause parses, and the misplacement is semantic.
+fn heritage_clauses(parser: &mut Parser) {
+    if parser.at(SyntaxKind::Extends) {
+        let clause = parser.start();
+        parser.bump();
+        name_list(parser);
+        clause.complete(parser, SyntaxKind::ExtendsClause);
+    }
+    if parser.at(SyntaxKind::Implements) {
+        let clause = parser.start();
+        parser.bump();
+        name_list(parser);
+        clause.complete(parser, SyntaxKind::ImplementsClause);
+    }
+}
+
+/// Comma-separated qualified names. Arity (single inheritance) is
+/// semantic. Terminates: every iteration parses a name (which always
+/// bumps) or breaks.
+fn name_list(parser: &mut Parser) {
+    loop {
+        if matches!(
+            parser.current(),
+            Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace)
+        ) {
+            name(parser);
+        } else {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+            break;
+        }
+        if !parser.eat(SyntaxKind::Comma) {
+            break;
+        }
+    }
+}
+
+/// `{ members }`. The loop is position-guarded like `argument_list`:
+/// a member rule can refuse without consuming (the nesting guard can
+/// veto a type or initializer sub-parse), and the guard then forces an
+/// `error_element` bump, so the list always progresses. The guard on
+/// `current` (not `at_end`) makes a blown fuse unwind instead of spin.
+fn member_list(parser: &mut Parser) {
+    let marker = parser.start();
+    if parser.eat(SyntaxKind::OpenBrace) {
+        while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
+            let position_before_member = parser.position();
+            member(parser);
+            if parser.position() == position_before_member {
+                error_element(parser);
+            }
+        }
+        parser.expect(SyntaxKind::CloseBrace);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace));
+    }
+    marker.complete(parser, SyntaxKind::MemberList);
+}
+
+/// One class-body member. Tasks 6 through 10 grow this dispatch
+/// (properties, constants, methods, trait use, enum cases,
+/// attributes); until then everything is swept as wreckage.
+fn member(parser: &mut Parser) {
+    if parser.current().is_none() {
+        return;
+    }
+    error_element(parser);
 }

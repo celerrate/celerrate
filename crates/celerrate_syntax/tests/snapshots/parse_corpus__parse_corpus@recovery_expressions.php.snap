@@ -85,8 +85,9 @@ SourceFile@0..172
     NewExpression@71..80
       New@71..74 "new"
       Whitespace@74..75 " "
-      ErrorNode@75..80
+      ClassDeclaration@75..80
         Class@75..80 "class"
+        MemberList@80..80
     Semicolon@80..81 ";"
   Whitespace@81..82 "\n"
   ExpressionStatement@82..89
@@ -163,7 +164,7 @@ Parser(ExpectedMemberName) @ 35..36
 Parser(ExpectedMemberName) @ 42..43
 Parser(Expected(FatArrow)) @ 58..58
 Parser(ExpectedExpression) @ 69..70
-Parser(UnexpectedToken) @ 75..80
+Parser(Expected(OpenBrace)) @ 80..80
 Parser(Expected(Colon)) @ 88..88
 Parser(ExpectedExpression) @ 88..89
 Parser(ExpectedExpression) @ 103..104
