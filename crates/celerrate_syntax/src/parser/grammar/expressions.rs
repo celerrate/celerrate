@@ -871,7 +871,7 @@ fn match_expression(parser: &mut Parser) -> CompletedMarker {
 /// and is bounded by the finite token stream regardless. The guard is
 /// defensive, not load-bearing: it exists so a condition the nesting
 /// guard refuses (without consuming a token) is still swept into an
-/// `ErrorElement` here, rather than left dangling for
+/// `ErrorNode` here, rather than left dangling for
 /// `match_expression`'s own arm-loop guard to recover one layer out.
 fn match_arm(parser: &mut Parser) {
     let marker = parser.start();
@@ -918,7 +918,7 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
         if parser.eat(SyntaxKind::Colon) {
             type_reference(parser);
         }
-        block(parser);
+        super::statements::block(parser);
         marker.complete(parser, SyntaxKind::ClosureExpression)
     } else {
         parser.expect(SyntaxKind::Fn);
@@ -1070,33 +1070,6 @@ fn closure_use_clause(parser: &mut Parser) {
         parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
     }
     marker.complete(parser, SyntaxKind::ClosureUseClause);
-}
-
-/// `{ statements }`. Progress follows from `statement_list_step`, the
-/// same loop body `source_file` has always used (extracted, not
-/// changed): every step either bumps an inline-HTML/tag token or
-/// dispatches to `statement`, whose own arms all bump at least one
-/// token before returning.
-///
-/// A blown fuse must unwind through this loop, exactly like
-/// `source_file`'s: once the step budget is exceeded, `current` (and
-/// `nth`) report `None` for the rest of the parse, but `at_end` stays
-/// false, since it reads the raw token position, which the fuse never
-/// touches and which real, unconsumed tokens can still sit past. Gating
-/// this loop on `at_end` alone would spin forever in that state; the
-/// condition must observe `current`, mirroring `source_file`'s idiom.
-fn block(parser: &mut Parser) {
-    let marker = parser.start();
-    if parser.at(SyntaxKind::OpenBrace) {
-        parser.bump();
-        while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
-            super::statement_list_step(parser);
-        }
-        parser.expect(SyntaxKind::CloseBrace);
-    } else {
-        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace));
-    }
-    marker.complete(parser, SyntaxKind::Block);
 }
 
 /// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`: one `Name` node. Zend
