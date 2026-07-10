@@ -1,0 +1,138 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/statements_try.php
+---
+SourceFile@0..213
+  OpenTag@0..5 "<?php"
+  Whitespace@5..7 "\n\n"
+  TryStatement@7..165
+    Try@7..10 "try"
+    Whitespace@10..11 " "
+    Block@11..27
+      OpenBrace@11..12 "{"
+      Whitespace@12..17 "\n    "
+      ExpressionStatement@17..25
+        CallExpression@17..24
+          NameExpression@17..22
+            Name@17..22
+              Identifier@17..22 "risky"
+          ArgumentList@22..24
+            OpenParenthesis@22..23 "("
+            CloseParenthesis@23..24 ")"
+        Semicolon@24..25 ";"
+      Whitespace@25..26 "\n"
+      CloseBrace@26..27 "}"
+    Whitespace@27..28 " "
+    CatchClause@28..101
+      Catch@28..33 "catch"
+      Whitespace@33..34 " "
+      OpenParenthesis@34..35 "("
+      Name@35..49
+        Identifier@35..49 "LogicException"
+      Whitespace@49..50 " "
+      Pipe@50..51 "|"
+      Whitespace@51..52 " "
+      Name@52..69
+        Backslash@52..53 "\\"
+        Identifier@53..69 "RuntimeException"
+      Whitespace@69..70 " "
+      VariableReference@70..76
+        Variable@70..76 "$error"
+      CloseParenthesis@76..77 ")"
+      Whitespace@77..78 " "
+      Block@78..101
+        OpenBrace@78..79 "{"
+        Whitespace@79..84 "\n    "
+        ExpressionStatement@84..99
+          CallExpression@84..98
+            NameExpression@84..90
+              Name@84..90
+                Identifier@84..90 "report"
+            ArgumentList@90..98
+              OpenParenthesis@90..91 "("
+              Argument@91..97
+                VariableReference@91..97
+                  Variable@91..97 "$error"
+              CloseParenthesis@97..98 ")"
+          Semicolon@98..99 ";"
+        Whitespace@99..100 "\n"
+        CloseBrace@100..101 "}"
+    Whitespace@101..102 " "
+    CatchClause@102..138
+      Catch@102..107 "catch"
+      Whitespace@107..108 " "
+      OpenParenthesis@108..109 "("
+      Name@109..118
+        Identifier@109..118 "Throwable"
+      CloseParenthesis@118..119 ")"
+      Whitespace@119..120 " "
+      Block@120..138
+        OpenBrace@120..121 "{"
+        Whitespace@121..126 "\n    "
+        ExpressionStatement@126..136
+          CallExpression@126..135
+            NameExpression@126..133
+              Name@126..133
+                Identifier@126..133 "recover"
+            ArgumentList@133..135
+              OpenParenthesis@133..134 "("
+              CloseParenthesis@134..135 ")"
+          Semicolon@135..136 ";"
+        Whitespace@136..137 "\n"
+        CloseBrace@137..138 "}"
+    Whitespace@138..139 " "
+    FinallyClause@139..165
+      Finally@139..146 "finally"
+      Whitespace@146..147 " "
+      Block@147..165
+        OpenBrace@147..148 "{"
+        Whitespace@148..153 "\n    "
+        ExpressionStatement@153..163
+          CallExpression@153..162
+            NameExpression@153..160
+              Name@153..160
+                Identifier@153..160 "cleanup"
+            ArgumentList@160..162
+              OpenParenthesis@160..161 "("
+              CloseParenthesis@161..162 ")"
+          Semicolon@162..163 ";"
+        Whitespace@163..164 "\n"
+        CloseBrace@164..165 "}"
+  Whitespace@165..167 "\n\n"
+  TryStatement@167..212
+    Try@167..170 "try"
+    Whitespace@170..171 " "
+    Block@171..186
+      OpenBrace@171..172 "{"
+      Whitespace@172..177 "\n    "
+      ExpressionStatement@177..184
+        CallExpression@177..183
+          NameExpression@177..181
+            Name@177..181
+              Identifier@177..181 "once"
+          ArgumentList@181..183
+            OpenParenthesis@181..182 "("
+            CloseParenthesis@182..183 ")"
+        Semicolon@183..184 ";"
+      Whitespace@184..185 "\n"
+      CloseBrace@185..186 "}"
+    Whitespace@186..187 " "
+    FinallyClause@187..212
+      Finally@187..194 "finally"
+      Whitespace@194..195 " "
+      Block@195..212
+        OpenBrace@195..196 "{"
+        Whitespace@196..201 "\n    "
+        ExpressionStatement@201..210
+          CallExpression@201..209
+            NameExpression@201..207
+              Name@201..207
+                Identifier@201..207 "always"
+            ArgumentList@207..209
+              OpenParenthesis@207..208 "("
+              CloseParenthesis@208..209 ")"
+          Semicolon@209..210 ";"
+        Whitespace@210..211 "\n"
+        CloseBrace@211..212 "}"
+  Whitespace@212..213 "\n"

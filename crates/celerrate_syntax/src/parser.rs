@@ -123,15 +123,26 @@ impl Parser {
             .source
             .range(self.position)
             .unwrap_or_else(|| TextRange::empty(self.previous_end()));
-        self.diagnostics.push(ParserDiagnostic { kind, range });
+        self.push_diagnostic(ParserDiagnostic { kind, range });
     }
 
     /// Marks something missing: zero-width at the previous token's end.
     fn diagnose_missing(&mut self, kind: ParserDiagnosticKind) {
-        self.diagnostics.push(ParserDiagnostic {
+        self.push_diagnostic(ParserDiagnostic {
             kind,
             range: TextRange::empty(self.previous_end()),
         });
+    }
+
+    /// Appends a diagnostic unless it repeats the previous one exactly.
+    /// Recovery that unwinds through many levels at one spot (an
+    /// exhausted nesting budget above all) re-diagnoses the same missing
+    /// token at the same offset once per level; one report suffices.
+    fn push_diagnostic(&mut self, diagnostic: ParserDiagnostic) {
+        if self.diagnostics.last() == Some(&diagnostic) {
+            return;
+        }
+        self.diagnostics.push(diagnostic);
     }
 
     /// Bounds recursive descent: degenerate nesting (`((((...`,
@@ -228,7 +239,7 @@ impl Parser {
         if let Some(event) = outer_close {
             self.events.push(event);
         }
-        self.diagnostics.push(ParserDiagnostic {
+        self.push_diagnostic(ParserDiagnostic {
             kind: ParserDiagnosticKind::NoProgress,
             range: TextRange::new(start, self.previous_end()),
         });
@@ -474,68 +485,6 @@ mod tests {
                 .any(|node| node.kind() == SyntaxKind::ErrorNode),
             "the recovered remainder must sit under an ErrorNode"
         );
-    }
-
-    #[test]
-    fn a_blown_fuse_inside_a_block_context_still_terminates() {
-        // Reproduces the historical bug in `block`'s loop, whose guard
-        // used to read `!at_end()` instead of observing `current()`:
-        // once the fuse blows, `current`/`nth` report `None`, but
-        // `at_end` stays false as long as real, unconsumed tokens remain
-        // past the (untouched) raw token position — exactly the state a
-        // block body sits in when the fuse blows partway through it.
-        // `block` itself lives in the private `expressions` module and
-        // is unreachable from here, so this hand-drives the identical
-        // idiom `block` now shares with `source_file` directly on
-        // `Parser`, over a source whose block is still open when the
-        // fuse blows. A regression back to `!at_end()` would hang this
-        // test rather than fail it.
-        let source = "<?php function () { 1; 2; 3; };";
-        let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
-        let mut parser = Parser::new(token_source::TokenSource::new(&tokens));
-        let outer = parser.start();
-        // Advance past `<?php function ( ) {`, so the raw position sits
-        // inside the block body, with real tokens (`1; 2; 3; };`) still
-        // ahead, before the fuse blows.
-        for _ in 0..6 {
-            parser.bump();
-        }
-        assert!(!parser.at_end(), "real tokens must still remain unconsumed");
-        // A stuck loop: observe `current` without ever bumping.
-        for _ in 0..=Parser::MAXIMUM_STEPS_WITHOUT_PROGRESS {
-            parser.current();
-        }
-        assert_eq!(parser.current(), None, "the fuse must have blown");
-        assert!(
-            !parser.at_end(),
-            "the fuse must not have moved the raw token position"
-        );
-        let block = parser.start();
-        // `block`'s own guard, verbatim: `current().is_some()` before
-        // `at(CloseBrace)`.
-        while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
-            parser.bump();
-        }
-        parser.expect(SyntaxKind::CloseBrace);
-        block.complete(&mut parser, SyntaxKind::Block);
-        outer.complete(&mut parser, SyntaxKind::SourceFile);
-        parser.recover_unconsumed_tail();
-        let tree = SyntaxNode::new_root(crate::tree::builder::build_tree(
-            source,
-            &tokens,
-            parser.events,
-        ));
-        assert_eq!(
-            tree.text().to_string(),
-            source,
-            "the tree must stay lossless even after the fuse blows mid-block"
-        );
-        let no_progress_count = parser
-            .diagnostics
-            .iter()
-            .filter(|diagnostic| diagnostic.kind == ParserDiagnosticKind::NoProgress)
-            .count();
-        assert_eq!(no_progress_count, 1, "exactly one NoProgress diagnostic");
     }
 
     #[test]

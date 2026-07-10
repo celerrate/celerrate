@@ -137,3 +137,21 @@ fn lexer_and_parser_diagnostics_merge_in_source_order() {
         Some(SyntaxDiagnosticKind::Parser(_))
     ));
 }
+
+#[test]
+#[allow(clippy::indexing_slicing)]
+fn exhausted_nesting_reports_each_finding_once() {
+    // Unwinding out of an exhausted nesting budget used to emit one
+    // identical Expected(CloseParenthesis) per unwound level, all
+    // zero-width at the same offset: 127 adjacent duplicates on this
+    // input.
+    let source = format!("<?php {}1;", "(".repeat(140));
+    let parse = support::parse_verified(&source);
+    assert!(
+        parse
+            .diagnostics()
+            .windows(2)
+            .all(|pair| pair[0] != pair[1]),
+        "no diagnostic may repeat its immediate predecessor"
+    );
+}

@@ -1,0 +1,350 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/statements_kitchen_sink.php
+---
+SourceFile@0..772
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  DeclareStatement@6..30
+    Declare@6..13 "declare"
+    OpenParenthesis@13..14 "("
+    DeclareDirective@14..28
+      Identifier@14..26 "strict_types"
+      Equals@26..27 "="
+      Literal@27..28
+        IntegerLiteral@27..28 "1"
+    CloseParenthesis@28..29 ")"
+    EmptyStatement@29..30
+      Semicolon@29..30 ";"
+  Whitespace@30..32 "\n\n"
+  FunctionDeclaration@32..771
+    Function@32..40 "function"
+    Whitespace@40..41 " "
+    Identifier@41..48 "process"
+    ParameterList@48..87
+      OpenParenthesis@48..49 "("
+      Parameter@49..60
+        TypeReference@49..54
+          Array@49..54 "array"
+        Whitespace@54..55 " "
+        Variable@55..60 "$jobs"
+      Comma@60..61 ","
+      Whitespace@61..62 " "
+      Parameter@62..86
+        TypeReference@62..71
+          Question@62..63 "?"
+          Callable@63..71 "callable"
+        Whitespace@71..72 " "
+        Variable@72..79 "$notify"
+        Whitespace@79..80 " "
+        Equals@80..81 "="
+        Whitespace@81..82 " "
+        NameExpression@82..86
+          Name@82..86
+            Identifier@82..86 "null"
+      CloseParenthesis@86..87 ")"
+    Colon@87..88 ":"
+    Whitespace@88..89 " "
+    TypeReference@89..92
+      Identifier@89..92 "int"
+    Whitespace@92..93 "\n"
+    Block@93..771
+      OpenBrace@93..94 "{"
+      Whitespace@94..99 "\n    "
+      ExpressionStatement@99..109
+        AssignmentExpression@99..108
+          VariableReference@99..104
+            Variable@99..104 "$done"
+          Whitespace@104..105 " "
+          Equals@105..106 "="
+          Whitespace@106..107 " "
+          Literal@107..108
+            IntegerLiteral@107..108 "0"
+        Semicolon@108..109 ";"
+      Whitespace@109..114 "\n    "
+      ForeachStatement@114..642
+        Foreach@114..121 "foreach"
+        Whitespace@121..122 " "
+        OpenParenthesis@122..123 "("
+        VariableReference@123..128
+          Variable@123..128 "$jobs"
+        Whitespace@128..129 " "
+        As@129..131 "as"
+        Whitespace@131..132 " "
+        VariableReference@132..135
+          Variable@132..135 "$id"
+        Whitespace@135..136 " "
+        FatArrow@136..138 "=>"
+        Whitespace@138..139 " "
+        VariableReference@139..143
+          Variable@139..143 "$job"
+        CloseParenthesis@143..144 ")"
+        Whitespace@144..145 " "
+        Block@145..642
+          OpenBrace@145..146 "{"
+          Whitespace@146..155 "\n        "
+          SwitchStatement@155..284
+            Switch@155..161 "switch"
+            Whitespace@161..162 " "
+            OpenParenthesis@162..163 "("
+            NameExpression@163..167
+              Name@163..167
+                Identifier@163..167 "true"
+            CloseParenthesis@167..168 ")"
+            Whitespace@168..169 " "
+            OpenBrace@169..170 "{"
+            Whitespace@170..183 "\n            "
+            SwitchCase@183..230
+              Case@183..187 "case"
+              Whitespace@187..188 " "
+              BinaryExpression@188..201
+                VariableReference@188..192
+                  Variable@188..192 "$job"
+                Whitespace@192..193 " "
+                EqualsEqualsEquals@193..196 "==="
+                Whitespace@196..197 " "
+                NameExpression@197..201
+                  Name@197..201
+                    Identifier@197..201 "null"
+              Colon@201..202 ":"
+              Whitespace@202..219 "\n                "
+              ContinueStatement@219..230
+                Continue@219..227 "continue"
+                Whitespace@227..228 " "
+                Literal@228..229
+                  IntegerLiteral@228..229 "2"
+                Semicolon@229..230 ";"
+            Whitespace@230..243 "\n            "
+            SwitchCase@243..274
+              Default@243..250 "default"
+              Colon@250..251 ":"
+              Whitespace@251..268 "\n                "
+              BreakStatement@268..274
+                Break@268..273 "break"
+                Semicolon@273..274 ";"
+            Whitespace@274..283 "\n        "
+            CloseBrace@283..284 "}"
+          Whitespace@284..293 "\n        "
+          TryStatement@293..636
+            Try@293..296 "try"
+            Whitespace@296..297 " "
+            Block@297..453
+              OpenBrace@297..298 "{"
+              Whitespace@298..311 "\n            "
+              IfStatement@311..443
+                If@311..313 "if"
+                Whitespace@313..314 " "
+                OpenParenthesis@314..315 "("
+                CallExpression@315..326
+                  MemberAccessExpression@315..324
+                    VariableReference@315..319
+                      Variable@315..319 "$job"
+                    Arrow@319..321 "->"
+                    MemberName@321..324
+                      Identifier@321..324 "run"
+                  ArgumentList@324..326
+                    OpenParenthesis@324..325 "("
+                    CloseParenthesis@325..326 ")"
+                CloseParenthesis@326..327 ")"
+                Whitespace@327..328 " "
+                Block@328..368
+                  OpenBrace@328..329 "{"
+                  Whitespace@329..346 "\n                "
+                  ExpressionStatement@346..354
+                    PostfixExpression@346..353
+                      VariableReference@346..351
+                        Variable@346..351 "$done"
+                      PlusPlus@351..353 "++"
+                    Semicolon@353..354 ";"
+                  Whitespace@354..367 "\n            "
+                  CloseBrace@367..368 "}"
+                Whitespace@368..369 " "
+                ElseClause@369..443
+                  Else@369..373 "else"
+                  Whitespace@373..374 " "
+                  Block@374..443
+                    OpenBrace@374..375 "{"
+                    Whitespace@375..392 "\n                "
+                    ExpressionStatement@392..429
+                      ThrowExpression@392..428
+                        Throw@392..397 "throw"
+                        Whitespace@397..398 " "
+                        NewExpression@398..428
+                          New@398..401 "new"
+                          Whitespace@401..402 " "
+                          Name@402..418
+                            Identifier@402..418 "RuntimeException"
+                          ArgumentList@418..428
+                            OpenParenthesis@418..419 "("
+                            Argument@419..427
+                              Literal@419..427
+                                SingleQuotedString@419..427 "'failed'"
+                            CloseParenthesis@427..428 ")"
+                      Semicolon@428..429 ";"
+                    Whitespace@429..442 "\n            "
+                    CloseBrace@442..443 "}"
+              Whitespace@443..452 "\n        "
+              CloseBrace@452..453 "}"
+            Whitespace@453..454 " "
+            CatchClause@454..585
+              Catch@454..459 "catch"
+              Whitespace@459..460 " "
+              OpenParenthesis@460..461 "("
+              Name@461..477
+                Identifier@461..477 "RuntimeException"
+              Whitespace@477..478 " "
+              VariableReference@478..484
+                Variable@478..484 "$error"
+              CloseParenthesis@484..485 ")"
+              Whitespace@485..486 " "
+              Block@486..585
+                OpenBrace@486..487 "{"
+                Whitespace@487..500 "\n            "
+                IfStatement@500..575
+                  If@500..502 "if"
+                  Whitespace@502..503 " "
+                  OpenParenthesis@503..504 "("
+                  BinaryExpression@504..520
+                    VariableReference@504..511
+                      Variable@504..511 "$notify"
+                    Whitespace@511..512 " "
+                    BangEqualsEquals@512..515 "!=="
+                    Whitespace@515..516 " "
+                    NameExpression@516..520
+                      Name@516..520
+                        Identifier@516..520 "null"
+                  CloseParenthesis@520..521 ")"
+                  Whitespace@521..522 " "
+                  Block@522..575
+                    OpenBrace@522..523 "{"
+                    Whitespace@523..540 "\n                "
+                    ExpressionStatement@540..561
+                      CallExpression@540..560
+                        VariableReference@540..547
+                          Variable@540..547 "$notify"
+                        ArgumentList@547..560
+                          OpenParenthesis@547..548 "("
+                          Argument@548..551
+                            VariableReference@548..551
+                              Variable@548..551 "$id"
+                          Comma@551..552 ","
+                          Whitespace@552..553 " "
+                          Argument@553..559
+                            VariableReference@553..559
+                              Variable@553..559 "$error"
+                          CloseParenthesis@559..560 ")"
+                      Semicolon@560..561 ";"
+                    Whitespace@561..574 "\n            "
+                    CloseBrace@574..575 "}"
+                Whitespace@575..584 "\n        "
+                CloseBrace@584..585 "}"
+            Whitespace@585..586 " "
+            FinallyClause@586..636
+              Finally@586..593 "finally"
+              Whitespace@593..594 " "
+              Block@594..636
+                OpenBrace@594..595 "{"
+                Whitespace@595..608 "\n            "
+                UnsetStatement@608..626
+                  Unset@608..613 "unset"
+                  ArgumentList@613..625
+                    OpenParenthesis@613..614 "("
+                    Argument@614..624
+                      IndexExpression@614..624
+                        VariableReference@614..619
+                          Variable@614..619 "$jobs"
+                        OpenBracket@619..620 "["
+                        VariableReference@620..623
+                          Variable@620..623 "$id"
+                        CloseBracket@623..624 "]"
+                    CloseParenthesis@624..625 ")"
+                  Semicolon@625..626 ";"
+                Whitespace@626..635 "\n        "
+                CloseBrace@635..636 "}"
+          Whitespace@636..641 "\n    "
+          CloseBrace@641..642 "}"
+      Whitespace@642..647 "\n    "
+      DoWhileStatement@647..695
+        Do@647..649 "do"
+        Whitespace@649..650 " "
+        Block@650..674
+          OpenBrace@650..651 "{"
+          Whitespace@651..660 "\n        "
+          ExpressionStatement@660..668
+            PostfixExpression@660..667
+              VariableReference@660..665
+                Variable@660..665 "$done"
+              MinusMinus@665..667 "--"
+            Semicolon@667..668 ";"
+          Whitespace@668..673 "\n    "
+          CloseBrace@673..674 "}"
+        Whitespace@674..675 " "
+        While@675..680 "while"
+        Whitespace@680..681 " "
+        OpenParenthesis@681..682 "("
+        BinaryExpression@682..693
+          VariableReference@682..687
+            Variable@682..687 "$done"
+          Whitespace@687..688 " "
+          Greater@688..689 ">"
+          Whitespace@689..690 " "
+          Literal@690..693
+            IntegerLiteral@690..693 "100"
+        CloseParenthesis@693..694 ")"
+        Semicolon@694..695 ";"
+      Whitespace@695..700 "\n    "
+      ForStatement@700..751
+        For@700..703 "for"
+        Whitespace@703..704 " "
+        OpenParenthesis@704..705 "("
+        ForExpressionList@705..711
+          AssignmentExpression@705..711
+            VariableReference@705..707
+              Variable@705..707 "$i"
+            Whitespace@707..708 " "
+            Equals@708..709 "="
+            Whitespace@709..710 " "
+            Literal@710..711
+              IntegerLiteral@710..711 "0"
+        Semicolon@711..712 ";"
+        Whitespace@712..713 " "
+        ForExpressionList@713..719
+          BinaryExpression@713..719
+            VariableReference@713..715
+              Variable@713..715 "$i"
+            Whitespace@715..716 " "
+            Less@716..717 "<"
+            Whitespace@717..718 " "
+            Literal@718..719
+              IntegerLiteral@718..719 "2"
+        Semicolon@719..720 ";"
+        Whitespace@720..721 " "
+        ForExpressionList@721..725
+          PostfixExpression@721..725
+            VariableReference@721..723
+              Variable@721..723 "$i"
+            PlusPlus@723..725 "++"
+        CloseParenthesis@725..726 ")"
+        Whitespace@726..727 " "
+        Block@727..751
+          OpenBrace@727..728 "{"
+          Whitespace@728..737 "\n        "
+          EchoStatement@737..745
+            Echo@737..741 "echo"
+            Whitespace@741..742 " "
+            VariableReference@742..744
+              Variable@742..744 "$i"
+            Semicolon@744..745 ";"
+          Whitespace@745..750 "\n    "
+          CloseBrace@750..751 "}"
+      Whitespace@751..756 "\n    "
+      ReturnStatement@756..769
+        Return@756..762 "return"
+        Whitespace@762..763 " "
+        VariableReference@763..768
+          Variable@763..768 "$done"
+        Semicolon@768..769 ";"
+      Whitespace@769..770 "\n"
+      CloseBrace@770..771 "}"
+  Whitespace@771..772 "\n"

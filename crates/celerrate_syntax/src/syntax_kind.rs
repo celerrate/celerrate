@@ -352,6 +352,68 @@ syntax_kinds! {
     ClosureUseClause,
     /// `{ statements }`.
     Block,
+    /// A lone `;`.
+    EmptyStatement,
+    /// `return;` or `return expression;`.
+    ReturnStatement,
+    /// `break;` or `break level;`; level validity is semantic.
+    BreakStatement,
+    /// `continue;` or `continue level;`; level validity is semantic.
+    ContinueStatement,
+    /// `global $a, $b;`.
+    GlobalStatement,
+    /// `static $a = 1, $b;`, the function-static declaration.
+    StaticStatement,
+    /// One declared static: the variable and its optional initializer.
+    StaticVariable,
+    /// `unset( targets );`.
+    UnsetStatement,
+    /// `goto label;`; whether the label exists is semantic.
+    GotoStatement,
+    /// `label:`, the target of a `goto`.
+    LabelStatement,
+    /// `if (condition) body`, with optional `ElseIfClause`s and one
+    /// optional `ElseClause`, in either classic or alternative syntax.
+    IfStatement,
+    /// `elseif (condition) body` (or its alternative-syntax form).
+    ElseIfClause,
+    /// `else body` (or its alternative-syntax form).
+    ElseClause,
+    /// `while (condition) body`, either syntax.
+    WhileStatement,
+    /// `do body while (condition);`.
+    DoWhileStatement,
+    /// `for (initializers; condition; updates) body`, either syntax.
+    ForStatement,
+    /// One of `for`'s three sections: a possibly-empty comma-separated
+    /// expression list, always present as a node so the sections stay
+    /// addressable by position.
+    ForExpressionList,
+    /// `foreach (subject as key => value) body`, either syntax; the
+    /// `=>` separates the optional key target from the value target.
+    ForeachStatement,
+    /// `switch (subject) { cases }`, either syntax.
+    SwitchStatement,
+    /// One `case expression:` or `default:` section, its statements
+    /// included; the body ends where the next section (or the switch)
+    /// begins, so an empty body is a fallthrough.
+    SwitchCase,
+    /// `try block`, then catch clauses and an optional finally.
+    TryStatement,
+    /// `catch (Type | Type $variable) block`; the variable is optional
+    /// since PHP 8.0.
+    CatchClause,
+    /// `finally block`.
+    FinallyClause,
+    /// `declare( directives ) body`, either syntax; the body may be a
+    /// lone `;` (an empty statement).
+    DeclareStatement,
+    /// One `name = value` directive; which names and values are legal
+    /// is semantic.
+    DeclareDirective,
+    /// `function name(parameters): type { body }`, the top-level form;
+    /// methods arrive with the declarations plan.
+    FunctionDeclaration,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

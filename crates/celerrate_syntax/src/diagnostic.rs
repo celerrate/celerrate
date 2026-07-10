@@ -57,6 +57,9 @@ pub enum ParserDiagnosticKind {
     NoProgress,
     /// `->`, `?->`, or `::` with nothing usable after it.
     ExpectedMemberName,
+    /// A control-flow body position holds no statement (`if ($x)` at
+    /// end of input, or directly against a closing keyword).
+    ExpectedStatement,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

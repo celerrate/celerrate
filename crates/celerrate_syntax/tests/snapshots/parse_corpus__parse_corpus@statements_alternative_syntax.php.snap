@@ -1,0 +1,165 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/statements_alternative_syntax.php
+---
+SourceFile@0..327
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 " "
+  IfStatement@6..148
+    If@6..8 "if"
+    Whitespace@8..9 " "
+    OpenParenthesis@9..10 "("
+    BinaryExpression@10..28
+      VariableReference@10..15
+        Variable@10..15 "$mode"
+      Whitespace@15..16 " "
+      EqualsEqualsEquals@16..19 "==="
+      Whitespace@19..20 " "
+      Literal@20..28
+        SingleQuotedString@20..28 "'header'"
+    CloseParenthesis@28..29 ")"
+    Colon@29..30 ":"
+    Whitespace@30..31 " "
+    CloseTag@31..34 "?>\n"
+    InlineHtml@34..50 "<h1>Header</h1>\n"
+    OpenTag@50..55 "<?php"
+    Whitespace@55..56 " "
+    ElseIfClause@56..114
+      ElseIf@56..62 "elseif"
+      Whitespace@62..63 " "
+      OpenParenthesis@63..64 "("
+      BinaryExpression@64..82
+        VariableReference@64..69
+          Variable@64..69 "$mode"
+        Whitespace@69..70 " "
+        EqualsEqualsEquals@70..73 "==="
+        Whitespace@73..74 " "
+        Literal@74..82
+          SingleQuotedString@74..82 "'footer'"
+      CloseParenthesis@82..83 ")"
+      Colon@83..84 ":"
+      Whitespace@84..85 " "
+      CloseTag@85..88 "?>\n"
+      InlineHtml@88..109 "<footer>Bye</footer>\n"
+      OpenTag@109..114 "<?php"
+    Whitespace@114..115 " "
+    ElseClause@115..141
+      Else@115..119 "else"
+      Colon@119..120 ":"
+      Whitespace@120..121 " "
+      CloseTag@121..124 "?>\n"
+      InlineHtml@124..136 "<p>Body</p>\n"
+      OpenTag@136..141 "<?php"
+    Whitespace@141..142 " "
+    EndIf@142..147 "endif"
+    Semicolon@147..148 ";"
+  Whitespace@148..150 "\n\n"
+  WhileStatement@150..184
+    While@150..155 "while"
+    Whitespace@155..156 " "
+    OpenParenthesis@156..157 "("
+    VariableReference@157..161
+      Variable@157..161 "$row"
+    CloseParenthesis@161..162 ")"
+    Colon@162..163 ":"
+    Whitespace@163..164 " "
+    EchoStatement@164..174
+      Echo@164..168 "echo"
+      Whitespace@168..169 " "
+      VariableReference@169..173
+        Variable@169..173 "$row"
+      Semicolon@173..174 ";"
+    Whitespace@174..175 " "
+    EndWhile@175..183 "endwhile"
+    Semicolon@183..184 ";"
+  Whitespace@184..186 "\n\n"
+  ForStatement@186..230
+    For@186..189 "for"
+    Whitespace@189..190 " "
+    OpenParenthesis@190..191 "("
+    ForExpressionList@191..197
+      AssignmentExpression@191..197
+        VariableReference@191..193
+          Variable@191..193 "$i"
+        Whitespace@193..194 " "
+        Equals@194..195 "="
+        Whitespace@195..196 " "
+        Literal@196..197
+          IntegerLiteral@196..197 "0"
+    Semicolon@197..198 ";"
+    Whitespace@198..199 " "
+    ForExpressionList@199..205
+      BinaryExpression@199..205
+        VariableReference@199..201
+          Variable@199..201 "$i"
+        Whitespace@201..202 " "
+        Less@202..203 "<"
+        Whitespace@203..204 " "
+        Literal@204..205
+          IntegerLiteral@204..205 "2"
+    Semicolon@205..206 ";"
+    Whitespace@206..207 " "
+    ForExpressionList@207..211
+      PostfixExpression@207..211
+        VariableReference@207..209
+          Variable@207..209 "$i"
+        PlusPlus@209..211 "++"
+    CloseParenthesis@211..212 ")"
+    Colon@212..213 ":"
+    Whitespace@213..214 " "
+    EchoStatement@214..222
+      Echo@214..218 "echo"
+      Whitespace@218..219 " "
+      VariableReference@219..221
+        Variable@219..221 "$i"
+      Semicolon@221..222 ";"
+    Whitespace@222..223 " "
+    EndFor@223..229 "endfor"
+    Semicolon@229..230 ";"
+  Whitespace@230..232 "\n\n"
+  ForeachStatement@232..282
+    Foreach@232..239 "foreach"
+    Whitespace@239..240 " "
+    OpenParenthesis@240..241 "("
+    VariableReference@241..247
+      Variable@241..247 "$links"
+    Whitespace@247..248 " "
+    As@248..250 "as"
+    Whitespace@250..251 " "
+    VariableReference@251..256
+      Variable@251..256 "$link"
+    CloseParenthesis@256..257 ")"
+    Colon@257..258 ":"
+    Whitespace@258..259 " "
+    EchoStatement@259..270
+      Echo@259..263 "echo"
+      Whitespace@263..264 " "
+      VariableReference@264..269
+        Variable@264..269 "$link"
+      Semicolon@269..270 ";"
+    Whitespace@270..271 " "
+    EndForeach@271..281 "endforeach"
+    Semicolon@281..282 ";"
+  Whitespace@282..284 "\n\n"
+  DeclareStatement@284..326
+    Declare@284..291 "declare"
+    OpenParenthesis@291..292 "("
+    DeclareDirective@292..299
+      Identifier@292..297 "ticks"
+      Equals@297..298 "="
+      Literal@298..299
+        IntegerLiteral@298..299 "1"
+    CloseParenthesis@299..300 ")"
+    Colon@300..301 ":"
+    Whitespace@301..302 " "
+    EchoStatement@302..314
+      Echo@302..306 "echo"
+      Whitespace@306..307 " "
+      Literal@307..313
+        SingleQuotedString@307..313 "'tick'"
+      Semicolon@313..314 ";"
+    Whitespace@314..315 " "
+    EndDeclare@315..325 "enddeclare"
+    Semicolon@325..326 ";"
+  Whitespace@326..327 "\n"
