@@ -11,6 +11,7 @@ authors = ["JDevelop"]
 repository = "https://github.com/celerrate/celerrate"
 
 [workspace.dependencies]
+insta = { version = "1", features = ["glob"] }
 text-size = "1"
 
 [workspace.lints.rust]

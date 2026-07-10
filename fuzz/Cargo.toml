@@ -1,0 +1,23 @@
+[package]
+name = "celerrate-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+celerrate_source = { path = "../crates/celerrate_source" }
+celerrate_syntax = { path = "../crates/celerrate_syntax" }
+
+[[bin]]
+name = "lex"
+path = "fuzz_targets/lex.rs"
+test = false
+doc = false
+bench = false
+
+# The fuzz harness is its own workspace, separate from the root one.
+[workspace]

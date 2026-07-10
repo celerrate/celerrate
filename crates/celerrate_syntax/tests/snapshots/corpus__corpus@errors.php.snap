@@ -1,0 +1,19 @@
+---
+source: crates/celerrate_syntax/tests/corpus.rs
+expression: render(&source)
+input_file: crates/celerrate_syntax/tests/corpus/errors.php
+---
+OpenTag @ 0..5 "<?php"
+Whitespace @ 5..7 "\n\n"
+Variable @ 7..20 "$unterminated"
+Whitespace @ 20..21 " "
+Equals @ 21..22 "="
+Whitespace @ 22..23 " "
+DoubleQuote @ 23..24 "\""
+StringFragment @ 24..35 "still open "
+OpenBrace @ 35..36 "{"
+Variable @ 36..42 "$brace"
+Whitespace @ 42..43 "\n"
+---
+UnterminatedString @ 23..24
+UnterminatedInterpolation @ 35..36

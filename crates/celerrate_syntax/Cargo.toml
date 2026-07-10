@@ -1,0 +1,18 @@
+[package]
+name = "celerrate_syntax"
+description = "PHP lexer and parser for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_source = { path = "../celerrate_source" }
+text-size = { workspace = true }
+
+[dev-dependencies]
+insta = { workspace = true }
+
+[lints]
+workspace = true
