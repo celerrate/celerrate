@@ -12,6 +12,7 @@ repository = "https://github.com/celerrate/celerrate"
 
 [workspace.dependencies]
 insta = { version = "1", features = ["glob"] }
+rowan = "0.16"
 text-size = "1"
 
 [workspace.lints.rust]

@@ -8,8 +8,10 @@ mod diagnostic;
 mod lexer;
 mod syntax_kind;
 mod token;
+mod tree;
 
 pub use diagnostic::{LexerDiagnostic, LexerDiagnosticKind};
 pub use lexer::lex;
 pub use syntax_kind::SyntaxKind;
 pub use token::Token;
+pub use tree::{PhpLanguage, SyntaxElement, SyntaxNode, SyntaxToken};
