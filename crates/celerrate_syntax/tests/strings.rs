@@ -321,6 +321,15 @@ fn unterminated_double_quoted_string_diagnoses_the_opening() {
 }
 
 #[test]
+fn unterminated_binary_double_quoted_string_points_at_the_quote() {
+    let (_tokens, diagnostics) = lex_verified(r#"<?php b"open"#);
+    let diagnostic = diagnostics.first().copied().expect("one diagnostic");
+    assert_eq!(diagnostic.kind, LexerDiagnosticKind::UnterminatedString);
+    // The opening quote is at offset 7; the consumed `b` prefix sits at 6.
+    assert_eq!(u32::from(diagnostic.range.start()), 7);
+}
+
+#[test]
 fn unterminated_brace_interpolation_diagnoses_the_opening() {
     let (_tokens, diagnostics) = lex_verified(r#"<?php "a {$x"#);
     assert!(diagnostics.iter().any(|diagnostic| {

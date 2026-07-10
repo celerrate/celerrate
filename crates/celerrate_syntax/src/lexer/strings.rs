@@ -31,7 +31,7 @@ impl Lexer<'_> {
     }
 
     pub(super) fn lex_double_quote_delimiter(&mut self) {
-        let opening = self.token_start();
+        let opening = self.token_start() + self.cursor.pending_length();
         self.cursor.eat('"');
         self.emit(SyntaxKind::DoubleQuote);
         self.push_mode(Mode::DoubleQuotedString { opening });
