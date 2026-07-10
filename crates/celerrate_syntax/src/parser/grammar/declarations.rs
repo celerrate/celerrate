@@ -494,10 +494,12 @@ fn asymmetric_visibility_suffix(parser: &mut Parser) {
     }
 }
 
-/// The declarators of one property: `$a = 1, $b;`. The caller consumed
-/// the modifiers and the optional type into `marker`. Terminates:
-/// every iteration bumps a variable or breaks.
+/// The declarators of one property: `$a = 1, $b;`, or the hooked form
+/// `$name { get; ... }`, which ends at its closing brace with no `;`.
+/// The caller consumed the modifiers and the optional type into
+/// `marker`. Terminates: every iteration bumps a variable or breaks.
 fn property_declaration(parser: &mut Parser, marker: Marker) {
+    let mut hooked = false;
     loop {
         if !parser.at(SyntaxKind::Variable) {
             parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Variable));
@@ -508,13 +510,86 @@ fn property_declaration(parser: &mut Parser, marker: Marker) {
         if parser.eat(SyntaxKind::Equals) {
             expression(parser);
         }
+        if parser.at(SyntaxKind::OpenBrace) {
+            property_hook_list(parser);
+            hooked = true;
+        }
         element.complete(parser, SyntaxKind::PropertyElement);
         if !parser.eat(SyntaxKind::Comma) {
             break;
         }
     }
-    terminate_statement(parser);
+    if !hooked {
+        terminate_statement(parser);
+    }
     marker.complete(parser, SyntaxKind::PropertyDeclaration);
+}
+
+/// `{ get; set => ...; &get { ... } }` (8.4 property hooks).
+/// Position-guarded like `member_list`, and for the same reason.
+pub(super) fn property_hook_list(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `{`
+    while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
+        let position_before_hook = parser.position();
+        property_hook(parser);
+        if parser.position() == position_before_hook {
+            error_element(parser);
+        }
+    }
+    parser.expect(SyntaxKind::CloseBrace);
+    marker.complete(parser, SyntaxKind::PropertyHookList);
+}
+
+/// One hook: `get;` (abstract), `get => expression;`,
+/// `set(string $value) { ... }`, `final &get { ... }`. Hook names are
+/// plain identifiers; which names exist (`get`, `set`) and which
+/// combinations are legal is semantic.
+fn property_hook(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.eat(SyntaxKind::Final); // the one modifier hooks admit today
+    parser.eat(SyntaxKind::Ampersand); // by-reference `get`
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => {
+            parser.bump();
+            if parser.at(SyntaxKind::OpenParenthesis) {
+                parameter_list(parser); // `set(string $value)`
+            }
+            if parser.eat(SyntaxKind::FatArrow) {
+                expression(parser);
+                terminate_statement(parser);
+            } else if parser.at(SyntaxKind::OpenBrace) {
+                block(parser);
+            } else {
+                terminate_statement(parser); // the abstract form `get;`
+            }
+            marker.complete(parser, SyntaxKind::PropertyHook);
+        }
+        _ => {
+            // Nothing hook-shaped. Tokens may already be consumed
+            // (`final`, `&`), so the node completes partially; a
+            // zero-consumption trip is swept by the list's position
+            // guard.
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+            marker.complete(parser, SyntaxKind::PropertyHook);
+        }
+    }
+}
+
+/// Constructor promotion (8.0) and its 8.4 extensions on a parameter:
+/// visibility (optionally asymmetric) and `readonly`. Which parameters
+/// admit them (constructors only) is semantic.
+pub(super) fn promotion_modifiers(parser: &mut Parser) {
+    loop {
+        match parser.current() {
+            Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private) => {
+                parser.bump();
+                asymmetric_visibility_suffix(parser);
+            }
+            Some(SyntaxKind::Readonly) => parser.bump(),
+            _ => break,
+        }
+    }
 }
 
 /// `function name(parameters): type` ending in a block or, for the

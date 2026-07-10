@@ -999,12 +999,17 @@ fn starts_parameter(parser: &mut Parser) -> bool {
                 | SyntaxKind::Callable
                 | SyntaxKind::Static
                 | SyntaxKind::OpenParenthesis
+                | SyntaxKind::Public
+                | SyntaxKind::Protected
+                | SyntaxKind::Private
+                | SyntaxKind::Readonly
         )
     )
 }
 
 fn parameter(parser: &mut Parser) {
     let marker = parser.start();
+    super::declarations::promotion_modifiers(parser);
     if !matches!(
         parser.current(),
         Some(SyntaxKind::Variable | SyntaxKind::Ampersand | SyntaxKind::Ellipsis)
@@ -1016,6 +1021,12 @@ fn parameter(parser: &mut Parser) {
     parser.expect(SyntaxKind::Variable);
     if parser.eat(SyntaxKind::Equals) {
         expression(parser);
+    }
+    if parser.at(SyntaxKind::OpenBrace) {
+        // Hooks on a promoted constructor property (8.4); legality is
+        // semantic. Unreachable for an ordinary closing parameter: the
+        // list already stopped at `)`.
+        super::declarations::property_hook_list(parser);
     }
     marker.complete(parser, SyntaxKind::Parameter);
 }

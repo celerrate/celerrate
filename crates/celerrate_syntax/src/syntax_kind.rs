@@ -457,7 +457,7 @@ syntax_kinds! {
     /// declarator elements.
     PropertyDeclaration,
     /// One `$name [= initializer]` element; a hooked property carries
-    /// its `PropertyHookList` here (a later task of this plan).
+    /// its `PropertyHookList` here.
     PropertyElement,
     /// `function name(parameters): type { body }` (or `;` for the
     /// abstract and interface forms) as a class member, modifiers
@@ -476,6 +476,12 @@ syntax_kinds! {
     EnumDeclaration,
     /// `case Name;` or `case Name = expression;`.
     EnumCase,
+    /// `{ get; set(...) { ... } }` on a property or a promoted
+    /// parameter (8.4).
+    PropertyHookList,
+    /// One hook: optional `final`, optional `&`, the name, an optional
+    /// parameter list, then `;`, `=> expression;`, or a block.
+    PropertyHook,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
