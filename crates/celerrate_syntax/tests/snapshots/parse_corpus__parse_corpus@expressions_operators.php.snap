@@ -1,0 +1,283 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_operators.php
+---
+SourceFile@0..251
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..28
+    BinaryExpression@6..27
+      BinaryExpression@6..15
+        Literal@6..7
+          IntegerLiteral@6..7 "1"
+        Whitespace@7..8 " "
+        Plus@8..9 "+"
+        Whitespace@9..10 " "
+        BinaryExpression@10..15
+          Literal@10..11
+            IntegerLiteral@10..11 "2"
+          Whitespace@11..12 " "
+          Star@12..13 "*"
+          Whitespace@13..14 " "
+          Literal@14..15
+            IntegerLiteral@14..15 "3"
+      Whitespace@15..16 " "
+      Minus@16..17 "-"
+      Whitespace@17..18 " "
+      BinaryExpression@18..27
+        BinaryExpression@18..23
+          Literal@18..19
+            IntegerLiteral@18..19 "4"
+          Whitespace@19..20 " "
+          Slash@20..21 "/"
+          Whitespace@21..22 " "
+          Literal@22..23
+            IntegerLiteral@22..23 "5"
+        Whitespace@23..24 " "
+        Percent@24..25 "%"
+        Whitespace@25..26 " "
+        Literal@26..27
+          IntegerLiteral@26..27 "6"
+    Semicolon@27..28 ";"
+  Whitespace@28..29 "\n"
+  ExpressionStatement@29..41
+    BinaryExpression@29..40
+      Literal@29..30
+        IntegerLiteral@29..30 "2"
+      Whitespace@30..31 " "
+      StarStar@31..33 "**"
+      Whitespace@33..34 " "
+      BinaryExpression@34..40
+        Literal@34..35
+          IntegerLiteral@34..35 "3"
+        Whitespace@35..36 " "
+        StarStar@36..38 "**"
+        Whitespace@38..39 " "
+        Literal@39..40
+          IntegerLiteral@39..40 "4"
+    Semicolon@40..41 ";"
+  Whitespace@41..42 "\n"
+  ExpressionStatement@42..60
+    BinaryExpression@42..59
+      BinaryExpression@42..51
+        Literal@42..45
+          SingleQuotedString@42..45 "'a'"
+        Whitespace@45..46 " "
+        Dot@46..47 "."
+        Whitespace@47..48 " "
+        Literal@48..51
+          SingleQuotedString@48..51 "'b'"
+      Whitespace@51..52 " "
+      Dot@52..53 "."
+      Whitespace@53..54 " "
+      BinaryExpression@54..59
+        Literal@54..55
+          IntegerLiteral@54..55 "1"
+        Whitespace@55..56 " "
+        Plus@56..57 "+"
+        Whitespace@57..58 " "
+        Literal@58..59
+          IntegerLiteral@58..59 "2"
+    Semicolon@59..60 ";"
+  Whitespace@60..61 "\n"
+  ExpressionStatement@61..73
+    BinaryExpression@61..72
+      BinaryExpression@61..67
+        Literal@61..62
+          IntegerLiteral@61..62 "1"
+        Whitespace@62..63 " "
+        LessLess@63..65 "<<"
+        Whitespace@65..66 " "
+        Literal@66..67
+          IntegerLiteral@66..67 "2"
+      Whitespace@67..68 " "
+      GreaterGreater@68..70 ">>"
+      Whitespace@70..71 " "
+      Literal@71..72
+        IntegerLiteral@71..72 "3"
+    Semicolon@72..73 ";"
+  Whitespace@73..74 "\n"
+  ExpressionStatement@74..106
+    BinaryExpression@74..105
+      BinaryExpression@74..81
+        VariableReference@74..76
+          Variable@74..76 "$a"
+        Whitespace@76..77 " "
+        Less@77..78 "<"
+        Whitespace@78..79 " "
+        VariableReference@79..81
+          Variable@79..81 "$b"
+      Whitespace@81..82 " "
+      PipePipe@82..84 "||"
+      Whitespace@84..85 " "
+      BinaryExpression@85..105
+        BinaryExpression@85..93
+          VariableReference@85..87
+            Variable@85..87 "$c"
+          Whitespace@87..88 " "
+          GreaterEquals@88..90 ">="
+          Whitespace@90..91 " "
+          VariableReference@91..93
+            Variable@91..93 "$d"
+        Whitespace@93..94 " "
+        AmpersandAmpersand@94..96 "&&"
+        Whitespace@96..97 " "
+        BinaryExpression@97..105
+          VariableReference@97..99
+            Variable@97..99 "$e"
+          Whitespace@99..100 " "
+          EqualsEquals@100..102 "=="
+          Whitespace@102..103 " "
+          VariableReference@103..105
+            Variable@103..105 "$f"
+    Semicolon@105..106 ";"
+  Whitespace@106..107 "\n"
+  ExpressionStatement@107..131
+    BinaryExpression@107..130
+      BinaryExpression@107..116
+        VariableReference@107..109
+          Variable@107..109 "$a"
+        Whitespace@109..110 " "
+        EqualsEqualsEquals@110..113 "==="
+        Whitespace@113..114 " "
+        VariableReference@114..116
+          Variable@114..116 "$b"
+      Whitespace@116..117 " "
+      Xor@117..120 "xor"
+      Whitespace@120..121 " "
+      BinaryExpression@121..130
+        VariableReference@121..123
+          Variable@121..123 "$c"
+        Whitespace@123..124 " "
+        BangEqualsEquals@124..127 "!=="
+        Whitespace@127..128 " "
+        VariableReference@128..130
+          Variable@128..130 "$d"
+    Semicolon@130..131 ";"
+  Whitespace@131..132 "\n"
+  ExpressionStatement@132..142
+    BinaryExpression@132..141
+      VariableReference@132..134
+        Variable@132..134 "$a"
+      Whitespace@134..135 " "
+      Spaceship@135..138 "<=>"
+      Whitespace@138..139 " "
+      VariableReference@139..141
+        Variable@139..141 "$b"
+    Semicolon@141..142 ";"
+  Whitespace@142..143 "\n"
+  ExpressionStatement@143..158
+    BinaryExpression@143..157
+      VariableReference@143..145
+        Variable@143..145 "$a"
+      Whitespace@145..146 " "
+      QuestionQuestion@146..148 "??"
+      Whitespace@148..149 " "
+      BinaryExpression@149..157
+        VariableReference@149..151
+          Variable@149..151 "$b"
+        Whitespace@151..152 " "
+        QuestionQuestion@152..154 "??"
+        Whitespace@154..155 " "
+        VariableReference@155..157
+          Variable@155..157 "$c"
+    Semicolon@157..158 ";"
+  Whitespace@158..159 "\n"
+  ExpressionStatement@159..177
+    BinaryExpression@159..176
+      VariableReference@159..161
+        Variable@159..161 "$a"
+      Whitespace@161..162 " "
+      Pipe@162..163 "|"
+      Whitespace@163..164 " "
+      BinaryExpression@164..176
+        VariableReference@164..166
+          Variable@164..166 "$b"
+        Whitespace@166..167 " "
+        Caret@167..168 "^"
+        Whitespace@168..169 " "
+        BinaryExpression@169..176
+          VariableReference@169..171
+            Variable@169..171 "$c"
+          Whitespace@171..172 " "
+          Ampersand@172..173 "&"
+          Whitespace@173..174 " "
+          VariableReference@174..176
+            Variable@174..176 "$d"
+    Semicolon@176..177 ";"
+  Whitespace@177..178 "\n"
+  ExpressionStatement@178..192
+    BinaryExpression@178..191
+      BinaryExpression@178..185
+        Literal@178..179
+          IntegerLiteral@178..179 "1"
+        Whitespace@179..180 " "
+        PipeGreater@180..182 "|>"
+        Whitespace@182..183 " "
+        VariableReference@183..185
+          Variable@183..185 "$f"
+      Whitespace@185..186 " "
+      PipeGreater@186..188 "|>"
+      Whitespace@188..189 " "
+      VariableReference@189..191
+        Variable@189..191 "$g"
+    Semicolon@191..192 ";"
+  Whitespace@192..193 "\n"
+  ExpressionStatement@193..214
+    BinaryExpression@193..213
+      VariableReference@193..195
+        Variable@193..195 "$a"
+      Whitespace@195..196 " "
+      InstanceOf@196..206 "instanceof"
+      Whitespace@206..207 " "
+      VariableReference@207..213
+        Variable@207..213 "$class"
+    Semicolon@213..214 ";"
+  Whitespace@214..215 "\n"
+  ExpressionStatement@215..231
+    BinaryExpression@215..230
+      BinaryExpression@215..224
+        VariableReference@215..217
+          Variable@215..217 "$a"
+        Whitespace@217..218 " "
+        And@218..221 "and"
+        Whitespace@221..222 " "
+        VariableReference@222..224
+          Variable@222..224 "$b"
+      Whitespace@224..225 " "
+      Or@225..227 "or"
+      Whitespace@227..228 " "
+      VariableReference@228..230
+        Variable@228..230 "$c"
+    Semicolon@230..231 ";"
+  Whitespace@231..232 "\n"
+  ExpressionStatement@232..250
+    BinaryExpression@232..249
+      ParenthesizedExpression@232..239
+        OpenParenthesis@232..233 "("
+        BinaryExpression@233..238
+          Literal@233..234
+            IntegerLiteral@233..234 "1"
+          Whitespace@234..235 " "
+          Plus@235..236 "+"
+          Whitespace@236..237 " "
+          Literal@237..238
+            IntegerLiteral@237..238 "2"
+        CloseParenthesis@238..239 ")"
+      Whitespace@239..240 " "
+      Star@240..241 "*"
+      Whitespace@241..242 " "
+      ParenthesizedExpression@242..249
+        OpenParenthesis@242..243 "("
+        BinaryExpression@243..248
+          Literal@243..244
+            IntegerLiteral@243..244 "3"
+          Whitespace@244..245 " "
+          Minus@245..246 "-"
+          Whitespace@246..247 " "
+          Literal@247..248
+            IntegerLiteral@247..248 "4"
+        CloseParenthesis@248..249 ")"
+    Semicolon@249..250 ";"
+  Whitespace@250..251 "\n"

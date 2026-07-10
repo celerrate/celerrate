@@ -108,7 +108,6 @@ impl Parser {
         self.source.kind(self.position + offset)
     }
 
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     fn eat(&mut self, kind: SyntaxKind) -> bool {
         if self.at(kind) {
             self.bump();
@@ -117,14 +116,12 @@ impl Parser {
         false
     }
 
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     fn expect(&mut self, kind: SyntaxKind) {
         if !self.eat(kind) {
             self.diagnose_missing(ParserDiagnosticKind::Expected(kind));
         }
     }
 
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     /// Returns false (and diagnoses, once per trip) instead of
     /// recursing past the budget. Every recursive expression entry
     /// point pairs this with `leave_nesting`.
@@ -137,7 +134,6 @@ impl Parser {
         true
     }
 
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     fn leave_nesting(&mut self) {
         self.nesting_depth = self.nesting_depth.saturating_sub(1);
     }
@@ -195,7 +191,6 @@ impl CompletedMarker {
     /// marker's `Start` is appended now, and this node's `Start` gains
     /// a forward parent pointing at it (absolute event index), which
     /// the builder replays outermost-first.
-    #[allow(dead_code)] // Temporary: consumed by the expression grammar tasks of this plan.
     fn precede(self, parser: &mut Parser) -> Marker {
         let marker = parser.start();
         if let Some(Event::Start { forward_parent, .. }) = parser.events.get_mut(self.event_index) {

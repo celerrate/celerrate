@@ -46,6 +46,10 @@ pub enum ParserDiagnosticKind {
     /// innermost expression is missing from the tree, the tokens are
     /// preserved through recovery.
     NestingTooDeep,
+    /// A non-associative operator chained at the same level, which Zend
+    /// rejects (`1 < 2 < 3`, unparenthesized ternary chains, double
+    /// `instanceof`). Parsed left-associatively anyway.
+    NonAssociativeOperator,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

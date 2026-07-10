@@ -8,6 +8,10 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::{CompletedMarker, Parser};
 
+mod expressions;
+
+use expressions::{expression, starts_expression};
+
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();
     while let Some(kind) = parser.current() {
@@ -26,7 +30,7 @@ pub(super) fn source_file(parser: &mut Parser) {
 fn statement(parser: &mut Parser) {
     match parser.current() {
         Some(SyntaxKind::Echo) => echo_statement(parser),
-        Some(kind) if is_expression_start(kind) => expression_statement(parser),
+        Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}
     }
@@ -82,33 +86,4 @@ fn terminate_statement(parser: &mut Parser) {
         return;
     }
     parser.diagnose_missing(ParserDiagnosticKind::ExpectedSemicolon);
-}
-
-fn is_expression_start(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::IntegerLiteral
-            | SyntaxKind::FloatLiteral
-            | SyntaxKind::SingleQuotedString
-            | SyntaxKind::Variable
-    )
-}
-
-/// A minimal primary expression; the Pratt machinery of the next plan
-/// replaces this dispatch.
-fn expression(parser: &mut Parser) -> Option<CompletedMarker> {
-    let kind = match parser.current() {
-        Some(kind) if is_expression_start(kind) => kind,
-        _ => {
-            parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
-            return None;
-        }
-    };
-    let marker = parser.start();
-    parser.bump();
-    let node_kind = match kind {
-        SyntaxKind::Variable => SyntaxKind::VariableReference,
-        _ => SyntaxKind::Literal,
-    };
-    Some(marker.complete(parser, node_kind))
 }

@@ -249,6 +249,11 @@ syntax_kinds! {
     VariableReference,
     /// Recovery wreckage: tokens no grammar rule accepted.
     ErrorNode,
+    /// `( expression )`.
+    ParenthesizedExpression,
+    /// One binary operation: left operand, operator token, right operand.
+    /// The operator token distinguishes `+` from `instanceof` from `|>`.
+    BinaryExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
