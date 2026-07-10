@@ -54,7 +54,22 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: fuzz
-      - run: cargo install cargo-fuzz --locked
+      - name: Cache the cargo-fuzz binary
+        id: cargo-fuzz-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          # Bump the key suffix to pick up a newer cargo-fuzz release.
+          key: cargo-fuzz-${{ runner.os }}-1
+      - if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
       # The +nightly proxy overrides the repository's rust-toolchain.toml
       # pin, which would otherwise route the sanitizer build to stable.
       - run: cargo +nightly fuzz run lex -- -max_total_time=180
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
