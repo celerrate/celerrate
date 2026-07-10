@@ -175,3 +175,72 @@ fn a_block_does_not_swallow_an_alternative_closer() {
     assert!(diagnostics.contains(&ParserDiagnosticKind::Expected(SyntaxKind::CloseBrace)));
     assert!(diagnostics.contains(&ParserDiagnosticKind::UnexpectedToken));
 }
+
+#[test]
+fn a_body_against_a_terminator_is_diagnosed_without_consuming() {
+    // `else` right after the condition: the body is missing. The
+    // embedded-statement rule diagnoses without consuming, so the if
+    // still claims its else clause and recovery stays local.
+    let diagnostics = parser_diagnostics("<?php if ($x) else echo 1;");
+    assert_eq!(diagnostics, vec![ParserDiagnosticKind::ExpectedStatement]);
+}
+
+#[test]
+fn while_takes_both_syntaxes() {
+    insta::assert_snapshot!(render_statement("while ($x) echo 1;"), @r#"
+    WhileStatement
+      While "while"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$x"
+      CloseParenthesis ")"
+      EchoStatement
+        Echo "echo"
+        Literal
+          IntegerLiteral "1"
+        Semicolon ";"
+    "#);
+    insta::assert_snapshot!(render_statement("while ($x): echo 1; endwhile;"), @r#"
+    WhileStatement
+      While "while"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$x"
+      CloseParenthesis ")"
+      Colon ":"
+      EchoStatement
+        Echo "echo"
+        Literal
+          IntegerLiteral "1"
+        Semicolon ";"
+      EndWhile "endwhile"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn do_while_puts_the_condition_after_the_body() {
+    insta::assert_snapshot!(render_statement("do echo 1; while ($x);"), @r#"
+    DoWhileStatement
+      Do "do"
+      EchoStatement
+        Echo "echo"
+        Literal
+          IntegerLiteral "1"
+        Semicolon ";"
+      While "while"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$x"
+      CloseParenthesis ")"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn do_without_while_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php do echo 1;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::While))
+    );
+}

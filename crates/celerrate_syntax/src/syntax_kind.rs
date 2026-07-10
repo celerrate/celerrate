@@ -379,6 +379,10 @@ syntax_kinds! {
     ElseIfClause,
     /// `else body` (or its alternative-syntax form).
     ElseClause,
+    /// `while (condition) body`, either syntax.
+    WhileStatement,
+    /// `do body while (condition);`.
+    DoWhileStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

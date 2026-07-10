@@ -42,6 +42,8 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Unset) => unset_statement(parser),
         Some(SyntaxKind::Goto) => goto_statement(parser),
         Some(SyntaxKind::If) => if_statement(parser),
+        Some(SyntaxKind::While) => while_statement(parser),
+        Some(SyntaxKind::Do) => do_while_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -318,6 +320,30 @@ fn if_statement(parser: &mut Parser) {
         }
     }
     marker.complete(parser, SyntaxKind::IfStatement);
+}
+
+fn while_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `while`
+    parenthesized_condition(parser);
+    if parser.eat(SyntaxKind::Colon) {
+        statement_list(parser);
+        parser.expect(SyntaxKind::EndWhile);
+        terminate_statement(parser);
+    } else {
+        embedded_statement(parser);
+    }
+    marker.complete(parser, SyntaxKind::WhileStatement);
+}
+
+fn do_while_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `do`
+    embedded_statement(parser);
+    parser.expect(SyntaxKind::While);
+    parenthesized_condition(parser);
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::DoWhileStatement);
 }
 
 #[cfg(test)]
