@@ -422,6 +422,13 @@ syntax_kinds! {
     IntersectionType,
     /// `( type )` inside a type: the DNF grouping form.
     ParenthesizedType,
+    /// `const FOO = 1, BAR = 2;`, optionally typed (8.3), at the top
+    /// level or as a class member (with modifiers).
+    ConstantDeclaration,
+    /// One `name = value` element of a constant declaration.
+    ConstantElement,
+    /// `namespace A\B;` or `namespace A\B { ... }` or `namespace { ... }`.
+    NamespaceDeclaration,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

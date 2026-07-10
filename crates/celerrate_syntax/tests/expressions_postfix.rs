@@ -108,10 +108,19 @@ fn pathological_dollar_chains_trip_the_guard_without_panicking() {
 
 #[test]
 fn a_refused_expression_start_still_advances() {
-    // `namespace` not followed by `\` is a declaration keyword this
-    // plan does not parse; the statement loop must not livelock on it.
+    // `namespace` not followed by `\` now dispatches to the namespace
+    // declaration grammar (celerrate_syntax/src/parser/grammar/declarations.rs)
+    // instead of being refused by the expression grammar; the statement
+    // loop still produces two clean, distinct statements rather than
+    // stalling or merging them.
     let parse = support::parse_verified("<?php namespace Foo; $x;");
-    assert!(!parse.diagnostics().is_empty());
+    assert!(parse.diagnostics().is_empty());
+    assert!(
+        parse
+            .tree()
+            .children()
+            .any(|node| node.kind() == SyntaxKind::NamespaceDeclaration)
+    );
     assert!(
         parse
             .tree()

@@ -7,8 +7,7 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::Parser;
 use super::expressions::{
-    argument_list, error_element, expression, name, parameter_list, simple_variable,
-    starts_expression,
+    argument_list, error_element, expression, name, simple_variable, starts_expression,
 };
 
 pub(super) fn statement(parser: &mut Parser) {
@@ -56,8 +55,12 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Identifier) if parser.nth(1) == Some(SyntaxKind::Colon) => {
             label_statement(parser)
         }
-        Some(SyntaxKind::Function) if at_function_declaration(parser) => {
-            function_declaration(parser)
+        Some(SyntaxKind::Function) if super::declarations::at_function_declaration(parser) => {
+            super::declarations::declaration(parser)
+        }
+        Some(SyntaxKind::Const) => super::declarations::declaration(parser),
+        Some(SyntaxKind::Namespace) if parser.nth(1) != Some(SyntaxKind::Backslash) => {
+            super::declarations::declaration(parser)
         }
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
@@ -132,9 +135,8 @@ fn expression_statement(parser: &mut Parser) {
     let marker = parser.start();
     if expression(parser).is_none() {
         // The dispatcher saw an expression start but the grammar
-        // refused (for example `namespace` without `\`). The refusal
-        // already carried its diagnostic; consume the token so the
-        // statement loop always advances.
+        // refused. The refusal already carried its diagnostic; consume
+        // the token so the statement loop always advances.
         if parser.at_end() {
             marker.abandon(parser);
             return;
@@ -156,7 +158,7 @@ fn error_statement(parser: &mut Parser) {
 /// PHP requires `;` after a statement except immediately before `?>`,
 /// where it is optional. End of input does not exempt it (Zend rejects
 /// that too), so we diagnose it: zero-width, after the last token.
-fn terminate_statement(parser: &mut Parser) {
+pub(super) fn terminate_statement(parser: &mut Parser) {
     if parser.at(SyntaxKind::Semicolon) {
         parser.bump();
         return;
@@ -568,29 +570,6 @@ fn declare_statement(parser: &mut Parser) {
         embedded_statement(parser);
     }
     marker.complete(parser, SyntaxKind::DeclareStatement);
-}
-
-/// `function` declares only when a name follows, with an optional `&`
-/// between: `function (` and `function &(` are closure expressions.
-fn at_function_declaration(parser: &mut Parser) -> bool {
-    match parser.nth(1) {
-        Some(SyntaxKind::Identifier) => true,
-        Some(SyntaxKind::Ampersand) => parser.nth(2) == Some(SyntaxKind::Identifier),
-        _ => false,
-    }
-}
-
-fn function_declaration(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.bump(); // `function`
-    parser.eat(SyntaxKind::Ampersand); // by-reference return
-    parser.expect(SyntaxKind::Identifier);
-    parameter_list(parser);
-    if parser.eat(SyntaxKind::Colon) {
-        super::types::type_expression(parser);
-    }
-    block(parser);
-    marker.complete(parser, SyntaxKind::FunctionDeclaration);
 }
 
 #[cfg(test)]

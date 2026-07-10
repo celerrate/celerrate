@@ -3,8 +3,9 @@
 
 use crate::syntax_kind::SyntaxKind;
 
-use super::{CompletedMarker, Parser};
+use super::{CompletedMarker, Marker, Parser};
 
+mod declarations;
 mod expressions;
 mod statements;
 mod types;
