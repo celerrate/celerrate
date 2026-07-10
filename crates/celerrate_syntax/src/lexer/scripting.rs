@@ -1,3 +1,4 @@
+use crate::diagnostic::LexerDiagnosticKind;
 use crate::lexer::{BASE_SCRIPTING, Lexer, Mode};
 use crate::syntax_kind::SyntaxKind;
 
@@ -43,6 +44,13 @@ impl Lexer<'_> {
             '(' => self.lex_parenthesis_or_cast(),
             '{' => self.lex_open_brace(),
             '}' => self.lex_close_brace(),
+            '/' if self.cursor.rest().starts_with("//") => self.lex_line_comment(),
+            '/' if self.cursor.rest().starts_with("/*") => self.lex_block_comment(),
+            '#' if self.cursor.rest().starts_with("#[") => {
+                self.cursor.bump_bytes(2);
+                self.emit(SyntaxKind::AttributeOpen);
+            }
+            '#' => self.lex_line_comment(),
             _ if self.try_lex_operator() => {}
             _ => self.lex_unexpected_character(),
         }
@@ -198,6 +206,50 @@ impl Lexer<'_> {
             }
         }
         false
+    }
+
+    /// `//` and `#` comments end before the newline, and also before a
+    /// `?>` (the close tag still closes inside a line comment, as in
+    /// Zend).
+    fn lex_line_comment(&mut self) {
+        while let Some(character) = self.cursor.peek() {
+            if character == '\n' || character == '\r' {
+                break;
+            }
+            if self.cursor.rest().starts_with("?>") {
+                break;
+            }
+            self.cursor.bump();
+        }
+        self.emit(SyntaxKind::LineComment);
+    }
+
+    /// `/* ... */`, and `/** ... */` as a docblock when whitespace
+    /// follows the doc opener (Zend's rule, which keeps "/**/" a plain
+    /// comment). Unterminated comments run to the end of input with a
+    /// diagnostic pointing at the opener.
+    fn lex_block_comment(&mut self) {
+        let start = self.token_start();
+        let rest = self.cursor.rest();
+        let is_docblock = rest
+            .strip_prefix("/**")
+            .is_some_and(|after| after.starts_with(|c: char| c.is_ascii_whitespace()));
+        self.cursor.bump_bytes(2);
+        match self.cursor.rest().find("*/") {
+            Some(terminator_position) => {
+                self.cursor.bump_bytes(terminator_position + 2);
+            }
+            None => {
+                self.cursor.bump_bytes(self.cursor.rest().len());
+                self.diagnose_at(LexerDiagnosticKind::UnterminatedBlockComment, start, 2);
+            }
+        }
+        let kind = if is_docblock {
+            SyntaxKind::DocComment
+        } else {
+            SyntaxKind::BlockComment
+        };
+        self.emit(kind);
     }
 }
 
