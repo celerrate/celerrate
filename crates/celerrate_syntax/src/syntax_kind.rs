@@ -280,6 +280,15 @@ syntax_kinds! {
     Argument,
     /// A call: the callee expression, then its argument list.
     CallExpression,
+    /// `subject->name` and `subject?->name`.
+    MemberAccessExpression,
+    /// `subject::name`: constants, methods, static properties, `::class`.
+    ScopedAccessExpression,
+    /// The name after `->`, `?->`, or `::`: identifier, any keyword,
+    /// variable, or `{ expression }`.
+    MemberName,
+    /// `subject[index]`; the index is absent in the push form `$a[]`.
+    IndexExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

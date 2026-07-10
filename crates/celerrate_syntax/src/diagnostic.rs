@@ -55,6 +55,8 @@ pub enum ParserDiagnosticKind {
     /// preserved in an `ErrorNode`. Reaching this is a parser bug, kept
     /// survivable by design.
     NoProgress,
+    /// `->`, `?->`, or `::` with nothing usable after it.
+    ExpectedMemberName,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

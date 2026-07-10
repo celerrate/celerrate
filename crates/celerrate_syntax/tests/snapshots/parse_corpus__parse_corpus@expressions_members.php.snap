@@ -1,0 +1,226 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_members.php
+---
+SourceFile@0..302
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..18
+    MemberAccessExpression@6..17
+      VariableReference@6..11
+        Variable@6..11 "$user"
+      Arrow@11..13 "->"
+      MemberName@13..17
+        Identifier@13..17 "name"
+    Semicolon@17..18 ";"
+  Whitespace@18..19 "\n"
+  ExpressionStatement@19..44
+    MemberAccessExpression@19..43
+      MemberAccessExpression@19..34
+        VariableReference@19..24
+          Variable@19..24 "$user"
+        NullsafeArrow@24..27 "?->"
+        MemberName@27..34
+          Identifier@27..34 "profile"
+      NullsafeArrow@34..37 "?->"
+      MemberName@37..43
+        Identifier@37..43 "avatar"
+    Semicolon@43..44 ";"
+  Whitespace@44..45 "\n"
+  ExpressionStatement@45..61
+    CallExpression@45..60
+      MemberAccessExpression@45..58
+        VariableReference@45..52
+          Variable@45..52 "$object"
+        Arrow@52..54 "->"
+        MemberName@54..58
+          List@54..58 "list"
+      ArgumentList@58..60
+        OpenParenthesis@58..59 "("
+        CloseParenthesis@59..60 ")"
+    Semicolon@60..61 ";"
+  Whitespace@61..62 "\n"
+  ExpressionStatement@62..80
+    MemberAccessExpression@62..79
+      VariableReference@62..69
+        Variable@62..69 "$object"
+      Arrow@69..71 "->"
+      MemberName@71..79
+        VariableReference@71..79
+          Variable@71..79 "$dynamic"
+    Semicolon@79..80 ";"
+  Whitespace@80..81 "\n"
+  ExpressionStatement@81..111
+    MemberAccessExpression@81..110
+      VariableReference@81..88
+        Variable@81..88 "$object"
+      Arrow@88..90 "->"
+      MemberName@90..110
+        OpenBrace@90..91 "{"
+        BinaryExpression@91..109
+          Literal@91..101
+            SingleQuotedString@91..101 "'computed'"
+          Whitespace@101..102 " "
+          Dot@102..103 "."
+          Whitespace@103..104 " "
+          VariableReference@104..109
+            Variable@104..109 "$name"
+        CloseBrace@109..110 "}"
+    Semicolon@110..111 ";"
+  Whitespace@111..112 "\n"
+  ExpressionStatement@112..126
+    ScopedAccessExpression@112..125
+      NameExpression@112..115
+        Name@112..115
+          Identifier@112..115 "Foo"
+      ColonColon@115..117 "::"
+      MemberName@117..125
+        Identifier@117..125 "CONSTANT"
+    Semicolon@125..126 ";"
+  Whitespace@126..127 "\n"
+  ExpressionStatement@127..138
+    ScopedAccessExpression@127..137
+      NameExpression@127..130
+        Name@127..130
+          Identifier@127..130 "Foo"
+      ColonColon@130..132 "::"
+      MemberName@132..137
+        Class@132..137 "class"
+    Semicolon@137..138 ";"
+  Whitespace@138..139 "\n"
+  ExpressionStatement@139..160
+    ScopedAccessExpression@139..159
+      NameExpression@139..142
+        Name@139..142
+          Identifier@139..142 "Foo"
+      ColonColon@142..144 "::"
+      MemberName@144..159
+        VariableReference@144..159
+          Variable@144..159 "$staticProperty"
+    Semicolon@159..160 ";"
+  Whitespace@160..161 "\n"
+  ExpressionStatement@161..177
+    CallExpression@161..176
+      ScopedAccessExpression@161..172
+        NameExpression@161..164
+          Name@161..164
+            Identifier@161..164 "Foo"
+        ColonColon@164..166 "::"
+        MemberName@166..172
+          Identifier@166..172 "create"
+      ArgumentList@172..176
+        OpenParenthesis@172..173 "("
+        Argument@173..175
+          VariableReference@173..175
+            Variable@173..175 "$x"
+        CloseParenthesis@175..176 ")"
+    Semicolon@176..177 ";"
+  Whitespace@177..178 "\n"
+  ExpressionStatement@178..197
+    CallExpression@178..196
+      ScopedAccessExpression@178..194
+        NameExpression@178..184
+          Static@178..184 "static"
+        ColonColon@184..186 "::"
+        MemberName@186..194
+          Identifier@186..194 "instance"
+      ArgumentList@194..196
+        OpenParenthesis@194..195 "("
+        CloseParenthesis@195..196 ")"
+    Semicolon@196..197 ";"
+  Whitespace@197..198 "\n"
+  ExpressionStatement@198..225
+    CallExpression@198..224
+      ScopedAccessExpression@198..222
+        NameExpression@198..214
+          Name@198..214
+            Backslash@198..199 "\\"
+            Identifier@199..204 "Fully"
+            Backslash@204..205 "\\"
+            Identifier@205..214 "Qualified"
+        ColonColon@214..216 "::"
+        MemberName@216..222
+          Identifier@216..222 "method"
+      ArgumentList@222..224
+        OpenParenthesis@222..223 "("
+        CloseParenthesis@223..224 ")"
+    Semicolon@224..225 ";"
+  Whitespace@225..226 "\n"
+  ExpressionStatement@226..240
+    IndexExpression@226..239
+      IndexExpression@226..236
+        VariableReference@226..233
+          Variable@226..233 "$matrix"
+        OpenBracket@233..234 "["
+        Literal@234..235
+          IntegerLiteral@234..235 "0"
+        CloseBracket@235..236 "]"
+      OpenBracket@236..237 "["
+      Literal@237..238
+        IntegerLiteral@237..238 "1"
+      CloseBracket@238..239 "]"
+    Semicolon@239..240 ";"
+  Whitespace@240..241 "\n"
+  ExpressionStatement@241..265
+    CallExpression@241..264
+      IndexExpression@241..262
+        MemberAccessExpression@241..259
+          IndexExpression@241..252
+            VariableReference@241..245
+              Variable@241..245 "$map"
+            OpenBracket@245..246 "["
+            Literal@246..251
+              SingleQuotedString@246..251 "'key'"
+            CloseBracket@251..252 "]"
+          Arrow@252..254 "->"
+          MemberName@254..259
+            Identifier@254..259 "value"
+        OpenBracket@259..260 "["
+        Literal@260..261
+          IntegerLiteral@260..261 "2"
+        CloseBracket@261..262 "]"
+      ArgumentList@262..264
+        OpenParenthesis@262..263 "("
+        CloseParenthesis@263..264 ")"
+    Semicolon@264..265 ";"
+  Whitespace@265..266 "\n"
+  ExpressionStatement@266..284
+    AssignmentExpression@266..283
+      IndexExpression@266..274
+        VariableReference@266..272
+          Variable@266..272 "$queue"
+        OpenBracket@272..273 "["
+        CloseBracket@273..274 "]"
+      Whitespace@274..275 " "
+      Equals@275..276 "="
+      Whitespace@276..277 " "
+      Literal@277..283
+        SingleQuotedString@277..283 "'item'"
+    Semicolon@283..284 ";"
+  Whitespace@284..285 "\n"
+  ExpressionStatement@285..301
+    BinaryExpression@285..300
+      CallExpression@285..295
+        IndexExpression@285..293
+          MemberAccessExpression@285..290
+            VariableReference@285..287
+              Variable@285..287 "$a"
+            Arrow@287..289 "->"
+            MemberName@289..290
+              Identifier@289..290 "b"
+          OpenBracket@290..291 "["
+          Literal@291..292
+            IntegerLiteral@291..292 "0"
+          CloseBracket@292..293 "]"
+        ArgumentList@293..295
+          OpenParenthesis@293..294 "("
+          CloseParenthesis@294..295 ")"
+      Whitespace@295..296 " "
+      Plus@296..297 "+"
+      Whitespace@297..298 " "
+      VariableReference@298..300
+        Variable@298..300 "$c"
+    Semicolon@300..301 ";"
+  Whitespace@301..302 "\n"

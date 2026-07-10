@@ -276,10 +276,52 @@ fn postfix_expression(parser: &mut Parser) -> Option<CompletedMarker> {
                 argument_list(parser);
                 marker.complete(parser, SyntaxKind::CallExpression)
             }
+            Some(SyntaxKind::Arrow | SyntaxKind::NullsafeArrow) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                member_name(parser);
+                marker.complete(parser, SyntaxKind::MemberAccessExpression)
+            }
+            Some(SyntaxKind::ColonColon) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                member_name(parser);
+                marker.complete(parser, SyntaxKind::ScopedAccessExpression)
+            }
+            Some(SyntaxKind::OpenBracket) => {
+                let marker = left.precede(parser);
+                parser.bump();
+                if !parser.at(SyntaxKind::CloseBracket) {
+                    expression(parser);
+                }
+                parser.expect(SyntaxKind::CloseBracket);
+                marker.complete(parser, SyntaxKind::IndexExpression)
+            }
             _ => break,
         };
     }
     Some(left)
+}
+
+/// The name after `->`, `?->`, or `::`: an identifier, any keyword
+/// (Zend's semi-reserved list accepted wholesale, `::class` included;
+/// per-position validity is semantic), a variable form, or
+/// `{ expression }`.
+fn member_name(parser: &mut Parser) {
+    let marker = parser.start();
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
+        Some(SyntaxKind::Variable | SyntaxKind::Dollar) => {
+            simple_variable(parser);
+        }
+        Some(SyntaxKind::OpenBrace) => {
+            parser.bump();
+            expression(parser);
+            parser.expect(SyntaxKind::CloseBrace);
+        }
+        _ => parser.diagnose_current(ParserDiagnosticKind::ExpectedMemberName),
+    }
+    marker.complete(parser, SyntaxKind::MemberName);
 }
 
 /// One token no rule accepts inside a delimited construct: wrapped,

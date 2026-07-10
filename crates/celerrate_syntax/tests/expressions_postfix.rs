@@ -248,3 +248,135 @@ fn pathological_nesting_inside_a_call_terminates() {
         SyntaxDiagnosticKind::Parser(ParserDiagnosticKind::NestingTooDeep)
     )));
 }
+
+#[test]
+fn member_access_wraps_left_to_right() {
+    insta::assert_snapshot!(support::render_expression("$user->name"), @r#"
+    MemberAccessExpression
+      VariableReference
+        Variable "$user"
+      Arrow "->"
+      MemberName
+        Identifier "name"
+    "#);
+}
+
+#[test]
+fn nullsafe_access_and_semi_reserved_members_parse() {
+    insta::assert_snapshot!(support::render_expression("$user?->list()"), @r#"
+    CallExpression
+      MemberAccessExpression
+        VariableReference
+          Variable "$user"
+        NullsafeArrow "?->"
+        MemberName
+          List "list"
+      ArgumentList
+        OpenParenthesis "("
+        CloseParenthesis ")"
+    "#);
+}
+
+#[test]
+fn dynamic_and_computed_member_names_parse() {
+    insta::assert_snapshot!(support::render_expression("$object->$property"), @r#"
+    MemberAccessExpression
+      VariableReference
+        Variable "$object"
+      Arrow "->"
+      MemberName
+        VariableReference
+          Variable "$property"
+    "#);
+    insta::assert_snapshot!(support::render_expression("$object->{$prefix . 'x'}"), @r#"
+    MemberAccessExpression
+      VariableReference
+        Variable "$object"
+      Arrow "->"
+      MemberName
+        OpenBrace "{"
+        BinaryExpression
+          VariableReference
+            Variable "$prefix"
+          Dot "."
+          Literal
+            SingleQuotedString "'x'"
+        CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn scoped_access_covers_constants_methods_properties_and_class() {
+    insta::assert_snapshot!(support::render_expression("Foo::class"), @r#"
+    ScopedAccessExpression
+      NameExpression
+        Name
+          Identifier "Foo"
+      ColonColon "::"
+      MemberName
+        Class "class"
+    "#);
+    insta::assert_snapshot!(support::render_expression("Foo::$instance"), @r#"
+    ScopedAccessExpression
+      NameExpression
+        Name
+          Identifier "Foo"
+      ColonColon "::"
+      MemberName
+        VariableReference
+          Variable "$instance"
+    "#);
+    assert!(parser_diagnostics("<?php static::create();").is_empty());
+    assert!(parser_diagnostics("<?php \\Foo\\Bar::BAZ;").is_empty());
+}
+
+#[test]
+fn indexing_chains_and_the_empty_index_parse() {
+    insta::assert_snapshot!(support::render_expression("$matrix[0][1]"), @r#"
+    IndexExpression
+      IndexExpression
+        VariableReference
+          Variable "$matrix"
+        OpenBracket "["
+        Literal
+          IntegerLiteral "0"
+        CloseBracket "]"
+      OpenBracket "["
+      Literal
+        IntegerLiteral "1"
+      CloseBracket "]"
+    "#);
+    assert!(parser_diagnostics("<?php $queue[] = 1;").is_empty());
+}
+
+#[test]
+fn the_spec_chain_parses_with_forward_parents() {
+    insta::assert_snapshot!(support::render_expression("$a->b[0]() + $c"), @r#"
+    BinaryExpression
+      CallExpression
+        IndexExpression
+          MemberAccessExpression
+            VariableReference
+              Variable "$a"
+            Arrow "->"
+            MemberName
+              Identifier "b"
+          OpenBracket "["
+          Literal
+            IntegerLiteral "0"
+          CloseBracket "]"
+        ArgumentList
+          OpenParenthesis "("
+          CloseParenthesis ")"
+      Plus "+"
+      VariableReference
+        Variable "$c"
+    "#);
+}
+
+#[test]
+fn a_missing_member_name_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php $object->;").contains(&ParserDiagnosticKind::ExpectedMemberName)
+    );
+}
