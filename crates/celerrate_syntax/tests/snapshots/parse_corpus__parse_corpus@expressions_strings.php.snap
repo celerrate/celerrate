@@ -1,0 +1,183 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_strings.php
+---
+SourceFile@0..270
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..14
+    InterpolatedString@6..13
+      DoubleQuote@6..7 "\""
+      StringFragment@7..12 "plain"
+      DoubleQuote@12..13 "\""
+    Semicolon@13..14 ";"
+  Whitespace@14..15 "\n"
+  ExpressionStatement@15..27
+    InterpolatedString@15..26
+      DoubleQuote@15..16 "\""
+      StringFragment@16..18 "a "
+      SimpleInterpolation@18..23
+        Variable@18..23 "$name"
+      StringFragment@23..25 " b"
+      DoubleQuote@25..26 "\""
+    Semicolon@26..27 ";"
+  Whitespace@27..28 "\n"
+  ExpressionStatement@28..59
+    InterpolatedString@28..58
+      DoubleQuote@28..29 "\""
+      SimpleInterpolation@29..40
+        Variable@29..34 "$user"
+        Arrow@34..36 "->"
+        Identifier@36..40 "name"
+      StringFragment@40..45 " and "
+      SimpleInterpolation@45..57
+        Variable@45..50 "$user"
+        NullsafeArrow@50..53 "?->"
+        Identifier@53..57 "name"
+      DoubleQuote@57..58 "\""
+    Semicolon@58..59 ";"
+  Whitespace@59..60 "\n"
+  ExpressionStatement@60..102
+    InterpolatedString@60..101
+      DoubleQuote@60..61 "\""
+      SimpleInterpolation@61..70
+        Variable@61..67 "$items"
+        OpenBracket@67..68 "["
+        IntegerLiteral@68..69 "0"
+        CloseBracket@69..70 "]"
+      StringFragment@70..71 " "
+      SimpleInterpolation@71..80
+        Variable@71..75 "$map"
+        OpenBracket@75..76 "["
+        Identifier@76..79 "key"
+        CloseBracket@79..80 "]"
+      StringFragment@80..81 " "
+      SimpleInterpolation@81..90
+        Variable@81..86 "$grid"
+        OpenBracket@86..87 "["
+        Variable@87..89 "$x"
+        CloseBracket@89..90 "]"
+      StringFragment@90..91 " "
+      SimpleInterpolation@91..100
+        Variable@91..96 "$list"
+        OpenBracket@96..97 "["
+        Minus@97..98 "-"
+        IntegerLiteral@98..99 "1"
+        CloseBracket@99..100 "]"
+      DoubleQuote@100..101 "\""
+    Semicolon@101..102 ";"
+  Whitespace@102..103 "\n"
+  ExpressionStatement@103..120
+    InterpolatedString@103..119
+      DoubleQuote@103..104 "\""
+      StringFragment@104..106 "x "
+      BraceInterpolation@106..116
+        OpenBrace@106..107 "{"
+        CallExpression@107..115
+          MemberAccessExpression@107..112
+            VariableReference@107..109
+              Variable@107..109 "$a"
+            Arrow@109..111 "->"
+            MemberName@111..112
+              Identifier@111..112 "b"
+          ArgumentList@112..115
+            OpenParenthesis@112..113 "("
+            Argument@113..114
+              Literal@113..114
+                IntegerLiteral@113..114 "1"
+            CloseParenthesis@114..115 ")"
+        CloseBrace@115..116 "}"
+      StringFragment@116..118 " y"
+      DoubleQuote@118..119 "\""
+    Semicolon@119..120 ";"
+  Whitespace@120..121 "\n"
+  ExpressionStatement@121..140
+    InterpolatedString@121..139
+      DoubleQuote@121..122 "\""
+      BraceInterpolation@122..138
+        OpenBrace@122..123 "{"
+        CallExpression@123..137
+          VariableReference@123..125
+            Variable@123..125 "$f"
+          ArgumentList@125..137
+            OpenParenthesis@125..126 "("
+            Argument@126..136
+              ArrayExpression@126..136
+                OpenBracket@126..127 "["
+                ArrayElement@127..135
+                  Literal@127..130
+                    SingleQuotedString@127..130 "'k'"
+                  Whitespace@130..131 " "
+                  FatArrow@131..133 "=>"
+                  Whitespace@133..134 " "
+                  Literal@134..135
+                    IntegerLiteral@134..135 "1"
+                CloseBracket@135..136 "]"
+            CloseParenthesis@136..137 ")"
+        CloseBrace@137..138 "}"
+      DoubleQuote@138..139 "\""
+    Semicolon@139..140 ";"
+  Whitespace@140..141 "\n"
+  ExpressionStatement@141..153
+    InterpolatedString@141..152
+      DoubleQuote@141..142 "\""
+      DollarBraceInterpolation@142..151
+        DollarOpenBrace@142..144 "${"
+        NameExpression@144..150
+          Name@144..150
+            Identifier@144..150 "legacy"
+        CloseBrace@150..151 "}"
+      DoubleQuote@151..152 "\""
+    Semicolon@152..153 ";"
+  Whitespace@153..154 "\n"
+  ExpressionStatement@154..170
+    ShellExecExpression@154..169
+      Backtick@154..155 "`"
+      StringFragment@155..158 "ls "
+      SimpleInterpolation@158..168
+        Variable@158..168 "$directory"
+      Backtick@168..169 "`"
+    Semicolon@169..170 ";"
+  Whitespace@170..171 "\n"
+  ExpressionStatement@171..218
+    HeredocExpression@171..217
+      HeredocStart@171..178 "<<<TXT\n"
+      StringFragment@178..184 "Hello "
+      SimpleInterpolation@184..189
+        Variable@184..189 "$name"
+      StringFragment@189..197 ", total "
+      BraceInterpolation@197..213
+        OpenBrace@197..198 "{"
+        CallExpression@198..212
+          MemberAccessExpression@198..210
+            VariableReference@198..203
+              Variable@198..203 "$cart"
+            Arrow@203..205 "->"
+            MemberName@205..210
+              Identifier@205..210 "total"
+          ArgumentList@210..212
+            OpenParenthesis@210..211 "("
+            CloseParenthesis@211..212 ")"
+        CloseBrace@212..213 "}"
+      StringFragment@213..214 "\n"
+      HeredocEnd@214..217 "TXT"
+    Semicolon@217..218 ";"
+  Whitespace@218..219 "\n"
+  ExpressionStatement@219..255
+    HeredocExpression@219..254
+      HeredocStart@219..228 "<<<'RAW'\n"
+      StringFragment@228..251 "No $interpolation here\n"
+      HeredocEnd@251..254 "RAW"
+    Semicolon@254..255 ";"
+  Whitespace@255..256 "\n"
+  ExpressionStatement@256..269
+    InterpolatedString@256..268
+      DoubleQuote@256..258 "b\""
+      StringFragment@258..265 "binary "
+      SimpleInterpolation@265..267
+        Variable@265..267 "$x"
+      DoubleQuote@267..268 "\""
+    Semicolon@268..269 ";"
+  Whitespace@269..270 "\n"

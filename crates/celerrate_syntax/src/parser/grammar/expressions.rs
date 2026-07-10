@@ -138,6 +138,9 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::OpenBracket
             | SyntaxKind::Array
             | SyntaxKind::List
+            | SyntaxKind::DoubleQuote
+            | SyntaxKind::Backtick
+            | SyntaxKind::HeredocStart
     )
 }
 
@@ -517,6 +520,74 @@ fn array_element(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::ArrayElement);
 }
 
+/// `"..."`, heredocs, and backticks share one loop: fragments stay
+/// tokens, interpolations become nodes. The lexer already diagnosed an
+/// unterminated string, so the missing closer is eaten silently here.
+fn interpolated_string(
+    parser: &mut Parser,
+    closing: SyntaxKind,
+    node_kind: SyntaxKind,
+) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // the opening delimiter
+    while !parser.at(closing) && !parser.at_end() {
+        match parser.current() {
+            Some(SyntaxKind::StringFragment) => parser.bump(),
+            Some(SyntaxKind::Variable) => simple_interpolation(parser),
+            Some(SyntaxKind::OpenBrace) => brace_interpolation(parser),
+            Some(SyntaxKind::DollarOpenBrace) => dollar_brace_interpolation(parser),
+            // The lexer does not produce anything else between string
+            // delimiters; this arm is fuzz armor, not grammar.
+            _ => error_element(parser),
+        }
+    }
+    parser.eat(closing);
+    marker.complete(parser, node_kind)
+}
+
+/// Zend's "simple" interpolation: the variable, then at most one
+/// property hop or one offset. The lexer only emits the arrow or the
+/// bracket when the full form is present; the diagnostics are
+/// defensive, for fuzzed streams.
+fn simple_interpolation(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // the variable
+    if parser.at(SyntaxKind::Arrow) || parser.at(SyntaxKind::NullsafeArrow) {
+        parser.bump();
+        if !parser.eat(SyntaxKind::Identifier) {
+            parser.diagnose_current(ParserDiagnosticKind::ExpectedMemberName);
+        }
+    } else if parser.eat(SyntaxKind::OpenBracket) {
+        parser.eat(SyntaxKind::Minus);
+        if matches!(
+            parser.current(),
+            Some(SyntaxKind::IntegerLiteral | SyntaxKind::Identifier | SyntaxKind::Variable)
+        ) {
+            parser.bump();
+        } else {
+            parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
+        }
+        parser.expect(SyntaxKind::CloseBracket);
+    }
+    marker.complete(parser, SyntaxKind::SimpleInterpolation);
+}
+
+fn brace_interpolation(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `{`
+    expression(parser);
+    parser.expect(SyntaxKind::CloseBrace);
+    marker.complete(parser, SyntaxKind::BraceInterpolation);
+}
+
+fn dollar_brace_interpolation(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `${`
+    expression(parser);
+    parser.expect(SyntaxKind::CloseBrace);
+    marker.complete(parser, SyntaxKind::DollarBraceInterpolation);
+}
+
 fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
     match parser.current() {
         Some(
@@ -529,6 +600,21 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
         Some(SyntaxKind::Variable | SyntaxKind::Dollar) => simple_variable(parser),
         Some(SyntaxKind::OpenBracket | SyntaxKind::Array) => Some(array_expression(parser)),
         Some(SyntaxKind::List) => Some(list_expression(parser)),
+        Some(SyntaxKind::DoubleQuote) => Some(interpolated_string(
+            parser,
+            SyntaxKind::DoubleQuote,
+            SyntaxKind::InterpolatedString,
+        )),
+        Some(SyntaxKind::Backtick) => Some(interpolated_string(
+            parser,
+            SyntaxKind::Backtick,
+            SyntaxKind::ShellExecExpression,
+        )),
+        Some(SyntaxKind::HeredocStart) => Some(interpolated_string(
+            parser,
+            SyntaxKind::HeredocEnd,
+            SyntaxKind::HeredocExpression,
+        )),
         Some(SyntaxKind::Identifier | SyntaxKind::Backslash) => {
             let marker = parser.start();
             name(parser);

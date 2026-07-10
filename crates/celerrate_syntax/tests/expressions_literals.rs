@@ -137,3 +137,136 @@ fn pathological_nesting_inside_an_array_terminates() {
         SyntaxDiagnosticKind::Parser(ParserDiagnosticKind::NestingTooDeep)
     )));
 }
+
+#[test]
+fn a_double_quoted_string_holds_fragments_and_interpolations() {
+    insta::assert_snapshot!(support::render_expression(r#""a $name b""#), @r#"
+    InterpolatedString
+      DoubleQuote "\""
+      StringFragment "a "
+      SimpleInterpolation
+        Variable "$name"
+      StringFragment " b"
+      DoubleQuote "\""
+    "#);
+}
+
+#[test]
+fn simple_interpolation_takes_one_property_hop_or_one_offset() {
+    insta::assert_snapshot!(support::render_expression(r#""$user->name""#), @r#"
+    InterpolatedString
+      DoubleQuote "\""
+      SimpleInterpolation
+        Variable "$user"
+        Arrow "->"
+        Identifier "name"
+      DoubleQuote "\""
+    "#);
+    insta::assert_snapshot!(support::render_expression(r#""$items[0] $list[-1]""#), @r#"
+    InterpolatedString
+      DoubleQuote "\""
+      SimpleInterpolation
+        Variable "$items"
+        OpenBracket "["
+        IntegerLiteral "0"
+        CloseBracket "]"
+      StringFragment " "
+      SimpleInterpolation
+        Variable "$list"
+        OpenBracket "["
+        Minus "-"
+        IntegerLiteral "1"
+        CloseBracket "]"
+      DoubleQuote "\""
+    "#);
+}
+
+#[test]
+fn brace_interpolation_holds_a_full_expression() {
+    insta::assert_snapshot!(support::render_expression(r#""x {$a->b(1)} y""#), @r#"
+    InterpolatedString
+      DoubleQuote "\""
+      StringFragment "x "
+      BraceInterpolation
+        OpenBrace "{"
+        CallExpression
+          MemberAccessExpression
+            VariableReference
+              Variable "$a"
+            Arrow "->"
+            MemberName
+              Identifier "b"
+          ArgumentList
+            OpenParenthesis "("
+            Argument
+              Literal
+                IntegerLiteral "1"
+            CloseParenthesis ")"
+        CloseBrace "}"
+      StringFragment " y"
+      DoubleQuote "\""
+    "#);
+}
+
+#[test]
+fn the_deprecated_dollar_brace_form_still_parses() {
+    insta::assert_snapshot!(support::render_expression(r#""${name}""#), @r#"
+    InterpolatedString
+      DoubleQuote "\""
+      DollarBraceInterpolation
+        DollarOpenBrace "${"
+        NameExpression
+          Name
+            Identifier "name"
+        CloseBrace "}"
+      DoubleQuote "\""
+    "#);
+}
+
+#[test]
+fn backticks_are_shell_executions() {
+    insta::assert_snapshot!(support::render_expression("`ls $dir`"), @r#"
+    ShellExecExpression
+      Backtick "`"
+      StringFragment "ls "
+      SimpleInterpolation
+        Variable "$dir"
+      Backtick "`"
+    "#);
+}
+
+#[test]
+fn heredocs_interpolate_and_nowdocs_do_not() {
+    let heredoc = support::parse_verified("<?php <<<TXT\nHello $name\nTXT;");
+    let interpolations = heredoc
+        .tree()
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::SimpleInterpolation)
+        .count();
+    assert_eq!(interpolations, 1);
+    assert!(
+        heredoc
+            .tree()
+            .descendants()
+            .any(|node| node.kind() == SyntaxKind::HeredocExpression)
+    );
+
+    let nowdoc = support::parse_verified("<?php <<<'TXT'\nHello $name\nTXT;");
+    let interpolation_nodes = nowdoc
+        .tree()
+        .descendants()
+        .filter(|node| node.kind() == SyntaxKind::SimpleInterpolation)
+        .count();
+    assert_eq!(interpolation_nodes, 0);
+}
+
+#[test]
+fn an_unterminated_string_adds_no_parser_diagnostic_of_its_own() {
+    // The lexer already reported the unterminated string; the parser
+    // contributes only the ordinary missing terminator, nothing about
+    // the missing quote.
+    assert_eq!(
+        parser_diagnostics("<?php \"open"),
+        vec![ParserDiagnosticKind::ExpectedSemicolon]
+    );
+}

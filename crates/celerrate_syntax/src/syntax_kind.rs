@@ -298,6 +298,18 @@ syntax_kinds! {
     ArrayElement,
     /// `list( elements )`, the keyword destructuring form.
     ListExpression,
+    /// `"..."` with fragments and interpolations.
+    InterpolatedString,
+    /// A heredoc or nowdoc, start to end label.
+    HeredocExpression,
+    /// A backtick string: shell execution.
+    ShellExecExpression,
+    /// `$name`, `$name->property`, `$name[offset]` inside a string.
+    SimpleInterpolation,
+    /// `{ expression }` inside a string.
+    BraceInterpolation,
+    /// `${ ... }` inside a string, the deprecated form.
+    DollarBraceInterpolation,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
