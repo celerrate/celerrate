@@ -349,3 +349,14 @@ fn foreach_without_as_is_diagnosed() {
             .contains(&ParserDiagnosticKind::Expected(SyntaxKind::As))
     );
 }
+
+#[test]
+fn a_trailing_comma_in_a_for_section_parses_without_diagnostic() {
+    // Recorded plan-3 permissiveness: Zend rejects `for ($i = 0,;;)`,
+    // this parser accepts it clean. The pin keeps the divergence a
+    // decision instead of an accident.
+    assert_eq!(
+        parser_diagnostics("<?php for ($i = 0,; $i < 3; $i++) {}"),
+        vec![]
+    );
+}
