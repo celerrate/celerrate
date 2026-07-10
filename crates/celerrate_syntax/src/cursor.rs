@@ -156,6 +156,23 @@ mod tests {
     }
 
     #[test]
+    fn bump_bytes_with_an_out_of_range_count_consumes_everything() {
+        let mut cursor = Cursor::new("abc");
+        cursor.bump_bytes(10);
+        assert!(cursor.is_at_end());
+        assert_eq!(cursor.rest(), "");
+    }
+
+    #[test]
+    fn is_at_end_becomes_true_after_full_consumption() {
+        let mut cursor = Cursor::new("ab");
+        assert!(!cursor.is_at_end());
+        cursor.bump();
+        cursor.bump();
+        assert!(cursor.is_at_end());
+    }
+
+    #[test]
     fn end_of_input_is_stable() {
         let mut cursor = Cursor::new("");
         assert!(cursor.is_at_end());
