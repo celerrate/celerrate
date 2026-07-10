@@ -13,6 +13,25 @@ use super::expressions::{
 use super::statements::{block, terminate_statement};
 use super::{Marker, Parser};
 
+/// Whether the current token is a semi-reserved name: an identifier or
+/// any keyword. Zend accepts any keyword wherever a semi-reserved name
+/// is expected (constant, method, case, and adaptation-member names,
+/// aliases); per-position reservation is judged upstairs.
+fn at_semi_reserved_name(parser: &mut Parser) -> bool {
+    parser
+        .current()
+        .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword())
+}
+
+/// Bumps a semi-reserved name, or diagnoses one missing.
+fn expect_semi_reserved_name(parser: &mut Parser) {
+    if at_semi_reserved_name(parser) {
+        parser.bump();
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+    }
+}
+
 /// Dispatch for declaration statements. The statement dispatcher only
 /// routes here on tokens it has already vetted (with lookahead where a
 /// keyword is overloaded), so the fallback arm is defensive: it is
@@ -110,18 +129,13 @@ fn function_declaration(parser: &mut Parser, marker: Marker) {
 /// Terminates: every iteration bumps a name or breaks.
 pub(super) fn constant_declaration(parser: &mut Parser, marker: Marker) {
     parser.bump(); // `const`
-    let at_untyped_name = parser
-        .current()
-        .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword())
-        && parser.nth(1) == Some(SyntaxKind::Equals);
+    let at_untyped_name =
+        at_semi_reserved_name(parser) && parser.nth(1) == Some(SyntaxKind::Equals);
     if !at_untyped_name && parser.current().is_some_and(super::types::starts_type) {
         super::types::type_expression(parser);
     }
     loop {
-        let at_name = parser
-            .current()
-            .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword());
-        if !at_name {
+        if !at_semi_reserved_name(parser) {
             parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
             break;
         }
@@ -266,10 +280,7 @@ fn use_alias(parser: &mut Parser) {
     if !parser.eat(SyntaxKind::As) {
         return;
     }
-    match parser.current() {
-        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
+    expect_semi_reserved_name(parser);
 }
 
 /// `abstract`, `final`, `readonly` before `class`, in any order and
@@ -337,14 +348,15 @@ pub(super) fn anonymous_class(parser: &mut Parser, marker: Marker) {
 /// and `implements`, which stay heritage clauses so a missing name
 /// cannot swallow them.
 fn class_like_name(parser: &mut Parser) {
-    match parser.current() {
-        Some(kind)
-            if (kind == SyntaxKind::Identifier || kind.is_keyword())
-                && !matches!(kind, SyntaxKind::Extends | SyntaxKind::Implements) =>
-        {
-            parser.bump();
-        }
-        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    if at_semi_reserved_name(parser)
+        && !matches!(
+            parser.current(),
+            Some(SyntaxKind::Extends | SyntaxKind::Implements)
+        )
+    {
+        parser.bump();
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
     }
 }
 
@@ -601,31 +613,27 @@ fn property_hook(parser: &mut Parser) {
     super::attributes::attribute_groups(parser);
     parser.eat(SyntaxKind::Final); // the one modifier hooks admit today
     parser.eat(SyntaxKind::Ampersand); // by-reference `get`
-    match parser.current() {
-        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => {
-            parser.bump();
-            if parser.at(SyntaxKind::OpenParenthesis) {
-                parameter_list(parser); // `set(string $value)`
-            }
-            if parser.eat(SyntaxKind::FatArrow) {
-                expression(parser);
-                terminate_statement(parser);
-            } else if parser.at(SyntaxKind::OpenBrace) {
-                block(parser);
-            } else {
-                terminate_statement(parser); // the abstract form `get;`
-            }
-            marker.complete(parser, SyntaxKind::PropertyHook);
+    if at_semi_reserved_name(parser) {
+        parser.bump();
+        if parser.at(SyntaxKind::OpenParenthesis) {
+            parameter_list(parser); // `set(string $value)`
         }
-        _ => {
-            // Nothing hook-shaped. Tokens may already be consumed
-            // (`final`, `&`), so the node completes partially; a
-            // zero-consumption trip is swept by the list's position
-            // guard.
-            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
-            marker.complete(parser, SyntaxKind::PropertyHook);
+        if parser.eat(SyntaxKind::FatArrow) {
+            expression(parser);
+            terminate_statement(parser);
+        } else if parser.at(SyntaxKind::OpenBrace) {
+            block(parser);
+        } else {
+            terminate_statement(parser); // the abstract form `get;`
         }
+    } else {
+        // Nothing hook-shaped. Tokens may already be consumed
+        // (`final`, `&`), so the node completes partially; a
+        // zero-consumption trip is swept by the list's position
+        // guard.
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
     }
+    marker.complete(parser, SyntaxKind::PropertyHook);
 }
 
 /// `function name(parameters): type` ending in a block or, for the
@@ -636,10 +644,7 @@ fn property_hook(parser: &mut Parser) {
 fn method_declaration(parser: &mut Parser, marker: Marker) {
     parser.bump(); // `function`
     parser.eat(SyntaxKind::Ampersand); // by-reference return
-    match parser.current() {
-        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
+    expect_semi_reserved_name(parser);
     parameter_list(parser);
     if parser.eat(SyntaxKind::Colon) {
         super::types::type_expression(parser);
@@ -716,10 +721,7 @@ fn trait_adaptation(parser: &mut Parser) {
         ) {
             parser.bump();
         }
-        if parser
-            .current()
-            .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword())
-        {
+        if at_semi_reserved_name(parser) {
             parser.bump();
         }
         terminate_statement(parser);
@@ -730,10 +732,7 @@ fn trait_adaptation(parser: &mut Parser) {
 /// The member half of `A::member` in an adaptation: an identifier or
 /// any keyword (semi-reserved).
 fn adaptation_member_name(parser: &mut Parser) {
-    match parser.current() {
-        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
+    expect_semi_reserved_name(parser);
 }
 
 /// `enum Name: BackingType implements A { ... }`. `enum` is not
@@ -756,10 +755,7 @@ fn enum_declaration(parser: &mut Parser, marker: Marker) {
 /// the value is required (backed enums) are semantic.
 fn enum_case(parser: &mut Parser, marker: Marker) {
     parser.bump(); // `case`
-    match parser.current() {
-        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
-        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
-    }
+    expect_semi_reserved_name(parser);
     if parser.eat(SyntaxKind::Equals) {
         expression(parser);
     }
