@@ -56,6 +56,7 @@ fn form_feed_is_not_whitespace_in_scripting_mode() {
         tokens.iter().map(|token| token.kind).collect::<Vec<_>>(),
         [OpenTag, Whitespace, Error, Semicolon]
     );
+    assert_eq!(diagnostics.len(), 1);
     let diagnostic = diagnostics.first().copied().expect("one diagnostic");
     assert_eq!(diagnostic.kind, LexerDiagnosticKind::UnexpectedCharacter);
     assert_eq!(u32::from(diagnostic.range.start()), 6);
