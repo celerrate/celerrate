@@ -314,6 +314,14 @@ syntax_kinds! {
     NewExpression,
     /// `clone value` or the 8.5 function form `clone(...)`.
     CloneExpression,
+    /// `isset( arguments )`.
+    IssetExpression,
+    /// `empty( argument )`.
+    EmptyExpression,
+    /// `eval( argument )`.
+    EvalExpression,
+    /// `exit` / `die`, with an optional argument list since 8.4.
+    ExitExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

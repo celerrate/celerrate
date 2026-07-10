@@ -144,6 +144,10 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::HeredocStart
             | SyntaxKind::New
             | SyntaxKind::Clone
+            | SyntaxKind::Isset
+            | SyntaxKind::Empty
+            | SyntaxKind::Eval
+            | SyntaxKind::Exit
     )
 }
 
@@ -597,6 +601,20 @@ fn dollar_brace_interpolation(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::DollarBraceInterpolation);
 }
 
+/// A keyword followed by a mandatory argument list (`isset`, `empty`,
+/// `eval`). Arity and argument validity are semantic; the shared list
+/// brings its recovery along.
+fn keyword_call(parser: &mut Parser, node_kind: SyntaxKind) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // the keyword
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        argument_list(parser);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    marker.complete(parser, node_kind)
+}
+
 fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
     match parser.current() {
         Some(
@@ -649,6 +667,17 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             parser.bump();
             argument_list(parser);
             Some(marker.complete(parser, SyntaxKind::CloneExpression))
+        }
+        Some(SyntaxKind::Isset) => Some(keyword_call(parser, SyntaxKind::IssetExpression)),
+        Some(SyntaxKind::Empty) => Some(keyword_call(parser, SyntaxKind::EmptyExpression)),
+        Some(SyntaxKind::Eval) => Some(keyword_call(parser, SyntaxKind::EvalExpression)),
+        Some(SyntaxKind::Exit) => {
+            let marker = parser.start();
+            parser.bump();
+            if parser.at(SyntaxKind::OpenParenthesis) {
+                argument_list(parser);
+            }
+            Some(marker.complete(parser, SyntaxKind::ExitExpression))
         }
         _ => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);

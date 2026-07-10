@@ -4,7 +4,7 @@
 
 mod support;
 
-use celerrate_syntax::{ParserDiagnosticKind, SyntaxDiagnosticKind};
+use celerrate_syntax::{ParserDiagnosticKind, SyntaxDiagnosticKind, SyntaxKind};
 
 fn parser_diagnostics(source: &str) -> Vec<ParserDiagnosticKind> {
     support::parse_verified(source)
@@ -111,4 +111,53 @@ fn the_php_85_clone_function_form_parses_and_chains() {
         CloseParenthesis ")"
     "#);
     assert!(parser_diagnostics("<?php clone($entity)->touch();").is_empty());
+}
+
+#[test]
+fn isset_takes_a_variable_list() {
+    insta::assert_snapshot!(support::render_expression("isset($a, $b->c)"), @r#"
+    IssetExpression
+      Isset "isset"
+      ArgumentList
+        OpenParenthesis "("
+        Argument
+          VariableReference
+            Variable "$a"
+        Comma ","
+        Argument
+          MemberAccessExpression
+            VariableReference
+              Variable "$b"
+            Arrow "->"
+            MemberName
+              Identifier "c"
+        CloseParenthesis ")"
+    "#);
+}
+
+#[test]
+fn empty_and_eval_require_their_parentheses() {
+    assert!(parser_diagnostics("<?php empty($x);").is_empty());
+    assert!(parser_diagnostics("<?php eval($code);").is_empty());
+    assert!(
+        parser_diagnostics("<?php isset;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis))
+    );
+}
+
+#[test]
+fn exit_and_die_take_optional_arguments() {
+    insta::assert_snapshot!(support::render_expression("exit(1)"), @r#"
+    ExitExpression
+      Exit "exit"
+      ArgumentList
+        OpenParenthesis "("
+        Argument
+          Literal
+            IntegerLiteral "1"
+        CloseParenthesis ")"
+    "#);
+    assert!(parser_diagnostics("<?php exit;").is_empty());
+    assert!(parser_diagnostics("<?php die;").is_empty());
+    assert!(parser_diagnostics("<?php $code = $failed ? exit(1) : 0;").is_empty());
 }
