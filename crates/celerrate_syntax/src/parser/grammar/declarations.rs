@@ -7,7 +7,7 @@
 use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;
 
-use super::expressions::{expression, name, parameter_list};
+use super::expressions::{error_element, expect_list_separator, expression, name, parameter_list};
 use super::statements::{block, terminate_statement};
 use super::{Marker, Parser};
 
@@ -26,6 +26,7 @@ pub(super) fn declaration(parser: &mut Parser) {
         Some(SyntaxKind::Namespace) if parser.nth(1) != Some(SyntaxKind::Backslash) => {
             namespace_declaration(parser, marker);
         }
+        Some(SyntaxKind::Use) => use_declaration(parser, marker),
         Some(_) => {
             parser.diagnose_current(ParserDiagnosticKind::ExpectedDeclaration);
             marker.complete(parser, SyntaxKind::ErrorNode);
@@ -109,4 +110,121 @@ fn namespace_declaration(parser: &mut Parser, marker: Marker) {
         terminate_statement(parser);
     }
     marker.complete(parser, SyntaxKind::NamespaceDeclaration);
+}
+
+/// `use A\B;`, `use A\B as C;`, `use function a\b;`,
+/// `use const A\B;`, comma-separated clause lists, and the group form
+/// `use A\{B, function c as d};`. Collisions and resolution are
+/// semantic. Terminates: every iteration parses a clause that consumed
+/// at least one name token, or breaks.
+fn use_declaration(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `use`
+    if matches!(
+        parser.current(),
+        Some(SyntaxKind::Function | SyntaxKind::Const)
+    ) {
+        parser.bump(); // the import type, for the whole clause list
+    }
+    loop {
+        if !use_clause(parser) {
+            break;
+        }
+        if !parser.eat(SyntaxKind::Comma) {
+            break;
+        }
+    }
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::UseDeclaration);
+}
+
+/// One top-level import clause: a name, then a group (`\{ ... }`) or
+/// an optional alias. Returns false without consuming when no name can
+/// start here.
+fn use_clause(parser: &mut Parser) -> bool {
+    if !matches!(
+        parser.current(),
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace)
+    ) {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+        return false;
+    }
+    let marker = parser.start();
+    name(parser);
+    if parser.at(SyntaxKind::Backslash) && parser.nth(1) == Some(SyntaxKind::OpenBrace) {
+        use_group(parser);
+    } else {
+        use_alias(parser);
+    }
+    marker.complete(parser, SyntaxKind::UseClause);
+    true
+}
+
+/// `\{ B, function c as d, }`: the group of a grouped import. Same
+/// recovery contract as the expression lists: unexpected tokens are
+/// wrapped and consumed; `;`, `?>`, and end of input abort. The shared
+/// separator helper tolerates the trailing comma Zend allows here.
+/// Terminates: every iteration consumes through `use_group_item` (its
+/// dispatch admits only kinds that item always bumps) or through
+/// `error_element`.
+fn use_group(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `\`
+    parser.bump(); // `{`
+    while !parser.at(SyntaxKind::CloseBrace) && !parser.at_end() {
+        if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+            break;
+        }
+        if !matches!(
+            parser.current(),
+            Some(
+                SyntaxKind::Function
+                    | SyntaxKind::Const
+                    | SyntaxKind::Identifier
+                    | SyntaxKind::Backslash
+                    | SyntaxKind::Namespace
+            )
+        ) {
+            error_element(parser);
+            continue;
+        }
+        use_group_item(parser);
+        expect_list_separator(parser, SyntaxKind::CloseBrace);
+    }
+    parser.expect(SyntaxKind::CloseBrace);
+    marker.complete(parser, SyntaxKind::UseGroup);
+}
+
+/// One item of a group: an optional per-item `function`/`const` type,
+/// the name, an optional alias. Always consumes at least one token:
+/// the group loop admitted only its leading kinds.
+fn use_group_item(parser: &mut Parser) {
+    let marker = parser.start();
+    if matches!(
+        parser.current(),
+        Some(SyntaxKind::Function | SyntaxKind::Const)
+    ) {
+        parser.bump();
+    }
+    if matches!(
+        parser.current(),
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace)
+    ) {
+        name(parser);
+        use_alias(parser);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
+    }
+    marker.complete(parser, SyntaxKind::UseClause);
+}
+
+/// `as Alias`. Any keyword is accepted as the alias; validity is
+/// semantic.
+fn use_alias(parser: &mut Parser) {
+    if !parser.eat(SyntaxKind::As) {
+        return;
+    }
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
+        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
 }

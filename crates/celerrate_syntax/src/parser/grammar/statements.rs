@@ -62,6 +62,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::Namespace) if parser.nth(1) != Some(SyntaxKind::Backslash) => {
             super::declarations::declaration(parser)
         }
+        Some(SyntaxKind::Use) => super::declarations::declaration(parser),
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}

@@ -429,6 +429,14 @@ syntax_kinds! {
     ConstantElement,
     /// `namespace A\B;` or `namespace A\B { ... }` or `namespace { ... }`.
     NamespaceDeclaration,
+    /// `use A\B;` and every import shape: aliases, `function`/`const`
+    /// types, clause lists, group imports.
+    UseDeclaration,
+    /// One imported name: optional per-item `function`/`const` type
+    /// (inside groups), the name, an optional group or alias.
+    UseClause,
+    /// `\{ items }` of a grouped import.
+    UseGroup,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

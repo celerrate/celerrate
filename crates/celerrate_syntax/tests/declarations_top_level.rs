@@ -2,7 +2,7 @@
 
 mod support;
 
-use celerrate_syntax::ParserDiagnosticKind;
+use celerrate_syntax::{ParserDiagnosticKind, SyntaxKind};
 use support::{parser_diagnostics, render_statement};
 
 #[test]
@@ -117,5 +117,91 @@ fn function_declarations_still_parse_after_the_move() {
     assert_eq!(
         parser_diagnostics("<?php function f(int $x): void { return; }"),
         vec![]
+    );
+}
+
+#[test]
+fn a_use_import_with_an_alias() {
+    insta::assert_snapshot!(render_statement("use App\\Service as Servicing;"), @r#"
+    UseDeclaration
+      Use "use"
+      UseClause
+        Name
+          Identifier "App"
+          Backslash "\\"
+          Identifier "Service"
+        As "as"
+        Identifier "Servicing"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_function_import_types_the_whole_clause_list() {
+    insta::assert_snapshot!(render_statement("use function strlen, strrev;"), @r#"
+    UseDeclaration
+      Use "use"
+      Function "function"
+      UseClause
+        Name
+          Identifier "strlen"
+      Comma ","
+      UseClause
+        Name
+          Identifier "strrev"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_group_import_nests_typed_and_aliased_items() {
+    insta::assert_snapshot!(render_statement("use App\\{Service, function helper as aid, const LIMIT};"), @r#"
+    UseDeclaration
+      Use "use"
+      UseClause
+        Name
+          Identifier "App"
+        UseGroup
+          Backslash "\\"
+          OpenBrace "{"
+          UseClause
+            Name
+              Identifier "Service"
+          Comma ","
+          UseClause
+            Function "function"
+            Name
+              Identifier "helper"
+            As "as"
+            Identifier "aid"
+          Comma ","
+          UseClause
+            Const "const"
+            Name
+              Identifier "LIMIT"
+          CloseBrace "}"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_trailing_comma_inside_a_group_parses_clean() {
+    // Zend allows the trailing comma in group imports.
+    assert_eq!(parser_diagnostics("<?php use App\\{Service,};"), vec![]);
+}
+
+#[test]
+fn an_unclosed_group_recovers_at_the_semicolon() {
+    assert_eq!(
+        parser_diagnostics("<?php use App\\{Service; echo 1;"),
+        vec![ParserDiagnosticKind::Expected(SyntaxKind::CloseBrace)]
+    );
+}
+
+#[test]
+fn a_use_without_a_name_is_diagnosed_and_recovers() {
+    assert_eq!(
+        parser_diagnostics("<?php use ; echo 1;"),
+        vec![ParserDiagnosticKind::Expected(SyntaxKind::Identifier)]
     );
 }
