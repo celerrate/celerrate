@@ -383,6 +383,12 @@ syntax_kinds! {
     WhileStatement,
     /// `do body while (condition);`.
     DoWhileStatement,
+    /// `for (initializers; condition; updates) body`, either syntax.
+    ForStatement,
+    /// One of `for`'s three sections: a possibly-empty comma-separated
+    /// expression list, always present as a node so the sections stay
+    /// addressable by position.
+    ForExpressionList,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

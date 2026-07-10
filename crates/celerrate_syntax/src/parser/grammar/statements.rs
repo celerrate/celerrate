@@ -44,6 +44,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::If) => if_statement(parser),
         Some(SyntaxKind::While) => while_statement(parser),
         Some(SyntaxKind::Do) => do_while_statement(parser),
+        Some(SyntaxKind::For) => for_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -344,6 +345,50 @@ fn do_while_statement(parser: &mut Parser) {
     parenthesized_condition(parser);
     terminate_statement(parser);
     marker.complete(parser, SyntaxKind::DoWhileStatement);
+}
+
+fn for_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `for`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        for_expression_list(parser);
+        parser.expect(SyntaxKind::Semicolon);
+        for_expression_list(parser);
+        parser.expect(SyntaxKind::Semicolon);
+        for_expression_list(parser);
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    if parser.eat(SyntaxKind::Colon) {
+        statement_list(parser);
+        parser.expect(SyntaxKind::EndFor);
+        terminate_statement(parser);
+    } else {
+        embedded_statement(parser);
+    }
+    marker.complete(parser, SyntaxKind::ForStatement);
+}
+
+/// One `for` section. Progress is enforced mechanically: the nesting
+/// guard can refuse an expression without consuming (this loop can be
+/// entered while the budget is exhausted, through a pathological
+/// condition chain); an unmoved position breaks out and leaves the
+/// token to the section's caller.
+fn for_expression_list(parser: &mut Parser) {
+    let marker = parser.start();
+    while parser.current().is_some_and(starts_expression) {
+        let position_before_expression = parser.position();
+        expression(parser);
+        if parser.position() == position_before_expression {
+            break;
+        }
+        if !parser.eat(SyntaxKind::Comma) && parser.current().is_some_and(starts_expression) {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Comma));
+        }
+    }
+    marker.complete(parser, SyntaxKind::ForExpressionList);
 }
 
 #[cfg(test)]

@@ -244,3 +244,66 @@ fn do_without_while_is_diagnosed() {
             .contains(&ParserDiagnosticKind::Expected(SyntaxKind::While))
     );
 }
+
+#[test]
+fn for_holds_three_sections_and_a_body() {
+    insta::assert_snapshot!(render_statement("for ($i = 0; $i < 3; $i++) echo $i;"), @r#"
+    ForStatement
+      For "for"
+      OpenParenthesis "("
+      ForExpressionList
+        AssignmentExpression
+          VariableReference
+            Variable "$i"
+          Equals "="
+          Literal
+            IntegerLiteral "0"
+      Semicolon ";"
+      ForExpressionList
+        BinaryExpression
+          VariableReference
+            Variable "$i"
+          Less "<"
+          Literal
+            IntegerLiteral "3"
+      Semicolon ";"
+      ForExpressionList
+        PostfixExpression
+          VariableReference
+            Variable "$i"
+          PlusPlus "++"
+      CloseParenthesis ")"
+      EchoStatement
+        Echo "echo"
+        VariableReference
+          Variable "$i"
+        Semicolon ";"
+    "#);
+}
+
+#[test]
+fn for_sections_may_be_empty_or_lists() {
+    insta::assert_snapshot!(render_statement("for (;;) ;"), @r#"
+    ForStatement
+      For "for"
+      OpenParenthesis "("
+      ForExpressionList
+      Semicolon ";"
+      ForExpressionList
+      Semicolon ";"
+      ForExpressionList
+      CloseParenthesis ")"
+      EmptyStatement
+        Semicolon ";"
+    "#);
+    assert!(parser_diagnostics("<?php for ($i = 0, $j = 9; $i < $j; $i++, $j--) ;").is_empty());
+}
+
+#[test]
+fn an_alternative_for_closes_with_endfor() {
+    assert!(parser_diagnostics("<?php for (;;): echo 1; endfor;").is_empty());
+    assert!(
+        parser_diagnostics("<?php for (;;): echo 1;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::EndFor))
+    );
+}
