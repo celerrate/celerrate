@@ -1,0 +1,218 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_new_clone.php
+---
+SourceFile@0..282
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..14
+    NewExpression@6..13
+      New@6..9 "new"
+      Whitespace@9..10 " "
+      Name@10..13
+        Identifier@10..13 "Foo"
+    Semicolon@13..14 ";"
+  Whitespace@14..15 "\n"
+  ExpressionStatement@15..29
+    NewExpression@15..28
+      New@15..18 "new"
+      Whitespace@18..19 " "
+      Name@19..22
+        Identifier@19..22 "Foo"
+      ArgumentList@22..28
+        OpenParenthesis@22..23 "("
+        Argument@23..24
+          Literal@23..24
+            IntegerLiteral@23..24 "1"
+        Comma@24..25 ","
+        Whitespace@25..26 " "
+        Argument@26..27
+          Literal@26..27
+            IntegerLiteral@26..27 "2"
+        CloseParenthesis@27..28 ")"
+    Semicolon@28..29 ";"
+  Whitespace@29..30 "\n"
+  ExpressionStatement@30..55
+    NewExpression@30..54
+      New@30..33 "new"
+      Whitespace@33..34 " "
+      Name@34..50
+        Backslash@34..35 "\\"
+        Identifier@35..40 "Fully"
+        Backslash@40..41 "\\"
+        Identifier@41..50 "Qualified"
+      ArgumentList@50..54
+        OpenParenthesis@50..51 "("
+        Argument@51..53
+          VariableReference@51..53
+            Variable@51..53 "$x"
+        CloseParenthesis@53..54 ")"
+    Semicolon@54..55 ";"
+  Whitespace@55..56 "\n"
+  ExpressionStatement@56..67
+    NewExpression@56..66
+      New@56..59 "new"
+      Whitespace@59..60 " "
+      Static@60..66 "static"
+    Semicolon@66..67 ";"
+  Whitespace@67..68 "\n"
+  ExpressionStatement@68..79
+    NewExpression@68..78
+      New@68..71 "new"
+      Whitespace@71..72 " "
+      VariableReference@72..78
+        Variable@72..78 "$class"
+    Semicolon@78..79 ";"
+  Whitespace@79..80 "\n"
+  ExpressionStatement@80..105
+    NewExpression@80..104
+      New@80..83 "new"
+      Whitespace@83..84 " "
+      MemberAccessExpression@84..101
+        VariableReference@84..92
+          Variable@84..92 "$factory"
+        Arrow@92..94 "->"
+        MemberName@94..101
+          Identifier@94..101 "product"
+      ArgumentList@101..104
+        OpenParenthesis@101..102 "("
+        Argument@102..103
+          Literal@102..103
+            IntegerLiteral@102..103 "1"
+        CloseParenthesis@103..104 ")"
+    Semicolon@104..105 ";"
+  Whitespace@105..106 "\n"
+  ExpressionStatement@106..134
+    NewExpression@106..133
+      New@106..109 "new"
+      Whitespace@109..110 " "
+      ParenthesizedExpression@110..129
+        OpenParenthesis@110..111 "("
+        CallExpression@111..128
+          MemberAccessExpression@111..126
+            VariableReference@111..120
+              Variable@111..120 "$resolver"
+            Arrow@120..122 "->"
+            MemberName@122..126
+              Identifier@122..126 "pick"
+          ArgumentList@126..128
+            OpenParenthesis@126..127 "("
+            CloseParenthesis@127..128 ")"
+        CloseParenthesis@128..129 ")"
+      ArgumentList@129..133
+        OpenParenthesis@129..130 "("
+        Argument@130..132
+          VariableReference@130..132
+            Variable@130..132 "$x"
+        CloseParenthesis@132..133 ")"
+    Semicolon@133..134 ";"
+  Whitespace@134..135 "\n"
+  ExpressionStatement@135..157
+    MemberAccessExpression@135..156
+      CallExpression@135..151
+        MemberAccessExpression@135..149
+          NewExpression@135..144
+            New@135..138 "new"
+            Whitespace@138..139 " "
+            Name@139..142
+              Identifier@139..142 "Foo"
+            ArgumentList@142..144
+              OpenParenthesis@142..143 "("
+              CloseParenthesis@143..144 ")"
+          Arrow@144..146 "->"
+          MemberName@146..149
+            Identifier@146..149 "bar"
+        ArgumentList@149..151
+          OpenParenthesis@149..150 "("
+          CloseParenthesis@150..151 ")"
+      Arrow@151..153 "->"
+      MemberName@153..156
+        Identifier@153..156 "baz"
+    Semicolon@156..157 ";"
+  Whitespace@157..158 "\n"
+  ExpressionStatement@158..172
+    CloneExpression@158..171
+      Clone@158..163 "clone"
+      Whitespace@163..164 " "
+      VariableReference@164..171
+        Variable@164..171 "$entity"
+    Semicolon@171..172 ";"
+  Whitespace@172..173 "\n"
+  ExpressionStatement@173..194
+    CloneExpression@173..193
+      Clone@173..178 "clone"
+      Whitespace@178..179 " "
+      MemberAccessExpression@179..193
+        VariableReference@179..186
+          Variable@179..186 "$entity"
+        Arrow@186..188 "->"
+        MemberName@188..193
+          Identifier@188..193 "child"
+    Semicolon@193..194 ";"
+  Whitespace@194..195 "\n"
+  ExpressionStatement@195..224
+    CallExpression@195..223
+      MemberAccessExpression@195..221
+        ParenthesizedExpression@195..213
+          OpenParenthesis@195..196 "("
+          CloneExpression@196..212
+            Clone@196..201 "clone"
+            Whitespace@201..202 " "
+            VariableReference@202..212
+              Variable@202..212 "$prototype"
+          CloseParenthesis@212..213 ")"
+        Arrow@213..215 "->"
+        MemberName@215..221
+          Identifier@215..221 "mutate"
+      ArgumentList@221..223
+        OpenParenthesis@221..222 "("
+        CloseParenthesis@222..223 ")"
+    Semicolon@223..224 ";"
+  Whitespace@224..225 "\n"
+  ExpressionStatement@225..256
+    CloneExpression@225..255
+      Clone@225..230 "clone"
+      ArgumentList@230..255
+        OpenParenthesis@230..231 "("
+        Argument@231..238
+          VariableReference@231..238
+            Variable@231..238 "$entity"
+        Comma@238..239 ","
+        Whitespace@239..240 " "
+        Argument@240..254
+          ArrayExpression@240..254
+            OpenBracket@240..241 "["
+            ArrayElement@241..253
+              Literal@241..245
+                SingleQuotedString@241..245 "'id'"
+              Whitespace@245..246 " "
+              FatArrow@246..248 "=>"
+              Whitespace@248..249 " "
+              NameExpression@249..253
+                Name@249..253
+                  Identifier@249..253 "null"
+            CloseBracket@253..254 "]"
+        CloseParenthesis@254..255 ")"
+    Semicolon@255..256 ";"
+  Whitespace@256..257 "\n"
+  ExpressionStatement@257..281
+    CallExpression@257..280
+      MemberAccessExpression@257..278
+        CloneExpression@257..271
+          Clone@257..262 "clone"
+          ArgumentList@262..271
+            OpenParenthesis@262..263 "("
+            Argument@263..270
+              VariableReference@263..270
+                Variable@263..270 "$entity"
+            CloseParenthesis@270..271 ")"
+        Arrow@271..273 "->"
+        MemberName@273..278
+          Identifier@273..278 "touch"
+      ArgumentList@278..280
+        OpenParenthesis@278..279 "("
+        CloseParenthesis@279..280 ")"
+    Semicolon@280..281 ";"
+  Whitespace@281..282 "\n"

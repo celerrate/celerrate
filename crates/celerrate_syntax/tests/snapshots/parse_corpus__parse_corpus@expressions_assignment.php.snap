@@ -1,0 +1,155 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_assignment.php
+---
+SourceFile@0..227
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..19
+    AssignmentExpression@6..18
+      VariableReference@6..8
+        Variable@6..8 "$a"
+      Whitespace@8..9 " "
+      Equals@9..10 "="
+      Whitespace@10..11 " "
+      AssignmentExpression@11..18
+        VariableReference@11..13
+          Variable@11..13 "$b"
+        Whitespace@13..14 " "
+        Equals@14..15 "="
+        Whitespace@15..16 " "
+        VariableReference@16..18
+          Variable@16..18 "$c"
+    Semicolon@18..19 ";"
+  Whitespace@19..20 "\n"
+  ExpressionStatement@20..32
+    AssignmentExpression@20..31
+      VariableReference@20..26
+        Variable@20..26 "$total"
+      Whitespace@26..27 " "
+      PlusEquals@27..29 "+="
+      Whitespace@29..30 " "
+      Literal@30..31
+        IntegerLiteral@30..31 "1"
+    Semicolon@31..32 ";"
+  Whitespace@32..33 "\n"
+  ExpressionStatement@33..49
+    AssignmentExpression@33..48
+      VariableReference@33..38
+        Variable@33..38 "$path"
+      Whitespace@38..39 " "
+      DotEquals@39..41 ".="
+      Whitespace@41..42 " "
+      Literal@42..48
+        SingleQuotedString@42..48 "'/etc'"
+    Semicolon@48..49 ";"
+  Whitespace@49..50 "\n"
+  ExpressionStatement@50..62
+    AssignmentExpression@50..61
+      VariableReference@50..55
+        Variable@50..55 "$mask"
+      Whitespace@55..56 " "
+      LessLessEquals@56..59 "<<="
+      Whitespace@59..60 " "
+      Literal@60..61
+        IntegerLiteral@60..61 "2"
+    Semicolon@61..62 ";"
+  Whitespace@62..63 "\n"
+  ExpressionStatement@63..84
+    AssignmentExpression@63..83
+      VariableReference@63..69
+        Variable@63..69 "$value"
+      Whitespace@69..70 " "
+      QuestionQuestionEquals@70..73 "??="
+      Whitespace@73..74 " "
+      Literal@74..83
+        SingleQuotedString@74..83 "'default'"
+    Semicolon@83..84 ";"
+  Whitespace@84..85 "\n"
+  ExpressionStatement@85..109
+    AssignmentExpression@85..108
+      VariableReference@85..95
+        Variable@85..95 "$reference"
+      Whitespace@95..96 " "
+      Equals@96..97 "="
+      Whitespace@97..98 " "
+      Ampersand@98..99 "&"
+      VariableReference@99..108
+        Variable@99..108 "$original"
+    Semicolon@108..109 ";"
+  Whitespace@109..110 "\n"
+  ExpressionStatement@110..144
+    AssignmentExpression@110..143
+      VariableReference@110..116
+        Variable@110..116 "$grade"
+      Whitespace@116..117 " "
+      Equals@117..118 "="
+      Whitespace@118..119 " "
+      TernaryExpression@119..143
+        BinaryExpression@119..131
+          VariableReference@119..125
+            Variable@119..125 "$score"
+          Whitespace@125..126 " "
+          GreaterEquals@126..128 ">="
+          Whitespace@128..129 " "
+          Literal@129..131
+            IntegerLiteral@129..131 "90"
+        Whitespace@131..132 " "
+        Question@132..133 "?"
+        Whitespace@133..134 " "
+        Literal@134..137
+          SingleQuotedString@134..137 "'a'"
+        Whitespace@137..138 " "
+        Colon@138..139 ":"
+        Whitespace@139..140 " "
+        Literal@140..143
+          SingleQuotedString@140..143 "'b'"
+    Semicolon@143..144 ";"
+  Whitespace@144..145 "\n"
+  ExpressionStatement@145..177
+    AssignmentExpression@145..176
+      VariableReference@145..153
+        Variable@145..153 "$display"
+      Whitespace@153..154 " "
+      Equals@154..155 "="
+      Whitespace@155..156 " "
+      TernaryExpression@156..176
+        VariableReference@156..161
+          Variable@156..161 "$name"
+        Whitespace@161..162 " "
+        Question@162..163 "?"
+        Colon@163..164 ":"
+        Whitespace@164..165 " "
+        Literal@165..176
+          SingleQuotedString@165..176 "'anonymous'"
+    Semicolon@176..177 ";"
+  Whitespace@177..178 "\n"
+  ExpressionStatement@178..226
+    AssignmentExpression@178..225
+      VariableReference@178..183
+        Variable@178..183 "$pick"
+      Whitespace@183..184 " "
+      Equals@184..185 "="
+      Whitespace@185..186 " "
+      TernaryExpression@186..225
+        BinaryExpression@186..203
+          VariableReference@186..192
+            Variable@186..192 "$first"
+          Whitespace@192..193 " "
+          QuestionQuestion@193..195 "??"
+          Whitespace@195..196 " "
+          VariableReference@196..203
+            Variable@196..203 "$second"
+        Whitespace@203..204 " "
+        Question@204..205 "?"
+        Whitespace@205..206 " "
+        Literal@206..213
+          SingleQuotedString@206..213 "'found'"
+        Whitespace@213..214 " "
+        Colon@214..215 ":"
+        Whitespace@215..216 " "
+        Literal@216..225
+          SingleQuotedString@216..225 "'missing'"
+    Semicolon@225..226 ";"
+  Whitespace@226..227 "\n"

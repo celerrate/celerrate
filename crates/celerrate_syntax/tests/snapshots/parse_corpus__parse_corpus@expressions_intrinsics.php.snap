@@ -1,0 +1,127 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_intrinsics.php
+---
+SourceFile@0..143
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..16
+    IssetExpression@6..15
+      Isset@6..11 "isset"
+      ArgumentList@11..15
+        OpenParenthesis@11..12 "("
+        Argument@12..14
+          VariableReference@12..14
+            Variable@12..14 "$a"
+        CloseParenthesis@14..15 ")"
+    Semicolon@15..16 ";"
+  Whitespace@16..17 "\n"
+  ExpressionStatement@17..41
+    IssetExpression@17..40
+      Isset@17..22 "isset"
+      ArgumentList@22..40
+        OpenParenthesis@22..23 "("
+        Argument@23..25
+          VariableReference@23..25
+            Variable@23..25 "$a"
+        Comma@25..26 ","
+        Whitespace@26..27 " "
+        Argument@27..32
+          IndexExpression@27..32
+            VariableReference@27..29
+              Variable@27..29 "$b"
+            OpenBracket@29..30 "["
+            Literal@30..31
+              IntegerLiteral@30..31 "0"
+            CloseBracket@31..32 "]"
+        Comma@32..33 ","
+        Whitespace@33..34 " "
+        Argument@34..39
+          MemberAccessExpression@34..39
+            VariableReference@34..36
+              Variable@34..36 "$c"
+            Arrow@36..38 "->"
+            MemberName@38..39
+              Identifier@38..39 "d"
+        CloseParenthesis@39..40 ")"
+    Semicolon@40..41 ";"
+  Whitespace@41..42 "\n"
+  ExpressionStatement@42..56
+    EmptyExpression@42..55
+      Empty@42..47 "empty"
+      ArgumentList@47..55
+        OpenParenthesis@47..48 "("
+        Argument@48..54
+          VariableReference@48..54
+            Variable@48..54 "$value"
+        CloseParenthesis@54..55 ")"
+    Semicolon@55..56 ";"
+  Whitespace@56..57 "\n"
+  ExpressionStatement@57..75
+    EvalExpression@57..74
+      Eval@57..61 "eval"
+      ArgumentList@61..74
+        OpenParenthesis@61..62 "("
+        Argument@62..73
+          Literal@62..73
+            SingleQuotedString@62..73 "'return 1;'"
+        CloseParenthesis@73..74 ")"
+    Semicolon@74..75 ";"
+  Whitespace@75..76 "\n"
+  ExpressionStatement@76..81
+    ExitExpression@76..80
+      Exit@76..80 "exit"
+    Semicolon@80..81 ";"
+  Whitespace@81..82 "\n"
+  ExpressionStatement@82..90
+    ExitExpression@82..89
+      Exit@82..86 "exit"
+      ArgumentList@86..89
+        OpenParenthesis@86..87 "("
+        Argument@87..88
+          Literal@87..88
+            IntegerLiteral@87..88 "0"
+        CloseParenthesis@88..89 ")"
+    Semicolon@89..90 ";"
+  Whitespace@90..91 "\n"
+  ExpressionStatement@91..106
+    ExitExpression@91..105
+      Exit@91..94 "die"
+      ArgumentList@94..105
+        OpenParenthesis@94..95 "("
+        Argument@95..104
+          Literal@95..104
+            SingleQuotedString@95..104 "'goodbye'"
+        CloseParenthesis@104..105 ")"
+    Semicolon@105..106 ";"
+  Whitespace@106..107 "\n"
+  ExpressionStatement@107..142
+    AssignmentExpression@107..141
+      VariableReference@107..114
+        Variable@107..114 "$status"
+      Whitespace@114..115 " "
+      Equals@115..116 "="
+      Whitespace@116..117 " "
+      TernaryExpression@117..141
+        VariableReference@117..124
+          Variable@117..124 "$broken"
+        Whitespace@124..125 " "
+        Question@125..126 "?"
+        Whitespace@126..127 " "
+        ExitExpression@127..134
+          Exit@127..131 "exit"
+          ArgumentList@131..134
+            OpenParenthesis@131..132 "("
+            Argument@132..133
+              Literal@132..133
+                IntegerLiteral@132..133 "1"
+            CloseParenthesis@133..134 ")"
+        Whitespace@134..135 " "
+        Colon@135..136 ":"
+        Whitespace@136..137 " "
+        Literal@137..141
+          SingleQuotedString@137..141 "'ok'"
+    Semicolon@141..142 ";"
+  Whitespace@142..143 "\n"

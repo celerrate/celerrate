@@ -77,3 +77,15 @@ fn node_kinds_exist_and_are_not_trivia() {
 fn node_kinds_come_after_token_kinds() {
     assert!(SyntaxKind::SourceFile.into_raw() > SyntaxKind::Error.into_raw());
 }
+
+#[test]
+fn keywords_are_classified_and_contiguous() {
+    assert!(SyntaxKind::Abstract.is_keyword());
+    assert!(SyntaxKind::Yield.is_keyword());
+    assert!(SyntaxKind::YieldFrom.is_keyword());
+    assert!(SyntaxKind::Exit.is_keyword());
+    assert!(!SyntaxKind::Identifier.is_keyword());
+    assert!(!SyntaxKind::PipeGreater.is_keyword());
+    assert!(!SyntaxKind::IntCast.is_keyword());
+    assert!(!SyntaxKind::SourceFile.is_keyword());
+}

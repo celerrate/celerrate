@@ -1,5 +1,7 @@
 use celerrate_source::TextRange;
 
+use crate::syntax_kind::SyntaxKind;
+
 /// What went wrong, structurally. Rendering into messages is an upper
 /// layer's business.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,8 +37,26 @@ pub enum ParserDiagnosticKind {
     /// A statement misses its terminator (`;`, or `?>` / end of input
     /// only where PHP itself allows the omission).
     ExpectedSemicolon,
+    /// A specific token is missing; the range is zero-width at the spot
+    /// where it belongs.
+    Expected(SyntaxKind),
     /// A token no grammar rule accepts; wrapped in an `ErrorNode`.
     UnexpectedToken,
+    /// Expressions nest deeper than the parser's recursion budget; the
+    /// innermost expression is missing from the tree, the tokens are
+    /// preserved through recovery.
+    NestingTooDeep,
+    /// A non-associative operator chained at the same level, which Zend
+    /// rejects (`1 < 2 < 3`, unparenthesized ternary chains, double
+    /// `instanceof`). Parsed left-associatively anyway.
+    NonAssociativeOperator,
+    /// The parser stopped consuming input: an internal grammar loop made
+    /// no progress within its step budget. The remaining tokens are
+    /// preserved in an `ErrorNode`. Reaching this is a parser bug, kept
+    /// survivable by design.
+    NoProgress,
+    /// `->`, `?->`, or `::` with nothing usable after it.
+    ExpectedMemberName,
 }
 
 /// A parser diagnostic: a structured kind and the range it points at.

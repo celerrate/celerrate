@@ -3,7 +3,7 @@
 //! the source exactly.
 // Slicing by accumulated token lengths is the point of these helpers; a
 // bad slice must fail the test loudly.
-#![allow(clippy::indexing_slicing)]
+#![allow(clippy::indexing_slicing, clippy::expect_used)]
 
 use celerrate_syntax::{LexerDiagnostic, SyntaxKind, Token, lex};
 
@@ -114,6 +114,49 @@ fn render_element(output: &mut String, element: celerrate_syntax::SyntaxElement,
                 u32::from(range.end()),
                 token.text(),
             );
+        }
+    }
+}
+
+/// Renders the first statement's expression as an indented tree of node
+/// kinds and token texts, offsets and trivia omitted: the workhorse
+/// assertion of the expression grammar tests. Wraps the fragment as one
+/// PHP statement, so the fragment must be a single valid-ish expression.
+#[allow(dead_code)] // Used by other test binaries; dead_code is analyzed per test crate.
+pub fn render_expression(expression_source: &str) -> String {
+    let source = format!("<?php {expression_source};");
+    let parse = parse_verified(&source);
+    let statement = parse.tree().children().next().expect("a first statement");
+    let expression = statement
+        .children()
+        .next()
+        .expect("an expression inside the statement");
+    let mut output = String::new();
+    render_element_without_offsets(&mut output, expression.into(), 0);
+    output
+}
+
+#[allow(dead_code)]
+fn render_element_without_offsets(
+    output: &mut String,
+    element: celerrate_syntax::SyntaxElement,
+    depth: usize,
+) {
+    use std::fmt::Write as _;
+
+    let indent = "  ".repeat(depth);
+    match element {
+        celerrate_syntax::SyntaxElement::Node(node) => {
+            let _ = writeln!(output, "{indent}{:?}", node.kind());
+            for child in node.children_with_tokens() {
+                render_element_without_offsets(output, child, depth + 1);
+            }
+        }
+        celerrate_syntax::SyntaxElement::Token(token) => {
+            if token.kind().is_trivia() {
+                return;
+            }
+            let _ = writeln!(output, "{indent}{:?} {:?}", token.kind(), token.text());
         }
     }
 }

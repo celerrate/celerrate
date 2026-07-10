@@ -8,25 +8,39 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::{CompletedMarker, Parser};
 
+mod expressions;
+
+use expressions::{error_element, expression, starts_expression};
+
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();
-    while let Some(kind) = parser.current() {
-        match kind {
+    while parser.current().is_some() {
+        statement_list_step(parser);
+    }
+    marker.complete(parser, SyntaxKind::SourceFile);
+}
+
+/// One step of a statement list: inline HTML and tags stay tokens;
+/// everything else is a statement. Shared by the source file and every
+/// brace-delimited body (closure blocks now, compound statements in
+/// the statements plan).
+pub(super) fn statement_list_step(parser: &mut Parser) {
+    match parser.current() {
+        Some(
             SyntaxKind::InlineHtml
             | SyntaxKind::OpenTag
             | SyntaxKind::OpenTagEcho
             | SyntaxKind::ShortOpenTag
-            | SyntaxKind::CloseTag => parser.bump(),
-            _ => statement(parser),
-        }
+            | SyntaxKind::CloseTag,
+        ) => parser.bump(),
+        _ => statement(parser),
     }
-    marker.complete(parser, SyntaxKind::SourceFile);
 }
 
 fn statement(parser: &mut Parser) {
     match parser.current() {
         Some(SyntaxKind::Echo) => echo_statement(parser),
-        Some(kind) if is_expression_start(kind) => expression_statement(parser),
+        Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}
     }
@@ -52,9 +66,16 @@ fn echo_statement(parser: &mut Parser) {
 fn expression_statement(parser: &mut Parser) {
     let marker = parser.start();
     if expression(parser).is_none() {
-        // Unreachable through `statement`'s dispatch, but recovery must
-        // never leave an open marker or an empty node behind.
-        marker.abandon(parser);
+        // The dispatcher saw an expression start but the grammar
+        // refused (for example `namespace` without `\`). The refusal
+        // already carried its diagnostic; consume the token so the
+        // statement loop always advances.
+        if parser.at_end() {
+            marker.abandon(parser);
+            return;
+        }
+        parser.bump();
+        marker.complete(parser, SyntaxKind::ErrorNode);
         return;
     }
     terminate_statement(parser);
@@ -64,10 +85,7 @@ fn expression_statement(parser: &mut Parser) {
 /// One token no rule accepts, wrapped and reported; the guaranteed
 /// progress of the statement loop.
 fn error_statement(parser: &mut Parser) {
-    let marker = parser.start();
-    parser.diagnose_current(ParserDiagnosticKind::UnexpectedToken);
-    parser.bump();
-    marker.complete(parser, SyntaxKind::ErrorNode);
+    error_element(parser);
 }
 
 /// PHP requires `;` after a statement except immediately before `?>`,
@@ -82,33 +100,4 @@ fn terminate_statement(parser: &mut Parser) {
         return;
     }
     parser.diagnose_missing(ParserDiagnosticKind::ExpectedSemicolon);
-}
-
-fn is_expression_start(kind: SyntaxKind) -> bool {
-    matches!(
-        kind,
-        SyntaxKind::IntegerLiteral
-            | SyntaxKind::FloatLiteral
-            | SyntaxKind::SingleQuotedString
-            | SyntaxKind::Variable
-    )
-}
-
-/// A minimal primary expression; the Pratt machinery of the next plan
-/// replaces this dispatch.
-fn expression(parser: &mut Parser) -> Option<CompletedMarker> {
-    let kind = match parser.current() {
-        Some(kind) if is_expression_start(kind) => kind,
-        _ => {
-            parser.diagnose_current(ParserDiagnosticKind::ExpectedExpression);
-            return None;
-        }
-    };
-    let marker = parser.start();
-    parser.bump();
-    let node_kind = match kind {
-        SyntaxKind::Variable => SyntaxKind::VariableReference,
-        _ => SyntaxKind::Literal,
-    };
-    Some(marker.complete(parser, node_kind))
 }

@@ -1,0 +1,185 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/recovery_expressions.php
+---
+SourceFile@0..172
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..13
+    CallExpression@6..12
+      NameExpression@6..7
+        Name@6..7
+          Identifier@6..7 "f"
+      ArgumentList@7..12
+        OpenParenthesis@7..8 "("
+        Argument@8..9
+          Literal@8..9
+            IntegerLiteral@8..9 "1"
+        Comma@9..10 ","
+        Whitespace@10..11 " "
+        Argument@11..12
+          Literal@11..12
+            IntegerLiteral@11..12 "2"
+    Semicolon@12..13 ";"
+  Whitespace@13..14 "\n"
+  ExpressionStatement@14..25
+    ArrayExpression@14..24
+      OpenBracket@14..15 "["
+      ArrayElement@15..16
+        Literal@15..16
+          IntegerLiteral@15..16 "1"
+      Comma@16..17 ","
+      Whitespace@17..18 " "
+      ArrayElement@18..24
+        Literal@18..21
+          SingleQuotedString@18..21 "'k'"
+        Whitespace@21..22 " "
+        FatArrow@22..24 "=>"
+    Semicolon@24..25 ";"
+  Whitespace@25..26 "\n"
+  ExpressionStatement@26..36
+    MemberAccessExpression@26..35
+      VariableReference@26..33
+        Variable@26..33 "$object"
+      Arrow@33..35 "->"
+      MemberName@35..35
+    Semicolon@35..36 ";"
+  Whitespace@36..37 "\n"
+  ExpressionStatement@37..43
+    ScopedAccessExpression@37..42
+      NameExpression@37..40
+        Name@37..40
+          Identifier@37..40 "Foo"
+      ColonColon@40..42 "::"
+      MemberName@42..42
+    Semicolon@42..43 ";"
+  Whitespace@43..44 "\n"
+  ExpressionStatement@44..65
+    MatchExpression@44..64
+      Match@44..49 "match"
+      Whitespace@49..50 " "
+      OpenParenthesis@50..51 "("
+      VariableReference@51..53
+        Variable@51..53 "$x"
+      CloseParenthesis@53..54 ")"
+      Whitespace@54..55 " "
+      OpenBrace@55..56 "{"
+      Whitespace@56..57 " "
+      MatchArm@57..62
+        Literal@57..58
+          IntegerLiteral@57..58 "1"
+        Whitespace@58..59 " "
+        Literal@59..62
+          SingleQuotedString@59..62 "'a'"
+      Whitespace@62..63 " "
+      CloseBrace@63..64 "}"
+    Semicolon@64..65 ";"
+  Whitespace@65..66 "\n"
+  ExpressionStatement@66..70
+    NewExpression@66..69
+      New@66..69 "new"
+    Semicolon@69..70 ";"
+  Whitespace@70..71 "\n"
+  ExpressionStatement@71..81
+    NewExpression@71..80
+      New@71..74 "new"
+      Whitespace@74..75 " "
+      ErrorNode@75..80
+        Class@75..80 "class"
+    Semicolon@80..81 ";"
+  Whitespace@81..82 "\n"
+  ExpressionStatement@82..89
+    TernaryExpression@82..88
+      VariableReference@82..84
+        Variable@82..84 "$a"
+      Whitespace@84..85 " "
+      Question@85..86 "?"
+      Whitespace@86..87 " "
+      Literal@87..88
+        IntegerLiteral@87..88 "1"
+    Semicolon@88..89 ";"
+  Whitespace@89..90 "\n"
+  ExpressionStatement@90..104
+    BinaryExpression@90..103
+      VariableReference@90..92
+        Variable@90..92 "$a"
+      Whitespace@92..93 " "
+      InstanceOf@93..103 "instanceof"
+    Semicolon@103..104 ";"
+  Whitespace@104..105 "\n"
+  ExpressionStatement@105..114
+    ClosureExpression@105..114
+      Function@105..113 "function"
+      Whitespace@113..114 " "
+      ParameterList@114..114
+      Block@114..114
+  ExpressionStatement@114..119
+    CastExpression@114..119
+      IntCast@114..119 "(int)"
+  Whitespace@119..120 " "
+  ErrorNode@120..121
+    OpenBrace@120..121 "{"
+  ErrorNode@121..122
+    CloseBrace@121..122 "}"
+  ErrorNode@122..123
+    Semicolon@122..123 ";"
+  Whitespace@123..124 "\n"
+  ExpressionStatement@124..134
+    ArrowFunctionExpression@124..132
+      Fn@124..126 "fn"
+      Whitespace@126..127 " "
+      ParameterList@127..129
+        OpenParenthesis@127..128 "("
+        CloseParenthesis@128..129 ")"
+      Whitespace@129..130 " "
+      FatArrow@130..132 "=>"
+    Whitespace@132..133 " "
+    Semicolon@133..134 ";"
+  Whitespace@134..135 "\n"
+  ExpressionStatement@135..141
+    CloneExpression@135..140
+      Clone@135..140 "clone"
+    Semicolon@140..141 ";"
+  Whitespace@141..142 "\n"
+  ExpressionStatement@142..153
+    YieldExpression@142..152
+      YieldFrom@142..152 "yield from"
+    Semicolon@152..153 ";"
+  Whitespace@153..154 "\n"
+  ExpressionStatement@154..171
+    InterpolatedString@154..171
+      DoubleQuote@154..155 "\""
+      StringFragment@155..168 "unterminated "
+      BraceInterpolation@168..171
+        OpenBrace@168..169 "{"
+        VariableReference@169..171
+          Variable@169..171 "$x"
+  Whitespace@171..172 "\n"
+---
+Parser(Expected(CloseParenthesis)) @ 12..12
+Parser(Expected(CloseBracket)) @ 24..24
+Parser(ExpectedExpression) @ 24..25
+Parser(ExpectedMemberName) @ 35..36
+Parser(ExpectedMemberName) @ 42..43
+Parser(Expected(FatArrow)) @ 58..58
+Parser(ExpectedExpression) @ 69..70
+Parser(UnexpectedToken) @ 75..80
+Parser(Expected(Colon)) @ 88..88
+Parser(ExpectedExpression) @ 88..89
+Parser(ExpectedExpression) @ 103..104
+Parser(Expected(OpenParenthesis)) @ 113..113
+Parser(Expected(OpenBrace)) @ 113..113
+Parser(ExpectedSemicolon) @ 113..113
+Parser(ExpectedSemicolon) @ 119..119
+Parser(ExpectedExpression) @ 120..121
+Parser(UnexpectedToken) @ 120..121
+Parser(UnexpectedToken) @ 121..122
+Parser(UnexpectedToken) @ 122..123
+Parser(ExpectedExpression) @ 133..134
+Parser(ExpectedExpression) @ 140..141
+Parser(ExpectedExpression) @ 152..153
+Lexer(UnterminatedString) @ 154..155
+Lexer(UnterminatedInterpolation) @ 168..169
+Parser(Expected(CloseBrace)) @ 171..171
+Parser(ExpectedSemicolon) @ 171..171

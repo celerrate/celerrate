@@ -147,6 +147,8 @@ syntax_kinds! {
     While,
     Xor,
     Yield,
+    /// `yield from`, one token as in Zend, interior whitespace included.
+    YieldFrom,
 
     // Casts (single tokens, inner whitespace included).
     IntCast,
@@ -205,6 +207,8 @@ syntax_kinds! {
     Comma,
     Ampersand,
     Pipe,
+    /// `|>`, the PHP 8.5 pipe operator.
+    PipeGreater,
     Caret,
     Tilde,
     At,
@@ -245,6 +249,109 @@ syntax_kinds! {
     VariableReference,
     /// Recovery wreckage: tokens no grammar rule accepted.
     ErrorNode,
+    /// `( expression )`.
+    ParenthesizedExpression,
+    /// One binary operation: left operand, operator token, right operand.
+    /// The operator token distinguishes `+` from `instanceof` from `|>`.
+    BinaryExpression,
+    /// A prefix operation: `!`, `~`, unary `+`/`-`, `@`, `++`, `--`.
+    PrefixExpression,
+    /// A postfix operation: `++`, `--`.
+    PostfixExpression,
+    /// A cast: the single cast token, then the operand.
+    CastExpression,
+    /// `condition ? middle : third`; the short form `?:` has no middle.
+    TernaryExpression,
+    /// `target = value` and the compound forms; `= &value` keeps its
+    /// ampersand as a token child. Whether the target is assignable is
+    /// a semantic judgment.
+    AssignmentExpression,
+    /// A possibly-qualified name: `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`.
+    Name,
+    /// A name used as an expression: a constant fetch or a callee.
+    NameExpression,
+    /// `$$name` and `${expression}`.
+    DynamicVariableExpression,
+    /// `( argument, ... )`, including the lone `...` of a first-class
+    /// callable.
+    ArgumentList,
+    /// One argument: optional `label:`, optional `...`, optional `&`,
+    /// then the expression.
+    Argument,
+    /// A call: the callee expression, then its argument list.
+    CallExpression,
+    /// `subject->name` and `subject?->name`.
+    MemberAccessExpression,
+    /// `subject::name`: constants, methods, static properties, `::class`.
+    ScopedAccessExpression,
+    /// The name after `->`, `?->`, or `::`: identifier, any keyword,
+    /// variable, or `{ expression }`.
+    MemberName,
+    /// `subject[index]`; the index is absent in the push form `$a[]`.
+    IndexExpression,
+    /// `[ elements ]` or `array( elements )`; also the destructuring
+    /// target shape. Empty destructuring slots keep their commas as
+    /// direct children.
+    ArrayExpression,
+    /// One element: optional `...`, optional `&`, expression, then
+    /// optionally `=>` (optional `&`) expression.
+    ArrayElement,
+    /// `list( elements )`, the keyword destructuring form.
+    ListExpression,
+    /// `"..."` with fragments and interpolations.
+    InterpolatedString,
+    /// A heredoc or nowdoc, start to end label.
+    HeredocExpression,
+    /// A backtick string: shell execution.
+    ShellExecExpression,
+    /// `$name`, `$name->property`, `$name[offset]` inside a string.
+    SimpleInterpolation,
+    /// `{ expression }` inside a string.
+    BraceInterpolation,
+    /// `${ ... }` inside a string, the deprecated form.
+    DollarBraceInterpolation,
+    /// `new` with a class reference and optional constructor arguments.
+    NewExpression,
+    /// `clone value` or the 8.5 function form `clone(...)`.
+    CloneExpression,
+    /// `isset( arguments )`.
+    IssetExpression,
+    /// `empty( argument )`.
+    EmptyExpression,
+    /// `eval( argument )`.
+    EvalExpression,
+    /// `exit` / `die`, with an optional argument list since 8.4.
+    ExitExpression,
+    /// `print operand`.
+    PrintExpression,
+    /// `throw operand`, an expression since PHP 8.0.
+    ThrowExpression,
+    /// `yield`, `yield value`, `yield key => value`, `yield from source`.
+    YieldExpression,
+    /// `include`, `include_once`, `require`, `require_once`; the
+    /// keyword token distinguishes them.
+    IncludeExpression,
+    /// `match ( subject ) { arms }`.
+    MatchExpression,
+    /// One arm: a condition list (or `default`), `=>`, the body.
+    MatchArm,
+    /// `function (...) use (...) { ... }`, optionally `static`, with an
+    /// optional by-reference `&` and return type.
+    ClosureExpression,
+    /// `fn (...) => expression`, optionally `static`.
+    ArrowFunctionExpression,
+    /// `( parameter, ... )`.
+    ParameterList,
+    /// One parameter: optional type, `&`, `...`, the variable, and an
+    /// optional default.
+    Parameter,
+    /// One optionally-nullable named type. The declarations plan
+    /// replaces this with the full union/intersection/DNF grammar.
+    TypeReference,
+    /// `use ( variables )` on a closure.
+    ClosureUseClause,
+    /// `{ statements }`.
+    Block,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
@@ -275,6 +382,13 @@ impl SyntaxKind {
                 | Self::DocComment
                 | Self::Shebang
         )
+    }
+
+    /// Whether this kind is a PHP keyword. Relies on the keyword section
+    /// being contiguous in the declaration, `Abstract` through
+    /// `YieldFrom`; the classifier test pins that layout.
+    pub fn is_keyword(self) -> bool {
+        (Self::Abstract..=Self::YieldFrom).contains(&self)
     }
 
     /// Resolves a keyword case-insensitively, allocation-free. Returns

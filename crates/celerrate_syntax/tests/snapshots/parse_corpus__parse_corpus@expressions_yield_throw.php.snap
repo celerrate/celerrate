@@ -1,0 +1,155 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_yield_throw.php
+---
+SourceFile@0..287
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..20
+    PrintExpression@6..19
+      Print@6..11 "print"
+      Whitespace@11..12 " "
+      Literal@12..19
+        SingleQuotedString@12..19 "'hello'"
+    Semicolon@19..20 ";"
+  Whitespace@20..21 "\n"
+  ExpressionStatement@21..42
+    AssignmentExpression@21..41
+      VariableReference@21..24
+        Variable@21..24 "$ok"
+      Whitespace@24..25 " "
+      Equals@25..26 "="
+      Whitespace@26..27 " "
+      PrintExpression@27..41
+        Print@27..32 "print"
+        Whitespace@32..33 " "
+        Literal@33..41
+          SingleQuotedString@33..41 "'logged'"
+    Semicolon@41..42 ";"
+  Whitespace@42..43 "\n"
+  ExpressionStatement@43..97
+    AssignmentExpression@43..96
+      VariableReference@43..49
+        Variable@43..49 "$value"
+      Whitespace@49..50 " "
+      Equals@50..51 "="
+      Whitespace@51..52 " "
+      BinaryExpression@52..96
+        VariableReference@52..58
+          Variable@52..58 "$cache"
+        Whitespace@58..59 " "
+        QuestionQuestion@59..61 "??"
+        Whitespace@61..62 " "
+        ThrowExpression@62..96
+          Throw@62..67 "throw"
+          Whitespace@67..68 " "
+          NewExpression@68..96
+            New@68..71 "new"
+            Whitespace@71..72 " "
+            Name@72..88
+              Identifier@72..88 "RuntimeException"
+            ArgumentList@88..96
+              OpenParenthesis@88..89 "("
+              Argument@89..95
+                Literal@89..95
+                  SingleQuotedString@89..95 "'cold'"
+              CloseParenthesis@95..96 ")"
+    Semicolon@96..97 ";"
+  Whitespace@97..98 "\n"
+  ExpressionStatement@98..104
+    YieldExpression@98..103
+      Yield@98..103 "yield"
+    Semicolon@103..104 ";"
+  Whitespace@104..105 "\n"
+  ExpressionStatement@105..117
+    YieldExpression@105..116
+      Yield@105..110 "yield"
+      Whitespace@110..111 " "
+      VariableReference@111..116
+        Variable@111..116 "$item"
+    Semicolon@116..117 ";"
+  Whitespace@117..118 "\n"
+  ExpressionStatement@118..138
+    YieldExpression@118..137
+      Yield@118..123 "yield"
+      Whitespace@123..124 " "
+      VariableReference@124..128
+        Variable@124..128 "$key"
+      Whitespace@128..129 " "
+      FatArrow@129..131 "=>"
+      Whitespace@131..132 " "
+      VariableReference@132..137
+        Variable@132..137 "$item"
+    Semicolon@137..138 ";"
+  Whitespace@138..139 "\n"
+  ExpressionStatement@139..157
+    YieldExpression@139..156
+      YieldFrom@139..149 "yield from"
+      Whitespace@149..150 " "
+      VariableReference@150..156
+        Variable@150..156 "$inner"
+    Semicolon@156..157 ";"
+  Whitespace@157..158 "\n"
+  ExpressionStatement@158..175
+    AssignmentExpression@158..174
+      VariableReference@158..162
+        Variable@158..162 "$sum"
+      Whitespace@162..163 " "
+      Equals@163..164 "="
+      Whitespace@164..165 " "
+      BinaryExpression@165..174
+        Literal@165..166
+          IntegerLiteral@165..166 "1"
+        Whitespace@166..167 " "
+        Plus@167..168 "+"
+        Whitespace@168..169 " "
+        YieldExpression@169..174
+          Yield@169..174 "yield"
+    Semicolon@174..175 ";"
+  Whitespace@175..176 "\n"
+  ExpressionStatement@176..190
+    IncludeExpression@176..189
+      Include@176..183 "include"
+      Whitespace@183..184 " "
+      VariableReference@184..189
+        Variable@184..189 "$path"
+    Semicolon@189..190 ";"
+  Whitespace@190..191 "\n"
+  ExpressionStatement@191..219
+    IncludeExpression@191..218
+      IncludeOnce@191..203 "include_once"
+      Whitespace@203..204 " "
+      BinaryExpression@204..218
+        VariableReference@204..209
+          Variable@204..209 "$path"
+        Whitespace@209..210 " "
+        Dot@210..211 "."
+        Whitespace@211..212 " "
+        Literal@212..218
+          SingleQuotedString@212..218 "'.php'"
+    Semicolon@218..219 ";"
+  Whitespace@219..220 "\n"
+  ExpressionStatement@220..239
+    IncludeExpression@220..238
+      Require@220..227 "require"
+      Whitespace@227..228 " "
+      VariableReference@228..238
+        Variable@228..238 "$bootstrap"
+    Semicolon@238..239 ";"
+  Whitespace@239..240 "\n"
+  ExpressionStatement@240..286
+    IncludeExpression@240..285
+      RequireOnce@240..252 "require_once"
+      Whitespace@252..253 " "
+      BinaryExpression@253..285
+        NameExpression@253..260
+          Name@253..260
+            Identifier@253..260 "__DIR__"
+        Whitespace@260..261 " "
+        Dot@261..262 "."
+        Whitespace@262..263 " "
+        Literal@263..285
+          SingleQuotedString@263..285 "'/vendor/autoload.php'"
+    Semicolon@285..286 ";"
+  Whitespace@286..287 "\n"
