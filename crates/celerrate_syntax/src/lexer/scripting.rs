@@ -11,11 +11,11 @@ pub(crate) fn is_name_continue(character: char) -> bool {
     is_name_start(character) || character.is_ascii_digit()
 }
 
-/// A radix prefix counts only when a digit-ish character follows: "0x"
-/// alone lexes as the integer zero then the name "x", as in Zend.
-fn starts_with_radix_prefix(rest: &str, prefix: &str) -> bool {
+/// A radix prefix counts only when a digit of that radix follows: "0x"
+/// alone or "0xyz" lexes as the integer zero then a name, as in Zend.
+fn starts_with_radix_prefix(rest: &str, prefix: &str, is_digit: impl Fn(char) -> bool) -> bool {
     rest.strip_prefix(prefix)
-        .is_some_and(|after| after.starts_with(|c: char| c.is_ascii_alphanumeric()))
+        .is_some_and(|after| after.starts_with(is_digit))
 }
 
 impl Lexer<'_> {
@@ -84,20 +84,31 @@ impl Lexer<'_> {
     }
 
     fn lex_number(&mut self) {
+        // Binary and octal deliberately take the maximal decimal-digit
+        // run: digit validity ("0b2", "0o99") is judged upstairs, so each
+        // stays a single literal.
         let rest = self.cursor.rest();
-        if starts_with_radix_prefix(rest, "0x") || starts_with_radix_prefix(rest, "0X") {
+        let is_hex_digit = |c: char| c.is_ascii_hexdigit();
+        let is_decimal_digit = |c: char| c.is_ascii_digit();
+        if starts_with_radix_prefix(rest, "0x", is_hex_digit)
+            || starts_with_radix_prefix(rest, "0X", is_hex_digit)
+        {
             self.cursor.bump_bytes(2);
             self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
             self.emit(SyntaxKind::IntegerLiteral);
             return;
         }
-        if starts_with_radix_prefix(rest, "0b") || starts_with_radix_prefix(rest, "0B") {
+        if starts_with_radix_prefix(rest, "0b", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0B", is_decimal_digit)
+        {
             self.cursor.bump_bytes(2);
             self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
             self.emit(SyntaxKind::IntegerLiteral);
             return;
         }
-        if starts_with_radix_prefix(rest, "0o") || starts_with_radix_prefix(rest, "0O") {
+        if starts_with_radix_prefix(rest, "0o", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0O", is_decimal_digit)
+        {
             self.cursor.bump_bytes(2);
             self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
             self.emit(SyntaxKind::IntegerLiteral);

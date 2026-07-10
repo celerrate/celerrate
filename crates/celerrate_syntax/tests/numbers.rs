@@ -62,3 +62,38 @@ fn hex_prefix_without_digits_is_a_plain_zero() {
     // "0x" alone: integer zero, then the name "x", as in Zend.
     assert_eq!(number_kinds("0x"), [IntegerLiteral, Identifier]);
 }
+
+#[test]
+fn a_radix_prefix_without_a_valid_digit_is_a_plain_zero() {
+    // Zend: the prefix letter joins the following name instead.
+    assert_eq!(
+        texts("<?php 0xyz"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0".to_owned()),
+            (Identifier, "xyz".to_owned()),
+        ]
+    );
+    assert_eq!(number_kinds("0bz"), [IntegerLiteral, Identifier]);
+    assert_eq!(number_kinds("0oz"), [IntegerLiteral, Identifier]);
+}
+
+#[test]
+fn radix_digit_runs_are_taken_maximally_and_judged_upstairs() {
+    // "0b2" stays one literal: digit validity is a semantic judgment.
+    assert_eq!(
+        texts("<?php 0b2 0o99 0xDEAD_beef 1_000_000"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0b2".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0o99".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0xDEAD_beef".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "1_000_000".to_owned()),
+        ]
+    );
+}
