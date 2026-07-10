@@ -89,6 +89,16 @@ impl Lexer<'_> {
     }
 
     fn lex_close_tag(&mut self) {
+        // `?>` also cuts an open `{$` or `${` interpolation. `set_mode`
+        // below replaces the tagged mode and would lose its opening
+        // offset, so report it now; deeper open constructions stay on
+        // the stack for `flush_open_modes`.
+        if let Mode::Scripting {
+            opened_by_interpolation_at: Some(opening),
+        } = self.current_mode()
+        {
+            self.diagnose_at(LexerDiagnosticKind::UnterminatedInterpolation, opening, 1);
+        }
         self.cursor.bump_bytes(2);
         // PHP swallows one newline right after `?>`; it belongs to the
         // close tag token so the stream stays lossless.

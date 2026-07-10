@@ -397,3 +397,23 @@ fn a_radix_prefix_without_a_digit_falls_back_in_offsets_too() {
         ]
     );
 }
+
+#[test]
+fn a_close_tag_cutting_brace_interpolation_diagnoses_the_opening() {
+    // `?>` returns to inline HTML even inside `{$ }` (the stream is
+    // Zend-faithful); the interpolation opened at the brace never
+    // closes and must be reported exactly once.
+    let (_tokens, diagnostics) = lex_verified(r#"<?php "a {$x ?>html"#);
+    let openings: Vec<u32> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.kind == LexerDiagnosticKind::UnterminatedInterpolation)
+        .map(|diagnostic| u32::from(diagnostic.range.start()))
+        .collect();
+    assert_eq!(openings, [9]);
+    // The double-quoted string is still open too.
+    assert!(
+        diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.kind == LexerDiagnosticKind::UnterminatedString)
+    );
+}
