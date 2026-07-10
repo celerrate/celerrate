@@ -933,11 +933,14 @@ fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
     }
 }
 
-/// `( parameter, ... )`. Progress is guaranteed without an explicit
-/// committed-position guard: `starts_parameter` only admits kinds that
-/// force `parameter` to consume at least one token before it can reach
-/// any refusable sub-parse (the default value), unlike `argument_list`
-/// where the element can be a bare, refusable expression.
+/// `( parameter, ... )`. Progress is enforced mechanically, with the
+/// same committed-position guard as `argument_list`: the nesting guard
+/// can refuse a parameter's type outright, without consuming a token,
+/// when this list sits deep inside a pathological chain of
+/// parenthesized expressions, and `starts_parameter` would re-admit
+/// that same unconsumed token forever. Each iteration records the
+/// position before parsing a parameter and, if it is unchanged
+/// afterward, forces an `error_element` bump.
 pub(super) fn parameter_list(parser: &mut Parser) {
     let marker = parser.start();
     if parser.at(SyntaxKind::OpenParenthesis) {
@@ -950,8 +953,12 @@ pub(super) fn parameter_list(parser: &mut Parser) {
                 error_element(parser);
                 continue;
             }
+            let position_before_parameter = parser.position();
             parameter(parser);
             expect_list_separator(parser, SyntaxKind::CloseParenthesis);
+            if parser.position() == position_before_parameter {
+                error_element(parser);
+            }
         }
         parser.expect(SyntaxKind::CloseParenthesis);
     } else {

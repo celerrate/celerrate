@@ -150,6 +150,42 @@ fn a_missing_union_member_is_diagnosed() {
 }
 
 #[test]
+fn a_refused_parameter_type_never_stalls_the_parameter_list() {
+    // A closure buried under deep parenthesized-expression nesting
+    // reaches its parameter list with the nesting budget nearly spent,
+    // so `type_expression` can refuse the parameter's type without
+    // consuming a token; the list's position guard must force one
+    // error bump. The broken loop re-diagnosed the same missing
+    // parameter variable once per spin until the step fuse blew, so
+    // the spin signature is that diagnostic repeating; the band of
+    // depths keeps the test on the exact exhaustion point even if the
+    // grammar's nesting arithmetic drifts.
+    for depth in 120..=130 {
+        let source = format!(
+            "<?php $x = {}function(int $y){{}}{};",
+            "(".repeat(depth),
+            ")".repeat(depth)
+        );
+        let diagnostics = parser_diagnostics(&source);
+        assert!(
+            !diagnostics.contains(&ParserDiagnosticKind::NoProgress),
+            "the parse must never abandon tokens at depth {depth}"
+        );
+        let missing_variable_count = diagnostics
+            .iter()
+            .filter(|kind| {
+                **kind == ParserDiagnosticKind::Expected(celerrate_syntax::SyntaxKind::Variable)
+            })
+            .count();
+        assert!(
+            missing_variable_count <= 1,
+            "one refused parameter reports once at depth {depth}, \
+             got {missing_variable_count}"
+        );
+    }
+}
+
+#[test]
 fn pathological_nullable_nesting_stays_a_diagnostic() {
     // `??` lexes as one coalesce token, so the chain must be spaced to
     // reach the parser as repeated `?` tokens.
