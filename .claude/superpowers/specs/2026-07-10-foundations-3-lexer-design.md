@@ -153,6 +153,19 @@ Cross-cutting rules:
   and so on); per-version availability is a semantic diagnostic,
   never a lexing failure, per the parent spec.
 
+### Recorded divergences
+
+One deliberate divergence from Zend's lexer, chosen for error recovery:
+binary and octal literals take the maximal digit run. `0b2` and `0o99`
+each lex as a single `IntegerLiteral` whose digit validity is judged
+semantically; Zend stops at the first invalid digit (`0b2` is the
+integer `0` followed by the name `b2`). One token gives the semantic
+layer a single literal to attach an invalid-digit diagnostic to,
+instead of a confusing name-after-number token pair. The same rule
+applies to radix-prefixed offsets in string interpolation
+(`"$a[0b2]"`).
+
+
 ## 4. Error handling
 
 The lexer always terminates and always produces a complete stream.
