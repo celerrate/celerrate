@@ -375,6 +375,23 @@ fn the_spec_chain_parses_with_forward_parents() {
 }
 
 #[test]
+fn whitespace_between_qualified_name_segments_still_parses_as_one_name() {
+    // Zend lexes a qualified name as a single token, which forbids
+    // interior whitespace; the trivia-free token view this parser reads
+    // cannot see that adjacency, so a spaced form like `Foo \ Bar`
+    // parses the same as `Foo\Bar`, diagnostic-free, as one `Name` run.
+    // Pinned so this recorded permissiveness decision does not drift.
+    insta::assert_snapshot!(support::render_expression("Foo \\ Bar"), @r#"
+    NameExpression
+      Name
+        Identifier "Foo"
+        Backslash "\\"
+        Identifier "Bar"
+    "#);
+    assert!(parser_diagnostics("<?php Foo \\ Bar;").is_empty());
+}
+
+#[test]
 fn a_missing_member_name_is_diagnosed() {
     assert!(
         parser_diagnostics("<?php $object->;").contains(&ParserDiagnosticKind::ExpectedMemberName)

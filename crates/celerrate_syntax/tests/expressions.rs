@@ -193,6 +193,27 @@ fn equality_and_relational_are_different_levels() {
 }
 
 #[test]
+fn an_equality_chain_is_diagnosed_and_still_parses() {
+    // Zend rejects `$a == $b == $c`; we parse it left-associatively and
+    // say so, exactly like the relational chain above.
+    assert_eq!(
+        parser_diagnostics("<?php $a == $b == $c;"),
+        vec![ParserDiagnosticKind::NonAssociativeOperator]
+    );
+}
+
+#[test]
+fn an_instanceof_chain_is_diagnosed_and_still_parses() {
+    // Zend rejects `$a instanceof $b instanceof $c`; we parse it
+    // left-associatively and say so, exactly like the other
+    // non-associative levels.
+    assert_eq!(
+        parser_diagnostics("<?php $a instanceof $b instanceof $c;"),
+        vec![ParserDiagnosticKind::NonAssociativeOperator]
+    );
+}
+
+#[test]
 fn a_missing_right_operand_is_diagnosed_and_the_node_completes() {
     let diagnostics = parser_diagnostics("<?php 1 +;");
     assert_eq!(diagnostics, vec![ParserDiagnosticKind::ExpectedExpression]);

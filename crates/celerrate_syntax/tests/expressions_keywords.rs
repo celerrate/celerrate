@@ -64,6 +64,16 @@ fn member_access_chains_on_new_since_php_84() {
 }
 
 #[test]
+fn new_without_arguments_still_chains_member_access() {
+    // `new` without a parenthesized argument list still completes as an
+    // ordinary primary the postfix loop can wrap, so `new Foo->bar`
+    // parses diagnostic-free, the same as the parenthesized
+    // `new Foo()->bar()` form pinned above. Pinned so this recorded
+    // permissiveness decision does not drift.
+    assert!(parser_diagnostics("<?php new Foo->bar;").is_empty());
+}
+
+#[test]
 fn an_anonymous_class_is_deferred_with_recovery() {
     // `new class {}` belongs to the declarations plan; until then the
     // tokens survive through recovery.
