@@ -307,3 +307,45 @@ fn an_alternative_for_closes_with_endfor() {
             .contains(&ParserDiagnosticKind::Expected(SyntaxKind::EndFor))
     );
 }
+
+#[test]
+fn foreach_binds_key_and_value() {
+    insta::assert_snapshot!(render_statement("foreach ($map as $key => $value) ;"), @r#"
+    ForeachStatement
+      Foreach "foreach"
+      OpenParenthesis "("
+      VariableReference
+        Variable "$map"
+      As "as"
+      VariableReference
+        Variable "$key"
+      FatArrow "=>"
+      VariableReference
+        Variable "$value"
+      CloseParenthesis ")"
+      EmptyStatement
+        Semicolon ";"
+    "#);
+}
+
+#[test]
+fn foreach_values_may_be_by_reference_or_destructured() {
+    assert!(parser_diagnostics("<?php foreach ($queue as &$task) ;").is_empty());
+    assert!(parser_diagnostics("<?php foreach ($pairs as [$a, $b]) ;").is_empty());
+    assert!(parser_diagnostics("<?php foreach ($pairs as $k => list($a, $b)) ;").is_empty());
+}
+
+#[test]
+fn an_alternative_foreach_closes_with_endforeach() {
+    assert!(
+        parser_diagnostics("<?php foreach ($items as $item): echo $item; endforeach;").is_empty()
+    );
+}
+
+#[test]
+fn foreach_without_as_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php foreach ($items $item) ;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::As))
+    );
+}

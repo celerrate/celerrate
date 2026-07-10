@@ -389,6 +389,9 @@ syntax_kinds! {
     /// expression list, always present as a node so the sections stay
     /// addressable by position.
     ForExpressionList,
+    /// `foreach (subject as key => value) body`, either syntax; the
+    /// `=>` separates the optional key target from the value target.
+    ForeachStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

@@ -45,6 +45,7 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::While) => while_statement(parser),
         Some(SyntaxKind::Do) => do_while_statement(parser),
         Some(SyntaxKind::For) => for_statement(parser),
+        Some(SyntaxKind::Foreach) => foreach_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
         }
@@ -389,6 +390,40 @@ fn for_expression_list(parser: &mut Parser) {
         }
     }
     marker.complete(parser, SyntaxKind::ForExpressionList);
+}
+
+fn foreach_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `foreach`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        expression(parser);
+        parser.expect(SyntaxKind::As);
+        foreach_target(parser);
+        if parser.eat(SyntaxKind::FatArrow) {
+            foreach_target(parser);
+        }
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    if parser.eat(SyntaxKind::Colon) {
+        statement_list(parser);
+        parser.expect(SyntaxKind::EndForeach);
+        terminate_statement(parser);
+    } else {
+        embedded_statement(parser);
+    }
+    marker.complete(parser, SyntaxKind::ForeachStatement);
+}
+
+/// One binding target: optional `&`, then an expression (a variable,
+/// `[...]`/`list(...)` destructuring, a member chain). `=>` is not a
+/// binary operator, so the expression stops before it. Assignability
+/// is semantic.
+fn foreach_target(parser: &mut Parser) {
+    parser.eat(SyntaxKind::Ampersand);
+    expression(parser);
 }
 
 #[cfg(test)]
