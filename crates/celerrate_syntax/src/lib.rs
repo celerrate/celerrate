@@ -3,6 +3,7 @@
 //! (trivia included, nothing discarded) plus structured diagnostics. The
 //! parser and syntax tree arrive in the next Foundations part.
 
+mod cursor;
 mod diagnostic;
 mod syntax_kind;
 mod token;
