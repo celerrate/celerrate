@@ -55,4 +55,6 @@ jobs:
         with:
           workspaces: fuzz
       - run: cargo install cargo-fuzz --locked
-      - run: cargo fuzz run lex -- -max_total_time=180
+      # The +nightly proxy overrides the repository's rust-toolchain.toml
+      # pin, which would otherwise route the sanitizer build to stable.
+      - run: cargo +nightly fuzz run lex -- -max_total_time=180
