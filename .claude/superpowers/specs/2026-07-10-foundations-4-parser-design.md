@@ -82,9 +82,11 @@ New `tree/` module in `celerrate_syntax`.
 inserted by the builder where they occur. One rule matters now because
 the type engine will depend on it: a `DocComment` attaches to the
 declaration node that follows it (class, function, method, property,
-constant, enum case), not to the preceding node. All other trivia
-follow the simple rule: glued to the token that follows, at the lowest
-possible position in the tree.
+constant, enum case), not to the preceding node. All other trivia sit
+between siblings, ahead of the construct that follows: the builder
+flushes pending trivia just before the next node or token starts, into
+the node open at that point. A node's range therefore starts at its
+first significant token and never includes leading trivia.
 
 **Public API.** `parse(source: &str) -> Parse` chains `lex` and the
 parser. `Parse` owns the root green node and the diagnostics — lexer
