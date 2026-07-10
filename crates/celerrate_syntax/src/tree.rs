@@ -2,6 +2,8 @@
 //! import these aliases; no bare rowan type appears in any public
 //! signature.
 
+pub(crate) mod builder;
+
 use crate::syntax_kind::SyntaxKind;
 
 /// PHP for rowan: ties [`SyntaxKind`] to the untyped green tree.

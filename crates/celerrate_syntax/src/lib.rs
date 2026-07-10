@@ -6,6 +6,7 @@
 mod cursor;
 mod diagnostic;
 mod lexer;
+mod parser;
 mod syntax_kind;
 mod token;
 mod tree;
