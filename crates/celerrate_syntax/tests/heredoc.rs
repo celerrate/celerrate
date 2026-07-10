@@ -187,3 +187,51 @@ fn an_unterminated_binary_heredoc_covers_the_whole_start_token() {
     assert_eq!(u32::from(diagnostic.range.start()), 6);
     assert_eq!(u32::from(diagnostic.range.end()), 14);
 }
+
+#[test]
+fn crlf_line_endings_work_throughout_a_heredoc() {
+    // The header newline (CRLF included) belongs to the start token;
+    // a body line's CRLF stays in the fragment before the closer.
+    assert_eq!(
+        texts("<?php <<<EOT\r\nx\r\nEOT"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (HeredocStart, "<<<EOT\r\n".to_owned()),
+            (StringFragment, "x\r\n".to_owned()),
+            (HeredocEnd, "EOT".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_non_ascii_label_closes_correctly() {
+    // Any non-ASCII character is a name character under PHP's
+    // byte-oriented rule, so a label like this is valid.
+    assert_eq!(
+        texts("<?php <<<Été\nx\nÉté"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (HeredocStart, "<<<Été\n".to_owned()),
+            (StringFragment, "x\n".to_owned()),
+            (HeredocEnd, "Été".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn an_escaped_newline_still_starts_the_closer_line() {
+    // The trailing backslash is literal heredoc content; the newline it
+    // precedes still begins the closing-label line, as in Zend.
+    assert_eq!(
+        texts("<?php <<<EOT\nx\\\nEOT"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (HeredocStart, "<<<EOT\n".to_owned()),
+            (StringFragment, "x\\\n".to_owned()),
+            (HeredocEnd, "EOT".to_owned()),
+        ]
+    );
+}

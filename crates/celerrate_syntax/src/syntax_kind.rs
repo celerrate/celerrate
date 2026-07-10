@@ -214,7 +214,8 @@ pub enum SyntaxKind {
     Error,
 }
 
-/// The longest PHP keyword is `include_once`: twelve bytes.
+/// The longest PHP keywords are `include_once` and `require_once`,
+/// tied at twelve bytes.
 const LONGEST_KEYWORD_LENGTH: usize = 12;
 
 impl SyntaxKind {

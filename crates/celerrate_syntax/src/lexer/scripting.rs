@@ -14,6 +14,13 @@ pub(crate) fn is_name_continue(character: char) -> bool {
     is_name_start(character) || character.is_ascii_digit()
 }
 
+/// Zend's whitespace is exactly these four characters. Notably, form
+/// feed (U+000C) is not one of them: in PHP code it lexes as an
+/// unexpected character.
+fn is_php_whitespace(character: char) -> bool {
+    matches!(character, ' ' | '\t' | '\n' | '\r')
+}
+
 /// A radix prefix counts only when a digit of that radix follows: "0x"
 /// alone or "0xyz" lexes as the integer zero then a name, as in Zend.
 fn starts_with_radix_prefix(rest: &str, prefix: &str, is_digit: impl Fn(char) -> bool) -> bool {
@@ -27,9 +34,8 @@ impl Lexer<'_> {
             return;
         };
         match character {
-            character if character.is_ascii_whitespace() => {
-                self.cursor
-                    .eat_while(|character| character.is_ascii_whitespace());
+            character if is_php_whitespace(character) => {
+                self.cursor.eat_while(is_php_whitespace);
                 self.emit(SyntaxKind::Whitespace);
             }
             '?' if self.cursor.rest().starts_with("?>") => self.lex_close_tag(),
@@ -83,6 +89,16 @@ impl Lexer<'_> {
     }
 
     fn lex_close_tag(&mut self) {
+        // `?>` also cuts an open `{$` or `${` interpolation. `set_mode`
+        // below replaces the tagged mode and would lose its opening
+        // offset, so report it now; deeper open constructions stay on
+        // the stack for `flush_open_modes`.
+        if let Mode::Scripting {
+            opened_by_interpolation_at: Some(opening),
+        } = self.current_mode()
+        {
+            self.diagnose_at(LexerDiagnosticKind::UnterminatedInterpolation, opening, 1);
+        }
         self.cursor.bump_bytes(2);
         // PHP swallows one newline right after `?>`; it belongs to the
         // close tag token so the stream stays lossless.
@@ -114,34 +130,7 @@ impl Lexer<'_> {
     }
 
     fn lex_number(&mut self) {
-        // Binary and octal deliberately take the maximal decimal-digit
-        // run: digit validity ("0b2", "0o99") is judged upstairs, so each
-        // stays a single literal.
-        let rest = self.cursor.rest();
-        let is_hex_digit = |c: char| c.is_ascii_hexdigit();
-        let is_decimal_digit = |c: char| c.is_ascii_digit();
-        if starts_with_radix_prefix(rest, "0x", is_hex_digit)
-            || starts_with_radix_prefix(rest, "0X", is_hex_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
-            return;
-        }
-        if starts_with_radix_prefix(rest, "0b", is_decimal_digit)
-            || starts_with_radix_prefix(rest, "0B", is_decimal_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
-            return;
-        }
-        if starts_with_radix_prefix(rest, "0o", is_decimal_digit)
-            || starts_with_radix_prefix(rest, "0O", is_decimal_digit)
-        {
-            self.cursor.bump_bytes(2);
-            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
-            self.emit(SyntaxKind::IntegerLiteral);
+        if self.try_lex_radix_integer() {
             return;
         }
         // Decimal digits. Separator placement and octal digit validity
@@ -169,6 +158,38 @@ impl Lexer<'_> {
             SyntaxKind::IntegerLiteral
         };
         self.emit(kind);
+    }
+
+    /// Consumes a `0x`/`0b`/`0o` integer (either case) when one starts
+    /// at the cursor and returns true; consumes nothing otherwise.
+    /// Binary and octal deliberately take the maximal decimal-digit
+    /// run: digit validity ("0b2", "0o99") is judged upstairs, so each
+    /// stays a single literal. Also used by the variable-offset mode:
+    /// Zend's ST_VAR_OFFSET accepts the same integer forms as
+    /// scripting.
+    pub(super) fn try_lex_radix_integer(&mut self) -> bool {
+        let rest = self.cursor.rest();
+        let is_hex_digit = |c: char| c.is_ascii_hexdigit();
+        let is_decimal_digit = |c: char| c.is_ascii_digit();
+        if starts_with_radix_prefix(rest, "0x", is_hex_digit)
+            || starts_with_radix_prefix(rest, "0X", is_hex_digit)
+        {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_hexdigit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return true;
+        }
+        if starts_with_radix_prefix(rest, "0b", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0B", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0o", is_decimal_digit)
+            || starts_with_radix_prefix(rest, "0O", is_decimal_digit)
+        {
+            self.cursor.bump_bytes(2);
+            self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
+            self.emit(SyntaxKind::IntegerLiteral);
+            return true;
+        }
+        false
     }
 
     /// Consumes `[eE][+-]?digits` only when the digits are there;
@@ -243,6 +264,8 @@ impl Lexer<'_> {
                 break;
             }
             if self.cursor.rest().starts_with("?>") {
+                // Left unconsumed: the scripting dispatch lexes the
+                // close tag itself on the next step.
                 break;
             }
             self.cursor.bump();
@@ -259,7 +282,7 @@ impl Lexer<'_> {
         let rest = self.cursor.rest();
         let is_docblock = rest
             .strip_prefix("/**")
-            .is_some_and(|after| after.starts_with(|c: char| c.is_ascii_whitespace()));
+            .is_some_and(|after| after.starts_with(is_php_whitespace));
         self.cursor.bump_bytes(2);
         match self.cursor.rest().find("*/") {
             Some(terminator_position) => {
@@ -356,9 +379,9 @@ fn cast_at(rest: &str) -> Option<(SyntaxKind, usize)> {
     let word = after_leading.get(..word_length)?;
     let after_word = after_leading.get(word_length..)?;
     let after_trailing = after_word.trim_start_matches([' ', '\t']);
-    after_trailing.strip_prefix(')')?;
+    let after_parenthesis = after_trailing.strip_prefix(')')?;
     let kind = cast_kind(word)?;
-    let total_length = rest.len() - after_trailing.len() + ')'.len_utf8();
+    let total_length = rest.len() - after_parenthesis.len();
     Some((kind, total_length))
 }
 

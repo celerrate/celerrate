@@ -88,3 +88,13 @@ fn attribute_opener_is_not_a_comment() {
         ]
     );
 }
+
+#[test]
+fn a_form_feed_after_the_doc_opener_is_a_plain_block_comment() {
+    // Zend's docblock rule requires real whitespace after `/**`; a form
+    // feed is not PHP whitespace, so this stays an ordinary comment.
+    assert_eq!(
+        kinds("<?php /**\u{C} x */"),
+        [OpenTag, Whitespace, BlockComment]
+    );
+}

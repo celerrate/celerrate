@@ -75,8 +75,18 @@ fn a_radix_prefix_without_a_valid_digit_is_a_plain_zero() {
             (Identifier, "xyz".to_owned()),
         ]
     );
-    assert_eq!(number_kinds("0bz"), [IntegerLiteral, Identifier]);
-    assert_eq!(number_kinds("0oz"), [IntegerLiteral, Identifier]);
+    assert_eq!(
+        texts("<?php 0bz 0oz"),
+        [
+            (OpenTag, "<?php".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0".to_owned()),
+            (Identifier, "bz".to_owned()),
+            (Whitespace, " ".to_owned()),
+            (IntegerLiteral, "0".to_owned()),
+            (Identifier, "oz".to_owned()),
+        ]
+    );
 }
 
 #[test]
