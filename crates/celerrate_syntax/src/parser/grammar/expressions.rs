@@ -162,6 +162,8 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Require
             | SyntaxKind::RequireOnce
             | SyntaxKind::Match
+            | SyntaxKind::Function
+            | SyntaxKind::Fn
     )
 }
 
@@ -694,8 +696,13 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             name(parser);
             Some(marker.complete(parser, SyntaxKind::NameExpression))
         }
+        Some(SyntaxKind::Function | SyntaxKind::Fn) => Some(closure_or_arrow_function(parser)),
+        Some(SyntaxKind::Static)
+            if matches!(parser.nth(1), Some(SyntaxKind::Function | SyntaxKind::Fn)) =>
+        {
+            Some(closure_or_arrow_function(parser))
+        }
         // `static` as a scoped-access subject (`static::create()`).
-        // Static closures take a different arm in task 15.
         Some(SyntaxKind::Static) => {
             let marker = parser.start();
             parser.bump();
@@ -886,6 +893,194 @@ fn match_arm(parser: &mut Parser) {
     parser.expect(SyntaxKind::FatArrow);
     expression(parser);
     marker.complete(parser, SyntaxKind::MatchArm);
+}
+
+/// `function`/`fn` at expression position, optionally preceded by
+/// `static`; the caller checked the shape.
+fn closure_or_arrow_function(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    parser.eat(SyntaxKind::Static);
+    if parser.at(SyntaxKind::Function) {
+        parser.bump();
+        parser.eat(SyntaxKind::Ampersand); // by-reference return
+        parameter_list(parser);
+        if parser.at(SyntaxKind::Use) {
+            closure_use_clause(parser);
+        }
+        if parser.eat(SyntaxKind::Colon) {
+            type_reference(parser);
+        }
+        block(parser);
+        marker.complete(parser, SyntaxKind::ClosureExpression)
+    } else {
+        parser.expect(SyntaxKind::Fn);
+        parser.eat(SyntaxKind::Ampersand); // by-reference return
+        parameter_list(parser);
+        if parser.eat(SyntaxKind::Colon) {
+            type_reference(parser);
+        }
+        parser.expect(SyntaxKind::FatArrow);
+        expression(parser);
+        marker.complete(parser, SyntaxKind::ArrowFunctionExpression)
+    }
+}
+
+/// `( parameter, ... )`. Progress is guaranteed without an explicit
+/// committed-position guard: `starts_parameter` only admits kinds that
+/// force `parameter` to consume at least one token before it can reach
+/// any refusable sub-parse (the default value), unlike `argument_list`
+/// where the element can be a bare, refusable expression.
+fn parameter_list(parser: &mut Parser) {
+    let marker = parser.start();
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        while !parser.at(SyntaxKind::CloseParenthesis) && !parser.at_end() {
+            if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+                break;
+            }
+            if !starts_parameter(parser) {
+                error_element(parser);
+                continue;
+            }
+            parameter(parser);
+            expect_list_separator(parser, SyntaxKind::CloseParenthesis);
+        }
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    marker.complete(parser, SyntaxKind::ParameterList);
+}
+
+fn starts_parameter(parser: &mut Parser) -> bool {
+    matches!(
+        parser.current(),
+        Some(
+            SyntaxKind::Variable
+                | SyntaxKind::Ampersand
+                | SyntaxKind::Ellipsis
+                | SyntaxKind::Question
+                | SyntaxKind::Identifier
+                | SyntaxKind::Backslash
+                | SyntaxKind::Namespace
+                | SyntaxKind::Array
+                | SyntaxKind::Callable
+                | SyntaxKind::Static
+        )
+    )
+}
+
+fn parameter(parser: &mut Parser) {
+    let marker = parser.start();
+    if !matches!(
+        parser.current(),
+        Some(SyntaxKind::Variable | SyntaxKind::Ampersand | SyntaxKind::Ellipsis)
+    ) {
+        type_reference(parser);
+    }
+    parser.eat(SyntaxKind::Ampersand);
+    parser.eat(SyntaxKind::Ellipsis);
+    parser.expect(SyntaxKind::Variable);
+    if parser.eat(SyntaxKind::Equals) {
+        expression(parser);
+    }
+    marker.complete(parser, SyntaxKind::Parameter);
+}
+
+/// One optionally-nullable named type (`int`, `?\Foo\Bar`, `callable`,
+/// `array`, `static`). Union, intersection, and DNF forms arrive with
+/// the declarations plan, which replaces this rule.
+///
+/// The qualified-name tokens are bumped directly, not through `name`:
+/// `name` wraps them in their own `Name` node (as `NameExpression`
+/// needs, to keep a name a reusable, independently-addressable unit),
+/// but a `TypeReference` has no such second consumer, so the tokens sit
+/// directly under it.
+fn type_reference(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.eat(SyntaxKind::Question);
+    match parser.current() {
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace) => {
+            qualified_type_name(parser);
+        }
+        Some(kind) if kind.is_keyword() => parser.bump(),
+        _ => parser.diagnose_current(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
+    marker.complete(parser, SyntaxKind::TypeReference);
+}
+
+/// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`, bumped directly under the
+/// caller's node. Mirrors `name`'s token sequence without its `Name`
+/// wrapper.
+fn qualified_type_name(parser: &mut Parser) {
+    if parser.eat(SyntaxKind::Namespace) {
+        parser.expect(SyntaxKind::Backslash);
+    } else {
+        parser.eat(SyntaxKind::Backslash);
+    }
+    parser.expect(SyntaxKind::Identifier);
+    while parser.at(SyntaxKind::Backslash) && parser.nth(1) == Some(SyntaxKind::Identifier) {
+        parser.bump();
+        parser.bump();
+    }
+}
+
+/// `use ( variables )` on a closure. Progress is guaranteed without an
+/// explicit committed-position guard: every loop iteration either takes
+/// the `error_element` branch (which always bumps) or the
+/// ampersand/variable branch, which always consumes at least the
+/// ampersand or the variable itself before any refusable sub-parse can
+/// run (there is none here; the diagnosed-missing-variable path is
+/// zero-width but only reached after the ampersand it followed already
+/// advanced the position).
+fn closure_use_clause(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `use`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        while !parser.at(SyntaxKind::CloseParenthesis) && !parser.at_end() {
+            if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+                break;
+            }
+            if parser.at(SyntaxKind::Ampersand) || parser.at(SyntaxKind::Variable) {
+                parser.eat(SyntaxKind::Ampersand);
+                if parser.at(SyntaxKind::Variable) {
+                    let variable = parser.start();
+                    parser.bump();
+                    variable.complete(parser, SyntaxKind::VariableReference);
+                } else {
+                    parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Variable));
+                }
+            } else {
+                error_element(parser);
+                continue;
+            }
+            expect_list_separator(parser, SyntaxKind::CloseParenthesis);
+        }
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    marker.complete(parser, SyntaxKind::ClosureUseClause);
+}
+
+/// `{ statements }`. Progress follows from `statement_list_step`, the
+/// same loop body `source_file` has always used (extracted, not
+/// changed): every step either bumps an inline-HTML/tag token or
+/// dispatches to `statement`, whose own arms all bump at least one
+/// token before returning.
+fn block(parser: &mut Parser) {
+    let marker = parser.start();
+    if parser.at(SyntaxKind::OpenBrace) {
+        parser.bump();
+        while !parser.at(SyntaxKind::CloseBrace) && !parser.at_end() {
+            super::statement_list_step(parser);
+        }
+        parser.expect(SyntaxKind::CloseBrace);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace));
+    }
+    marker.complete(parser, SyntaxKind::Block);
 }
 
 /// `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`: one `Name` node. Zend

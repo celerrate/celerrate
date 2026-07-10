@@ -1,0 +1,348 @@
+---
+source: crates/celerrate_syntax/tests/parse_corpus.rs
+assertion_line: 13
+expression: "support::render_parse(&source)"
+input_file: crates/celerrate_syntax/tests/parse_corpus/expressions_closures.php
+---
+SourceFile@0..483
+  OpenTag@0..5 "<?php"
+  Whitespace@5..6 "\n"
+  ExpressionStatement@6..77
+    AssignmentExpression@6..76
+      VariableReference@6..14
+        Variable@6..14 "$closure"
+      Whitespace@14..15 " "
+      Equals@15..16 "="
+      Whitespace@16..17 " "
+      ClosureExpression@17..76
+        Function@17..25 "function"
+        Whitespace@25..26 " "
+        ParameterList@26..38
+          OpenParenthesis@26..27 "("
+          Parameter@27..29
+            Variable@27..29 "$a"
+          Comma@29..30 ","
+          Whitespace@30..31 " "
+          Parameter@31..37
+            Variable@31..33 "$b"
+            Whitespace@33..34 " "
+            Equals@34..35 "="
+            Whitespace@35..36 " "
+            Literal@36..37
+              IntegerLiteral@36..37 "1"
+          CloseParenthesis@37..38 ")"
+        Whitespace@38..39 " "
+        ClosureUseClause@39..59
+          Use@39..42 "use"
+          Whitespace@42..43 " "
+          OpenParenthesis@43..44 "("
+          Ampersand@44..45 "&"
+          VariableReference@45..51
+            Variable@45..51 "$total"
+          Comma@51..52 ","
+          Whitespace@52..53 " "
+          VariableReference@53..58
+            Variable@53..58 "$rate"
+          CloseParenthesis@58..59 ")"
+        Whitespace@59..60 " "
+        Block@60..76
+          OpenBrace@60..61 "{"
+          Whitespace@61..66 "\n    "
+          EchoStatement@66..74
+            Echo@66..70 "echo"
+            Whitespace@70..71 " "
+            VariableReference@71..73
+              Variable@71..73 "$a"
+            Semicolon@73..74 ";"
+          Whitespace@74..75 "\n"
+          CloseBrace@75..76 "}"
+    Semicolon@76..77 ";"
+  Whitespace@77..78 "\n"
+  ExpressionStatement@78..168
+    AssignmentExpression@78..167
+      VariableReference@78..84
+        Variable@78..84 "$typed"
+      Whitespace@84..85 " "
+      Equals@85..86 "="
+      Whitespace@86..87 " "
+      ClosureExpression@87..167
+        Function@87..95 "function"
+        Whitespace@95..96 " "
+        ParameterList@96..144
+          OpenParenthesis@96..97 "("
+          Parameter@97..103
+            TypeReference@97..100
+              Identifier@97..100 "int"
+            Whitespace@100..101 " "
+            Variable@101..103 "$x"
+          Comma@103..104 ","
+          Whitespace@104..105 " "
+          Parameter@105..124
+            TypeReference@105..114
+              Question@105..106 "?"
+              Backslash@106..107 "\\"
+              Identifier@107..110 "Foo"
+              Backslash@110..111 "\\"
+              Identifier@111..114 "Bar"
+            Whitespace@114..115 " "
+            Variable@115..117 "$y"
+            Whitespace@117..118 " "
+            Equals@118..119 "="
+            Whitespace@119..120 " "
+            NameExpression@120..124
+              Name@120..124
+                Identifier@120..124 "null"
+          Comma@124..125 ","
+          Whitespace@125..126 " "
+          Parameter@126..143
+            TypeReference@126..134
+              Callable@126..134 "callable"
+            Whitespace@134..135 " "
+            Ellipsis@135..138 "..."
+            Variable@138..143 "$rest"
+          CloseParenthesis@143..144 ")"
+        Colon@144..145 ":"
+        Whitespace@145..146 " "
+        TypeReference@146..150
+          Question@146..147 "?"
+          Identifier@147..150 "int"
+        Whitespace@150..151 " "
+        Block@151..167
+          OpenBrace@151..152 "{"
+          Whitespace@152..157 "\n    "
+          EchoStatement@157..165
+            Echo@157..161 "echo"
+            Whitespace@161..162 " "
+            VariableReference@162..164
+              Variable@162..164 "$x"
+            Semicolon@164..165 ";"
+          Whitespace@165..166 "\n"
+          CloseBrace@166..167 "}"
+    Semicolon@167..168 ";"
+  Whitespace@168..169 "\n"
+  ExpressionStatement@169..227
+    AssignmentExpression@169..226
+      VariableReference@169..181
+        Variable@169..181 "$byReference"
+      Whitespace@181..182 " "
+      Equals@182..183 "="
+      Whitespace@183..184 " "
+      ClosureExpression@184..226
+        Function@184..192 "function"
+        Whitespace@192..193 " "
+        Ampersand@193..194 "&"
+        ParameterList@194..204
+          OpenParenthesis@194..195 "("
+          Parameter@195..203
+            Ampersand@195..196 "&"
+            Variable@196..203 "$target"
+          CloseParenthesis@203..204 ")"
+        Whitespace@204..205 " "
+        Block@205..226
+          OpenBrace@205..206 "{"
+          Whitespace@206..211 "\n    "
+          EchoStatement@211..224
+            Echo@211..215 "echo"
+            Whitespace@215..216 " "
+            VariableReference@216..223
+              Variable@216..223 "$target"
+            Semicolon@223..224 ";"
+          Whitespace@224..225 "\n"
+          CloseBrace@225..226 "}"
+    Semicolon@226..227 ";"
+  Whitespace@227..228 "\n"
+  ExpressionStatement@228..273
+    AssignmentExpression@228..272
+      VariableReference@228..238
+        Variable@228..238 "$immediate"
+      Whitespace@238..239 " "
+      Equals@239..240 "="
+      Whitespace@240..241 " "
+      CallExpression@241..272
+        ParenthesizedExpression@241..270
+          OpenParenthesis@241..242 "("
+          ClosureExpression@242..269
+            Function@242..250 "function"
+            Whitespace@250..251 " "
+            ParameterList@251..253
+              OpenParenthesis@251..252 "("
+              CloseParenthesis@252..253 ")"
+            Whitespace@253..254 " "
+            Block@254..269
+              OpenBrace@254..255 "{"
+              Whitespace@255..256 " "
+              EchoStatement@256..267
+                Echo@256..260 "echo"
+                Whitespace@260..261 " "
+                Literal@261..266
+                  SingleQuotedString@261..266 "'now'"
+                Semicolon@266..267 ";"
+              Whitespace@267..268 " "
+              CloseBrace@268..269 "}"
+          CloseParenthesis@269..270 ")"
+        ArgumentList@270..272
+          OpenParenthesis@270..271 "("
+          CloseParenthesis@271..272 ")"
+    Semicolon@272..273 ";"
+  Whitespace@273..274 "\n"
+  ExpressionStatement@274..301
+    AssignmentExpression@274..300
+      VariableReference@274..280
+        Variable@274..280 "$arrow"
+      Whitespace@280..281 " "
+      Equals@281..282 "="
+      Whitespace@282..283 " "
+      ArrowFunctionExpression@283..300
+        Fn@283..285 "fn"
+        Whitespace@285..286 " "
+        ParameterList@286..290
+          OpenParenthesis@286..287 "("
+          Parameter@287..289
+            Variable@287..289 "$x"
+          CloseParenthesis@289..290 ")"
+        Whitespace@290..291 " "
+        FatArrow@291..293 "=>"
+        Whitespace@293..294 " "
+        BinaryExpression@294..300
+          VariableReference@294..296
+            Variable@294..296 "$x"
+          Whitespace@296..297 " "
+          Star@297..298 "*"
+          Whitespace@298..299 " "
+          Literal@299..300
+            IntegerLiteral@299..300 "2"
+    Semicolon@300..301 ";"
+  Whitespace@301..302 "\n"
+  ExpressionStatement@302..373
+    AssignmentExpression@302..372
+      VariableReference@302..310
+        Variable@302..310 "$curried"
+      Whitespace@310..311 " "
+      Equals@311..312 "="
+      Whitespace@312..313 " "
+      ArrowFunctionExpression@313..372
+        Static@313..319 "static"
+        Whitespace@319..320 " "
+        Fn@320..322 "fn"
+        Whitespace@322..323 " "
+        ParameterList@323..331
+          OpenParenthesis@323..324 "("
+          Parameter@324..330
+            TypeReference@324..327
+              Identifier@324..327 "int"
+            Whitespace@327..328 " "
+            Variable@328..330 "$x"
+          CloseParenthesis@330..331 ")"
+        Colon@331..332 ":"
+        Whitespace@332..333 " "
+        TypeReference@333..341
+          Callable@333..341 "callable"
+        Whitespace@341..342 " "
+        FatArrow@342..344 "=>"
+        Whitespace@344..345 " "
+        ArrowFunctionExpression@345..372
+          Fn@345..347 "fn"
+          Whitespace@347..348 " "
+          ParameterList@348..356
+            OpenParenthesis@348..349 "("
+            Parameter@349..355
+              TypeReference@349..352
+                Identifier@349..352 "int"
+              Whitespace@352..353 " "
+              Variable@353..355 "$y"
+            CloseParenthesis@355..356 ")"
+          Colon@356..357 ":"
+          Whitespace@357..358 " "
+          TypeReference@358..361
+            Identifier@358..361 "int"
+          Whitespace@361..362 " "
+          FatArrow@362..364 "=>"
+          Whitespace@364..365 " "
+          BinaryExpression@365..372
+            VariableReference@365..367
+              Variable@365..367 "$x"
+            Whitespace@367..368 " "
+            Plus@368..369 "+"
+            Whitespace@369..370 " "
+            VariableReference@370..372
+              Variable@370..372 "$y"
+    Semicolon@372..373 ";"
+  Whitespace@373..374 "\n"
+  ExpressionStatement@374..430
+    CallExpression@374..429
+      NameExpression@374..379
+        Name@374..379
+          Identifier@374..379 "usort"
+      ArgumentList@379..429
+        OpenParenthesis@379..380 "("
+        Argument@380..386
+          VariableReference@380..386
+            Variable@380..386 "$items"
+        Comma@386..387 ","
+        Whitespace@387..388 " "
+        Argument@388..428
+          ArrowFunctionExpression@388..428
+            Fn@388..390 "fn"
+            Whitespace@390..391 " "
+            ParameterList@391..399
+              OpenParenthesis@391..392 "("
+              Parameter@392..394
+                Variable@392..394 "$a"
+              Comma@394..395 ","
+              Whitespace@395..396 " "
+              Parameter@396..398
+                Variable@396..398 "$b"
+              CloseParenthesis@398..399 ")"
+            Whitespace@399..400 " "
+            FatArrow@400..402 "=>"
+            Whitespace@402..403 " "
+            BinaryExpression@403..428
+              MemberAccessExpression@403..413
+                VariableReference@403..405
+                  Variable@403..405 "$a"
+                Arrow@405..407 "->"
+                MemberName@407..413
+                  Identifier@407..413 "weight"
+              Whitespace@413..414 " "
+              Spaceship@414..417 "<=>"
+              Whitespace@417..418 " "
+              MemberAccessExpression@418..428
+                VariableReference@418..420
+                  Variable@418..420 "$b"
+                Arrow@420..422 "->"
+                MemberName@422..428
+                  Identifier@422..428 "weight"
+        CloseParenthesis@428..429 ")"
+    Semicolon@429..430 ";"
+  Whitespace@430..431 "\n"
+  ExpressionStatement@431..482
+    AssignmentExpression@431..481
+      VariableReference@431..437
+        Variable@431..437 "$mixed"
+      Whitespace@437..438 " "
+      Equals@438..439 "="
+      Whitespace@439..440 " "
+      ClosureExpression@440..481
+        Function@440..448 "function"
+        Whitespace@448..449 " "
+        ParameterList@449..451
+          OpenParenthesis@449..450 "("
+          CloseParenthesis@450..451 ")"
+        Whitespace@451..452 " "
+        Block@452..481
+          OpenBrace@452..453 "{"
+          Whitespace@453..454 " "
+          CloseTag@454..456 "?>"
+          InlineHtml@456..461 "chunk"
+          OpenTag@461..466 "<?php"
+          Whitespace@466..467 " "
+          EchoStatement@467..479
+            Echo@467..471 "echo"
+            Whitespace@471..472 " "
+            Literal@472..478
+              SingleQuotedString@472..478 "'back'"
+            Semicolon@478..479 ";"
+          Whitespace@479..480 " "
+          CloseBrace@480..481 "}"
+    Semicolon@481..482 ";"
+  Whitespace@482..483 "\n"

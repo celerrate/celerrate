@@ -335,6 +335,23 @@ syntax_kinds! {
     MatchExpression,
     /// One arm: a condition list (or `default`), `=>`, the body.
     MatchArm,
+    /// `function (...) use (...) { ... }`, optionally `static`, with an
+    /// optional by-reference `&` and return type.
+    ClosureExpression,
+    /// `fn (...) => expression`, optionally `static`.
+    ArrowFunctionExpression,
+    /// `( parameter, ... )`.
+    ParameterList,
+    /// One parameter: optional type, `&`, `...`, the variable, and an
+    /// optional default.
+    Parameter,
+    /// One optionally-nullable named type. The declarations plan
+    /// replaces this with the full union/intersection/DNF grammar.
+    TypeReference,
+    /// `use ( variables )` on a closure.
+    ClosureUseClause,
+    /// `{ statements }`.
+    Block,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

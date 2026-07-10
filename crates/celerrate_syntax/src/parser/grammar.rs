@@ -14,17 +14,27 @@ use expressions::{error_element, expression, starts_expression};
 
 pub(super) fn source_file(parser: &mut Parser) {
     let marker = parser.start();
-    while let Some(kind) = parser.current() {
-        match kind {
+    while parser.current().is_some() {
+        statement_list_step(parser);
+    }
+    marker.complete(parser, SyntaxKind::SourceFile);
+}
+
+/// One step of a statement list: inline HTML and tags stay tokens;
+/// everything else is a statement. Shared by the source file and every
+/// brace-delimited body (closure blocks now, compound statements in
+/// the statements plan).
+pub(super) fn statement_list_step(parser: &mut Parser) {
+    match parser.current() {
+        Some(
             SyntaxKind::InlineHtml
             | SyntaxKind::OpenTag
             | SyntaxKind::OpenTagEcho
             | SyntaxKind::ShortOpenTag
-            | SyntaxKind::CloseTag => parser.bump(),
-            _ => statement(parser),
-        }
+            | SyntaxKind::CloseTag,
+        ) => parser.bump(),
+        _ => statement(parser),
     }
-    marker.complete(parser, SyntaxKind::SourceFile);
 }
 
 fn statement(parser: &mut Parser) {
