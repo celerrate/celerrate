@@ -1,4 +1,4 @@
-use crate::lexer::{Lexer, Mode};
+use crate::lexer::{BASE_SCRIPTING, Lexer, Mode};
 use crate::syntax_kind::SyntaxKind;
 
 /// PHP name start: `[a-zA-Z_\x80-\xff]`. Any non-ASCII char qualifies,
@@ -40,14 +40,10 @@ impl Lexer<'_> {
                 self.lex_number()
             }
             character if is_name_start(character) => self.lex_name(),
-            ';' => {
-                self.cursor.eat(';');
-                self.emit(SyntaxKind::Semicolon);
-            }
-            '+' => {
-                self.cursor.eat('+');
-                self.emit(SyntaxKind::Plus);
-            }
+            '(' => self.lex_parenthesis_or_cast(),
+            '{' => self.lex_open_brace(),
+            '}' => self.lex_close_brace(),
+            _ if self.try_lex_operator() => {}
             _ => self.lex_unexpected_character(),
         }
     }
@@ -161,4 +157,148 @@ impl Lexer<'_> {
         self.cursor.eat_while(|c| c.is_ascii_digit() || c == '_');
         true
     }
+
+    /// Every `{` pushes a scripting mode and every `}` pops one, exactly
+    /// like Zend's state stack. Balanced braces are a no-op; the payoff
+    /// is `{$expr}` interpolation, whose closing brace pops back into
+    /// the string mode with no extra bookkeeping.
+    fn lex_open_brace(&mut self) {
+        self.cursor.eat('{');
+        self.emit(SyntaxKind::OpenBrace);
+        self.push_mode(BASE_SCRIPTING);
+    }
+
+    fn lex_close_brace(&mut self) {
+        self.cursor.eat('}');
+        self.emit(SyntaxKind::CloseBrace);
+        if self.can_pop_mode() {
+            self.pop_mode();
+        }
+    }
+
+    fn lex_parenthesis_or_cast(&mut self) {
+        if let Some((kind, byte_length)) = cast_at(self.cursor.rest()) {
+            self.cursor.bump_bytes(byte_length);
+            self.emit(kind);
+        } else {
+            self.cursor.eat('(');
+            self.emit(SyntaxKind::OpenParenthesis);
+        }
+    }
+
+    /// Longest-match scan of the operator table. Returns false when no
+    /// operator starts here, letting the fallback take over.
+    fn try_lex_operator(&mut self) -> bool {
+        let rest = self.cursor.rest();
+        for (text, kind) in OPERATORS {
+            if rest.starts_with(text) {
+                self.cursor.bump_bytes(text.len());
+                self.emit(*kind);
+                return true;
+            }
+        }
+        false
+    }
+}
+
+/// Operators and punctuation, longest first so prefixes never shadow a
+/// longer operator. A linear scan is fine for now; a first-character
+/// match tree can come with the benchmark part if it ever shows up.
+const OPERATORS: &[(&str, SyntaxKind)] = &[
+    ("<=>", SyntaxKind::Spaceship),
+    ("===", SyntaxKind::EqualsEqualsEquals),
+    ("!==", SyntaxKind::BangEqualsEquals),
+    ("**=", SyntaxKind::StarStarEquals),
+    ("<<=", SyntaxKind::LessLessEquals),
+    (">>=", SyntaxKind::GreaterGreaterEquals),
+    ("??=", SyntaxKind::QuestionQuestionEquals),
+    ("...", SyntaxKind::Ellipsis),
+    ("?->", SyntaxKind::NullsafeArrow),
+    ("**", SyntaxKind::StarStar),
+    ("==", SyntaxKind::EqualsEquals),
+    ("!=", SyntaxKind::BangEquals),
+    ("<>", SyntaxKind::BangEquals),
+    ("<=", SyntaxKind::LessEquals),
+    (">=", SyntaxKind::GreaterEquals),
+    ("&&", SyntaxKind::AmpersandAmpersand),
+    ("||", SyntaxKind::PipePipe),
+    ("??", SyntaxKind::QuestionQuestion),
+    ("++", SyntaxKind::PlusPlus),
+    ("--", SyntaxKind::MinusMinus),
+    ("<<", SyntaxKind::LessLess),
+    (">>", SyntaxKind::GreaterGreater),
+    ("+=", SyntaxKind::PlusEquals),
+    ("-=", SyntaxKind::MinusEquals),
+    ("*=", SyntaxKind::StarEquals),
+    ("/=", SyntaxKind::SlashEquals),
+    (".=", SyntaxKind::DotEquals),
+    ("%=", SyntaxKind::PercentEquals),
+    ("&=", SyntaxKind::AmpersandEquals),
+    ("|=", SyntaxKind::PipeEquals),
+    ("^=", SyntaxKind::CaretEquals),
+    ("->", SyntaxKind::Arrow),
+    ("=>", SyntaxKind::FatArrow),
+    ("::", SyntaxKind::ColonColon),
+    ("+", SyntaxKind::Plus),
+    ("-", SyntaxKind::Minus),
+    ("*", SyntaxKind::Star),
+    ("/", SyntaxKind::Slash),
+    ("%", SyntaxKind::Percent),
+    ("=", SyntaxKind::Equals),
+    ("<", SyntaxKind::Less),
+    (">", SyntaxKind::Greater),
+    ("!", SyntaxKind::Bang),
+    ("&", SyntaxKind::Ampersand),
+    ("|", SyntaxKind::Pipe),
+    ("^", SyntaxKind::Caret),
+    ("?", SyntaxKind::Question),
+    (":", SyntaxKind::Colon),
+    (";", SyntaxKind::Semicolon),
+    (",", SyntaxKind::Comma),
+    (".", SyntaxKind::Dot),
+    ("@", SyntaxKind::At),
+    ("~", SyntaxKind::Tilde),
+    ("\\", SyntaxKind::Backslash),
+    (")", SyntaxKind::CloseParenthesis),
+    ("[", SyntaxKind::OpenBracket),
+    ("]", SyntaxKind::CloseBracket),
+];
+
+/// Detects a cast at the start of `rest`: `(`, optional spaces and tabs,
+/// one of the exact PHP 8.1 cast words (case-insensitive), optional
+/// spaces and tabs, `)`. Returns the kind and the total byte length.
+/// `(real)` and `(unset)` were removed in PHP 8.0 and do not match.
+fn cast_at(rest: &str) -> Option<(SyntaxKind, usize)> {
+    let inner = rest.strip_prefix('(')?;
+    let after_leading = inner.trim_start_matches([' ', '\t']);
+    let word_length = after_leading
+        .chars()
+        .take_while(|character| character.is_ascii_alphabetic())
+        .count();
+    let word = after_leading.get(..word_length)?;
+    let after_word = after_leading.get(word_length..)?;
+    let after_trailing = after_word.trim_start_matches([' ', '\t']);
+    after_trailing.strip_prefix(')')?;
+    let kind = cast_kind(word)?;
+    let total_length = rest.len() - after_trailing.len() + ')'.len_utf8();
+    Some((kind, total_length))
+}
+
+fn cast_kind(word: &str) -> Option<SyntaxKind> {
+    const CASTS: &[(&str, SyntaxKind)] = &[
+        ("int", SyntaxKind::IntCast),
+        ("integer", SyntaxKind::IntCast),
+        ("bool", SyntaxKind::BoolCast),
+        ("boolean", SyntaxKind::BoolCast),
+        ("float", SyntaxKind::FloatCast),
+        ("double", SyntaxKind::FloatCast),
+        ("string", SyntaxKind::StringCast),
+        ("binary", SyntaxKind::BinaryCast),
+        ("array", SyntaxKind::ArrayCast),
+        ("object", SyntaxKind::ObjectCast),
+    ];
+    CASTS
+        .iter()
+        .find(|(name, _)| word.eq_ignore_ascii_case(name))
+        .map(|(_, kind)| *kind)
 }

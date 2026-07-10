@@ -177,12 +177,10 @@ impl<'source> Lexer<'source> {
         }
     }
 
-    #[allow(dead_code)]
     fn push_mode(&mut self, mode: Mode) {
         self.modes.push(mode);
     }
 
-    #[allow(dead_code)]
     fn pop_mode(&mut self) {
         if self.modes.len() > 1 {
             self.modes.pop();
@@ -190,7 +188,6 @@ impl<'source> Lexer<'source> {
     }
 
     /// Whether the mode stack has room to pop (used by `}` handling).
-    #[allow(dead_code)]
     fn can_pop_mode(&self) -> bool {
         self.modes.len() > 1
     }
