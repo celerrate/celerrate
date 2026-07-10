@@ -40,8 +40,12 @@ fn dispatch_statement(parser: &mut Parser) {
         }
         Some(SyntaxKind::Global) => global_statement(parser),
         Some(SyntaxKind::Unset) => unset_statement(parser),
+        Some(SyntaxKind::Goto) => goto_statement(parser),
         Some(SyntaxKind::Static) if parser.nth(1) == Some(SyntaxKind::Variable) => {
             static_statement(parser)
+        }
+        Some(SyntaxKind::Identifier) if parser.nth(1) == Some(SyntaxKind::Colon) => {
+            label_statement(parser)
         }
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
@@ -203,6 +207,22 @@ fn unset_statement(parser: &mut Parser) {
     }
     terminate_statement(parser);
     marker.complete(parser, SyntaxKind::UnsetStatement);
+}
+
+fn goto_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `goto`
+    parser.expect(SyntaxKind::Identifier);
+    terminate_statement(parser);
+    marker.complete(parser, SyntaxKind::GotoStatement);
+}
+
+/// The dispatcher guaranteed the identifier-colon shape.
+fn label_statement(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // the label
+    parser.bump(); // `:`
+    marker.complete(parser, SyntaxKind::LabelStatement);
 }
 
 #[cfg(test)]

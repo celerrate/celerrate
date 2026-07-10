@@ -190,3 +190,35 @@ fn unset_without_parentheses_is_diagnosed() {
             .contains(&ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis))
     );
 }
+
+#[test]
+fn goto_names_a_label() {
+    insta::assert_snapshot!(render_statement("goto cleanup;"), @r#"
+    GotoStatement
+      Goto "goto"
+      Identifier "cleanup"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn an_identifier_followed_by_a_colon_is_a_label() {
+    insta::assert_snapshot!(render_statement("cleanup: echo 1;"), @r#"
+    LabelStatement
+      Identifier "cleanup"
+      Colon ":"
+    "#);
+}
+
+#[test]
+fn a_call_statement_is_not_mistaken_for_a_label() {
+    assert!(parser_diagnostics("<?php cleanup();").is_empty());
+}
+
+#[test]
+fn goto_without_a_label_is_diagnosed() {
+    assert!(
+        parser_diagnostics("<?php goto ;")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Identifier))
+    );
+}

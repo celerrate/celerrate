@@ -368,6 +368,10 @@ syntax_kinds! {
     StaticVariable,
     /// `unset( targets );`.
     UnsetStatement,
+    /// `goto label;`; whether the label exists is semantic.
+    GotoStatement,
+    /// `label:`, the target of a `goto`.
+    LabelStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,
