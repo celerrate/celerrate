@@ -459,6 +459,19 @@ syntax_kinds! {
     /// One `$name [= initializer]` element; a hooked property carries
     /// its `PropertyHookList` here (a later task of this plan).
     PropertyElement,
+    /// `function name(parameters): type { body }` (or `;` for the
+    /// abstract and interface forms) as a class member, modifiers
+    /// included.
+    MethodDeclaration,
+    /// `use TraitA, TraitB;` inside a class body, with an optional
+    /// adaptation list instead of the semicolon.
+    TraitUseClause,
+    /// `{ adaptations }` of a trait use.
+    TraitAdaptationList,
+    /// `A::member insteadof B, C;`.
+    TraitPrecedence,
+    /// `[A::]member as [visibility] [name];`.
+    TraitAlias,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

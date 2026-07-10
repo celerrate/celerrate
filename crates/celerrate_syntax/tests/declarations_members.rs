@@ -153,3 +153,140 @@ fn a_property_without_a_variable_is_diagnosed() {
         "got {diagnostics:?}"
     );
 }
+
+#[test]
+fn a_method_with_modifiers_a_return_type_and_a_body() {
+    insta::assert_snapshot!(render_member("public function list(): array { return []; }"), @r#"
+    MethodDeclaration
+      Public "public"
+      Function "function"
+      List "list"
+      ParameterList
+        OpenParenthesis "("
+        CloseParenthesis ")"
+      Colon ":"
+      NamedType
+        Array "array"
+      Block
+        OpenBrace "{"
+        ReturnStatement
+          Return "return"
+          ArrayExpression
+            OpenBracket "["
+            CloseBracket "]"
+          Semicolon ";"
+        CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn an_abstract_method_ends_at_its_semicolon() {
+    insta::assert_snapshot!(render_member("abstract protected function close(): void;"), @r#"
+    MethodDeclaration
+      Abstract "abstract"
+      Protected "protected"
+      Function "function"
+      Identifier "close"
+      ParameterList
+        OpenParenthesis "("
+        CloseParenthesis ")"
+      Colon ":"
+      NamedType
+        Name
+          Identifier "void"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn a_by_reference_method_parses() {
+    assert_eq!(
+        parser_diagnostics(
+            "<?php class A { public function &reference(): int { return $this->x; } }"
+        ),
+        vec![]
+    );
+}
+
+#[test]
+fn interface_method_signatures_parse() {
+    assert_eq!(
+        parser_diagnostics("<?php interface Shape { public function area(): float; }"),
+        vec![]
+    );
+}
+
+#[test]
+fn a_simple_trait_use_ends_at_its_semicolon() {
+    insta::assert_snapshot!(render_member("use Greets, Counts;"), @r#"
+    TraitUseClause
+      Use "use"
+      Name
+        Identifier "Greets"
+      Comma ","
+      Name
+        Identifier "Counts"
+      Semicolon ";"
+    "#);
+}
+
+#[test]
+fn trait_adaptations_parse_precedences_and_aliases() {
+    insta::assert_snapshot!(render_member("use Greets, Counts { Greets::hello insteadof Counts; Counts::hello as protected countedHello; }"), @r#"
+    TraitUseClause
+      Use "use"
+      Name
+        Identifier "Greets"
+      Comma ","
+      Name
+        Identifier "Counts"
+      TraitAdaptationList
+        OpenBrace "{"
+        TraitPrecedence
+          Name
+            Identifier "Greets"
+          ColonColon "::"
+          Identifier "hello"
+          InsteadOf "insteadof"
+          Name
+            Identifier "Counts"
+          Semicolon ";"
+        TraitAlias
+          Name
+            Identifier "Counts"
+          ColonColon "::"
+          Identifier "hello"
+          As "as"
+          Protected "protected"
+          Identifier "countedHello"
+          Semicolon ";"
+        CloseBrace "}"
+    "#);
+}
+
+#[test]
+fn a_bare_alias_with_a_keyword_member_name_parses() {
+    // `list as unreserved;`: a bare semi-reserved member name, no
+    // class qualifier.
+    assert_eq!(
+        parser_diagnostics("<?php class A { use B { list as unreserved; } }"),
+        vec![]
+    );
+}
+
+#[test]
+fn a_visibility_only_alias_parses() {
+    assert_eq!(
+        parser_diagnostics("<?php class A { use B { hello as protected; } }"),
+        vec![]
+    );
+}
+
+#[test]
+fn junk_inside_an_adaptation_list_is_swept() {
+    let diagnostics = parser_diagnostics("<?php class A { use B { 42; hello as h; } }");
+    assert!(
+        diagnostics.contains(&ParserDiagnosticKind::UnexpectedToken),
+        "got {diagnostics:?}"
+    );
+}

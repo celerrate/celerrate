@@ -377,6 +377,7 @@ fn member_list(parser: &mut Parser) {
 /// zero-consumption refusal path, so the arms may refuse freely.
 fn member(parser: &mut Parser) {
     match parser.current() {
+        Some(SyntaxKind::Use) => trait_use(parser),
         Some(kind) if starts_member(kind) => {
             let marker = parser.start();
             modified_member(parser, marker);
@@ -387,7 +388,7 @@ fn member(parser: &mut Parser) {
 }
 
 /// Whether `kind` can start a modified member (a property, a
-/// constant, or — from the methods task on — a method).
+/// constant, or a method).
 fn starts_member(kind: SyntaxKind) -> bool {
     matches!(
         kind,
@@ -401,16 +402,18 @@ fn starts_member(kind: SyntaxKind) -> bool {
             | SyntaxKind::Var
             | SyntaxKind::Const
             | SyntaxKind::Variable
+            | SyntaxKind::Function
     ) || super::types::starts_type(kind)
 }
 
-/// Modifiers, then the member they modify: a constant, a method
-/// (next task), or a property (optionally typed). The member's kind
-/// is decided by the first token after the modifiers.
+/// Modifiers, then the member they modify: a constant, a method, or a
+/// property (optionally typed). The member's kind is decided by the
+/// first token after the modifiers.
 fn modified_member(parser: &mut Parser, marker: Marker) {
     member_modifiers(parser);
     match parser.current() {
         Some(SyntaxKind::Const) => constant_declaration(parser, marker),
+        Some(SyntaxKind::Function) => method_declaration(parser, marker),
         // A bare `$x;` member is a Zend parse error; parsing it as an
         // unmodified property keeps it one analyzable unit.
         Some(SyntaxKind::Variable) => property_declaration(parser, marker),
@@ -505,4 +508,112 @@ fn property_declaration(parser: &mut Parser, marker: Marker) {
     }
     terminate_statement(parser);
     marker.complete(parser, SyntaxKind::PropertyDeclaration);
+}
+
+/// `function name(parameters): type` ending in a block or, for the
+/// abstract and interface forms, `;`. Method names are semi-reserved:
+/// any keyword parses (`public function list() {}`). The caller
+/// consumed the modifiers into `marker`; whether a body is required
+/// is semantic.
+fn method_declaration(parser: &mut Parser, marker: Marker) {
+    parser.bump(); // `function`
+    parser.eat(SyntaxKind::Ampersand); // by-reference return
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
+        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
+    parameter_list(parser);
+    if parser.eat(SyntaxKind::Colon) {
+        super::types::type_expression(parser);
+    }
+    if parser.at(SyntaxKind::OpenBrace) {
+        block(parser);
+    } else {
+        parser.expect(SyntaxKind::Semicolon);
+    }
+    marker.complete(parser, SyntaxKind::MethodDeclaration);
+}
+
+/// `use A, B;` or `use A, B { adaptations }` inside a class body.
+/// Distinct from the import `use` (statement level) and the closure
+/// `use` (expression level); the contexts are disjoint.
+fn trait_use(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `use`
+    name_list(parser);
+    if parser.at(SyntaxKind::OpenBrace) {
+        trait_adaptation_list(parser);
+    } else {
+        terminate_statement(parser);
+    }
+    marker.complete(parser, SyntaxKind::TraitUseClause);
+}
+
+/// `{ A::b insteadof C; b as protected c; }`. Position-guarded like
+/// `member_list`, and for the same reason.
+fn trait_adaptation_list(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.bump(); // `{`
+    while parser.current().is_some() && !parser.at(SyntaxKind::CloseBrace) {
+        let position_before_adaptation = parser.position();
+        trait_adaptation(parser);
+        if parser.position() == position_before_adaptation {
+            error_element(parser);
+        }
+    }
+    parser.expect(SyntaxKind::CloseBrace);
+    marker.complete(parser, SyntaxKind::TraitAdaptationList);
+}
+
+/// One adaptation. The method reference is `A\B::member` or a bare
+/// `member` (semi-reserved: keywords parse). `insteadof` makes it a
+/// precedence; otherwise `as` with an optional visibility and an
+/// optional new name makes it an alias. Whether the reference resolves
+/// is semantic.
+fn trait_adaptation(parser: &mut Parser) {
+    let marker = parser.start();
+    match parser.current() {
+        Some(SyntaxKind::Identifier | SyntaxKind::Backslash | SyntaxKind::Namespace) => {
+            name(parser);
+            if parser.eat(SyntaxKind::ColonColon) {
+                adaptation_member_name(parser);
+            }
+        }
+        Some(kind) if kind.is_keyword() => parser.bump(),
+        _ => {
+            marker.abandon(parser);
+            error_element(parser);
+            return;
+        }
+    }
+    if parser.eat(SyntaxKind::InsteadOf) {
+        name_list(parser);
+        terminate_statement(parser);
+        marker.complete(parser, SyntaxKind::TraitPrecedence);
+    } else {
+        parser.expect(SyntaxKind::As);
+        if matches!(
+            parser.current(),
+            Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private)
+        ) {
+            parser.bump();
+        }
+        if parser
+            .current()
+            .is_some_and(|kind| kind == SyntaxKind::Identifier || kind.is_keyword())
+        {
+            parser.bump();
+        }
+        terminate_statement(parser);
+        marker.complete(parser, SyntaxKind::TraitAlias);
+    }
+}
+
+/// The member half of `A::member` in an adaptation: an identifier or
+/// any keyword (semi-reserved).
+fn adaptation_member_name(parser: &mut Parser) {
+    match parser.current() {
+        Some(kind) if kind == SyntaxKind::Identifier || kind.is_keyword() => parser.bump(),
+        _ => parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier)),
+    }
 }
