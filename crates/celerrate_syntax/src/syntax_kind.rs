@@ -289,6 +289,15 @@ syntax_kinds! {
     MemberName,
     /// `subject[index]`; the index is absent in the push form `$a[]`.
     IndexExpression,
+    /// `[ elements ]` or `array( elements )`; also the destructuring
+    /// target shape. Empty destructuring slots keep their commas as
+    /// direct children.
+    ArrayExpression,
+    /// One element: optional `...`, optional `&`, expression, then
+    /// optionally `=>` (optional `&`) expression.
+    ArrayElement,
+    /// `list( elements )`, the keyword destructuring form.
+    ListExpression,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

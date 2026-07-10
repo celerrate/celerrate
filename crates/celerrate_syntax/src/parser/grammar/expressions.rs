@@ -135,6 +135,9 @@ pub(super) fn starts_expression(kind: SyntaxKind) -> bool {
             | SyntaxKind::Namespace
             | SyntaxKind::Static
             | SyntaxKind::Dollar
+            | SyntaxKind::OpenBracket
+            | SyntaxKind::Array
+            | SyntaxKind::List
     )
 }
 
@@ -423,6 +426,97 @@ fn argument(parser: &mut Parser) {
     marker.complete(parser, SyntaxKind::Argument);
 }
 
+/// `[ elements ]` or `array( elements )`: one node kind, the delimiter
+/// tokens tell the forms apart. Also the destructuring target shape;
+/// the parser does not distinguish a literal from an assignment target.
+fn array_expression(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    if parser.eat(SyntaxKind::Array) {
+        if parser.at(SyntaxKind::OpenParenthesis) {
+            parser.bump();
+            array_element_list(parser, SyntaxKind::CloseParenthesis);
+            parser.expect(SyntaxKind::CloseParenthesis);
+        } else {
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+        }
+    } else {
+        parser.bump(); // `[`
+        array_element_list(parser, SyntaxKind::CloseBracket);
+        parser.expect(SyntaxKind::CloseBracket);
+    }
+    marker.complete(parser, SyntaxKind::ArrayExpression)
+}
+
+/// `list( elements )`, the keyword destructuring form.
+fn list_expression(parser: &mut Parser) -> CompletedMarker {
+    let marker = parser.start();
+    parser.bump(); // `list`
+    if parser.at(SyntaxKind::OpenParenthesis) {
+        parser.bump();
+        array_element_list(parser, SyntaxKind::CloseParenthesis);
+        parser.expect(SyntaxKind::CloseParenthesis);
+    } else {
+        parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::OpenParenthesis));
+    }
+    marker.complete(parser, SyntaxKind::ListExpression)
+}
+
+/// Elements until `closing`. Same recovery contract as `argument_list`:
+/// unexpected tokens are wrapped and consumed; `;`, `?>`, and end of
+/// input abort.
+///
+/// Progress is enforced mechanically, not only by convention, for the
+/// same reason `argument_list` needs it: the nesting guard can refuse
+/// an element's expression outright, without consuming a token, when it
+/// fires while this very loop is nested deep inside a pathological
+/// chain of `[` (the leftover, unconsumed `[` surfaces through the
+/// postfix loop at every level that chain unwinds through, not only at
+/// the top, so `array_element_list` can be entered again while the
+/// nesting budget is still exhausted). Trusting `array_element` to
+/// always consume would let such a case spin forever; instead each
+/// iteration records the position before parsing an element and, if it
+/// is unchanged afterward, forces an `error_element` bump.
+fn array_element_list(parser: &mut Parser, closing: SyntaxKind) {
+    while !parser.at(closing) && !parser.at_end() {
+        if parser.at(SyntaxKind::Semicolon) || parser.at(SyntaxKind::CloseTag) {
+            break;
+        }
+        if parser.at(SyntaxKind::Comma) {
+            // An empty destructuring slot: the comma stands alone.
+            parser.bump();
+            continue;
+        }
+        if !starts_array_element(parser) {
+            error_element(parser);
+            continue;
+        }
+        let position_before_element = parser.position();
+        array_element(parser);
+        expect_list_separator(parser, closing);
+        if parser.position() == position_before_element {
+            error_element(parser);
+        }
+    }
+}
+
+fn starts_array_element(parser: &mut Parser) -> bool {
+    parser.current().is_some_and(|kind| {
+        starts_expression(kind) || kind == SyntaxKind::Ellipsis || kind == SyntaxKind::Ampersand
+    })
+}
+
+fn array_element(parser: &mut Parser) {
+    let marker = parser.start();
+    parser.eat(SyntaxKind::Ellipsis);
+    parser.eat(SyntaxKind::Ampersand);
+    expression(parser);
+    if parser.eat(SyntaxKind::FatArrow) {
+        parser.eat(SyntaxKind::Ampersand);
+        expression(parser);
+    }
+    marker.complete(parser, SyntaxKind::ArrayElement);
+}
+
 fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
     match parser.current() {
         Some(
@@ -433,6 +527,8 @@ fn primary_expression(parser: &mut Parser) -> Option<CompletedMarker> {
             Some(marker.complete(parser, SyntaxKind::Literal))
         }
         Some(SyntaxKind::Variable | SyntaxKind::Dollar) => simple_variable(parser),
+        Some(SyntaxKind::OpenBracket | SyntaxKind::Array) => Some(array_expression(parser)),
+        Some(SyntaxKind::List) => Some(list_expression(parser)),
         Some(SyntaxKind::Identifier | SyntaxKind::Backslash) => {
             let marker = parser.start();
             name(parser);
