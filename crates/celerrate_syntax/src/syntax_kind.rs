@@ -147,6 +147,8 @@ syntax_kinds! {
     While,
     Xor,
     Yield,
+    /// `yield from`, one token as in Zend, interior whitespace included.
+    YieldFrom,
 
     // Casts (single tokens, inner whitespace included).
     IntCast,
@@ -205,6 +207,8 @@ syntax_kinds! {
     Comma,
     Ampersand,
     Pipe,
+    /// `|>`, the PHP 8.5 pipe operator.
+    PipeGreater,
     Caret,
     Tilde,
     At,
@@ -275,6 +279,13 @@ impl SyntaxKind {
                 | Self::DocComment
                 | Self::Shebang
         )
+    }
+
+    /// Whether this kind is a PHP keyword. Relies on the keyword section
+    /// being contiguous in the declaration, `Abstract` through
+    /// `YieldFrom`; the classifier test pins that layout.
+    pub fn is_keyword(self) -> bool {
+        (Self::Abstract..=Self::YieldFrom).contains(&self)
     }
 
     /// Resolves a keyword case-insensitively, allocation-free. Returns

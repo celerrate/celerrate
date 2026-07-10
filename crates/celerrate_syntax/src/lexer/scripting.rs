@@ -126,7 +126,36 @@ impl Lexer<'_> {
         self.cursor.eat_while(is_name_continue);
         let kind =
             SyntaxKind::from_keyword(self.cursor.pending_text()).unwrap_or(SyntaxKind::Identifier);
+        if kind == SyntaxKind::Yield && self.try_extend_yield_from() {
+            return;
+        }
         self.emit(kind);
+    }
+
+    /// Zend lexes `yield` + whitespace + `from` as the single token
+    /// T_YIELD_FROM (no comments allowed between the words); the
+    /// whitespace stays inside the token, like casts. Consumes nothing
+    /// and returns false when `from` does not follow.
+    fn try_extend_yield_from(&mut self) -> bool {
+        let rest = self.cursor.rest();
+        let after_whitespace = rest.trim_start_matches(is_php_whitespace);
+        let whitespace_length = rest.len() - after_whitespace.len();
+        if whitespace_length == 0 {
+            return false;
+        }
+        let word_matches = after_whitespace
+            .get(..4)
+            .is_some_and(|word| word.eq_ignore_ascii_case("from"));
+        let word_continues = after_whitespace
+            .get(4..)
+            .unwrap_or_default()
+            .starts_with(is_name_continue);
+        if !word_matches || word_continues {
+            return false;
+        }
+        self.cursor.bump_bytes(whitespace_length + 4);
+        self.emit(SyntaxKind::YieldFrom);
+        true
     }
 
     fn lex_number(&mut self) {
@@ -336,6 +365,7 @@ const OPERATORS: &[(&str, SyntaxKind)] = &[
     ("%=", SyntaxKind::PercentEquals),
     ("&=", SyntaxKind::AmpersandEquals),
     ("|=", SyntaxKind::PipeEquals),
+    ("|>", SyntaxKind::PipeGreater),
     ("^=", SyntaxKind::CaretEquals),
     ("->", SyntaxKind::Arrow),
     ("=>", SyntaxKind::FatArrow),
