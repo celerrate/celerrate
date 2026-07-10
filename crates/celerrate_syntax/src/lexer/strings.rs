@@ -1,3 +1,5 @@
+use celerrate_source::{TextRange, TextSize};
+
 use crate::diagnostic::LexerDiagnosticKind;
 use crate::lexer::{Lexer, Mode};
 use crate::syntax_kind::SyntaxKind;
@@ -193,4 +195,172 @@ impl Lexer<'_> {
         }
         self.emit(SyntaxKind::StringFragment);
     }
+
+    /// Only called when `heredoc_header_at` matched; the redundant parse
+    /// keeps the call sites free of unwraps.
+    pub(super) fn lex_heredoc_start(&mut self) {
+        let Some(header) = heredoc_header_at(self.cursor.rest()) else {
+            self.lex_unexpected_character();
+            return;
+        };
+        let start_offset = self.token_start();
+        let start = TextRange::at(start_offset, text_size(header.length));
+        let label = TextRange::at(
+            start_offset + text_size(header.label_start),
+            text_size(header.label_length),
+        );
+        self.cursor.bump_bytes(header.length);
+        self.emit(SyntaxKind::HeredocStart);
+        if header.is_nowdoc {
+            self.push_mode(Mode::Nowdoc { start, label });
+        } else {
+            self.push_mode(Mode::Heredoc { start, label });
+        }
+    }
+
+    pub(super) fn lex_heredoc(&mut self, label: TextRange) {
+        if self.at_line_start() && self.lex_heredoc_end(label) {
+            return;
+        }
+        if self.lex_interpolation() {
+            return;
+        }
+        self.lex_heredoc_fragment(label, true);
+    }
+
+    pub(super) fn lex_nowdoc(&mut self, label: TextRange) {
+        if self.at_line_start() && self.lex_heredoc_end(label) {
+            return;
+        }
+        self.lex_heredoc_fragment(label, false);
+    }
+
+    /// Emits `HeredocEnd` (indentation plus label, per PHP 7.3 flexible
+    /// closing markers) when the closing line starts here.
+    fn lex_heredoc_end(&mut self, label: TextRange) -> bool {
+        let Some(closer_length) = self.heredoc_closer_length(label) else {
+            return false;
+        };
+        self.cursor.bump_bytes(closer_length);
+        self.emit(SyntaxKind::HeredocEnd);
+        self.pop_mode();
+        true
+    }
+
+    /// When the unconsumed input begins a closing-label line (optional
+    /// spaces and tabs, the label, then no name character), returns the
+    /// byte length of indentation plus label.
+    fn heredoc_closer_length(&self, label: TextRange) -> Option<usize> {
+        let label_text = self
+            .source
+            .get(usize::from(label.start())..usize::from(label.end()))?;
+        let rest = self.cursor.rest();
+        let after_indentation = rest.trim_start_matches([' ', '\t']);
+        let indentation = rest.len() - after_indentation.len();
+        let after_label = after_indentation.strip_prefix(label_text)?;
+        if after_label.starts_with(is_name_continue) {
+            return None;
+        }
+        Some(indentation + label_text.len())
+    }
+
+    /// A heredoc or nowdoc literal run: stops before an interpolation
+    /// opener (heredoc only) and right after a newline that begins the
+    /// closing-label line.
+    fn lex_heredoc_fragment(&mut self, label: TextRange, interpolated: bool) {
+        while let Some(character) = self.cursor.peek() {
+            if interpolated {
+                if character == '\\' {
+                    self.cursor.bump();
+                    let escaped = self.cursor.bump();
+                    // A backslash at the end of a line is literal; the
+                    // newline it precedes may still start the closer.
+                    if escaped == Some('\n') && self.heredoc_closer_length(label).is_some() {
+                        break;
+                    }
+                    continue;
+                }
+                if character == '$'
+                    && self
+                        .cursor
+                        .peek_second()
+                        .is_some_and(|next| is_name_start(next) || next == '{')
+                {
+                    break;
+                }
+                if character == '{' && self.cursor.peek_second() == Some('$') {
+                    break;
+                }
+            }
+            self.cursor.bump();
+            if character == '\n' && self.heredoc_closer_length(label).is_some() {
+                break;
+            }
+        }
+        self.emit(SyntaxKind::StringFragment);
+    }
+}
+
+/// A parsed `<<<LABEL` header: `<<<`, optional spaces and tabs, the
+/// label (bare, double-quoted for a heredoc, single-quoted for a
+/// nowdoc), and the line's newline.
+pub(super) struct HeredocHeader {
+    /// Total header length in bytes, trailing newline included.
+    pub(super) length: usize,
+    /// The bare label's position, relative to the header start.
+    pub(super) label_start: usize,
+    pub(super) label_length: usize,
+    pub(super) is_nowdoc: bool,
+}
+
+/// Parses a heredoc or nowdoc header at the start of `rest`, or returns
+/// `None` so `<<<` falls back to shift operators.
+pub(super) fn heredoc_header_at(rest: &str) -> Option<HeredocHeader> {
+    let after_arrows = rest.strip_prefix("<<<")?;
+    let after_spaces = after_arrows.trim_start_matches([' ', '\t']);
+    let spaces = after_arrows.len() - after_spaces.len();
+    let quote = after_spaces
+        .chars()
+        .next()
+        .filter(|character| matches!(character, '"' | '\''));
+    let after_quote = match quote {
+        Some(_) => after_spaces.get(1..)?,
+        None => after_spaces,
+    };
+    if !after_quote.starts_with(is_name_start) {
+        return None;
+    }
+    let label_length: usize = after_quote
+        .chars()
+        .take_while(|character| is_name_continue(*character))
+        .map(char::len_utf8)
+        .sum();
+    let after_label = after_quote.get(label_length..)?;
+    let after_closing_quote = match quote {
+        Some(quote) => after_label.strip_prefix(quote)?,
+        None => after_label,
+    };
+    let newline_length = if after_closing_quote.starts_with("\r\n") {
+        2
+    } else if after_closing_quote.starts_with('\n') {
+        1
+    } else {
+        return None;
+    };
+    let quote_length = usize::from(quote.is_some());
+    let label_start = 3 + spaces + quote_length;
+    Some(HeredocHeader {
+        length: label_start + label_length + quote_length + newline_length,
+        label_start,
+        label_length,
+        is_nowdoc: quote == Some('\''),
+    })
+}
+
+/// Saturating usize-to-TextSize conversion; inputs are within the 4 GiB
+/// cap (`SourceText` guarantees it).
+fn text_size(length: usize) -> TextSize {
+    u32::try_from(length)
+        .map(TextSize::from)
+        .unwrap_or_else(|_| TextSize::from(u32::MAX))
 }

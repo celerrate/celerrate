@@ -36,13 +36,9 @@ enum Mode {
     /// Inside `` `...` ``.
     Backtick { opening: TextSize },
     /// Inside a heredoc body; `start` is the `<<<LABEL` token's range and
-    /// `label` the range of the bare label text within it. Not
-    /// constructed until Task 11.
-    #[allow(dead_code)]
+    /// `label` the range of the bare label text within it.
     Heredoc { start: TextRange, label: TextRange },
-    /// Inside a nowdoc body (no interpolation). Not constructed until
-    /// Task 11.
-    #[allow(dead_code)]
+    /// Inside a nowdoc body (no interpolation).
     Nowdoc { start: TextRange, label: TextRange },
     /// Inside the `[...]` offset of a simple string interpolation.
     VariableOffset,
@@ -53,8 +49,7 @@ const BASE_SCRIPTING: Mode = Mode::Scripting {
 };
 
 struct Lexer<'source> {
-    // Only read by `at_line_start`, unused until the heredoc task.
-    #[allow(dead_code)]
+    // Only read by `at_line_start`.
     source: &'source str,
     cursor: Cursor<'source>,
     modes: Vec<Mode>,
@@ -83,8 +78,8 @@ impl<'source> Lexer<'source> {
                 Mode::Scripting { .. } => self.lex_scripting(),
                 Mode::DoubleQuotedString { .. } => self.lex_double_quoted(),
                 Mode::Backtick { .. } => self.lex_backtick(),
-                // Heredoc bodies arrive in Task 11.
-                Mode::Heredoc { .. } | Mode::Nowdoc { .. } => self.lex_unexpected_character(),
+                Mode::Heredoc { label, .. } => self.lex_heredoc(label),
+                Mode::Nowdoc { label, .. } => self.lex_nowdoc(label),
                 Mode::VariableOffset => self.lex_variable_offset(),
             }
         }
@@ -159,13 +154,9 @@ impl<'source> Lexer<'source> {
         self.emit(SyntaxKind::Error);
     }
 
-    // Mode-stack discipline: tags replace the top (`set_mode`), braces
-    // and strings push and pop. `pop_mode` keeps the stack non-empty.
-    //
-    // `push_mode`, `pop_mode`, `can_pop_mode`, and `at_line_start` are not
-    // called yet: braces, string interpolation, and heredocs arrive in
-    // later tasks. They ship now with the rest of the shared machinery so
-    // those tasks only add call sites, never reshape this section.
+    // Mode-stack discipline: tags replace the top (`set_mode`), braces,
+    // strings, and heredocs push and pop. `pop_mode` keeps the stack
+    // non-empty.
 
     fn current_mode(&self) -> Mode {
         self.modes.last().copied().unwrap_or(Mode::InlineHtml)
@@ -194,7 +185,6 @@ impl<'source> Lexer<'source> {
 
     /// True at offset zero or right after a line feed; heredoc closing
     /// labels are only recognized at a line start.
-    #[allow(dead_code)]
     fn at_line_start(&self) -> bool {
         let consumed = self
             .source

@@ -2,6 +2,8 @@ use crate::diagnostic::LexerDiagnosticKind;
 use crate::lexer::{BASE_SCRIPTING, Lexer, Mode};
 use crate::syntax_kind::SyntaxKind;
 
+use super::strings::heredoc_header_at;
+
 /// PHP name start: `[a-zA-Z_\x80-\xff]`. Any non-ASCII char qualifies,
 /// matching Zend's byte-oriented rule on UTF-8 input.
 pub(crate) fn is_name_start(character: char) -> bool {
@@ -62,6 +64,9 @@ impl Lexer<'_> {
                 self.emit(SyntaxKind::AttributeOpen);
             }
             '#' => self.lex_line_comment(),
+            '<' if heredoc_header_at(self.cursor.rest()).is_some() => {
+                self.lex_heredoc_start();
+            }
             _ if self.try_lex_operator() => {}
             _ => self.lex_unexpected_character(),
         }
