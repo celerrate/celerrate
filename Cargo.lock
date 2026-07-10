@@ -10,6 +10,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_syntax"
+version = "0.1.0"
+dependencies = [
+ "celerrate_source",
+ "text-size",
+]
+
+[[package]]
 name = "text-size"
 version = "1.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
