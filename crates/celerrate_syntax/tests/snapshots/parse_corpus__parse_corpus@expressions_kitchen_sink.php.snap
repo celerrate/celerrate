@@ -296,10 +296,9 @@ SourceFile@0..662
                   IntegerLiteral@454..455 "0"
             Semicolon@455..456 ";"
           Whitespace@456..461 "\n    "
-          ErrorNode@461..467
+          ReturnStatement@461..477
             Return@461..467 "return"
-          Whitespace@467..468 " "
-          ExpressionStatement@468..477
+            Whitespace@467..468 " "
             PostfixExpression@468..476
               VariableReference@468..474
                 Variable@468..474 "$state"
@@ -431,5 +430,3 @@ SourceFile@0..662
             Variable@654..660 "$queue"
     Semicolon@660..661 ";"
   Whitespace@661..662 "\n"
----
-Parser(UnexpectedToken) @ 461..467

@@ -354,6 +354,12 @@ syntax_kinds! {
     Block,
     /// A lone `;`.
     EmptyStatement,
+    /// `return;` or `return expression;`.
+    ReturnStatement,
+    /// `break;` or `break level;`; level validity is semantic.
+    BreakStatement,
+    /// `continue;` or `continue level;`; level validity is semantic.
+    ContinueStatement,
 }
 
 /// The longest PHP keywords are `include_once` and `require_once`,

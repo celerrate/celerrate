@@ -27,6 +27,15 @@ fn dispatch_statement(parser: &mut Parser) {
         Some(SyntaxKind::OpenBrace) => block(parser),
         Some(SyntaxKind::Semicolon) => empty_statement(parser),
         Some(SyntaxKind::Echo) => echo_statement(parser),
+        Some(SyntaxKind::Return) => {
+            keyword_optional_expression_statement(parser, SyntaxKind::ReturnStatement)
+        }
+        Some(SyntaxKind::Break) => {
+            keyword_optional_expression_statement(parser, SyntaxKind::BreakStatement)
+        }
+        Some(SyntaxKind::Continue) => {
+            keyword_optional_expression_statement(parser, SyntaxKind::ContinueStatement)
+        }
         Some(kind) if starts_expression(kind) => expression_statement(parser),
         Some(_) => error_statement(parser),
         None => {}
@@ -79,6 +88,18 @@ fn echo_statement(parser: &mut Parser) {
     }
     terminate_statement(parser);
     marker.complete(parser, SyntaxKind::EchoStatement);
+}
+
+/// A keyword, an optional expression, the terminator: `return`,
+/// `break`, and `continue` share the shape.
+fn keyword_optional_expression_statement(parser: &mut Parser, kind: SyntaxKind) {
+    let marker = parser.start();
+    parser.bump();
+    if parser.current().is_some_and(starts_expression) {
+        expression(parser);
+    }
+    terminate_statement(parser);
+    marker.complete(parser, kind);
 }
 
 fn expression_statement(parser: &mut Parser) {
