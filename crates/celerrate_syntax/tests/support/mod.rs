@@ -1,7 +1,9 @@
 //! Shared helpers for the lexer integration tests. Every lexing goes
 //! through the lossless assertion: concatenated token lengths must cover
 //! the source exactly.
-#![allow(clippy::expect_used, clippy::indexing_slicing)]
+// Slicing by accumulated token lengths is the point of these helpers; a
+// bad slice must fail the test loudly.
+#![allow(clippy::indexing_slicing)]
 
 use celerrate_syntax::{LexerDiagnostic, SyntaxKind, Token, lex};
 

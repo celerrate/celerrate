@@ -113,10 +113,7 @@ impl<'source> Lexer<'source> {
                     self.diagnose_at(LexerDiagnosticKind::UnterminatedString, opening, 1);
                 }
                 Mode::Heredoc { start, .. } | Mode::Nowdoc { start, .. } => {
-                    self.diagnostics.push(LexerDiagnostic {
-                        kind: LexerDiagnosticKind::UnterminatedHeredoc,
-                        range: start,
-                    });
+                    self.diagnose(LexerDiagnosticKind::UnterminatedHeredoc, start);
                 }
             }
         }
