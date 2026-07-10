@@ -1032,6 +1032,9 @@ fn starts_parameter(parser: &mut Parser) -> bool {
                 | SyntaxKind::Protected
                 | SyntaxKind::Private
                 | SyntaxKind::Readonly
+                | SyntaxKind::Abstract
+                | SyntaxKind::Final
+                | SyntaxKind::Var
                 | SyntaxKind::AttributeOpen
         )
     )
@@ -1040,7 +1043,11 @@ fn starts_parameter(parser: &mut Parser) -> bool {
 fn parameter(parser: &mut Parser) {
     let marker = parser.start();
     super::attributes::attribute_groups(parser);
-    super::declarations::promotion_modifiers(parser);
+    // Constructor promotion accepts every member modifier (php-src's
+    // `optional_cpp_modifiers` is the same grammar as a class member's
+    // modifiers); which modifiers are legal on which parameters is
+    // semantic.
+    super::declarations::member_modifiers(parser);
     if !matches!(
         parser.current(),
         Some(SyntaxKind::Variable | SyntaxKind::Ampersand | SyntaxKind::Ellipsis)

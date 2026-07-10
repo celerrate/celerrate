@@ -491,8 +491,11 @@ fn types_then_property(parser: &mut Parser, marker: Marker) {
 /// `public`, `protected`, `private` (each optionally asymmetric:
 /// `private(set)`), `static`, `abstract`, `final`, `readonly`, `var`.
 /// Order, repetition, and combination are all judged upstairs; the
-/// parser accepts any sequence.
-fn member_modifiers(parser: &mut Parser) {
+/// parser accepts any sequence. Also the full modifier set constructor
+/// promotion admits: php-src's `optional_cpp_modifiers` is the same
+/// member-modifier grammar, and which modifiers are legal on a
+/// parameter is judged at compile time, not here.
+pub(super) fn member_modifiers(parser: &mut Parser) {
     loop {
         match parser.current() {
             Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private) => {
@@ -616,22 +619,6 @@ fn property_hook(parser: &mut Parser) {
             // guard.
             parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
             marker.complete(parser, SyntaxKind::PropertyHook);
-        }
-    }
-}
-
-/// Constructor promotion (8.0) and its 8.4 extensions on a parameter:
-/// visibility (optionally asymmetric) and `readonly`. Which parameters
-/// admit them (constructors only) is semantic.
-pub(super) fn promotion_modifiers(parser: &mut Parser) {
-    loop {
-        match parser.current() {
-            Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private) => {
-                parser.bump();
-                asymmetric_visibility_suffix(parser);
-            }
-            Some(SyntaxKind::Readonly) => parser.bump(),
-            _ => break,
         }
     }
 }

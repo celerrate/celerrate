@@ -166,3 +166,22 @@ fn an_unclosed_hook_list_terminates() {
     let diagnostics = parser_diagnostics("<?php class A { public int $x { get;");
     assert!(!diagnostics.is_empty());
 }
+
+#[test]
+fn constructor_promotion_accepts_final_alongside_visibility() {
+    // php-src's `optional_cpp_modifiers` is the full member-modifier
+    // set; legality of a given modifier on a parameter is judged at
+    // compile time, not by the parser.
+    assert_eq!(
+        parser_diagnostics(
+            "<?php class A { public function __construct(public final string $name) {} }"
+        ),
+        vec![]
+    );
+    assert_eq!(
+        parser_diagnostics(
+            "<?php class A { public function __construct(final public string $name) {} }"
+        ),
+        vec![]
+    );
+}
