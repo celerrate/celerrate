@@ -72,6 +72,10 @@ fn a_parenthesized_single_name_after_a_visibility_reads_as_the_suffix() {
         Variable "$x"
       Semicolon ";"
     "#);
+    assert_eq!(
+        parser_diagnostics("<?php class A { private (Foo) $x; }"),
+        vec![]
+    );
 }
 
 #[test]
@@ -289,4 +293,27 @@ fn junk_inside_an_adaptation_list_is_swept() {
         diagnostics.contains(&ParserDiagnosticKind::UnexpectedToken),
         "got {diagnostics:?}"
     );
+}
+
+#[test]
+fn an_alias_with_neither_visibility_nor_a_name_is_diagnosed() {
+    // Zend requires a visibility or a name after `as`; `A::b as;` alone
+    // has neither. Diagnostic only: the tree shape is unchanged.
+    assert!(
+        parser_diagnostics("<?php class A { use B { b as; } }")
+            .contains(&ParserDiagnosticKind::Expected(SyntaxKind::Identifier))
+    );
+}
+
+#[test]
+fn a_static_class_constant_parses_clean() {
+    assert_eq!(
+        parser_diagnostics("<?php class A { static const X = 1; }"),
+        vec![]
+    );
+}
+
+#[test]
+fn a_bare_unmodified_property_parses_clean() {
+    assert_eq!(parser_diagnostics("<?php class A { $x; }"), vec![]);
 }

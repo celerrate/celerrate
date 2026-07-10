@@ -3,6 +3,11 @@
 //! PHP-8.5: `type_expr`, `union_type`, `intersection_type`). Which
 //! compositions Zend accepts is a semantic judgment (`?A|B` and
 //! `(A|B)&C` it rejects); the parser accepts every composition.
+//! `starts_type` is deliberately narrower than `atomic_type`'s
+//! any-keyword acceptance: it is a dispatch predicate (which callers
+//! use to decide whether a type sits here at all), while `atomic_type`
+//! itself, once dispatched into, parses resiliently and accepts any
+//! keyword as a named type.
 
 use crate::diagnostic::ParserDiagnosticKind;
 use crate::syntax_kind::SyntaxKind;

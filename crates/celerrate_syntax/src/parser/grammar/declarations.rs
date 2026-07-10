@@ -127,7 +127,7 @@ fn function_declaration(parser: &mut Parser, marker: Marker) {
 /// member path parses its modifiers into `marker` first.
 ///
 /// Terminates: every iteration bumps a name or breaks.
-pub(super) fn constant_declaration(parser: &mut Parser, marker: Marker) {
+fn constant_declaration(parser: &mut Parser, marker: Marker) {
     parser.bump(); // `const`
     let at_untyped_name =
         at_semi_reserved_name(parser) && parser.nth(1) == Some(SyntaxKind::Equals);
@@ -344,7 +344,7 @@ pub(super) fn anonymous_class(parser: &mut Parser, marker: Marker) {
 
 /// The declared name. Zend rejects keywords here; every keyword parses
 /// as the name anyway (`class List {}` stays one analyzable
-/// declaration) and reservation is judged upstairs — except `extends`
+/// declaration) and reservation is judged upstairs: except `extends`
 /// and `implements`, which stay heritage clauses so a missing name
 /// cannot swallow them.
 fn class_like_name(parser: &mut Parser) {
@@ -715,14 +715,19 @@ fn trait_adaptation(parser: &mut Parser) {
         marker.complete(parser, SyntaxKind::TraitPrecedence);
     } else {
         parser.expect(SyntaxKind::As);
-        if matches!(
+        let has_visibility = matches!(
             parser.current(),
             Some(SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private)
-        ) {
+        );
+        if has_visibility {
             parser.bump();
         }
         if at_semi_reserved_name(parser) {
             parser.bump();
+        } else if !has_visibility {
+            // `A::b as;`: Zend requires a visibility or a name after
+            // `as`; neither is here.
+            parser.diagnose_missing(ParserDiagnosticKind::Expected(SyntaxKind::Identifier));
         }
         terminate_statement(parser);
         marker.complete(parser, SyntaxKind::TraitAlias);

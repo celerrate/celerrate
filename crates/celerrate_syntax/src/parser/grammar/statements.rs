@@ -648,8 +648,11 @@ mod tests {
         // token, and wrap it in an `ErrorNode`. No dispatcher arm
         // currently routes such a token here (bare `namespace` now
         // dispatches as a namespace declaration), so this drives the
-        // rule directly; the enum dispatch of a later task makes the
-        // branch reachable from source text again.
+        // rule directly; bare `enum` (no name following, so the
+        // declaration dispatch does not claim it) reaches this same
+        // branch from source text, pinned publicly by
+        // `a_bare_enum_with_no_name_is_diagnosed_and_wrapped` in
+        // `declarations_enums.rs`.
         let source = "<?php namespace + 1;";
         let (tokens, _lexer_diagnostics) = crate::lexer::lex(source);
         let mut parser = Parser::new(TokenSource::new(&tokens));

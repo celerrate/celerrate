@@ -86,3 +86,16 @@ fn a_case_without_a_name_is_diagnosed_and_the_enum_recovers() {
         "got {diagnostics:?}"
     );
 }
+
+#[test]
+fn a_bare_enum_with_no_name_is_diagnosed_and_wrapped() {
+    // `enum` with no name behind it: the declaration dispatch requires
+    // a following identifier, so this token reaches the expression
+    // grammar instead, which refuses it and wraps it in an `ErrorNode`.
+    // Losslessness is covered by `parse_verified` inside `parser_diagnostics`.
+    let diagnostics = parser_diagnostics("<?php enum;");
+    assert!(
+        diagnostics.contains(&ParserDiagnosticKind::ExpectedExpression),
+        "got {diagnostics:?}"
+    );
+}
