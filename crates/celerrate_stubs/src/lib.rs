@@ -7,6 +7,8 @@
 //! as a high-durability salsa input and a tracked query filters it by
 //! the project's PHP version range.
 
+mod index;
 mod symbol;
 
+pub use index::StubIndex;
 pub use symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
