@@ -215,7 +215,15 @@ fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
                 }
             }
         }
-        // Use declarations expand into imports (a later task);
+        SyntaxKind::UseDeclaration => {
+            if let Some(declaration) = ast::UseDeclaration::cast(item.node.clone()) {
+                let inherited =
+                    import_kind_of(declaration.import_type_token()).unwrap_or(ImportKind::Class);
+                for clause in declaration.use_clauses() {
+                    expand_use_clause(&clause, inherited, "", item, ast_id, tree);
+                }
+            }
+        }
         // namespace declarations carry no projection of their own.
         _ => {}
     }
@@ -239,6 +247,65 @@ fn push_declaration(
         implements: inheritance.implements,
         trait_uses: inheritance.trait_uses,
     });
+}
+
+/// The import kind named by a `function` / `const` token, when present.
+fn import_kind_of(token: Option<SyntaxToken>) -> Option<ImportKind> {
+    match token?.kind() {
+        SyntaxKind::Function => Some(ImportKind::Function),
+        SyntaxKind::Const => Some(ImportKind::Constant),
+        _ => None,
+    }
+}
+
+/// Expands one `use` clause: a plain clause becomes one import, a
+/// group form recurses with the accumulated prefix. Wreckage without a
+/// usable target expands to nothing.
+fn expand_use_clause(
+    clause: &ast::UseClause,
+    inherited: ImportKind,
+    prefix: &str,
+    item: &ItemNode,
+    ast_id: AstId,
+    tree: &mut ItemTree,
+) {
+    let kind = import_kind_of(clause.import_type_token()).unwrap_or(inherited);
+    let written = clause.name().map(|name| name.text()).unwrap_or_default();
+    let target = join_qualified(prefix, written.trim_start_matches('\\'));
+    if let Some(group) = clause.use_group() {
+        for inner in group.use_clauses() {
+            expand_use_clause(&inner, kind, &target, item, ast_id, tree);
+        }
+        return;
+    }
+    if target.is_empty() {
+        return;
+    }
+    let alias = clause
+        .alias_token()
+        .map(|token| token.text().to_owned())
+        .unwrap_or_else(|| last_segment(&target).to_owned());
+    tree.imports.push(UseImport {
+        kind,
+        target,
+        alias,
+        namespace: item.namespace.clone(),
+        ast_id,
+    });
+}
+
+fn join_qualified(prefix: &str, name: &str) -> String {
+    if prefix.is_empty() {
+        name.to_owned()
+    } else if name.is_empty() {
+        prefix.to_owned()
+    } else {
+        format!("{prefix}\\{name}")
+    }
+}
+
+fn last_segment(target: &str) -> &str {
+    target.rsplit('\\').next().unwrap_or(target)
 }
 
 #[cfg(test)]
@@ -521,5 +588,126 @@ mod tests {
         assert_eq!(function.extends, Vec::<String>::new());
         assert_eq!(function.implements, Vec::<String>::new());
         assert_eq!(function.trait_uses, Vec::<String>::new());
+    }
+
+    use super::{ImportKind, UseImport};
+
+    fn imports_of(source: &str) -> Vec<UseImport> {
+        tree_of(source).imports
+    }
+
+    fn targets_and_aliases(source: &str) -> Vec<(ImportKind, String, String)> {
+        imports_of(source)
+            .into_iter()
+            .map(|import| (import.kind, import.target, import.alias))
+            .collect()
+    }
+
+    #[test]
+    fn a_simple_use_imports_a_class_with_its_last_segment_as_alias() {
+        assert_eq!(
+            targets_and_aliases("<?php use Foo\\Bar;"),
+            vec![(ImportKind::Class, "Foo\\Bar".to_owned(), "Bar".to_owned())],
+        );
+    }
+
+    #[test]
+    fn a_leading_backslash_is_trimmed_from_the_target() {
+        // Use targets are always absolute; the written backslash adds
+        // nothing.
+        assert_eq!(
+            targets_and_aliases("<?php use \\Foo\\Bar;"),
+            vec![(ImportKind::Class, "Foo\\Bar".to_owned(), "Bar".to_owned())],
+        );
+    }
+
+    #[test]
+    fn an_explicit_alias_wins() {
+        assert_eq!(
+            targets_and_aliases("<?php use Foo\\Bar as Baz;"),
+            vec![(ImportKind::Class, "Foo\\Bar".to_owned(), "Baz".to_owned())],
+        );
+    }
+
+    #[test]
+    fn function_and_const_declarations_set_the_import_kind() {
+        assert_eq!(
+            targets_and_aliases("<?php use function Foo\\greet; use const Foo\\LIMIT;"),
+            vec![
+                (
+                    ImportKind::Function,
+                    "Foo\\greet".to_owned(),
+                    "greet".to_owned()
+                ),
+                (
+                    ImportKind::Constant,
+                    "Foo\\LIMIT".to_owned(),
+                    "LIMIT".to_owned()
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_group_expands_with_the_shared_prefix() {
+        assert_eq!(
+            targets_and_aliases("<?php use Foo\\Bar\\{Baz, Qux\\Deep as D};"),
+            vec![
+                (
+                    ImportKind::Class,
+                    "Foo\\Bar\\Baz".to_owned(),
+                    "Baz".to_owned()
+                ),
+                (
+                    ImportKind::Class,
+                    "Foo\\Bar\\Qux\\Deep".to_owned(),
+                    "D".to_owned()
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_mixed_group_overrides_the_kind_per_clause() {
+        assert_eq!(
+            targets_and_aliases("<?php use Foo\\{function greet, const LIMIT, Service};",),
+            vec![
+                (
+                    ImportKind::Function,
+                    "Foo\\greet".to_owned(),
+                    "greet".to_owned()
+                ),
+                (
+                    ImportKind::Constant,
+                    "Foo\\LIMIT".to_owned(),
+                    "LIMIT".to_owned()
+                ),
+                (
+                    ImportKind::Class,
+                    "Foo\\Service".to_owned(),
+                    "Service".to_owned()
+                ),
+            ],
+        );
+    }
+
+    #[test]
+    fn comma_separated_clauses_each_import() {
+        assert_eq!(
+            targets_and_aliases("<?php use Foo\\A, Foo\\B;"),
+            vec![
+                (ImportKind::Class, "Foo\\A".to_owned(), "A".to_owned()),
+                (ImportKind::Class, "Foo\\B".to_owned(), "B".to_owned()),
+            ],
+        );
+    }
+
+    #[test]
+    fn imports_carry_their_enclosing_namespace_and_identity() {
+        let tree = tree_of("<?php namespace App; use Lib\\Helper;");
+        let import = tree.imports.first().unwrap();
+        assert_eq!(import.namespace, "App");
+        // Numbering: namespace = 0, use declaration = 1.
+        assert_eq!(import.ast_id.index, 1);
     }
 }
