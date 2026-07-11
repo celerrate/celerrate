@@ -11,6 +11,7 @@ mod item_nodes;
 mod items;
 mod lookup;
 mod queries;
+mod reference_checks;
 mod references;
 mod resolve;
 mod symbols;
@@ -23,6 +24,9 @@ pub use index::{
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use queries::{ast_id_map, item_tree};
+pub use reference_checks::{
+    UNKNOWN_CLASS, UNKNOWN_CONSTANT, UNKNOWN_FUNCTION, reference_diagnostics,
+};
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
