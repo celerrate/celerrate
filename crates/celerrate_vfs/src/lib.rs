@@ -7,10 +7,12 @@
 //! root can pump new states into the database. It never reads anything
 //! during a query: it pushes states, salsa pulls derivations.
 //!
-//! Callers pass absolute, already-normalized paths: normalization
-//! policy (separators, case, symlinks) is owned by the discovery layer
-//! that walks the disk, not by the map that interns its results.
+//! Callers pass absolute, already-normalized paths to the map:
+//! [`normalize_path`] produces them, and the discovery layer above
+//! decides what gets walked.
 
+mod path;
 mod vfs;
 
+pub use path::normalize_path;
 pub use vfs::{ChangedFile, Vfs};
