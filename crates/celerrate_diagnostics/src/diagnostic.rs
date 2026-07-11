@@ -3,16 +3,20 @@ use celerrate_source::{FileId, TextRange};
 use crate::identifier::DiagnosticId;
 use crate::severity::Severity;
 
-/// One reported finding: a stable identifier, a severity, and the
-/// primary span it points at. The minimal shared shape every producer
-/// projects into; ordering is total and deterministic so diagnostic
-/// lists can be sorted and compared byte for byte.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// One reported finding: a stable identifier, a severity, the primary
+/// span it points at, and the rendered message. The minimal shared shape
+/// every producer projects into; ordering is total and deterministic so
+/// diagnostic lists can be sorted and compared byte for byte.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Diagnostic {
     pub id: DiagnosticId,
     pub severity: Severity,
     pub file: FileId,
     pub range: TextRange,
+    /// The rendered one-sentence message, parameterized by the producer
+    /// (the written name, the required version). The rich anatomy —
+    /// annotated spans, notes, suggestions — is sub-project 4.
+    pub message: String,
 }
 
 impl Ord for Diagnostic {
@@ -23,6 +27,7 @@ impl Ord for Diagnostic {
             self.range.end(),
             self.id,
             self.severity,
+            &self.message,
         )
             .cmp(&(
                 other.file,
@@ -30,6 +35,7 @@ impl Ord for Diagnostic {
                 other.range.end(),
                 other.id,
                 other.severity,
+                &other.message,
             ))
     }
 }
@@ -54,6 +60,7 @@ mod tests {
             severity: Severity::Error,
             file: FileId::new(file),
             range: TextRange::new(TextSize::from(start), TextSize::from(end)),
+            message: String::new(),
         }
     }
 
@@ -96,5 +103,21 @@ mod tests {
             diagnostic(0, 0, 1, "CEL0002"),
             diagnostic(0, 0, 1, "CEL0002")
         );
+    }
+
+    #[test]
+    fn the_message_is_the_final_ordering_tie_break() {
+        let first = Diagnostic {
+            id: DiagnosticId::new("CEL9999"),
+            severity: Severity::Error,
+            file: FileId::new(0),
+            range: TextRange::empty(0.into()),
+            message: "alpha".to_owned(),
+        };
+        let second = Diagnostic {
+            message: "beta".to_owned(),
+            ..first.clone()
+        };
+        assert!(first < second);
     }
 }

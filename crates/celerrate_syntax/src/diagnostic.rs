@@ -127,12 +127,52 @@ impl ParserDiagnosticKind {
     }
 }
 
+impl LexerDiagnosticKind {
+    fn message(self) -> String {
+        match self {
+            Self::UnexpectedCharacter => "unexpected character".to_owned(),
+            Self::UnterminatedBlockComment => "unterminated block comment".to_owned(),
+            Self::UnterminatedString => "unterminated string literal".to_owned(),
+            Self::UnterminatedHeredoc => "unterminated heredoc".to_owned(),
+            Self::UnterminatedInterpolation => "unterminated string interpolation".to_owned(),
+        }
+    }
+}
+
+impl ParserDiagnosticKind {
+    fn message(self) -> String {
+        match self {
+            Self::ExpectedExpression => "expected an expression".to_owned(),
+            Self::ExpectedSemicolon => "expected `;`".to_owned(),
+            Self::Expected(kind) => format!("expected {kind:?}"),
+            Self::UnexpectedToken => "unexpected token".to_owned(),
+            Self::NestingTooDeep => "the input nests too deeply".to_owned(),
+            Self::NonAssociativeOperator => {
+                "non-associative operators cannot be chained".to_owned()
+            }
+            Self::NoProgress => "unable to interpret the input here".to_owned(),
+            Self::ExpectedMemberName => "expected a member name".to_owned(),
+            Self::ExpectedStatement => "expected a statement".to_owned(),
+            Self::ExpectedType => "expected a type".to_owned(),
+            Self::ExpectedDeclaration => "expected a declaration".to_owned(),
+        }
+    }
+}
+
 impl SyntaxDiagnostic {
     /// The stable identifier of this diagnostic's kind.
     pub const fn diagnostic_id(&self) -> DiagnosticId {
         match self.kind {
             SyntaxDiagnosticKind::Lexer(kind) => kind.diagnostic_id(),
             SyntaxDiagnosticKind::Parser(kind) => kind.diagnostic_id(),
+        }
+    }
+
+    /// The rendered message of this finding.
+    pub fn message(&self) -> String {
+        match self.kind {
+            SyntaxDiagnosticKind::Lexer(kind) => kind.message(),
+            SyntaxDiagnosticKind::Parser(kind) => kind.message(),
         }
     }
 
@@ -144,6 +184,7 @@ impl SyntaxDiagnostic {
             severity: Severity::Error,
             file,
             range: self.range,
+            message: self.message(),
         }
     }
 }
@@ -212,5 +253,27 @@ mod tests {
     fn parses_compare_equal_to_themselves() {
         let parse = crate::parse("<?php echo 1;");
         assert_eq!(parse.clone(), parse);
+    }
+
+    #[test]
+    fn a_missing_semicolon_projects_its_message() {
+        let parse = crate::parse("<?php $x = 1");
+        let messages: Vec<String> = parse
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.to_diagnostic(FileId::new(0)).message)
+            .collect();
+        assert!(
+            messages.contains(&"expected `;`".to_owned()),
+            "messages: {messages:?}",
+        );
+    }
+
+    #[test]
+    fn every_kind_has_a_non_empty_message() {
+        let parse = crate::parse("<?php class { $");
+        for diagnostic in parse.diagnostics() {
+            assert!(!diagnostic.to_diagnostic(FileId::new(0)).message.is_empty());
+        }
     }
 }
