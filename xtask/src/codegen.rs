@@ -3,6 +3,7 @@
 //! writes them to the workspace. The freshness test compares
 //! `artifacts()` against the committed files.
 
+pub mod grammar;
 pub mod tokens;
 
 use std::path::PathBuf;
