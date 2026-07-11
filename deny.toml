@@ -1,5 +1,8 @@
 [licenses]
-allow = ["MIT", "Apache-2.0"]
+# Zlib (foldhash, via salsa) and Unicode-3.0 (unicode-ident, via
+# salsa-macros) are permissive, OSI-approved licenses pulled in by the
+# salsa dependency tree.
+allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0"]
 
 [advisories]
 yanked = "deny"

@@ -1,0 +1,17 @@
+[package]
+name = "celerrate_db"
+description = "Salsa inputs and foundational queries for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_syntax = { path = "../celerrate_syntax" }
+salsa = { workspace = true }
+
+[lints]
+workspace = true
