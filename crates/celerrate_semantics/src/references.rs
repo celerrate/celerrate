@@ -108,6 +108,11 @@ fn visit(node: &SyntaxNode, namespace: &str, references: &mut Vec<Reference>) {
                 }
             }
         }
+        SyntaxKind::NameExpression => {
+            if let Some(expression) = ast::NameExpression::cast(node.clone()) {
+                visit_name_expression(&expression, namespace, references);
+            }
+        }
         _ => {}
     }
 }
@@ -143,6 +148,126 @@ fn is_built_in_type_name(written: &str) -> bool {
     ]
     .iter()
     .any(|built_in| written.eq_ignore_ascii_case(built_in))
+}
+
+/// The role of a `NameExpression`, decided by its parent: the callee
+/// of a call is a function reference, the subject of `::` and the
+/// right-hand side of `instanceof` are class references, everything
+/// else is a constant fetch.
+enum NameExpressionRole {
+    Callee,
+    ClassSubject,
+    ConstantFetch,
+}
+
+fn visit_name_expression(
+    expression: &ast::NameExpression,
+    namespace: &str,
+    references: &mut Vec<Reference>,
+) {
+    if expression.static_keyword_token().is_some() {
+        return;
+    }
+    let Some(name) = expression.name() else {
+        return;
+    };
+    match role_of(expression.syntax()) {
+        NameExpressionRole::Callee => {
+            let written = name.text();
+            if written.is_empty() {
+                return;
+            }
+            references.push(Reference {
+                written,
+                space: SymbolSpace::Function,
+                namespace: namespace.to_owned(),
+                range: name.syntax().text_range(),
+            });
+        }
+        NameExpressionRole::ClassSubject => push_class_like(&name, namespace, references),
+        NameExpressionRole::ConstantFetch => {
+            let written = name.text();
+            if written.is_empty() || is_language_constant(&written) {
+                return;
+            }
+            references.push(Reference {
+                written,
+                space: SymbolSpace::Constant,
+                namespace: namespace.to_owned(),
+                range: name.syntax().text_range(),
+            });
+        }
+    }
+}
+
+fn role_of(node: &SyntaxNode) -> NameExpressionRole {
+    let Some(parent) = node.parent() else {
+        return NameExpressionRole::ConstantFetch;
+    };
+    match parent.kind() {
+        SyntaxKind::CallExpression => {
+            let is_callee = ast::CallExpression::cast(parent)
+                .and_then(|call| call.callee())
+                .is_some_and(|callee| callee.syntax() == node);
+            if is_callee {
+                NameExpressionRole::Callee
+            } else {
+                NameExpressionRole::ConstantFetch
+            }
+        }
+        SyntaxKind::ScopedAccessExpression => {
+            let is_subject = ast::ScopedAccessExpression::cast(parent)
+                .and_then(|access| access.subject())
+                .is_some_and(|subject| subject.syntax() == node);
+            if is_subject {
+                NameExpressionRole::ClassSubject
+            } else {
+                NameExpressionRole::ConstantFetch
+            }
+        }
+        SyntaxKind::BinaryExpression => {
+            let is_instanceof_right_hand_side = ast::BinaryExpression::cast(parent)
+                .filter(|binary| {
+                    binary
+                        .operator_token()
+                        .is_some_and(|operator| operator.kind() == SyntaxKind::InstanceOf)
+                })
+                .and_then(|binary| binary.rhs())
+                .is_some_and(|right| right.syntax() == node);
+            if is_instanceof_right_hand_side {
+                NameExpressionRole::ClassSubject
+            } else {
+                NameExpressionRole::ConstantFetch
+            }
+        }
+        _ => NameExpressionRole::ConstantFetch,
+    }
+}
+
+/// `true`, `false`, `null`, and the magic constants: language-defined,
+/// never symbol-table lookups. Compared after trimming one leading `\`
+/// (`\true` is the same literal), only for single-segment names.
+fn is_language_constant(written: &str) -> bool {
+    let unqualified = written.strip_prefix('\\').unwrap_or(written);
+    if unqualified.contains('\\') {
+        return false;
+    }
+    [
+        "true",
+        "false",
+        "null",
+        "__LINE__",
+        "__FILE__",
+        "__DIR__",
+        "__FUNCTION__",
+        "__CLASS__",
+        "__TRAIT__",
+        "__METHOD__",
+        "__NAMESPACE__",
+        "__PROPERTY__",
+    ]
+    .iter()
+    .any(|constant| unqualified.eq_ignore_ascii_case(constant))
 }
 
 #[cfg(test)]
@@ -270,6 +395,85 @@ mod tests {
                      null|false|true $k): void {}
                  enum Suit: string {}",
             ),
+            vec![],
+        );
+    }
+
+    fn function_reference(written: &str, namespace: &str) -> (String, SymbolSpace, String) {
+        (
+            written.to_owned(),
+            SymbolSpace::Function,
+            namespace.to_owned(),
+        )
+    }
+
+    fn constant_reference(written: &str, namespace: &str) -> (String, SymbolSpace, String) {
+        (
+            written.to_owned(),
+            SymbolSpace::Constant,
+            namespace.to_owned(),
+        )
+    }
+
+    #[test]
+    fn a_call_references_a_function() {
+        assert_eq!(
+            collected("<?php namespace App; strlen($x); \\count($y); inner(outer());"),
+            vec![
+                function_reference("strlen", "App"),
+                function_reference("\\count", "App"),
+                function_reference("inner", "App"),
+                function_reference("outer", "App"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_scoped_subject_references_its_class() {
+        assert_eq!(
+            collected("<?php Status::Open; Config::class; Client::create(); $x::CONST;"),
+            vec![
+                class_like("Status", ""),
+                class_like("Config", ""),
+                class_like("Client", ""),
+            ],
+        );
+    }
+
+    #[test]
+    fn an_instanceof_right_hand_side_is_a_class() {
+        assert_eq!(
+            collected("<?php $ok = $x instanceof Comparable;"),
+            vec![class_like("Comparable", "")],
+        );
+    }
+
+    #[test]
+    fn a_bare_name_is_a_constant_reference() {
+        assert_eq!(
+            collected("<?php $a = PHP_EOL; $b = Config\\LIMIT;"),
+            vec![
+                constant_reference("PHP_EOL", ""),
+                constant_reference("Config\\LIMIT", ""),
+            ],
+        );
+    }
+
+    #[test]
+    fn language_and_magic_constants_are_not_references() {
+        assert_eq!(
+            collected(
+                "<?php $a = true; $b = FALSE; $c = null; $d = \\true;
+                 $e = __DIR__; $f = __class__; $g = __NAMESPACE__;",
+            ),
+            vec![],
+        );
+    }
+
+    #[test]
+    fn relative_and_dynamic_subjects_are_not_references() {
+        assert_eq!(
+            collected("<?php self::f(); parent::g(); static::h(); $x instanceof self;"),
             vec![],
         );
     }
