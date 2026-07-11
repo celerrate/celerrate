@@ -72,6 +72,10 @@ impl AutoloadRules {
     }
 }
 
+/// Iteration is key-sorted and deterministic because `serde_json`'s
+/// default map is a `BTreeMap`; the `preserve_order` feature must stay
+/// off workspace-wide, and the declaration-order-independence test is
+/// the alarm if that ever changes.
 fn namespace_mappings(value: Option<&serde_json::Value>) -> Vec<NamespaceMapping> {
     let Some(object) = value.and_then(serde_json::Value::as_object) else {
         return Vec::new();
@@ -172,6 +176,17 @@ mod tests {
         ));
         assert_eq!(merged.psr4.len(), 2);
         assert_eq!(merged.files, vec![String::from("dev.php")]);
+    }
+
+    #[test]
+    fn namespace_mappings_are_key_sorted_regardless_of_declaration_order() {
+        let rules = rules(r#"{ "psr-4": { "Zebra\\": "zebra/", "Alpha\\": "alpha/" } }"#);
+        let prefixes: Vec<&str> = rules
+            .psr4
+            .iter()
+            .map(|mapping| mapping.prefix.as_str())
+            .collect();
+        assert_eq!(prefixes, vec!["Alpha\\", "Zebra\\"]);
     }
 
     #[test]

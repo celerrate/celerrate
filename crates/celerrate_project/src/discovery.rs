@@ -318,6 +318,22 @@ mod tests {
     }
 
     #[test]
+    fn an_invalid_platform_without_require_reports_once_and_falls_back() {
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            Some(r#"{ "config": { "platform": { "php": "eight" } } }"#),
+            None,
+        );
+        assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
+        assert_eq!(
+            discovery.notices,
+            vec![ProjectNotice::InvalidPhpVersionConstraint {
+                constraint: String::from("eight"),
+            }],
+        );
+    }
+
+    #[test]
     fn declared_autoload_replaces_the_root_walk_and_vendor_joins_in() {
         let discovery = discover_from_sources(
             Path::new(ROOT),

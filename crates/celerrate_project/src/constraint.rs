@@ -393,6 +393,13 @@ mod tests {
     }
 
     #[test]
+    fn a_malformed_alternative_poisons_the_whole_constraint() {
+        // Fail-closed by decision: one unparseable alternative makes
+        // the whole constraint unparseable, and the caller reports it.
+        assert_eq!(version_range_for_constraint("banana || ^8.1"), None);
+    }
+
+    #[test]
     fn a_platform_version_is_a_concrete_literal() {
         assert_eq!(php_version_from_text("8.1.2"), Some(PhpVersion::new(8, 1)));
         assert_eq!(

@@ -122,7 +122,7 @@ mod tests {
     #[test]
     fn nameless_entries_are_skipped_and_broken_documents_rejected() {
         let packages = parse_installed_packages(
-            r#"{ "packages": [ { "install-path": "../x/y" }, { "name": "kept/one" } ] }"#,
+            r#"{ "packages": [ { "install-path": "../x/y" }, "not an object", { "name": "kept/one" } ] }"#,
             Path::new(COMPOSER_DIRECTORY),
         )
         .unwrap();
