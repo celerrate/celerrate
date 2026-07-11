@@ -139,8 +139,10 @@ fn vendor_root(root: &Path, manifest: Option<&ComposerManifest>) -> PathBuf {
 /// The parent spec's detection precedence, minus its `celerrate.toml`
 /// first stage: `config.platform.php` (a point, clamped), then
 /// `require.php` as a range, then the latest stable with a warning.
-/// An unparseable stage reports itself and falls through; the plain
-/// fallback notice fires only when no version signal existed at all.
+/// An unparseable stage reports itself and falls through: each invalid
+/// field carries its own notice, but the plain fallback notice never
+/// stacks on a constraint notice — it fires only when no version
+/// signal existed at all.
 fn resolve_version_range(
     manifest: &ComposerManifest,
     notices: &mut Vec<ProjectNotice>,
@@ -284,6 +286,32 @@ mod tests {
             vec![ProjectNotice::InvalidPhpVersionConstraint {
                 constraint: String::from("7.4.*"),
             }],
+        );
+    }
+
+    #[test]
+    fn each_invalid_version_field_reports_itself_once() {
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            Some(
+                r#"{
+                    "require": { "php": "7.4.*" },
+                    "config": { "platform": { "php": "eight" } }
+                }"#,
+            ),
+            None,
+        );
+        assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
+        assert_eq!(
+            discovery.notices,
+            vec![
+                ProjectNotice::InvalidPhpVersionConstraint {
+                    constraint: String::from("eight"),
+                },
+                ProjectNotice::InvalidPhpVersionConstraint {
+                    constraint: String::from("7.4.*"),
+                },
+            ],
         );
     }
 
