@@ -8,8 +8,10 @@
 //! follows the parent spec's detection precedence. This crate is pure:
 //! the configuration becomes a salsa input at the composition root.
 
+mod constraint;
 mod version;
 
+pub use constraint::{php_version_from_text, version_range_for_constraint};
 pub use version::{
     LATEST_STABLE_VERSION, OLDEST_SUPPORTED_VERSION, PhpVersion, PhpVersionRange,
     SUPPORTED_VERSIONS,
