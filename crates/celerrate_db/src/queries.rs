@@ -40,6 +40,10 @@ pub fn line_index(db: &dyn salsa::Database, file: SourceFile) -> LineIndex {
 /// The file's decoded bytes would exceed the 4 GiB engine cap.
 pub const SOURCE_TOO_LARGE: DiagnosticId = DiagnosticId::new("CEL0001");
 
+/// Every identifier this crate allocates, for the registry check at the
+/// composition root.
+pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[SOURCE_TOO_LARGE];
+
 /// Every diagnostic of one file, in deterministic source order: the
 /// decode failure when the file could not be decoded, the projected
 /// syntax diagnostics otherwise. Semantic families join in later parts.

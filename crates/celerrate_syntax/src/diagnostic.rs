@@ -159,6 +159,28 @@ impl ParserDiagnosticKind {
     }
 }
 
+/// Every identifier this crate allocates, for the registry check at the
+/// composition root. The `Expected` family shares `CEL0009`: the
+/// identifier names the problem class, not the missing token.
+pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
+    DiagnosticId::new("CEL0002"),
+    DiagnosticId::new("CEL0003"),
+    DiagnosticId::new("CEL0004"),
+    DiagnosticId::new("CEL0005"),
+    DiagnosticId::new("CEL0006"),
+    DiagnosticId::new("CEL0007"),
+    DiagnosticId::new("CEL0008"),
+    DiagnosticId::new("CEL0009"),
+    DiagnosticId::new("CEL0010"),
+    DiagnosticId::new("CEL0011"),
+    DiagnosticId::new("CEL0012"),
+    DiagnosticId::new("CEL0013"),
+    DiagnosticId::new("CEL0014"),
+    DiagnosticId::new("CEL0015"),
+    DiagnosticId::new("CEL0016"),
+    DiagnosticId::new("CEL0017"),
+];
+
 impl SyntaxDiagnostic {
     /// The stable identifier of this diagnostic's kind.
     pub const fn diagnostic_id(&self) -> DiagnosticId {
@@ -306,5 +328,37 @@ mod tests {
             };
             assert!(!diagnostic.to_diagnostic(FileId::new(0)).message.is_empty());
         }
+    }
+
+    #[test]
+    fn the_allocation_list_is_exactly_what_the_kinds_use() {
+        let mut used: Vec<DiagnosticId> = Vec::new();
+        for kind in [
+            LexerDiagnosticKind::UnexpectedCharacter,
+            LexerDiagnosticKind::UnterminatedBlockComment,
+            LexerDiagnosticKind::UnterminatedString,
+            LexerDiagnosticKind::UnterminatedHeredoc,
+            LexerDiagnosticKind::UnterminatedInterpolation,
+        ] {
+            used.push(kind.diagnostic_id());
+        }
+        for kind in [
+            ParserDiagnosticKind::ExpectedExpression,
+            ParserDiagnosticKind::ExpectedSemicolon,
+            ParserDiagnosticKind::Expected(SyntaxKind::Semicolon),
+            ParserDiagnosticKind::UnexpectedToken,
+            ParserDiagnosticKind::NestingTooDeep,
+            ParserDiagnosticKind::NonAssociativeOperator,
+            ParserDiagnosticKind::NoProgress,
+            ParserDiagnosticKind::ExpectedMemberName,
+            ParserDiagnosticKind::ExpectedStatement,
+            ParserDiagnosticKind::ExpectedType,
+            ParserDiagnosticKind::ExpectedDeclaration,
+        ] {
+            used.push(kind.diagnostic_id());
+        }
+        used.sort();
+        used.dedup();
+        assert_eq!(used, ALLOCATED_IDENTIFIERS.to_vec());
     }
 }

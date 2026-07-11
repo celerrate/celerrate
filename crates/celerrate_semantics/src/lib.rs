@@ -26,8 +26,8 @@ pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
 pub use reference_checks::{
-    SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS, UNKNOWN_CONSTANT,
-    UNKNOWN_FUNCTION, reference_diagnostics,
+    ALLOCATED_IDENTIFIERS, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS,
+    UNKNOWN_CONSTANT, UNKNOWN_FUNCTION, reference_diagnostics,
 };
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};

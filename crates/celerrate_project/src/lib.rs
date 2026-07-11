@@ -24,8 +24,8 @@ pub use input::ProjectConfiguration;
 pub use installed::{VendorPackage, parse_installed_packages};
 pub use manifest::{ComposerManifest, parse_manifest};
 pub use notice::{
-    INVALID_COMPOSER_MANIFEST, INVALID_INSTALLED_PACKAGES, INVALID_PHP_VERSION_CONSTRAINT,
-    MISSING_COMPOSER_MANIFEST, PHP_VERSION_FALLBACK, ProjectNotice,
+    ALLOCATED_IDENTIFIERS, INVALID_COMPOSER_MANIFEST, INVALID_INSTALLED_PACKAGES,
+    INVALID_PHP_VERSION_CONSTRAINT, MISSING_COMPOSER_MANIFEST, PHP_VERSION_FALLBACK, ProjectNotice,
 };
 pub use version::{
     LATEST_STABLE_VERSION, OLDEST_SUPPORTED_VERSION, PhpVersion, PhpVersionRange,
