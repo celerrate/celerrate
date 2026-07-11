@@ -12,5 +12,9 @@ celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_vfs = { path = "../celerrate_vfs" }
 serde_json = { workspace = true }
 
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+tempfile = { workspace = true }
+
 [lints]
 workspace = true

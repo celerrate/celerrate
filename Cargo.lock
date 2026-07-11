@@ -66,8 +66,11 @@ dependencies = [
 name = "celerrate_project"
 version = "0.1.0"
 dependencies = [
+ "celerrate_db",
+ "celerrate_diagnostics",
  "celerrate_vfs",
  "serde_json",
+ "tempfile",
 ]
 
 [[package]]
