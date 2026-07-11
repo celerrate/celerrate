@@ -13,6 +13,8 @@
 
 mod path;
 mod vfs;
+mod walk;
 
 pub use path::normalize_path;
 pub use vfs::{ChangedFile, Vfs};
+pub use walk::enumerate_php_files;

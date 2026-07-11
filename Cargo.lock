@@ -85,6 +85,7 @@ name = "celerrate_vfs"
 version = "0.1.0"
 dependencies = [
  "celerrate_source",
+ "tempfile",
 ]
 
 [[package]]
