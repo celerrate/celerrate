@@ -1,12 +1,20 @@
-//! The incremental correctness harness, grown to the boundary: edit
+//! The incremental correctness harness, grown to resolution: edit
 //! sequences replayed over one incremental database, with the item
-//! tree and the numbering asserted identical to a from-scratch
-//! analysis after every edit.
+//! tree, the numbering, the symbol table, and name resolution asserted
+//! identical to a from-scratch analysis after every edit.
 
 #![allow(clippy::unwrap_used)]
 
-use celerrate_db::testing::assert_incremental_consistency_with;
-use celerrate_semantics::{ast_id_map, item_tree};
+use celerrate_db::testing::{
+    assert_incremental_consistency_with, assert_incremental_consistency_with_context,
+};
+use celerrate_db::{AnalyzedFileSet, SourceFile};
+use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
+use celerrate_semantics::{
+    SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, resolve_name,
+    source_symbol_table,
+};
+use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 
 fn assert_semantic_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])]) {
     assert_incremental_consistency_with(
@@ -87,5 +95,106 @@ fn multiple_files_replay_independently() {
             (1, b"<?php namespace B; class Two {} class Three {}"),
             (0, b"<?php namespace A;"),
         ],
+    );
+}
+
+type ResolutionContext = (AnalyzedFileSet, StubIndexInput, ProjectConfiguration);
+
+fn resolution_context(
+    db: &celerrate_db::testing::TestDatabase,
+    files: &[SourceFile],
+) -> ResolutionContext {
+    (
+        AnalyzedFileSet::new(db, files.to_vec()),
+        StubIndexInput::builder(StubIndex::from_symbols(vec![StubSymbol {
+            name: "strlen".to_owned(),
+            kind: StubSymbolKind::Function,
+            availability: StubAvailability::ALWAYS,
+        }]))
+        .durability(salsa::Durability::HIGH)
+        .new(db),
+        ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(db),
+    )
+}
+
+/// Every inheritance name of every file, resolved: the resolution
+/// traffic a real check would produce, in deterministic order.
+fn resolution_answers(
+    db: &celerrate_db::testing::TestDatabase,
+    context: &ResolutionContext,
+) -> Vec<(String, Option<SymbolResolution>)> {
+    let (files, stubs, configuration) = *context;
+    let sources = SymbolSources {
+        files,
+        stubs,
+        configuration,
+    };
+    let mut answers = Vec::new();
+    for &file in files.files(db) {
+        let tree = celerrate_semantics::item_tree(db, file);
+        for declaration in &tree.declarations {
+            let tables = UseTables::for_namespace(tree, &declaration.namespace);
+            for name in declaration
+                .extends
+                .iter()
+                .chain(&declaration.implements)
+                .chain(&declaration.trait_uses)
+            {
+                answers.push((
+                    name.clone(),
+                    resolve_name(
+                        db,
+                        sources,
+                        &declaration.namespace,
+                        &tables,
+                        name,
+                        SymbolSpace::ClassLike,
+                    ),
+                ));
+            }
+        }
+    }
+    answers
+}
+
+#[test]
+fn resolution_matches_a_from_scratch_analysis_after_every_edit() {
+    assert_incremental_consistency_with_context(
+        &[
+            b"<?php namespace App; use Lib\\Helper; class Consumer extends Helper implements Contract {}",
+            b"<?php namespace Lib; class Helper {}",
+            b"<?php namespace App; interface Contract {}",
+        ],
+        &[
+            // A body edit: nothing observable changes.
+            (1, b"<?php namespace Lib; class Helper { public function noop() {} }"),
+            // The referenced declaration disappears.
+            (1, b"<?php namespace Lib;"),
+            // It returns under a different spelling: class lookups are
+            // case-insensitive, so it resolves again.
+            (1, b"<?php namespace Lib; class HELPER {}"),
+            // The import is re-aliased: the reference now misses it.
+            (0, b"<?php namespace App; use Lib\\Helper as Aid; class Consumer extends Helper implements Contract {}"),
+            // A new file-set-neutral edit: an unrelated declaration.
+            (2, b"<?php namespace App; interface Contract {} interface Extra {}"),
+        ],
+        &resolution_context,
+        &|incremental, context, from_scratch, fresh_context| {
+            assert_eq!(
+                source_symbol_table(incremental, context.0),
+                source_symbol_table(from_scratch, fresh_context.0),
+                "the symbol tables diverged",
+            );
+            assert_eq!(
+                resolution_answers(incremental, context),
+                resolution_answers(from_scratch, fresh_context),
+                "the resolution answers diverged",
+            );
+        },
     );
 }

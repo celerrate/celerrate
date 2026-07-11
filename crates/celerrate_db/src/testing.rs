@@ -76,16 +76,40 @@ pub fn assert_incremental_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])
     );
 }
 
-/// The closure form of the replay: upper layers (the item tree today,
-/// the symbol index in part 5) extend the same harness with their own
-/// per-file comparison, without any dependency from this crate upward.
-/// The closure receives the incremental database and its file handle,
-/// the from-scratch database and its fresh handle, and the file index;
-/// it runs for every file after the initial state and after every edit.
+/// The closure form of the replay: upper layers extend the same
+/// harness with their own per-file comparison, without any dependency
+/// from this crate upward. The closure receives the incremental
+/// database and its file handle, the from-scratch database and its
+/// fresh handle, and the file index; it runs for every file after the
+/// initial state and after every edit.
 pub fn assert_incremental_consistency_with(
     initial: &[&[u8]],
     edits: &[(usize, &[u8])],
     assert_file_matches: &dyn Fn(&TestDatabase, SourceFile, &TestDatabase, SourceFile, usize),
+) {
+    assert_incremental_consistency_with_context(
+        initial,
+        edits,
+        // The per-file form needs no whole-project inputs: its context is the file handles themselves.
+        &|_, files| files.to_vec(),
+        &|incremental, files, from_scratch, fresh_files| {
+            for (index, (file, fresh_file)) in files.iter().zip(fresh_files).enumerate() {
+                assert_file_matches(incremental, *file, from_scratch, *fresh_file, index);
+            }
+        },
+    );
+}
+
+/// The state-level form of the replay: `make_context` creates the
+/// whole-project inputs (the analyzed file set, the stub index, the
+/// configuration) once for the incremental database and once per
+/// from-scratch database, and `assert_state_matches` compares the two
+/// databases after the initial state and after every edit.
+pub fn assert_incremental_consistency_with_context<Context>(
+    initial: &[&[u8]],
+    edits: &[(usize, &[u8])],
+    make_context: &dyn Fn(&TestDatabase, &[SourceFile]) -> Context,
+    assert_state_matches: &dyn Fn(&TestDatabase, &Context, &TestDatabase, &Context),
 ) {
     let mut incremental = TestDatabase::default();
     let mut current: Vec<Vec<u8>> = initial.iter().map(|bytes| bytes.to_vec()).collect();
@@ -96,8 +120,15 @@ pub fn assert_incremental_consistency_with(
             SourceFile::new(&incremental, FileId::new(index as u32), bytes.clone())
         })
         .collect();
+    let context = make_context(&incremental, &files);
 
-    assert_matches_from_scratch(&incremental, &files, &current, assert_file_matches);
+    assert_state_against_scratch(
+        &incremental,
+        &context,
+        &current,
+        make_context,
+        assert_state_matches,
+    );
     for &(file_index, new_bytes) in edits {
         assert!(
             file_index < files.len(),
@@ -109,19 +140,31 @@ pub fn assert_incremental_consistency_with(
         };
         *slot = new_bytes.to_vec();
         file.set_bytes(&mut incremental).to(new_bytes.to_vec());
-        assert_matches_from_scratch(&incremental, &files, &current, assert_file_matches);
+        assert_state_against_scratch(
+            &incremental,
+            &context,
+            &current,
+            make_context,
+            assert_state_matches,
+        );
     }
 }
 
-fn assert_matches_from_scratch(
+fn assert_state_against_scratch<Context>(
     incremental: &TestDatabase,
-    files: &[SourceFile],
+    context: &Context,
     current: &[Vec<u8>],
-    assert_file_matches: &dyn Fn(&TestDatabase, SourceFile, &TestDatabase, SourceFile, usize),
+    make_context: &dyn Fn(&TestDatabase, &[SourceFile]) -> Context,
+    assert_state_matches: &dyn Fn(&TestDatabase, &Context, &TestDatabase, &Context),
 ) {
     let from_scratch = TestDatabase::default();
-    for (index, (file, bytes)) in files.iter().zip(current).enumerate() {
-        let fresh_file = SourceFile::new(&from_scratch, FileId::new(index as u32), bytes.clone());
-        assert_file_matches(incremental, *file, &from_scratch, fresh_file, index);
-    }
+    let fresh_files: Vec<SourceFile> = current
+        .iter()
+        .enumerate()
+        .map(|(index, bytes)| {
+            SourceFile::new(&from_scratch, FileId::new(index as u32), bytes.clone())
+        })
+        .collect();
+    let fresh_context = make_context(&from_scratch, &fresh_files);
+    assert_state_matches(incremental, context, &from_scratch, &fresh_context);
 }
