@@ -12,4 +12,4 @@ mod queries;
 pub mod testing;
 
 pub use input::SourceFile;
-pub use queries::{line_index, parse, source_text};
+pub use queries::{SOURCE_TOO_LARGE, file_diagnostics, line_index, parse, source_text};

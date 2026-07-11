@@ -1,4 +1,5 @@
-use celerrate_source::{LineIndex, SourceText, SourceTooLarge};
+use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
+use celerrate_source::{LineIndex, SourceText, SourceTooLarge, TextRange, TextSize};
 use celerrate_syntax::Parse;
 
 use crate::input::SourceFile;
@@ -33,6 +34,30 @@ pub fn line_index(db: &dyn salsa::Database, file: SourceFile) -> LineIndex {
     match source_text(db, file) {
         Ok(text) => LineIndex::new(text.text()),
         Err(_) => LineIndex::new(""),
+    }
+}
+
+/// The file's decoded bytes would exceed the 4 GiB engine cap.
+pub const SOURCE_TOO_LARGE: DiagnosticId = DiagnosticId::new("CEL0001");
+
+/// Every diagnostic of one file, in deterministic source order: the
+/// decode failure when the file could not be decoded, the projected
+/// syntax diagnostics otherwise. Semantic families join in later parts.
+#[salsa::tracked(returns(ref))]
+pub fn file_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
+    let file_id = file.file_id(db);
+    match source_text(db, file) {
+        Err(_) => vec![Diagnostic {
+            id: SOURCE_TOO_LARGE,
+            severity: Severity::Error,
+            file: file_id,
+            range: TextRange::empty(TextSize::from(0)),
+        }],
+        Ok(_) => parse(db, file)
+            .diagnostics()
+            .iter()
+            .map(|diagnostic| diagnostic.to_diagnostic(file_id))
+            .collect(),
     }
 }
 
@@ -81,5 +106,32 @@ mod tests {
         assert_eq!(parse(&db, file).tree().text().to_string(), "<?php echo 1;");
         file.set_bytes(&mut db).to(b"<?php echo 2;".to_vec());
         assert_eq!(parse(&db, file).tree().text().to_string(), "<?php echo 2;");
+    }
+
+    use crate::{SOURCE_TOO_LARGE, file_diagnostics};
+
+    #[test]
+    fn clean_files_have_no_diagnostics() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(&db, FileId::new(0), b"<?php echo 1;".to_vec());
+        assert!(file_diagnostics(&db, file).is_empty());
+    }
+
+    #[test]
+    fn syntax_diagnostics_project_with_the_file_identifier() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(&db, FileId::new(9), b"<?php echo ;".to_vec());
+        let diagnostics = file_diagnostics(&db, file);
+        assert!(!diagnostics.is_empty());
+        for diagnostic in diagnostics {
+            assert_eq!(diagnostic.file, FileId::new(9));
+            assert_eq!(diagnostic.severity, celerrate_diagnostics::Severity::Error);
+            assert!(diagnostic.id.as_str().starts_with("CEL"));
+        }
+    }
+
+    #[test]
+    fn source_too_large_is_stable() {
+        assert_eq!(SOURCE_TOO_LARGE.as_str(), "CEL0001");
     }
 }
