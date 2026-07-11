@@ -85,8 +85,9 @@ Semantics an implementer must not re-litigate mid-task:
   `config.platform.php` (a concrete version, collapsing to a point range, clamped
   into the supported window) → `require.php` interpreted as a range → fallback
   [latest, latest] with CEL0020. An unparseable stage emits CEL0021 and falls
-  through; CEL0020 fires only when NO version signal existed at all, so a project
-  never gets two version notices.
+  through; each invalid field carries its own CEL0021, and CEL0020 fires only when
+  NO version signal existed at all, so the plain fallback notice never stacks on a
+  constraint notice.
 - **Notice economy.** A missing or invalid manifest emits exactly one notice (CEL0018
   or CEL0019); the version fallback it implies is not separately reported. A missing
   `installed.json` is silent (a project without installed dependencies is normal); an
