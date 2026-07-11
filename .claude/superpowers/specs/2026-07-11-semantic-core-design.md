@@ -59,8 +59,12 @@ index, the analyzed file set) and the foundational queries every layer
 shares. `parse(file)` chains `SourceText::from_bytes` and
 `celerrate_syntax::parse`; `line_index(file)` becomes the derived query
 foundations part 2 anticipated. Higher-level query definitions live in
-their domain crates; the concrete `salsa::Database` aggregating all
-storage is assembled at the composition root (`celerrate_cli`).
+their domain crates, and — recorded here after implementation review —
+so do the inputs whose field types live above this layer: the project
+configuration is defined in `celerrate_project`, the stub index in
+`celerrate_stubs`; the input list above names the base-db role, not one
+crate's contents. The concrete `salsa::Database` aggregating all storage
+is assembled at the composition root (`celerrate_cli`).
 
 The engine uses the upstream `salsa` crate (the one ty builds on),
 assumed openly as the engine's spine. Unlike `rowan`, salsa cannot be
