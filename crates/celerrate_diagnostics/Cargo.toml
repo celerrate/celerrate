@@ -1,0 +1,14 @@
+[package]
+name = "celerrate_diagnostics"
+description = "Shared diagnostic data model for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_source = { path = "../celerrate_source" }
+
+[lints]
+workspace = true
