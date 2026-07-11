@@ -443,7 +443,7 @@ DeclareDirective = name:'identifier' '=' value:Expression
 //**********************//
 
 /// `function name(parameters): type { body }`, the top-level form;
-/// methods arrive with the declarations plan.
+/// methods are `MethodDeclaration`.
 FunctionDeclaration =
   AttributeGroup* 'function' by_reference:'&'? name:'identifier'
   ParameterList (':' return_type:Type)? Block

@@ -1505,7 +1505,7 @@ impl DeclareStatement {
 }
 
 /// `function name(parameters): type { body }`, the top-level form;
-/// methods arrive with the declarations plan.
+/// methods are `MethodDeclaration`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct FunctionDeclaration {
     syntax: SyntaxNode,

@@ -338,7 +338,7 @@ pub enum SyntaxKind {
     /// accessor yields nothing there.
     DeclareStatement,
     /// `function name(parameters): type { body }`, the top-level form;
-    /// methods arrive with the declarations plan.
+    /// methods are `MethodDeclaration`.
     FunctionDeclaration,
     /// `const FOO = 1, BAR = 2;`, optionally typed (8.3), at the top
     /// level or as a class member (with modifiers).

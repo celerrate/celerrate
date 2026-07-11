@@ -59,8 +59,8 @@ mod tests {
     use crate::syntax_kind::SyntaxKind;
     use crate::tree::SyntaxNode;
 
-    // Hand-rolled views: the generated code arrives in the next task;
-    // the infrastructure must already carry any conforming type.
+    // Hand-rolled views: the infrastructure must carry any conforming
+    // type, independently of the generated code.
     struct EchoStatementView {
         syntax: SyntaxNode,
     }

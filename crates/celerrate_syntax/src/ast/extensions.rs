@@ -216,8 +216,8 @@ impl Parameter {
 
 impl PropertyHook {
     /// The hook name (`get`, `set`; semi-reserved in practice): the
-    /// first name token, except a leading `final`, which is the
-    /// modifier unless it is the only candidate left.
+    /// first name token after a leading `final`, which is always read
+    /// as the modifier.
     pub fn name_token(&self) -> Option<SyntaxToken> {
         let mut names = tokens_of(self.syntax()).filter(|token| is_name_token(token.kind()));
         let first = names.next()?;
