@@ -4,10 +4,11 @@ mod support;
 
 use celerrate_syntax::SyntaxKind;
 use celerrate_syntax::ast::{
-    ArrayElement, AstNode, ClassDeclaration, ConstantDeclaration, EnumCase, Expression,
-    ForeachStatement, MatchArm, MatchExpression, MemberAccessExpression, MemberDeclaration,
-    MethodDeclaration, NamedType, NamedTypeName, SourceFile, Statement, TernaryExpression,
-    TraitAlias, TraitPrecedence, TraitUseClause, Type, UseClause, UseDeclaration, YieldExpression,
+    ArrayElement, AstNode, BinaryExpression, ClassDeclaration, ConstantDeclaration,
+    DeclareStatement, EnumCase, Expression, ForeachStatement, MatchArm, MatchExpression,
+    MemberAccessExpression, MemberDeclaration, MethodDeclaration, NamedType, NamedTypeName,
+    SourceFile, Statement, TernaryExpression, TraitAlias, TraitPrecedence, TraitUseClause, Type,
+    UseClause, UseDeclaration, YieldExpression,
 };
 
 #[test]
@@ -277,4 +278,91 @@ fn labels_hooks_and_modifiers_resolve() {
         .map(|token| token.text().to_owned())
         .collect();
     assert_eq!(modifiers, ["public", "static"]);
+}
+
+#[test]
+fn partial_trees_are_normal_citizens() {
+    // Broken input still yields typed nodes; the missing pieces are
+    // `None`, never a panic and never a shifted role.
+    let parse = support::parse_verified("<?php class {");
+    let class_declaration: ClassDeclaration = first_descendant(&parse);
+    assert!(class_declaration.name_token().is_none());
+    assert!(
+        class_declaration.member_list().is_some(),
+        "the member list node completes even while broken"
+    );
+    assert!(!parse.diagnostics().is_empty());
+
+    let parse = support::parse_verified("<?php $a + ;");
+    let binary: BinaryExpression = first_descendant(&parse);
+    assert!(binary.lhs().is_some());
+    assert!(
+        binary.rhs().is_none(),
+        "a missing operand is a None, not a shift"
+    );
+
+    // Recovery-shape note: `function f(` never reaches a matching `)` or
+    // a `{`, yet the parser still closes out a `Block` node (zero-width,
+    // no braces) rather than omitting it, so `block()` is `Some`, not
+    // `None`. The Option guarantee still holds: the recovered block
+    // faithfully reports that it has no statements, rather than
+    // fabricating content or panicking.
+    let parse = support::parse_verified("<?php function f(");
+    let function: celerrate_syntax::ast::FunctionDeclaration = first_descendant(&parse);
+    assert_eq!(function.name_token().expect("the name").text(), "f");
+    assert!(function.parameter_list().is_some());
+    let block = function
+        .block()
+        .expect("recovery still builds an empty block node");
+    assert_eq!(
+        block.statements().count(),
+        0,
+        "the recovered block is empty, not fabricated"
+    );
+}
+
+#[test]
+fn a_close_tag_declare_body_yields_no_statement() {
+    // Recorded in plan 3 and carried here: a classic `declare` body of
+    // `?>` leaves a bare CloseTag token with no statement-node child,
+    // so the typed statement list is empty.
+    let parse = support::parse_verified("<?php declare(strict_types=1) ?>");
+    let declare: DeclareStatement = first_descendant(&parse);
+    assert_eq!(declare.declare_directives().count(), 1);
+    assert_eq!(declare.statements().count(), 0);
+}
+
+#[test]
+fn typed_casts_are_consistent_over_the_whole_corpus() {
+    // For every corpus tree: lossless, and `can_cast` agrees with
+    // `cast` on every node for the two big alternations. This is the
+    // typed layer's zero-panic guarantee, exercised at corpus scale.
+    let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/parse_corpus");
+    let mut checked = 0usize;
+    for entry in std::fs::read_dir(corpus).expect("the corpus directory exists") {
+        let path = entry.expect("a readable entry").path();
+        if path.extension().is_none_or(|extension| extension != "php") {
+            continue;
+        }
+        let source = std::fs::read_to_string(&path).expect("a corpus file reads");
+        let parse = celerrate_syntax::parse(&source);
+        assert_eq!(
+            parse.tree().text().to_string(),
+            source,
+            "lossless: {}",
+            path.display()
+        );
+        for node in parse.tree().descendants() {
+            if Statement::can_cast(node.kind()) {
+                let statement = Statement::cast(node.clone()).expect("can_cast implies cast");
+                assert_eq!(statement.syntax(), &node);
+            }
+            if Expression::can_cast(node.kind()) {
+                let expression = Expression::cast(node.clone()).expect("can_cast implies cast");
+                assert_eq!(expression.syntax(), &node);
+            }
+        }
+        checked += 1;
+    }
+    assert!(checked > 20, "the corpus was actually traversed");
 }

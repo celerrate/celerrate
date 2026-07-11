@@ -24,5 +24,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (classes with anonymous forms, interfaces, traits, enums, property
   hooks and asymmetric visibility, constructor promotion, union /
   intersection / DNF types, attributes, `const`/`namespace`/`use`).
+- `celerrate_syntax`: a typed AST layer generated from `php.ungram` by
+  the new dev-only `xtask` workspace member: the `SyntaxKind` node
+  kinds and the typed node structs (`Option`/iterator accessors
+  everywhere, so partial trees from error recovery are normal
+  citizens), plus hand-written accessors for semi-reserved names and
+  position-dependent roles. A sourcegen test keeps the committed
+  generated code fresh. This closes the Foundations sub-project.
 
 [Unreleased]: https://github.com/celerrate/celerrate/commits/main
