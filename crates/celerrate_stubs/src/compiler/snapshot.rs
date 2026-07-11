@@ -47,12 +47,33 @@ fn walk(directory: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
     Ok(())
 }
 
+/// The fetched pinned snapshot, if present: reads the pin file
+/// committed next to xtask and points into `target/`. `None` when the
+/// snapshot has not been fetched (or the pin is unreadable): callers
+/// treat that as "nothing to compare against", never as an error.
+pub fn pinned_snapshot_directory() -> Option<PathBuf> {
+    let manifest_directory = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_root = manifest_directory.parent()?.parent()?;
+    let pin_text = std::fs::read_to_string(workspace_root.join("xtask/phpstorm-stubs.pin")).ok()?;
+    let commit = pin_text.lines().find_map(|line| {
+        let (key, value) = line.split_once('=')?;
+        (key.trim() == "commit").then(|| value.trim().to_owned())
+    })?;
+    let directory = workspace_root.join("target/phpstorm-stubs").join(commit);
+    directory.is_dir().then_some(directory)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+    #![allow(clippy::panic)]
 
     use std::fs;
     use std::path::Path;
+
+    use crate::blob::{encode, fnv1a64};
+    use crate::compiler::extract::extract;
+    use crate::index::StubIndex;
 
     use super::stub_files;
 
@@ -109,5 +130,38 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let missing = root.path().join("absent");
         assert!(stub_files(&missing).is_err());
+    }
+
+    /// The committed blob must be exactly what the pinned snapshot
+    /// compiles to. Runs only when the snapshot has been fetched
+    /// (`cargo xtask fetch-stubs`); CI enforces it unconditionally
+    /// through `cargo xtask compile-stubs --check`. Debug-build note:
+    /// this parses the whole snapshot and can take a few minutes.
+    #[test]
+    fn the_committed_blob_matches_a_recompilation_of_the_pinned_snapshot() {
+        let Some(snapshot) = super::pinned_snapshot_directory() else {
+            eprintln!(
+                "skipped: pinned snapshot not fetched; run `cargo xtask fetch-stubs` to enable this test",
+            );
+            return;
+        };
+        let files = match super::stub_files(&snapshot) {
+            Ok(files) => files,
+            Err(error) => panic!("cannot walk the snapshot: {error}"),
+        };
+        let mut symbols = Vec::new();
+        for path in &files {
+            if let Ok(text) = std::fs::read_to_string(path) {
+                symbols.extend(extract(&text).symbols);
+            }
+        }
+        let recompiled = encode(&StubIndex::from_symbols(symbols));
+        let committed = crate::EMBEDDED_STUB_BLOB;
+        // Compare via length + hash: a byte-for-byte assert_eq would
+        // dump megabytes on failure.
+        assert!(
+            recompiled.len() == committed.len() && fnv1a64(&recompiled) == fnv1a64(committed),
+            "src/stubs.bin is stale: run `cargo xtask compile-stubs` and commit the result",
+        );
     }
 }
