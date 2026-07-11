@@ -31,5 +31,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   citizens), plus hand-written accessors for semi-reserved names and
   position-dependent roles. A sourcegen test keeps the committed
   generated code fresh. This closes the Foundations sub-project.
+- `celerrate_diagnostics`: the shared diagnostic data model (stable
+  `CEL####` identifiers, severity, primary span); lexer and parser
+  diagnostics project into it.
+- `celerrate_vfs`: the virtual file system (interned file identifiers,
+  disk state, in-memory overlays, change draining).
+- `celerrate_db`: the salsa base layer (`SourceFile` input;
+  `source_text`, `parse`, `line_index`, and `file_diagnostics` as
+  incremental queries), with the invalidation-scope tests and the
+  incremental-consistency harness skeleton. This opens the semantic
+  core sub-project.
 
 [Unreleased]: https://github.com/celerrate/celerrate/commits/main
