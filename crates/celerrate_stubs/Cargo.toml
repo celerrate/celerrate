@@ -19,6 +19,12 @@ celerrate_syntax = { path = "../celerrate_syntax", optional = true }
 
 [dev-dependencies]
 celerrate_syntax = { path = "../celerrate_syntax" }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "stub-compiler"
+path = "src/bin/stub-compiler.rs"
+required-features = ["compiler"]
 
 [lints]
 workspace = true
