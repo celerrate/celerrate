@@ -96,6 +96,49 @@ impl Inheritance {
     };
 }
 
+/// The written names of one clause, in source order.
+fn names_of(names: Option<ast::AstChildren<ast::Name>>) -> Vec<String> {
+    names
+        .into_iter()
+        .flatten()
+        .map(|name| name.text())
+        .collect()
+}
+
+/// The trait names a class-like uses, read from its member list. The
+/// traversal never descends into member lists; this projection field
+/// is the one place the tree looks inside one, because the spec names
+/// trait `use` among the inheritance names.
+fn trait_use_names(member_list: Option<ast::MemberList>) -> Vec<String> {
+    member_list
+        .into_iter()
+        .flat_map(|list| list.member_declarations())
+        .filter_map(|member| match member {
+            ast::MemberDeclaration::TraitUseClause(clause) => Some(clause),
+            _ => None,
+        })
+        .flat_map(|clause| clause.names())
+        .map(|name| name.text())
+        .collect()
+}
+
+/// The unresolved inheritance names of one class-like declaration. The
+/// four generated class-like types share accessor names but no trait;
+/// this macro reads them uniformly.
+macro_rules! inheritance_of {
+    ($declaration:expr) => {
+        Inheritance {
+            extends: names_of($declaration.extends_clause().map(|clause| clause.names())),
+            implements: names_of(
+                $declaration
+                    .implements_clause()
+                    .map(|clause| clause.names()),
+            ),
+            trait_uses: trait_use_names($declaration.member_list()),
+        }
+    };
+}
+
 fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
     match item.node.kind() {
         SyntaxKind::ClassDeclaration => {
@@ -106,7 +149,7 @@ fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
                     ast_id,
                     DeclarationKind::Class,
                     declaration.name_token(),
-                    Inheritance::NONE,
+                    inheritance_of!(declaration),
                 );
             }
         }
@@ -118,7 +161,7 @@ fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
                     ast_id,
                     DeclarationKind::Interface,
                     declaration.name_token(),
-                    Inheritance::NONE,
+                    inheritance_of!(declaration),
                 );
             }
         }
@@ -130,7 +173,7 @@ fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
                     ast_id,
                     DeclarationKind::Trait,
                     declaration.name_token(),
-                    Inheritance::NONE,
+                    inheritance_of!(declaration),
                 );
             }
         }
@@ -142,7 +185,7 @@ fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
                     ast_id,
                     DeclarationKind::Enum,
                     declaration.name_token(),
-                    Inheritance::NONE,
+                    inheritance_of!(declaration),
                 );
             }
         }
@@ -414,5 +457,69 @@ mod tests {
     fn empty_and_html_only_files_project_nothing() {
         assert_eq!(tree_of("").declarations, Vec::new());
         assert_eq!(tree_of("plain text, no PHP").declarations, Vec::new());
+    }
+
+    fn only_declaration(source: &str) -> super::Declaration {
+        let tree = tree_of(source);
+        assert_eq!(tree.declarations.len(), 1, "expected one declaration");
+        tree.declarations.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_class_carries_its_unresolved_inheritance_names() {
+        let class = only_declaration(
+            "<?php namespace App;\n\
+             class Service extends \\Core\\Base implements Contract, \\Psr\\Log\\LoggerAwareInterface {\n\
+                 use Concerns\\Loggable;\n\
+                 use \\Shared\\Serializable;\n\
+             }\n",
+        );
+        assert_eq!(class.extends, vec!["\\Core\\Base".to_owned()]);
+        assert_eq!(
+            class.implements,
+            vec![
+                "Contract".to_owned(),
+                "\\Psr\\Log\\LoggerAwareInterface".to_owned(),
+            ],
+        );
+        assert_eq!(
+            class.trait_uses,
+            vec![
+                "Concerns\\Loggable".to_owned(),
+                "\\Shared\\Serializable".to_owned(),
+            ],
+        );
+    }
+
+    #[test]
+    fn an_interface_extends_many_parents() {
+        let interface = only_declaration("<?php interface Both extends First, Second\\Third {}");
+        assert_eq!(
+            interface.extends,
+            vec!["First".to_owned(), "Second\\Third".to_owned()],
+        );
+        assert_eq!(interface.implements, Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_enum_carries_its_implements_names() {
+        let declaration =
+            only_declaration("<?php enum Suit: string implements HasColor { use Colored; }");
+        assert_eq!(declaration.implements, vec!["HasColor".to_owned()]);
+        assert_eq!(declaration.trait_uses, vec!["Colored".to_owned()]);
+    }
+
+    #[test]
+    fn a_grouped_trait_use_lists_every_name() {
+        let class = only_declaration("<?php class Mixed { use A, B\\C; }");
+        assert_eq!(class.trait_uses, vec!["A".to_owned(), "B\\C".to_owned()],);
+    }
+
+    #[test]
+    fn functions_and_constants_carry_no_inheritance() {
+        let function = only_declaration("<?php function greet() {}");
+        assert_eq!(function.extends, Vec::<String>::new());
+        assert_eq!(function.implements, Vec::<String>::new());
+        assert_eq!(function.trait_uses, Vec::<String>::new());
     }
 }
