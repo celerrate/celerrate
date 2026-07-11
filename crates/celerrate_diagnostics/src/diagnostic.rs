@@ -69,7 +69,7 @@ mod tests {
 
     #[test]
     fn diagnostics_order_by_file_then_range_then_identifier() {
-        let mut diagnostics = vec![
+        let mut diagnostics = [
             diagnostic(1, 0, 1, "CEL0002"),
             diagnostic(0, 5, 9, "CEL0002"),
             diagnostic(0, 0, 4, "CEL0003"),
