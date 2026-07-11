@@ -79,7 +79,9 @@ name = "celerrate_semantics"
 version = "0.1.0"
 dependencies = [
  "celerrate_db",
+ "celerrate_project",
  "celerrate_source",
+ "celerrate_stubs",
  "celerrate_syntax",
  "salsa",
 ]

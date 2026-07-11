@@ -9,7 +9,9 @@ repository.workspace = true
 
 [dependencies]
 celerrate_db = { path = "../celerrate_db" }
+celerrate_project = { path = "../celerrate_project" }
 celerrate_source = { path = "../celerrate_source" }
+celerrate_stubs = { path = "../celerrate_stubs" }
 celerrate_syntax = { path = "../celerrate_syntax" }
 salsa = { workspace = true }
 

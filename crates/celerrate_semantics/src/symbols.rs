@@ -5,6 +5,7 @@
 //! the engine's own folding.
 
 use crate::items::DeclarationKind;
+use celerrate_stubs::StubSymbolKind;
 
 /// The symbol space a name resolves in. Classes, interfaces, traits,
 /// and enums share one space; functions and constants each have their
@@ -26,6 +27,18 @@ impl SymbolSpace {
             | DeclarationKind::Enum => Self::ClassLike,
             DeclarationKind::Function => Self::Function,
             DeclarationKind::Constant => Self::Constant,
+        }
+    }
+
+    /// The space a compiled stub symbol occupies.
+    pub fn of_stub_kind(kind: StubSymbolKind) -> Self {
+        match kind {
+            StubSymbolKind::Class
+            | StubSymbolKind::Interface
+            | StubSymbolKind::Trait
+            | StubSymbolKind::Enum => Self::ClassLike,
+            StubSymbolKind::Function => Self::Function,
+            StubSymbolKind::Constant => Self::Constant,
         }
     }
 }
@@ -57,6 +70,7 @@ pub fn folded_symbol_key(space: SymbolSpace, fully_qualified: &str) -> String {
 mod tests {
     use super::{SymbolSpace, folded_symbol_key, fully_qualified_name};
     use crate::items::DeclarationKind;
+    use celerrate_stubs::StubSymbolKind;
 
     #[test]
     fn every_declaration_kind_maps_to_its_space() {
@@ -125,6 +139,34 @@ mod tests {
         assert_eq!(
             folded_symbol_key(SymbolSpace::ClassLike, "App\\Éxception"),
             "app\\Éxception",
+        );
+    }
+
+    #[test]
+    fn every_stub_kind_maps_to_its_space() {
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Class),
+            SymbolSpace::ClassLike,
+        );
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Interface),
+            SymbolSpace::ClassLike,
+        );
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Trait),
+            SymbolSpace::ClassLike,
+        );
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Enum),
+            SymbolSpace::ClassLike,
+        );
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Function),
+            SymbolSpace::Function,
+        );
+        assert_eq!(
+            SymbolSpace::of_stub_kind(StubSymbolKind::Constant),
+            SymbolSpace::Constant,
         );
     }
 }
