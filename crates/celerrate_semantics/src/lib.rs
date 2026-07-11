@@ -6,6 +6,7 @@
 //! salsa its early cutoff.
 
 mod ast_id;
+mod defines;
 mod index;
 mod item_nodes;
 mod items;
@@ -18,8 +19,9 @@ mod symbols;
 mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
+pub use defines::{DefineId, DefinedConstant, defined_constants};
 pub use index::{
-    StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolTable, source_symbol_table,
+    StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
     stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};

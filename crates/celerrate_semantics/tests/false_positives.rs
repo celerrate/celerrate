@@ -108,3 +108,62 @@ fn realistic_sources_produce_no_diagnostics() {
         assert_eq!(diagnostics, &vec![], "file {:?}", file.file_id(&db));
     }
 }
+
+/// One source, checked alone against the real embedded stub index: zero
+/// semantic diagnostics is the only acceptable outcome.
+fn assert_no_diagnostics(source: &str) {
+    let db = TestDatabase::default();
+    let file = SourceFile::new(&db, FileId::new(0), source.as_bytes().to_vec());
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(embedded_stub_index().unwrap())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
+    assert_eq!(diagnostics, &vec![], "source: {source}");
+}
+
+#[test]
+fn a_define_in_a_method_body_is_not_an_unknown_constant() {
+    // The case that motivated the design: bootstrap code calling
+    // `define()` from a static method is not exotic, and an unseen
+    // `define()` is a false positive.
+    assert_no_diagnostics(
+        r"<?php
+        class Bootstrap {
+            public static function boot(): void {
+                define('APP_ROOT', __DIR__);
+            }
+        }
+        echo APP_ROOT;
+        ",
+    );
+}
+
+#[test]
+fn a_define_inside_a_namespace_declares_globally() {
+    assert_no_diagnostics(
+        r"<?php
+        namespace App;
+        define('APP_ROOT', __DIR__);
+        echo APP_ROOT;
+        echo \APP_ROOT;
+        ",
+    );
+}
+
+#[test]
+fn a_qualified_define_literal_resolves_where_it_says() {
+    assert_no_diagnostics(
+        r"<?php
+        namespace App;
+        define('Vendor\Product\LIMIT', 10);
+        echo \Vendor\Product\LIMIT;
+        ",
+    );
+}

@@ -455,4 +455,26 @@ mod tests {
         );
         assert_eq!(diagnostics, vec![]);
     }
+
+    #[test]
+    fn a_dynamically_named_define_is_not_indexed() {
+        let diagnostics = checked_in_range(
+            &["<?php define($name, 1); echo APP_ROOT;"],
+            vec![stub("define", StubSymbolKind::Function)],
+            full_range(),
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
+    }
+
+    #[test]
+    fn a_define_keeps_its_terminal_segment_case_sensitive() {
+        let diagnostics = checked_in_range(
+            &["<?php define('APP_ROOT', 1); echo App_Root;"],
+            vec![stub("define", StubSymbolKind::Function)],
+            full_range(),
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
+    }
 }

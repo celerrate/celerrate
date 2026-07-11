@@ -11,9 +11,20 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_stubs::{StubIndexInput, StubSymbol, stubs_in_range};
 
 use crate::ast_id::AstId;
+use crate::defines::{DefineId, defined_constants};
 use crate::items::DeclarationKind;
 use crate::queries::item_tree;
 use crate::symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
+
+/// Where a source symbol was declared: an item the item tree numbers, or
+/// a `define()` call the item tree cannot see. Items sort before defines,
+/// so a `const FOO` and a `define('FOO')` under one key resolve to the
+/// `const`, deterministically.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SymbolOrigin {
+    Item(AstId),
+    Define(DefineId),
+}
 
 /// One declared symbol: its lookup key, the original spelling (the
 /// "did you mean" diagnostics of sub-project 4 will need it), and the
@@ -24,7 +35,7 @@ pub struct SymbolEntry {
     pub key: String,
     pub original: String,
     pub kind: DeclarationKind,
-    pub ast_id: AstId,
+    pub origin: SymbolOrigin,
 }
 
 /// The declared symbols of the analyzed file set, sorted by
@@ -42,13 +53,13 @@ impl SymbolTable {
             (
                 left.space,
                 left.key.as_str(),
-                left.ast_id,
+                left.origin,
                 left.original.as_str(),
             )
                 .cmp(&(
                     right.space,
                     right.key.as_str(),
-                    right.ast_id,
+                    right.origin,
                     right.original.as_str(),
                 ))
         });
@@ -70,10 +81,10 @@ impl SymbolTable {
     }
 }
 
-/// The source symbol table of the analyzed file set. Depends on every
-/// member's item tree: a signature change anywhere rebuilds it (the
-/// merge is cheap), and the per-name lookups behind it backdate for
-/// every name whose answer did not change.
+/// The source symbol table of the analyzed file set: every item tree's
+/// declarations, plus every `define()` the file introduces. Depends on
+/// both per-file queries, and on nothing that a body edit can move: a
+/// span never enters an entry, so the table still backdates.
 #[salsa::tracked(returns(ref))]
 pub fn source_symbol_table(db: &dyn salsa::Database, files: AnalyzedFileSet) -> SymbolTable {
     let mut entries = Vec::new();
@@ -86,7 +97,30 @@ pub fn source_symbol_table(db: &dyn salsa::Database, files: AnalyzedFileSet) -> 
                 key: folded_symbol_key(space, &original),
                 original,
                 kind: declaration.kind,
-                ast_id: declaration.ast_id,
+                origin: SymbolOrigin::Item(declaration.ast_id),
+            });
+        }
+        for (position, defined) in defined_constants(db, file).iter().enumerate() {
+            let Ok(index) = u32::try_from(position) else {
+                break;
+            };
+            // The name is literal: no namespace is prepended, a leading
+            // root qualifier is only spelling.
+            let original = defined
+                .name
+                .strip_prefix('\\')
+                .unwrap_or(defined.name.as_str())
+                .to_owned();
+            let space = SymbolSpace::Constant;
+            entries.push(SymbolEntry {
+                space,
+                key: folded_symbol_key(space, &original),
+                original,
+                kind: DeclarationKind::Constant,
+                origin: SymbolOrigin::Define(DefineId {
+                    file: file.file_id(db),
+                    index,
+                }),
             });
         }
     }
@@ -170,14 +204,16 @@ pub fn stub_symbol_table(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_source::FileId;
     use salsa::Setter;
 
-    use super::{SymbolTable, source_symbol_table};
+    use super::{SymbolOrigin, SymbolTable, source_symbol_table};
+    use crate::ast_id::AstId;
+    use crate::defines::DefineId;
     use crate::items::DeclarationKind;
     use crate::symbols::SymbolSpace;
 
@@ -207,7 +243,10 @@ mod tests {
             .unwrap();
         assert_eq!(class.original, "App\\Service");
         assert_eq!(class.kind, DeclarationKind::Class);
-        assert_eq!(class.ast_id.file, FileId::new(0));
+        assert!(matches!(
+            class.origin,
+            SymbolOrigin::Item(AstId { file, .. }) if file == FileId::new(0)
+        ));
 
         let function = table.lookup(SymbolSpace::Function, "app\\greet").unwrap();
         assert_eq!(function.original, "App\\greet");
@@ -250,8 +289,54 @@ mod tests {
         let entry = table
             .lookup(SymbolSpace::ClassLike, "app\\service")
             .unwrap();
-        assert_eq!(entry.ast_id.file, FileId::new(0));
+        assert!(matches!(
+            entry.origin,
+            SymbolOrigin::Item(AstId { file, .. }) if file == FileId::new(0)
+        ));
         assert_eq!(entry.original, "App\\Service");
+    }
+
+    #[test]
+    fn a_define_joins_the_symbol_table_in_the_global_namespace() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(
+            &db,
+            FileId::new(0),
+            b"<?php namespace App; define('APP_ROOT', 1);".to_vec(),
+        );
+        let files = AnalyzedFileSet::new(&db, vec![file]);
+        let table = source_symbol_table(&db, files);
+        let entry = table
+            .lookup(SymbolSpace::Constant, "APP_ROOT")
+            .expect("the define is indexed globally, not under App\\");
+        assert_eq!(entry.original, "APP_ROOT");
+        assert_eq!(entry.kind, DeclarationKind::Constant);
+        assert_eq!(
+            entry.origin,
+            SymbolOrigin::Define(DefineId {
+                file: FileId::new(0),
+                index: 0,
+            }),
+        );
+        assert!(
+            table
+                .lookup(SymbolSpace::Constant, "app\\APP_ROOT")
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_qualified_define_literal_declares_where_it_says() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(
+            &db,
+            FileId::new(0),
+            b"<?php define('Foo\\\\Bar', 1); define('\\\\Root\\\\Baz', 2);".to_vec(),
+        );
+        let files = AnalyzedFileSet::new(&db, vec![file]);
+        let table = source_symbol_table(&db, files);
+        assert!(table.lookup(SymbolSpace::Constant, "foo\\Bar").is_some());
+        assert!(table.lookup(SymbolSpace::Constant, "root\\Baz").is_some());
     }
 
     #[test]
