@@ -1,0 +1,83 @@
+name: Fuzz
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Nightly long run at 04:42 UTC. Any off-the-hour minute avoids the
+    # top-of-hour congestion on GitHub's shared cron scheduler.
+    - cron: "42 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  # Supersede stale pull-request runs, but never cancel a main-branch or
+  # scheduled run (both resolve to refs/heads/main).
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    # Two targets at 30 minutes each on the nightly run, plus the build.
+    # 90 minutes leaves comfortable headroom.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: nightly
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: fuzz
+      - name: Cache the cargo-fuzz binary
+        id: cargo-fuzz-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-fuzz
+          # Bump the key suffix to pick up a newer cargo-fuzz release.
+          key: cargo-fuzz-${{ runner.os }}-1
+      - if: steps.cargo-fuzz-cache.outputs.cache-hit != 'true'
+        run: cargo install cargo-fuzz --locked
+      # Accumulate the coverage-guided corpus across runs so coverage
+      # compounds instead of restarting cold from the committed seeds each
+      # time. Caches are immutable, so each run writes a fresh entry keyed by
+      # run id and restore-keys pulls the most recent previous corpus. The
+      # committed seeds under fuzz/corpus/<target> remain the floor.
+      - name: Restore the accumulated corpus
+        uses: actions/cache@v4
+        with:
+          path: fuzz/corpus
+          key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ runner.os }}-
+      - name: Resolve the fuzz duration
+        id: duration
+        # 30 minutes per target on the nightly schedule; a 60-second smoke
+        # test on push and pull requests. The nightly run carries the depth,
+        # so the per-push run only needs to catch shallow regressions fast.
+        run: |
+          if [ "${{ github.event_name }}" = "schedule" ]; then
+            echo "seconds=1800" >> "$GITHUB_OUTPUT"
+          else
+            echo "seconds=60" >> "$GITHUB_OUTPUT"
+          fi
+      # The +nightly proxy overrides the repository's rust-toolchain.toml
+      # pin, which would otherwise route the sanitizer build to stable.
+      # -timeout flags a single input that hangs past 25s (the termination
+      # invariant under test); -rss_limit_mb bounds runaway memory.
+      - run: cargo +nightly fuzz run lex -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
+      - run: cargo +nightly fuzz run parse -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
+      - name: Upload crash artifacts
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-artifacts
+          path: fuzz/artifacts/
+          if-no-files-found: ignore
