@@ -16,7 +16,8 @@ use celerrate_db::SourceFile;
 use celerrate_db::testing::TestDatabase;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, resolve_name,
+    SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, reference_diagnostics,
+    resolve_name, syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
@@ -471,5 +472,125 @@ fn a_version_range_change_never_touches_the_source_table() {
         executions_of(&log, "unresolved_inheritance_names"),
         0,
         "unchanged stub answers backdate: {log:?}",
+    );
+}
+
+#[test]
+fn an_unrelated_declaration_spares_other_files_reference_checks() {
+    let mut db = TestDatabase::default();
+    let library = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php namespace Lib; class Helper {}".to_vec(),
+    );
+    let consumer = SourceFile::new(
+        &db,
+        FileId::new(1),
+        b"<?php namespace App; use Lib\\Helper; $x = new Helper();".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
+    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    db.take_executed();
+
+    library
+        .set_bytes(&mut db)
+        .to(b"<?php namespace Lib; class Helper {} class Extra {}".to_vec());
+    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
+    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "reference_diagnostics"),
+        1,
+        "only the edited file re-checks; the consumer's lookups backdate: {log:?}",
+    );
+}
+
+#[test]
+fn a_version_range_change_re_runs_the_gating_queries() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php readonly class Point {}".to_vec(),
+    );
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    assert_eq!(
+        syntax_version_diagnostics(&db, file, configuration).len(),
+        1
+    );
+    db.take_executed();
+
+    configuration
+        .set_php_version_range(&mut db)
+        .to(PhpVersionRange::new(
+            PhpVersion::new(8, 2),
+            PhpVersion::new(8, 5),
+        ));
+    let diagnostics = syntax_version_diagnostics(&db, file, configuration);
+
+    assert_eq!(diagnostics, &vec![]);
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "syntax_version_diagnostics"),
+        1,
+        "the configuration is an input of the gating query: {log:?}",
+    );
+}
+
+#[test]
+fn a_comment_only_edit_elsewhere_spares_the_consumer() {
+    let mut db = TestDatabase::default();
+    let library = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php namespace Lib; class Helper {}".to_vec(),
+    );
+    let consumer = SourceFile::new(
+        &db,
+        FileId::new(1),
+        b"<?php namespace App; use Lib\\Helper; $x = new Helper();".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
+    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    db.take_executed();
+
+    library
+        .set_bytes(&mut db)
+        .to(b"<?php namespace Lib; class Helper { /* note */ }".to_vec());
+    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
+    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "reference_diagnostics"),
+        1,
+        "the edited file re-checks over its new tree; the consumer's \
+         lookups backdate behind the unchanged symbol table: {log:?}",
     );
 }
