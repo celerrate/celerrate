@@ -22,6 +22,13 @@ pub fn artifacts() -> Result<Vec<Artifact>> {
     Ok(Vec::new())
 }
 
+/// The raw text of `php.ungram`.
+pub fn php_ungram_source() -> Result<String> {
+    let path = crate::workspace_root()?.join("crates/celerrate_syntax/php.ungram");
+    std::fs::read_to_string(&path)
+        .map_err(|error| format!("cannot read {}: {error}", path.display()).into())
+}
+
 /// Writes every artifact into the workspace.
 pub fn run() -> Result<()> {
     let root = crate::workspace_root()?;
