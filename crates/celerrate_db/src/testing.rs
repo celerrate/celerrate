@@ -58,6 +58,35 @@ use crate::{SourceFile, file_diagnostics, parse};
 /// edit is `(file index, new bytes)`. Panics (test-style assertions)
 /// on any divergence or out-of-range file index.
 pub fn assert_incremental_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])]) {
+    assert_incremental_consistency_with(
+        initial,
+        edits,
+        &|incremental, file, from_scratch, fresh_file, index| {
+            assert_eq!(
+                parse(incremental, file).tree().text().to_string(),
+                parse(from_scratch, fresh_file).tree().text().to_string(),
+                "tree text diverged for file {index}",
+            );
+            assert_eq!(
+                file_diagnostics(incremental, file),
+                file_diagnostics(from_scratch, fresh_file),
+                "diagnostics diverged for file {index}",
+            );
+        },
+    );
+}
+
+/// The closure form of the replay: upper layers (the item tree today,
+/// the symbol index in part 5) extend the same harness with their own
+/// per-file comparison, without any dependency from this crate upward.
+/// The closure receives the incremental database and its file handle,
+/// the from-scratch database and its fresh handle, and the file index;
+/// it runs for every file after the initial state and after every edit.
+pub fn assert_incremental_consistency_with(
+    initial: &[&[u8]],
+    edits: &[(usize, &[u8])],
+    assert_file_matches: &dyn Fn(&TestDatabase, SourceFile, &TestDatabase, SourceFile, usize),
+) {
     let mut incremental = TestDatabase::default();
     let mut current: Vec<Vec<u8>> = initial.iter().map(|bytes| bytes.to_vec()).collect();
     let files: Vec<SourceFile> = current
@@ -68,7 +97,7 @@ pub fn assert_incremental_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])
         })
         .collect();
 
-    assert_matches_from_scratch(&incremental, &files, &current);
+    assert_matches_from_scratch(&incremental, &files, &current, assert_file_matches);
     for &(file_index, new_bytes) in edits {
         assert!(
             file_index < files.len(),
@@ -80,7 +109,7 @@ pub fn assert_incremental_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])
         };
         *slot = new_bytes.to_vec();
         file.set_bytes(&mut incremental).to(new_bytes.to_vec());
-        assert_matches_from_scratch(&incremental, &files, &current);
+        assert_matches_from_scratch(&incremental, &files, &current, assert_file_matches);
     }
 }
 
@@ -88,19 +117,11 @@ fn assert_matches_from_scratch(
     incremental: &TestDatabase,
     files: &[SourceFile],
     current: &[Vec<u8>],
+    assert_file_matches: &dyn Fn(&TestDatabase, SourceFile, &TestDatabase, SourceFile, usize),
 ) {
     let from_scratch = TestDatabase::default();
     for (index, (file, bytes)) in files.iter().zip(current).enumerate() {
         let fresh_file = SourceFile::new(&from_scratch, FileId::new(index as u32), bytes.clone());
-        assert_eq!(
-            parse(incremental, *file).tree().text().to_string(),
-            parse(&from_scratch, fresh_file).tree().text().to_string(),
-            "tree text diverged for file {index}",
-        );
-        assert_eq!(
-            file_diagnostics(incremental, *file),
-            file_diagnostics(&from_scratch, fresh_file),
-            "diagnostics diverged for file {index}",
-        );
+        assert_file_matches(incremental, *file, &from_scratch, fresh_file, index);
     }
 }
