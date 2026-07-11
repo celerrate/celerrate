@@ -6,9 +6,11 @@
 //! `Option` or an iterator: the partial trees error recovery produces
 //! are normal citizens, not special cases.
 
+mod extensions;
 mod generated;
 pub(crate) mod support;
 
+pub use extensions::NamedTypeName;
 pub use generated::*;
 
 use std::marker::PhantomData;
