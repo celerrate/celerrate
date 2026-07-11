@@ -10,6 +10,11 @@
 //! method bodies are invisible here. Nameless declarations (anonymous
 //! classes, error-recovery wreckage) carry no top-level identity and
 //! are skipped.
+//!
+//! A statement-form `namespace Foo;` nested inside a control-flow
+//! block (error-recovery input, invalid PHP) deliberately switches the
+//! walk state for everything that follows the enclosing block:
+//! tolerated and deterministic, never a failure.
 
 use celerrate_syntax::ast::{self, AstNode};
 use celerrate_syntax::{SyntaxKind, SyntaxNode};
