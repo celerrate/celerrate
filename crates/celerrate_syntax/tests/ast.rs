@@ -366,3 +366,17 @@ fn typed_casts_are_consistent_over_the_whole_corpus() {
     }
     assert!(checked > 20, "the corpus was actually traversed");
 }
+
+#[test]
+fn a_name_reads_back_as_its_written_text() {
+    use celerrate_syntax::ast::{AstNode, Name};
+
+    let parse = celerrate_syntax::parse("<?php use Foo\\Bar; new \\Baz\\Qux();");
+    let names: Vec<String> = parse
+        .tree()
+        .descendants()
+        .filter_map(Name::cast)
+        .map(|name| name.text())
+        .collect();
+    assert_eq!(names, vec!["Foo\\Bar".to_owned(), "\\Baz\\Qux".to_owned()]);
+}
