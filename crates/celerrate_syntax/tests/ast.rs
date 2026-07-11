@@ -230,6 +230,24 @@ fn trait_adaptations_and_import_aliases_resolve() {
     );
     assert_eq!(alias.alias_token().expect("an alias").text(), "h2");
 
+    // A bare-keyword reference stays a direct token (no `Name` wrap):
+    // the parser bumps `list` itself, so the member resolves through the
+    // direct-token fallback rather than through a `Name` child.
+    let parse = support::parse_verified(
+        "<?php class C { use A, B { list insteadof B; list as protected l2; } }",
+    );
+    let precedence: TraitPrecedence = first_descendant(&parse);
+    assert!(
+        precedence.reference_name().is_none(),
+        "a bare keyword is not wrapped in a Name"
+    );
+    assert_eq!(precedence.member_token().expect("a member").text(), "list");
+    assert_eq!(precedence.excluded_names().count(), 1);
+    let alias: TraitAlias = first_descendant(&parse);
+    assert!(alias.reference_name().is_none());
+    assert_eq!(alias.member_token().expect("a member").text(), "list");
+    assert_eq!(alias.alias_token().expect("an alias").text(), "l2");
+
     let parse = support::parse_verified("<?php use Foo\\Bar as Baz;");
     let use_declaration: UseDeclaration = first_descendant(&parse);
     let clause: UseClause = use_declaration.use_clauses().next().expect("one clause");
