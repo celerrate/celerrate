@@ -1,0 +1,12 @@
+//! Compiled phpstorm-stubs: the embedded index of standard-library and
+//! extension symbols with per-version availability metadata.
+//!
+//! A pinned snapshot of phpstorm-stubs is compiled by the feature-gated
+//! `stub-compiler` binary (driven by `cargo xtask compile-stubs`) into a
+//! committed, versioned binary blob. At runtime the embedded blob loads
+//! as a high-durability salsa input and a tracked query filters it by
+//! the project's PHP version range.
+
+mod symbol;
+
+pub use symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
