@@ -13,6 +13,8 @@ mod syntax_kind;
 mod token;
 mod tree;
 
+pub mod ast;
+
 pub use diagnostic::{
     LexerDiagnostic, LexerDiagnosticKind, ParserDiagnosticKind, SyntaxDiagnostic,
     SyntaxDiagnosticKind,
@@ -21,4 +23,4 @@ pub use lexer::lex;
 pub use parse::{Parse, parse};
 pub use syntax_kind::SyntaxKind;
 pub use token::Token;
-pub use tree::{PhpLanguage, SyntaxElement, SyntaxNode, SyntaxToken};
+pub use tree::{PhpLanguage, SyntaxElement, SyntaxNode, SyntaxNodePtr, SyntaxToken};
