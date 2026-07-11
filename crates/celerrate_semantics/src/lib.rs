@@ -6,12 +6,14 @@
 //! salsa its early cutoff.
 
 mod ast_id;
+mod index;
 mod item_nodes;
 mod items;
 mod queries;
 mod symbols;
 
 pub use ast_id::{AstId, AstIdMap};
+pub use index::{SymbolEntry, SymbolTable, source_symbol_table};
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
 pub use queries::{ast_id_map, item_tree};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
