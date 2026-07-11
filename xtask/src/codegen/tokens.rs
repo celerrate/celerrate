@@ -6,11 +6,13 @@
 
 /// One token kind: its `SyntaxKind` variant name, the spelling
 /// `php.ungram` uses for it (`None` for kinds that never appear in a
-/// grammar rule, like trivia and tags), and its doc lines.
+/// grammar rule, like trivia and tags), how it reads inside a diagnostic
+/// message when it has no fixed source spelling, and its doc lines.
 #[derive(Debug, Clone, Copy)]
 pub struct TokenKindDefinition {
     pub variant: &'static str,
     pub ungrammar_name: Option<&'static str>,
+    pub description: Option<&'static str>,
     pub documentation: &'static [&'static str],
 }
 
@@ -22,7 +24,40 @@ const fn token(
     TokenKindDefinition {
         variant,
         ungrammar_name,
+        description: None,
         documentation,
+    }
+}
+
+/// A token whose `ungrammar_name` is a symbolic name rather than source
+/// text, or which never appears in the grammar at all: it needs an
+/// explicit reading.
+const fn described(
+    variant: &'static str,
+    ungrammar_name: Option<&'static str>,
+    description: &'static str,
+    documentation: &'static [&'static str],
+) -> TokenKindDefinition {
+    TokenKindDefinition {
+        variant,
+        ungrammar_name,
+        description: Some(description),
+        documentation,
+    }
+}
+
+impl TokenKindDefinition {
+    /// How this token reads inside a diagnostic message: an explicit
+    /// phrase when it has one, its source spelling in backticks
+    /// otherwise. `None` means the table is incomplete, which fails
+    /// codegen: a token that describes as nothing would fall back to a
+    /// Rust variant name, and no user may ever read one.
+    pub fn describe(&self) -> Option<String> {
+        match (self.description, self.ungrammar_name) {
+            (Some(phrase), _) => Some(phrase.to_owned()),
+            (None, Some(spelling)) => Some(format!("`{spelling}`")),
+            (None, None) => None,
+        }
     }
 }
 
@@ -36,47 +71,73 @@ pub fn resolve_ungrammar_token(spelling: &str) -> Option<&'static str> {
 
 pub const TOKEN_KINDS: &[TokenKindDefinition] = &[
     // Trivia.
-    token("Whitespace", None, &[]),
-    token(
+    described("Whitespace", None, "whitespace", &[]),
+    described(
         "LineComment",
         None,
+        "a line comment",
         &["`//` and `#` comments, up to the end of the line or a `?>`."],
     ),
-    token("BlockComment", None, &["`/* ... */` comments."]),
-    token(
+    described(
+        "BlockComment",
+        None,
+        "a block comment",
+        &["`/* ... */` comments."],
+    ),
+    described(
         "DocComment",
         None,
+        "a docblock",
         &["`/** ... */` docblocks, a distinct kind: the type engine reads them."],
     ),
-    token("Shebang", None, &["A `#!` first line."]),
+    described("Shebang", None, "a shebang line", &["A `#!` first line."]),
     // Tags and inline HTML.
-    token("OpenTag", None, &["`<?php`."]),
-    token("OpenTagEcho", None, &["`<?=`."]),
-    token(
+    described("OpenTag", None, "`<?php`", &["`<?php`."]),
+    described("OpenTagEcho", None, "`<?=`", &["`<?=`."]),
+    described(
         "ShortOpenTag",
         None,
+        "`<?`",
         &["`<?`, lexed unconditionally; availability is a semantic judgment."],
     ),
-    token(
+    described(
         "CloseTag",
         None,
+        "`?>`",
         &["`?>`, plus the single newline PHP swallows after it, if present."],
     ),
-    token("InlineHtml", None, &["Everything outside PHP tags."]),
+    described(
+        "InlineHtml",
+        None,
+        "inline HTML",
+        &["Everything outside PHP tags."],
+    ),
     // Names.
-    token("Identifier", Some("identifier"), &[]),
-    token("Variable", Some("variable"), &["`$name`."]),
+    described("Identifier", Some("identifier"), "a name", &[]),
+    described("Variable", Some("variable"), "a variable", &["`$name`."]),
     // Literals and string structure.
-    token("IntegerLiteral", Some("integer_literal"), &[]),
-    token("FloatLiteral", Some("float_literal"), &[]),
-    token(
+    described(
+        "IntegerLiteral",
+        Some("integer_literal"),
+        "an integer literal",
+        &[],
+    ),
+    described(
+        "FloatLiteral",
+        Some("float_literal"),
+        "a float literal",
+        &[],
+    ),
+    described(
         "SingleQuotedString",
         Some("single_quoted_string"),
+        "a single-quoted string",
         &["A whole `'...'` (or `b'...'`) string, quotes included."],
     ),
-    token(
+    described(
         "StringFragment",
         Some("string_fragment"),
+        "a string fragment",
         &["A literal run inside an interpolated string, heredoc, or backtick."],
     ),
     token(
@@ -85,14 +146,16 @@ pub const TOKEN_KINDS: &[TokenKindDefinition] = &[
         &["A `\"` delimiter (or the opening `b\"`)."],
     ),
     token("Backtick", Some("`"), &["A `` ` `` delimiter."]),
-    token(
+    described(
         "HeredocStart",
         Some("heredoc_start"),
+        "a heredoc opener",
         &["`<<<LABEL` (or quoted label), trailing newline included."],
     ),
-    token(
+    described(
         "HeredocEnd",
         Some("heredoc_end"),
+        "a heredoc closer",
         &["The closing label of a heredoc or nowdoc, indentation included."],
     ),
     token(
@@ -238,7 +301,7 @@ pub const TOKEN_KINDS: &[TokenKindDefinition] = &[
     token("Tilde", Some("~"), &[]),
     token("At", Some("@"), &[]),
     token("Dollar", Some("$"), &[]),
-    token("Backslash", Some("backslash"), &[]),
+    described("Backslash", Some("backslash"), "`\\`", &[]),
     token("Arrow", Some("->"), &["`->`."]),
     token("NullsafeArrow", Some("?->"), &["`?->`."]),
     token("FatArrow", Some("=>"), &["`=>`."]),
@@ -254,12 +317,22 @@ pub const TOKEN_KINDS: &[TokenKindDefinition] = &[
         Some("#["),
         &["`#[`, distinct from the `#` line comment."],
     ),
-    token("Error", None, &["A character no rule accepts."]),
+    described(
+        "Error",
+        None,
+        "an unrecognized character",
+        &["A character no rule accepts."],
+    ),
 ];
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::expect_used, clippy::unwrap_used, clippy::indexing_slicing)]
+    #![allow(
+        clippy::expect_used,
+        clippy::unwrap_used,
+        clippy::indexing_slicing,
+        clippy::panic
+    )]
 
     use super::{TOKEN_KINDS, resolve_ungrammar_token};
 
@@ -320,5 +393,44 @@ mod tests {
             .position(|definition| definition.variant == "YieldFrom")
             .expect("YieldFrom exists");
         assert_eq!(end - start + 1, 70, "seventy keyword kinds");
+    }
+
+    #[test]
+    fn every_token_describes_itself_without_leaking_its_variant_name() {
+        for definition in TOKEN_KINDS {
+            let described = definition
+                .describe()
+                .unwrap_or_else(|| panic!("{} has no description", definition.variant));
+            assert!(
+                !described.is_empty(),
+                "{} describes as nothing",
+                definition.variant
+            );
+            assert_ne!(
+                described, definition.variant,
+                "{} would leak its Rust variant name to a user",
+                definition.variant,
+            );
+        }
+    }
+
+    #[test]
+    fn spellings_are_quoted_and_phrases_are_not() {
+        let describe = |variant: &str| {
+            TOKEN_KINDS
+                .iter()
+                .find(|definition| definition.variant == variant)
+                .and_then(|definition| definition.describe())
+                .unwrap()
+        };
+        assert_eq!(describe("OpenBrace"), "`{`");
+        assert_eq!(describe("Semicolon"), "`;`");
+        assert_eq!(describe("Class"), "`class`");
+        assert_eq!(describe("YieldFrom"), "`yield from`");
+        assert_eq!(describe("Identifier"), "a name");
+        assert_eq!(describe("Variable"), "a variable");
+        assert_eq!(describe("Backslash"), "`\\`");
+        assert_eq!(describe("OpenTag"), "`<?php`");
+        assert_eq!(describe("Whitespace"), "whitespace");
     }
 }

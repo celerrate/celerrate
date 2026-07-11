@@ -26,7 +26,7 @@ pub fn artifacts() -> Result<Vec<Artifact>> {
     Ok(vec![
         Artifact {
             relative_path: PathBuf::from("crates/celerrate_syntax/src/syntax_kind/generated.rs"),
-            text: reformat(&emit_kinds::syntax_kind_file(&grammar))?,
+            text: reformat(&emit_kinds::syntax_kind_file(&grammar)?)?,
         },
         Artifact {
             relative_path: PathBuf::from("crates/celerrate_syntax/src/ast/generated.rs"),

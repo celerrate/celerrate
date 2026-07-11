@@ -144,7 +144,7 @@ impl ParserDiagnosticKind {
         match self {
             Self::ExpectedExpression => "expected an expression".to_owned(),
             Self::ExpectedSemicolon => "expected `;`".to_owned(),
-            Self::Expected(kind) => format!("expected {kind:?}"),
+            Self::Expected(kind) => format!("expected {}", kind.describe()),
             Self::UnexpectedToken => "unexpected token".to_owned(),
             Self::NestingTooDeep => "the input nests too deeply".to_owned(),
             Self::NonAssociativeOperator => {
@@ -288,6 +288,26 @@ mod tests {
         assert!(
             messages.contains(&"expected `;`".to_owned()),
             "messages: {messages:?}",
+        );
+    }
+
+    #[test]
+    fn a_missing_token_reads_as_php_not_as_rust() {
+        assert_eq!(
+            ParserDiagnosticKind::Expected(SyntaxKind::OpenBrace).message(),
+            "expected `{`",
+        );
+        assert_eq!(
+            ParserDiagnosticKind::Expected(SyntaxKind::Identifier).message(),
+            "expected a name",
+        );
+        assert_eq!(
+            ParserDiagnosticKind::Expected(SyntaxKind::Variable).message(),
+            "expected a variable",
+        );
+        assert_eq!(
+            ParserDiagnosticKind::Expected(SyntaxKind::Catch).message(),
+            "expected `catch`",
         );
     }
 

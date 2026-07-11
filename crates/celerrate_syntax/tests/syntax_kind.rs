@@ -89,3 +89,18 @@ fn keywords_are_classified_and_contiguous() {
     assert!(!SyntaxKind::IntCast.is_keyword());
     assert!(!SyntaxKind::SourceFile.is_keyword());
 }
+
+#[test]
+fn every_kind_describes_itself_and_never_leaks_its_variant_name() {
+    let kinds: Vec<SyntaxKind> = (0..).map_while(SyntaxKind::from_raw).collect();
+    assert!(kinds.len() > 100, "the enumeration reached every kind");
+    for kind in kinds {
+        let described = kind.describe();
+        assert!(!described.is_empty(), "{kind:?} describes as nothing");
+        assert_ne!(
+            described,
+            format!("{kind:?}"),
+            "{kind:?} would leak its Rust variant name to a user",
+        );
+    }
+}

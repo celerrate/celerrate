@@ -8,10 +8,18 @@ use std::fmt::Write as _;
 
 use super::grammar::GrammarSource;
 use super::tokens::TOKEN_KINDS;
+use crate::Result;
 
-pub fn syntax_kind_file(grammar: &GrammarSource) -> String {
-    let mut variants: Vec<(String, Vec<String>)> = Vec::new();
+pub fn syntax_kind_file(grammar: &GrammarSource) -> Result<String> {
+    let mut variants: Vec<(String, Vec<String>, String)> = Vec::new();
     for definition in TOKEN_KINDS {
+        let described = definition.describe().ok_or_else(|| {
+            format!(
+                "token {} has neither an ungrammar spelling nor a description: \
+                 `SyntaxKind::describe` must stay total",
+                definition.variant,
+            )
+        })?;
         variants.push((
             definition.variant.to_owned(),
             definition
@@ -19,15 +27,21 @@ pub fn syntax_kind_file(grammar: &GrammarSource) -> String {
                 .iter()
                 .map(|line| (*line).to_owned())
                 .collect(),
+            described,
         ));
     }
     let first_node = variants.len();
     for node in &grammar.nodes {
-        variants.push((node.name.clone(), node.documentation.clone()));
+        variants.push((
+            node.name.clone(),
+            node.documentation.clone(),
+            humanize(&node.name),
+        ));
     }
     variants.push((
         "ErrorNode".to_owned(),
         vec!["Recovery wreckage: tokens no grammar rule accepted.".to_owned()],
+        humanize("ErrorNode"),
     ));
 
     let mut text = String::new();
@@ -53,7 +67,7 @@ pub fn syntax_kind_file(grammar: &GrammarSource) -> String {
     text.push_str("#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]\n");
     text.push_str("#[repr(u16)]\n");
     text.push_str("pub enum SyntaxKind {\n");
-    for (position, (variant, documentation)) in variants.iter().enumerate() {
+    for (position, (variant, documentation, _described)) in variants.iter().enumerate() {
         if position == first_node {
             text.push_str("    // Node kinds, owned by php.ungram.\n");
         }
@@ -66,7 +80,7 @@ pub fn syntax_kind_file(grammar: &GrammarSource) -> String {
     text.push_str("impl SyntaxKind {\n");
     text.push_str("    /// Every kind, in declaration (and therefore discriminant) order.\n");
     text.push_str("    const ALL: &[SyntaxKind] = &[\n");
-    for (variant, _documentation) in &variants {
+    for (variant, _documentation, _described) in &variants {
         let _ = writeln!(text, "        SyntaxKind::{variant},");
     }
     text.push_str("    ];\n\n");
@@ -79,8 +93,34 @@ pub fn syntax_kind_file(grammar: &GrammarSource) -> String {
     text.push_str("    pub fn into_raw(self) -> u16 {\n");
     text.push_str("        self as u16\n");
     text.push_str("    }\n");
+    text.push_str("\n    /// How this kind reads inside a diagnostic message: a\n");
+    text.push_str("    /// token's source spelling in backticks, a phrase for the\n");
+    text.push_str("    /// tokens that have no spelling of their own, a humanized\n");
+    text.push_str("    /// name for nodes. Total by construction: no Rust variant\n");
+    text.push_str("    /// name can ever reach a user.\n");
+    text.push_str("    pub fn describe(self) -> &'static str {\n");
+    text.push_str("        match self {\n");
+    for (variant, _documentation, described) in &variants {
+        let escaped = described.replace('\\', "\\\\").replace('"', "\\\"");
+        let _ = writeln!(text, "            SyntaxKind::{variant} => \"{escaped}\",");
+    }
+    text.push_str("        }\n");
+    text.push_str("    }\n");
     text.push_str("}\n");
-    text
+    Ok(text)
+}
+
+/// A node kind read as English: `ClassDeclaration` becomes
+/// `class declaration`.
+fn humanize(variant: &str) -> String {
+    let mut words = String::with_capacity(variant.len() + 4);
+    for (position, character) in variant.char_indices() {
+        if character.is_ascii_uppercase() && position > 0 {
+            words.push(' ');
+        }
+        words.extend(character.to_lowercase());
+    }
+    words
 }
 
 #[cfg(test)]
@@ -91,9 +131,9 @@ mod tests {
     use crate::codegen::grammar::load;
 
     #[test]
-    fn the_emission_contains_tokens_nodes_and_the_raw_conversion() {
+    fn the_emission_contains_tokens_nodes_the_raw_conversion_and_describe() {
         let grammar = load("/// The root.\nRoot = Item*\nItem = 'identifier'").expect("loads");
-        let text = syntax_kind_file(&grammar);
+        let text = syntax_kind_file(&grammar).expect("emits");
         // Token section, from the table, docs included.
         assert!(text.contains("    Whitespace,\n"));
         assert!(text.contains("/// `exit` and its alias `die`."));
@@ -106,6 +146,11 @@ mod tests {
         assert!(text.contains("const ALL: &[SyntaxKind]"));
         assert!(text.contains("pub fn from_raw(raw: u16) -> Option<Self>"));
         assert!(text.contains("SyntaxKind::Root,"));
+        // The description function.
+        assert!(text.contains("pub fn describe(self) -> &'static str"));
+        assert!(text.contains("SyntaxKind::OpenBrace => \"`{`\","));
+        assert!(text.contains("SyntaxKind::Identifier => \"a name\","));
+        assert!(text.contains("SyntaxKind::Root => \"root\","));
         // The do-not-edit banner.
         assert!(text.starts_with("//! Generated by `cargo xtask codegen`"));
     }
