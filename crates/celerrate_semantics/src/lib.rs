@@ -9,6 +9,7 @@ mod ast_id;
 mod index;
 mod item_nodes;
 mod items;
+mod lookup;
 mod queries;
 mod symbols;
 
@@ -18,5 +19,6 @@ pub use index::{
     stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
+pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use queries::{ast_id_map, item_tree};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
