@@ -1,0 +1,592 @@
+// php.ungram: the nominal shape of every PHP syntax node.
+//
+// This file owns the node kinds of SyntaxKind: `cargo xtask codegen`
+// generates the enum's node section and the typed AST accessors from
+// it. It describes shape, not parsing: the recursive-descent parser in
+// src/parser/ remains the sole authority on how text becomes nodes.
+//
+// Conventions:
+// - `|` between node references appears only in the enum rules at the
+//   top; inside node rules, alternation is between token literals only.
+// - Labeled tokens get generated accessors; unlabeled tokens are shape
+//   documentation. Semi-reserved name positions (where any keyword may
+//   stand for the name) are deliberately unlabeled: a generated
+//   Identifier accessor would return None on `const FOR = 1;`, so those
+//   accessors are hand-written in src/ast/extensions.rs.
+// - Nodes on xtask's HANDWRITTEN_ACCESSOR_NODES list (the short
+//   ternary, `key => value` shapes, trait adaptations) get no generated
+//   accessors; their rules here are documentation.
+// - Trivia, tags (`<?php`, `?>`, `<?=`), inline HTML, and ErrorNode
+//   wreckage stay bare in the tree and appear in no rule: typed
+//   iteration skips them, which is how partial trees stay free to
+//   consume.
+
+//**********************//
+//     Alternations     //
+//**********************//
+
+Expression =
+  Literal
+| VariableReference
+| DynamicVariableExpression
+| ParenthesizedExpression
+| BinaryExpression
+| PrefixExpression
+| PostfixExpression
+| CastExpression
+| TernaryExpression
+| AssignmentExpression
+| NameExpression
+| CallExpression
+| MemberAccessExpression
+| ScopedAccessExpression
+| IndexExpression
+| ArrayExpression
+| ListExpression
+| InterpolatedString
+| HeredocExpression
+| ShellExecExpression
+| NewExpression
+| CloneExpression
+| IssetExpression
+| EmptyExpression
+| EvalExpression
+| ExitExpression
+| PrintExpression
+| ThrowExpression
+| YieldExpression
+| IncludeExpression
+| MatchExpression
+| ClosureExpression
+| ArrowFunctionExpression
+
+Statement =
+  Block
+| EmptyStatement
+| EchoStatement
+| ExpressionStatement
+| ReturnStatement
+| BreakStatement
+| ContinueStatement
+| GlobalStatement
+| StaticStatement
+| UnsetStatement
+| GotoStatement
+| LabelStatement
+| IfStatement
+| WhileStatement
+| DoWhileStatement
+| ForStatement
+| ForeachStatement
+| SwitchStatement
+| TryStatement
+| DeclareStatement
+| FunctionDeclaration
+| ConstantDeclaration
+| NamespaceDeclaration
+| UseDeclaration
+| ClassDeclaration
+| InterfaceDeclaration
+| TraitDeclaration
+| EnumDeclaration
+
+Type =
+  NamedType
+| NullableType
+| UnionType
+| IntersectionType
+| ParenthesizedType
+
+MemberDeclaration =
+  PropertyDeclaration
+| MethodDeclaration
+| ConstantDeclaration
+| TraitUseClause
+| EnumCase
+
+StringInterpolation =
+  SimpleInterpolation
+| BraceInterpolation
+| DollarBraceInterpolation
+
+TraitAdaptation =
+  TraitPrecedence
+| TraitAlias
+
+//**********************//
+//      Source file     //
+//**********************//
+
+/// The root node: one parsed PHP file. Open and close tags and inline
+/// HTML sit between the statements as bare tokens.
+SourceFile = Statement*
+
+//**********************//
+//      Expressions     //
+//**********************//
+
+/// A literal expression: integer, float, or single-quoted string.
+Literal = value:('integer_literal' | 'float_literal' | 'single_quoted_string')
+
+/// A `$variable` used as an expression.
+VariableReference = name:'variable'
+
+/// `$$name` and `${expression}`.
+DynamicVariableExpression = '$' '{'? Expression? '}'?
+
+/// `( expression )`.
+ParenthesizedExpression = '(' Expression ')'
+
+/// One binary operation: left operand, operator token, right operand.
+/// The operator token distinguishes `+` from `instanceof` from `|>`.
+BinaryExpression =
+  lhs:Expression
+  operator:(
+    'or' | 'xor' | 'and' | '??' | '||' | '&&' | '|' | '^' | '&'
+  | '==' | '!=' | '===' | '!==' | '<=>' | '<' | '<=' | '>' | '>='
+  | '|>' | '.' | '<<' | '>>' | '+' | '-' | '*' | '/' | '%'
+  | 'instanceof' | '**'
+  )
+  rhs:Expression
+
+/// A prefix operation: `!`, `~`, unary `+`/`-`, `@`, `++`, `--`.
+PrefixExpression =
+  operator:('!' | '~' | '+' | '-' | '@' | '++' | '--')
+  operand:Expression
+
+/// A postfix operation: `++`, `--`.
+PostfixExpression = operand:Expression operator:('++' | '--')
+
+/// A cast: the single cast token, then the operand.
+CastExpression =
+  operator:('(int)' | '(bool)' | '(float)' | '(string)' | '(binary)' | '(array)' | '(object)')
+  operand:Expression
+
+/// `condition ? middle : third`; the short form `?:` has no middle, so
+/// position cannot assign roles and the accessors are hand-written.
+TernaryExpression = Expression '?' Expression? ':' Expression?
+
+/// `target = value` and the compound forms; `= &value` keeps its
+/// ampersand as a token child. Whether the target is assignable is
+/// a semantic judgment.
+AssignmentExpression =
+  target:Expression
+  operator:(
+    '=' | '+=' | '-=' | '*=' | '/=' | '.=' | '%=' | '**='
+  | '&=' | '|=' | '^=' | '<<=' | '>>=' | '??='
+  )
+  by_reference:'&'?
+  value:Expression
+
+/// A possibly-qualified name: `Foo`, `Foo\Bar`, `\Foo`, `namespace\Foo`.
+Name = 'namespace'? 'backslash'? 'identifier' ('backslash' 'identifier')*
+
+/// A name used as an expression: a constant fetch or a callee. Also
+/// `static` as a scoped-access subject, a bare keyword token with no
+/// Name child.
+NameExpression = Name? static_keyword:'static'?
+
+/// `( argument, ... )`, including the lone `...` of a first-class
+/// callable, which sits directly in the list.
+ArgumentList = '(' (Argument (',' Argument)*)? ellipsis:'...'? ')'
+
+/// One argument: optional `label:`, optional `...`, optional `&`,
+/// then the expression. The label is semi-reserved (any keyword), so
+/// its accessor is hand-written.
+Argument = 'identifier'? ':'? spread:'...'? '&'? Expression?
+
+/// A call: the callee expression, then its argument list.
+CallExpression = callee:Expression ArgumentList
+
+/// `subject->name` and `subject?->name`.
+MemberAccessExpression = subject:Expression operator:('->' | '?->') MemberName
+
+/// `subject::name`: constants, methods, static properties, `::class`.
+ScopedAccessExpression = subject:Expression '::' MemberName
+
+/// The name after `->`, `?->`, or `::`: identifier, any keyword
+/// (semi-reserved, hand-written accessor), variable, or
+/// `{ expression }`.
+MemberName = 'identifier'? '{'? Expression? '}'?
+
+/// `subject[index]`; the index is absent in the push form `$a[]`.
+IndexExpression = subject:Expression '[' index:Expression? ']'
+
+/// `[ elements ]` or `array( elements )`; also the destructuring
+/// target shape. Empty destructuring slots keep their commas as
+/// direct children.
+ArrayExpression = 'array'? ('[' | '(') (ArrayElement (',' ArrayElement)*)? (']' | ')')
+
+/// One element: optional `...`, optional `&`, expression, then
+/// optionally `=>` (optional `&`) expression. `[value]` and
+/// `[key => value]` put a different role at the first position, so the
+/// accessors are hand-written.
+ArrayElement = '...'? '&'? Expression ('=>' '&'? Expression)?
+
+/// `list( elements )`, the keyword destructuring form.
+ListExpression = 'list' '(' (ArrayElement (',' ArrayElement)*)? ')'
+
+/// `"..."` with fragments and interpolations.
+InterpolatedString = '"' ('string_fragment' | StringInterpolation)* '"'
+
+/// A heredoc or nowdoc, start to end label.
+HeredocExpression = 'heredoc_start' ('string_fragment' | StringInterpolation)* 'heredoc_end'
+
+/// A backtick string: shell execution.
+ShellExecExpression = '`' ('string_fragment' | StringInterpolation)* '`'
+
+/// `$name`, `$name->property`, `$name[offset]` inside a string.
+SimpleInterpolation =
+  name:'variable'
+  ('->' | '?->')?
+  '['? '-'? ('integer_literal' | 'identifier' | 'variable')? ']'?
+
+/// `{ expression }` inside a string.
+BraceInterpolation = '{' Expression '}'
+
+/// `${ ... }` inside a string, the deprecated form.
+DollarBraceInterpolation = '${' Expression '}'
+
+/// `new` with a class reference and optional constructor arguments.
+/// The reference is one of: a Name (`new Foo(1)`), the bare `static`
+/// keyword, a variable or parenthesized expression, or an anonymous
+/// ClassDeclaration (whose own constructor arguments sit inside it).
+NewExpression =
+  'new' static_keyword:'static'? Name? Expression? ClassDeclaration? ArgumentList?
+
+/// `clone value` or the 8.5 function form `clone(...)`.
+CloneExpression = 'clone' operand:Expression? ArgumentList?
+
+/// `isset( arguments )`.
+IssetExpression = 'isset' ArgumentList
+
+/// `empty( argument )`.
+EmptyExpression = 'empty' ArgumentList
+
+/// `eval( argument )`.
+EvalExpression = 'eval' ArgumentList
+
+/// `exit` / `die`, with an optional argument list since 8.4.
+ExitExpression = 'exit' ArgumentList?
+
+/// `print operand`.
+PrintExpression = 'print' operand:Expression
+
+/// `throw operand`, an expression since PHP 8.0.
+ThrowExpression = 'throw' operand:Expression
+
+/// `yield`, `yield value`, `yield key => value`, `yield from source`.
+/// `yield $v` puts the value first while `yield $k => $v` puts the key
+/// first, so the accessors are hand-written.
+YieldExpression = ('yield' | 'yield from') Expression? '=>'? Expression?
+
+/// `include`, `include_once`, `require`, `require_once`; the
+/// keyword token distinguishes them.
+IncludeExpression =
+  operator:('include' | 'include_once' | 'require' | 'require_once')
+  operand:Expression
+
+/// `match ( subject ) { arms }`.
+MatchExpression = 'match' '(' subject:Expression ')' '{' (MatchArm (',' MatchArm)*)? '}'
+
+/// One arm: a condition list (or `default`), `=>`, the body. The body
+/// is the expression after the arrow; position alone cannot separate
+/// it from the conditions, so the accessors are hand-written.
+MatchArm = 'default'? (Expression (',' Expression)*)? '=>' Expression
+
+/// `function (...) use (...) { ... }`, optionally `static`, with an
+/// optional by-reference `&` and return type.
+ClosureExpression =
+  AttributeGroup* static_keyword:'static'? 'function' by_reference:'&'?
+  ParameterList ClosureUseClause? (':' return_type:Type)? Block
+
+/// `fn (...) => expression`, optionally `static`.
+ArrowFunctionExpression =
+  AttributeGroup* static_keyword:'static'? 'fn' by_reference:'&'?
+  ParameterList (':' return_type:Type)? '=>' body:Expression
+
+/// `( parameter, ... )`.
+ParameterList = '(' (Parameter (',' Parameter)*)? ')'
+
+/// One parameter: optional type, `&`, `...`, the variable, and an
+/// optional default. Constructor promotion admits the full member
+/// modifier set; which modifiers are legal here is semantic.
+Parameter =
+  AttributeGroup*
+  ('public' | 'protected' | 'private' | 'static' | 'abstract' | 'final' | 'readonly' | 'var')*
+  Type? by_reference:'&'? variadic:'...'? name:'variable'
+  ('=' default_value:Expression)?
+  PropertyHookList?
+
+/// `use ( variables )` on a closure.
+ClosureUseClause = 'use' '(' ('&'? VariableReference (',' '&'? VariableReference)*)? ')'
+
+//**********************//
+//      Statements      //
+//**********************//
+
+/// `{ statements }`.
+Block = '{' Statement* '}'
+
+/// A lone `;`.
+EmptyStatement = ';'
+
+/// `echo expression, expression;`.
+EchoStatement = 'echo' (Expression (',' Expression)*)? ';'?
+
+/// An expression used as a statement, terminator included.
+ExpressionStatement = Expression ';'?
+
+/// `return;` or `return expression;`.
+ReturnStatement = 'return' Expression? ';'?
+
+/// `break;` or `break level;`; level validity is semantic.
+BreakStatement = 'break' Expression? ';'?
+
+/// `continue;` or `continue level;`; level validity is semantic.
+ContinueStatement = 'continue' Expression? ';'?
+
+/// `global $a, $b;`.
+GlobalStatement = 'global' (Expression (',' Expression)*)? ';'?
+
+/// `static $a = 1, $b;`, the function-static declaration.
+StaticStatement = 'static' (StaticVariable (',' StaticVariable)*)? ';'?
+
+/// One declared static: the variable and its optional initializer.
+StaticVariable = name:'variable' ('=' Expression)?
+
+/// `unset( targets );`.
+UnsetStatement = 'unset' ArgumentList ';'?
+
+/// `goto label;`; whether the label exists is semantic.
+GotoStatement = 'goto' label:'identifier' ';'?
+
+/// `label:`, the target of a `goto`.
+LabelStatement = name:'identifier' ':'
+
+/// `if (condition) body`, with optional `ElseIfClause`s and one
+/// optional `ElseClause`, in either classic or alternative syntax. The
+/// classic body is a single statement child; the alternative body is
+/// the statement list before the clauses.
+IfStatement =
+  'if' '(' condition:Expression ')'
+  ':'? Statement* ElseIfClause* ElseClause? 'endif'? ';'?
+
+/// `elseif (condition) body` (or its alternative-syntax form).
+ElseIfClause = 'elseif' '(' condition:Expression ')' ':'? Statement*
+
+/// `else body` (or its alternative-syntax form).
+ElseClause = 'else' ':'? Statement*
+
+/// `while (condition) body`, either syntax.
+WhileStatement = 'while' '(' condition:Expression ')' ':'? Statement* 'endwhile'? ';'?
+
+/// `do body while (condition);`.
+DoWhileStatement = 'do' body:Statement? 'while' '(' condition:Expression ')' ';'?
+
+/// `for (initializers; condition; updates) body`, either syntax.
+ForStatement =
+  'for' '('
+    initializers:ForExpressionList? ';'
+    condition:ForExpressionList? ';'
+    updates:ForExpressionList?
+  ')'
+  ':'? Statement* 'endfor'? ';'?
+
+/// One of `for`'s three sections: a possibly-empty comma-separated
+/// expression list, always present as a node so the sections stay
+/// addressable by position.
+ForExpressionList = (Expression (',' Expression)*)?
+
+/// `foreach (subject as key => value) body`, either syntax; the
+/// `=>` separates the optional key target from the value target, so
+/// position alone cannot assign roles and the accessors are
+/// hand-written.
+ForeachStatement =
+  'foreach' '(' Expression 'as' '&'? Expression? '=>'? '&'? Expression? ')'
+  ':'? Statement* 'endforeach'? ';'?
+
+/// `switch (subject) { cases }`, either syntax.
+SwitchStatement =
+  'switch' '(' condition:Expression ')'
+  ('{' | ':') ';'? SwitchCase* ('}' | 'endswitch') ';'?
+
+/// One `case expression:` or `default:` section, its statements
+/// included; the body ends where the next section (or the switch)
+/// begins, so an empty body is a fallthrough.
+SwitchCase = keyword:('case' | 'default') condition:Expression? (':' | ';') Statement*
+
+/// `try block`, then catch clauses and an optional finally.
+TryStatement = 'try' Block CatchClause* FinallyClause?
+
+/// `catch (Type | Type $variable) block`; the variable is optional
+/// since PHP 8.0.
+CatchClause = 'catch' '(' (Name ('|' Name)*)? VariableReference? ')' Block
+
+/// `finally block`.
+FinallyClause = 'finally' Block
+
+/// `declare( directives ) body`, either syntax; the body may be a
+/// lone `;` (an empty statement). A classic body of `?>` leaves a bare
+/// CloseTag token with no statement-node child, so the statement
+/// accessor yields nothing there.
+DeclareStatement =
+  'declare' '(' (DeclareDirective (',' DeclareDirective)*)? ')'
+  ':'? Statement* 'enddeclare'? ';'?
+
+/// One `name = value` directive; which names and values are legal
+/// is semantic.
+DeclareDirective = name:'identifier' '=' value:Expression
+
+//**********************//
+//     Declarations     //
+//**********************//
+
+/// `function name(parameters): type { body }`, the top-level form;
+/// methods are `MethodDeclaration`.
+FunctionDeclaration =
+  AttributeGroup* 'function' by_reference:'&'? name:'identifier'
+  ParameterList (':' return_type:Type)? Block
+
+/// One named type: a qualified `Name`, or a keyword type token
+/// (`array`, `callable`, `static`, and permissively any keyword)
+/// sitting bare. One concept in two shapes; the hand-written
+/// `name_or_keyword()` extension unifies them.
+NamedType = Name? ('array' | 'callable' | 'static')?
+
+/// `?type`.
+NullableType = '?' Type?
+
+/// `A|B|C`, one flat node for the whole chain.
+UnionType = Type ('|' Type)*
+
+/// `A&B&C`, one flat node for the whole chain.
+IntersectionType = Type ('&' Type)*
+
+/// `( type )` inside a type: the DNF grouping form.
+ParenthesizedType = '(' Type? ')'
+
+/// `const FOO = 1, BAR = 2;`, optionally typed (8.3), at the top
+/// level or as a class member (with modifiers).
+ConstantDeclaration =
+  AttributeGroup*
+  ('public' | 'protected' | 'private' | 'static' | 'abstract' | 'final' | 'readonly' | 'var')*
+  'const' Type? (ConstantElement (',' ConstantElement)*)? ';'?
+
+/// One `name = value` element of a constant declaration. The name is
+/// semi-reserved (`const FOR = 1;`), so its accessor is hand-written.
+ConstantElement = 'identifier'? '=' value:Expression
+
+/// `namespace A\B;` or `namespace A\B { ... }` or `namespace { ... }`.
+NamespaceDeclaration = 'namespace' Name? Block? ';'?
+
+/// `use A\B;` and every import shape: aliases, `function`/`const`
+/// types, clause lists, group imports.
+UseDeclaration =
+  'use' import_type:('function' | 'const')? (UseClause (',' UseClause)*)? ';'?
+
+/// One imported name: optional per-item `function`/`const` type
+/// (inside groups), the name, an optional group or alias. The alias is
+/// semi-reserved, so its accessor is hand-written.
+UseClause = import_type:('function' | 'const')? Name UseGroup? 'as'? 'identifier'?
+
+/// `\{ items }` of a grouped import.
+UseGroup = 'backslash' '{' (UseClause (',' UseClause)*)? '}'
+
+/// `class Name extends B implements C, D { members }`, with
+/// optional `abstract` / `final` / `readonly` modifiers. Anonymous
+/// classes (`new class(...) { ... }`) share this kind and simply
+/// have no name; their constructor arguments sit before the
+/// heritage clauses. The name is semi-reserved (`class List {}`
+/// parses), so its accessor is hand-written.
+ClassDeclaration =
+  AttributeGroup* ('abstract' | 'final' | 'readonly')* 'class' 'identifier'?
+  ArgumentList? ExtendsClause? ImplementsClause? MemberList
+
+/// `interface Name extends A, B { members }`. The name is
+/// semi-reserved, so its accessor is hand-written.
+InterfaceDeclaration =
+  AttributeGroup* 'interface' 'identifier'?
+  ExtendsClause? ImplementsClause? MemberList
+
+/// `trait Name { members }`. Heritage clauses parse permissively on
+/// traits; their legality is semantic. The name is semi-reserved, so
+/// its accessor is hand-written.
+TraitDeclaration =
+  AttributeGroup* 'trait' 'identifier'?
+  ExtendsClause? ImplementsClause? MemberList
+
+/// `extends` and its comma-separated names.
+ExtendsClause = 'extends' (Name (',' Name)*)?
+
+/// `implements` and its comma-separated names.
+ImplementsClause = 'implements' (Name (',' Name)*)?
+
+/// `{ members }` of a class-like body.
+MemberList = '{' MemberDeclaration* '}'
+
+/// `public int $a = 1, $b;`: modifiers, optional type, then the
+/// declarator elements.
+PropertyDeclaration =
+  AttributeGroup*
+  ('public' | 'protected' | 'private' | 'static' | 'abstract' | 'final' | 'readonly' | 'var')*
+  Type? (PropertyElement (',' PropertyElement)*)? ';'?
+
+/// One `$name [= initializer]` element; a hooked property carries
+/// its `PropertyHookList` here.
+PropertyElement = name:'variable' ('=' Expression)? PropertyHookList?
+
+/// `function name(parameters): type { body }` (or `;` for the
+/// abstract and interface forms) as a class member, modifiers
+/// included. The name is semi-reserved (`public function list()`), so
+/// its accessor is hand-written.
+MethodDeclaration =
+  AttributeGroup*
+  ('public' | 'protected' | 'private' | 'static' | 'abstract' | 'final' | 'readonly' | 'var')*
+  'function' by_reference:'&'? 'identifier'?
+  ParameterList (':' return_type:Type)? Block? ';'?
+
+/// `use TraitA, TraitB;` inside a class body, with an optional
+/// adaptation list instead of the semicolon.
+TraitUseClause = 'use' (Name (',' Name)*)? TraitAdaptationList? ';'?
+
+/// `{ adaptations }` of a trait use.
+TraitAdaptationList = '{' TraitAdaptation* '}'
+
+/// `A::member insteadof B, C;`. The reference name, the semi-reserved
+/// member, and the excluded names share types, so the accessors are
+/// hand-written.
+TraitPrecedence = Name? '::'? 'identifier'? 'insteadof' (Name (',' Name)*)? ';'?
+
+/// `[A::]member as [visibility] [name];`. The member and the alias are
+/// semi-reserved and position-dependent, so the accessors are
+/// hand-written.
+TraitAlias =
+  Name? '::'? 'identifier'? 'as'
+  ('public' | 'protected' | 'private')? 'identifier'? ';'?
+
+/// `enum Name: BackingType implements A { cases and members }`.
+EnumDeclaration =
+  AttributeGroup* 'enum' name:'identifier' (':' backing_type:Type)?
+  ExtendsClause? ImplementsClause? MemberList
+
+/// `case Name;` or `case Name = expression;`. Case names are
+/// semi-reserved, so the accessor is hand-written.
+EnumCase = AttributeGroup* 'case' 'identifier'? ('=' value:Expression)? ';'?
+
+/// `{ get; set(...) { ... } }` on a property or a promoted
+/// parameter (8.4).
+PropertyHookList = '{' PropertyHook* '}'
+
+/// One hook: optional `final`, optional `&`, the name, an optional
+/// parameter list, then `;`, `=> expression;`, or a block. Hook names
+/// are semi-reserved in practice, so the accessor is hand-written.
+PropertyHook =
+  AttributeGroup* modifier:'final'? by_reference:'&'? 'identifier'?
+  ParameterList? '=>'? body:Expression? Block? ';'?
+
+/// `#[Attribute(arguments), Other]`: one bracketed group.
+AttributeGroup = '#[' (Attribute (',' Attribute)*)? ']'
+
+/// One attribute inside a group: a name and optional arguments.
+Attribute = Name ArgumentList?

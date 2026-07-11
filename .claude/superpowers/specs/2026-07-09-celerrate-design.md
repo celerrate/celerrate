@@ -1,7 +1,17 @@
 # Celerrate — Vision and Engine Architecture Design
 
-Date: 2026-07-09
+Date: 2026-07-09 (amended 2026-07-11)
 Status: Approved (brainstorming output; each sub-project gets its own detailed spec)
+
+Amendment history:
+
+- 2026-07-11 — amended after a five-lens architecture review (incremental
+  engine, crate layering, type engine, extensibility, product/delivery):
+  honest persistent-cache design, engine invariants (cycle recovery,
+  cancellation, parallelism discipline), corrected crate layout with
+  dependency inversion, re-scoped v0.1 success criterion, deterministic
+  plugin failure semantics, pinned benchmark protocol, and sequencing
+  adjustments (preview milestone, framework-providers sub-project).
 
 ## 1. Vision
 
@@ -45,17 +55,38 @@ by plugins:
 
 - The PHPStan/Psalm syntax bridge is **first-party, shipped with the tool,
   and enabled by default**. Day-1 experience on existing codebases is
-  seamless; the Celerrate norm is the promoted path, the bridge is a
-  migration ramp.
+  seamless; the Celerrate norm becomes the promoted path once it freezes
+  (section 4), the bridge is a migration ramp.
 - A future `celerrate migrate --to-celerrate-types` autofix converts existing
   PHPDoc annotations to the Celerrate norm.
 
 ### Success criterion for v0.1
 
-v0.1 = `celerrate check` can analyze a real Symfony/Laravel codebase end to
-end with a restricted but reliable set of diagnostics (nullability, argument
-types, unknown symbols), no visible false positives, with speed as the proof.
-Depth comes later.
+v0.1 = `celerrate check` can analyze a real Symfony codebase end to end with
+a restricted but reliable set of diagnostics (nullability, argument types,
+unknown symbols), no visible false positives, with speed as the proof. Depth
+comes later.
+
+Two deliberate boundaries make this criterion honest:
+
+- **Magic-method semantics.** On classes with `__get`/`__set`/`__call`/
+  `__callStatic`, unknown-symbol diagnostics are conservatively suppressed:
+  the engine cannot know what the magic resolves, so it stays silent rather
+  than guessing — the same stance PHPStan and Psalm take. This is documented
+  engine semantics, not a scope workaround; dynamic type providers
+  (section 5) progressively restore precision by declaring what the magic
+  actually exposes.
+- **Laravel enters the measured corpus with the framework-providers
+  sub-project** (section 11), not before: Laravel's idioms (Eloquent magic
+  members, facades, container resolution) are dominated by exactly the
+  patterns that need providers, and claiming "no false positives" there
+  without them would be either untrue or vacuous. v0.1 runs on Laravel
+  without crashing and without a false-positive storm (the suppression rule
+  guarantees that), but the published claim is Symfony.
+
+The v0.1 positioning is "reads what you already have": the PHPStan/Psalm
+bridge carries the launch, and the Celerrate norm is not part of the v0.1
+public surface (section 4).
 
 ## 2. Language support
 
@@ -69,6 +100,12 @@ Depth comes later.
     the code must work on the whole declared range.
   - Deprecation and removal checks run at **max** — the code must survive
     the newest supported version.
+  - Signatures that change across the range are checked against the whole
+    range: arguments must satisfy the **intersection** (most restrictive
+    form) of the signature across `[min, max]`, and the call's return type
+    is the **union** (least restrictive) across the range. The stub compiler
+    therefore stores per-version signature deltas, not a single signature
+    plus availability flags (section 3).
 - **Version detection precedence:**
   1. Explicit `php = "8.2"` in `celerrate.toml` (range collapses to a point).
   2. `config.platform.php` in `composer.json`.
@@ -100,20 +137,111 @@ diagnostics", which asks for per-file diagnostics, which ask for types, which
 ask for name resolution, which asks for indexes, which ask for syntax trees.
 File-level fan-out is parallelized with rayon.
 
+**Invalidation boundary.** Semantic queries must not depend on raw syntax
+trees: any edit rebuilds the whole tree, so a query reading it directly is
+invalidated by every keystroke, and the engine degrades to batch behind an
+incremental facade. `celerrate_semantics` therefore exposes stable-identifier
+representations (the rust-analyzer `ItemTree`/`AstId` pattern) as the sole
+input of everything above it, with signatures and bodies split into separate
+queries so that editing a function body does not invalidate dependents of its
+signature. The exact identifier scheme, the signature/body query split, and
+whether bodies are lowered to a desugared form before inference are designed
+in the semantic-core sub-project's spec; this document fixes the principle,
+because the published incremental performance targets (section 7) depend on
+it, and the incremental correctness harness (section 9) cannot catch its
+absence: that harness verifies the incremental result, not how little work
+was redone to produce it.
+
+The boundary only cuts invalidation through three mechanisms the
+semantic-core spec must treat as part of the same principle: **early
+cutoff** (salsa re-executes the boundary query after an edit, gets an
+`Eq`-identical result, and backdates it so dependents never re-run — which
+requires boundary types with cheap, deterministic `Eq`/`Hash` and
+deterministically ordered contents, or backdating silently never fires),
+**interned identifiers** for the stable IDs, and **durability tiers**
+(stubs, `vendor/`, `celerrate.toml`, and the PHP version range are
+high-durability inputs whose dependency subgraphs are skipped wholesale on
+a user-code edit; the stdlib index is a salsa input, but not "like any
+other"). Syntax trees are evicted under an LRU policy and reparsed on
+demand — cheap to recompute, expensive to retain. The boundary is also
+regression-tested directly, not just asserted: see the invalidation-scope
+tests in section 9.
+
+**Engine invariants.** Four properties are fixed here because they cannot
+be retrofitted:
+
+- **Cycle recovery.** Interprocedural inference over user-controlled code
+  guarantees query cycles: mutual recursion is ordinary PHP, and degenerate
+  inputs like `class A extends A` reach the resolver because parsing never
+  fails. Salsa's default response to a cycle is a panic, which would violate
+  both the zero-panic rule and error resilience (section 8). Recursive
+  queries therefore resolve through salsa cycle recovery with **fixpoint
+  iteration and widening** (section 4), and cycle handling is deterministic
+  regardless of which participant is queried first.
+- **Cancellation.** The future LSP requires in-flight queries to be
+  cancelled when an input changes; salsa signals this by unwinding with
+  `salsa::Cancelled`. Cancellation-on-edit is an engine requirement from the
+  start, not an LSP-era addition.
+- **Panic isolation.** The per-file `catch_unwind` safety belt (section 8)
+  wraps only the outermost per-file diagnostics query call, is transparent
+  to `salsa::Cancelled` (always re-raised), and its product — the internal
+  error report — is never memoized.
+- **Parallelism discipline.** Rayon fan-out happens only through database
+  snapshots at declared fan-out boundaries, never inside queries (a rayon
+  thread blocking on a query claimed by another stalled task in the same
+  pool deadlocks). Parallel collection is deterministically ordered before
+  rendering or comparison.
+
 ### Crate layout (Cargo workspace, strict layering)
 
 ```
-celerrate_source      source files, spans, positions
-celerrate_syntax      lexer + parser → lossless syntax tree
-celerrate_db          the salsa query database (the "engine")
-celerrate_semantics   project discovery (Composer), symbol index, name resolution
-celerrate_types       inference and type system
-celerrate_rules       rule framework + diagnostics + structured edit engine
-celerrate_plugin      plugin API (native traits first, WASM host later)
-celerrate_cli         the binary: config, orchestration, rendering, disk cache
+celerrate_source       source files, spans, positions
+celerrate_diagnostics  the diagnostic data model (identifiers, annotated
+                       spans, notes, structured suggestions) — used by every
+                       layer that reports, from the parser up
+celerrate_syntax       lexer + parser → lossless syntax tree
+celerrate_edit         structured-edit library on the syntax tree (powers
+                       autofixes, later the formatter, migrations, codegen)
+celerrate_vfs          file loading and in-memory overlays feeding the inputs
+celerrate_db           salsa inputs and foundational queries (files, config,
+                       parse) — the base-db layer, not the whole engine
+celerrate_project      Composer discovery, autoload rules, PHP version range
+celerrate_stubs        phpstorm-stubs snapshot, build-time stub compiler,
+                       versioned binary format, overlay merging
+celerrate_semantics    symbol index, name resolution, stable identifiers
+celerrate_types        inference and type system
+celerrate_rules        rule framework, rule registry, rendering
+celerrate_plugin       plugin API facade (native traits first, WASM host later)
+celerrate_cli          the binary: config, orchestration, disk cache
 ```
 
-Each layer depends only on layers below it.
+The dependency rule is a **DAG with no upward edges**, not a total order: a
+crate depends only on crates strictly below it, but need not depend on all
+of them (a pure-syntax style rule does not pull in `celerrate_types`).
+`celerrate_ide` is reserved for the LSP-era feature layer between
+`celerrate_rules` and the binaries.
+
+Two clarifications the list alone does not carry:
+
+- **The concrete salsa database lives at the top, not the bottom.** Query
+  definitions live with their domain crates; `celerrate_db` holds only the
+  input definitions and the foundational queries every layer shares (the
+  rust-analyzer `base-db` pattern). The concrete `salsa::Database`
+  implementation that aggregates all storage is assembled at the composition
+  root (`celerrate_cli`, later the LSP binary).
+- **Extension points are dependency-inverted.** Each consuming layer owns
+  its extension-point traits: `celerrate_types` owns the type-syntax and
+  dynamic-type-provider traits, `celerrate_semantics` owns the
+  virtual-symbol and stub-provider traits, `celerrate_project` owns the
+  discovery traits. Implementations are registered as salsa inputs at the
+  composition root; `celerrate_plugin` is the aggregation facade that
+  re-exports the stable API surface and, later, hosts the WASM adapter
+  implementing those same traits. Nothing ever depends upward.
+
+The stub compiler uses `celerrate_syntax` as a build-dependency (a separate
+dependency graph in Cargo, so no layering violation), and the compiled
+blob's binary format is version-stamped because its schema is coupled to
+the runtime crates that read it.
 
 ### Parser
 
@@ -130,10 +258,12 @@ Each layer depends only on layers below it.
 
 - Source of truth: **phpstorm-stubs** (the de-facto standard, maintained,
   version-annotated).
-- Compiled **at build time** into a compact binary format embedded in the
-  `celerrate` binary: pre-parsed, pre-indexed, carrying per-version
-  availability metadata (added in 8.2, signature changed, deprecated...).
-  Zero startup cost; the stdlib index is a salsa input like any other.
+- Compiled **at build time** (owned by `celerrate_stubs`) into a compact
+  binary format embedded in the `celerrate` binary: pre-parsed, pre-indexed,
+  carrying per-version metadata as **signature deltas** (added in 8.2,
+  signature changed in 8.3, deprecated...) so range checks can apply the
+  intersection/union rule of section 2. Zero startup cost; the stdlib index
+  is a high-durability salsa input.
 - **Overlay system**, increasing priority: base stubs → Celerrate refinements
   (enriched signatures written in the Celerrate norm, the equivalent of
   PHPStan's functionMap) → plugin-contributed stubs (required by framework
@@ -142,11 +272,20 @@ Each layer depends only on layers below it.
 
 ### Persistent cache
 
-The salsa state is serialized to `.celerrate/cache/` between CLI runs. First
-run: full parallel analysis. Subsequent runs: only queries invalidated by
-changed files are recomputed — including in CI when the cache is restored
-between jobs. Corrupted caches are detected (versioning + checksums) and
-silently regenerated, never fatal.
+Salsa does not support serializing its database — memo tables, revisions,
+and interned IDs are in-memory only, and neither rust-analyzer nor ty
+persists them — so Celerrate does not pretend to. The persistent cache is a
+**content-addressed derived-artifact cache above salsa**: selected query
+outputs (item trees, symbol indexes, per-file diagnostics) are persisted to
+`.celerrate/cache/`, keyed by content hash plus the binary, configuration,
+stub, and plugin-set versions, and used to re-seed a fresh database at
+startup. First run: full parallel analysis. Subsequent runs — including in
+CI when the cache is restored between jobs — recompute only what the
+changed inputs invalidate. The economics are a design constraint, not a
+hope: deserialization plus revalidation must beat recomputation, or the
+affected artifact class is dropped from the cache as a net loss. Corrupted
+caches are detected (versioning + checksums) and silently regenerated,
+never fatal.
 
 ## 4. Type engine
 
@@ -156,19 +295,60 @@ Three components:
    propagation, function returns from bodies, control-flow narrowing (after
    `if ($x instanceof User)`, `$x` is `User`; `assert()`, `match`,
    comparisons). Interprocedural: the type of a call is computed from the
-   callee's body when unannotated — a memoized salsa query, paid once. The
-   type system covers unions (`User|null`), literal types (`'active'`, `42`),
-   array shapes (`array{id: int, name: string}`), and generics on classes and
-   functions.
+   callee's body when unannotated — a memoized salsa query. Three structural
+   decisions are fixed here and detailed in the type-engine sub-project's
+   spec:
+
+   - **Recursion resolves by fixpoint iteration with widening.** Mutual
+     recursion makes callee-return queries cyclic; iteration terminates
+     because the lattice widens (literal-to-general widening, union arity
+     caps, array-shape depth caps), deterministically regardless of entry
+     point (section 3, engine invariants).
+   - **Callee queries are parameterized by the resolved receiver class**
+     where PHP semantics demand it: `static`/`$this` returns under late
+     static binding, and trait methods (analyzed per using class, as PHPStan
+     does). "Paid once" means once per (callee, receiver) key, not once per
+     function.
+   - **Unannotated parameters are monovariant (`mixed`) in v0.1**;
+     call-site-sensitive parameter inference is an explicit later extension.
+
+   The type system covers unions (`User|null`), literal types (`'active'`,
+   `42`), array shapes (`array{id: int, name: string}`), intersection types
+   (native in PHP 8.1), enums (including `match` exhaustiveness), callable
+   signatures (`callable(int): string`, first-class callable syntax), and
+   generics on classes and functions. Generics ship with call-site template
+   inference and basic variance, or they ship **inference-only** (inferred
+   and propagated but never reported as mismatches): generics diagnostics
+   without template solving produce exactly the visible false positives
+   v0.1 forbids. A first-party **stdlib type provider written in code** (the
+   dynamic-type-provider extension point of section 5, compiled in) covers
+   the computation-dependent stdlib signatures no declarative stub can
+   express: `array_map` from its callable, `json_decode` from its flags,
+   `preg_match` `$matches` shapes.
 2. **The Celerrate norm.** Our own annotation syntax, designed after twenty
    years of PHPDoc lessons — living in docblocks (full runtime compatibility)
    but with a clean, strict, formally specified, versioned grammar. The exact
    syntax is designed in the type-engine sub-project's own spec; this
    document fixes the principle: one official norm, formally specified.
+   **Timing:** the norm is designed as an internal draft during the
+   type-engine sub-project (designing the bridge and the lattice against a
+   target keeps both honest) but is neither published nor frozen in v0.1 —
+   no public documentation, no `migrate --to-celerrate-types`, no stability
+   promise. It freezes in v1.x, informed by real-world feedback; freezing a
+   public grammar before any user feedback would be a premature API commit.
 3. **The compat bridge** (first-party plugin, enabled by default) translates
-   PHPStan/Psalm annotations into internal types. Internal engine types are
-   **the only currency**: plugins produce internal types, never their own
-   representation.
+   PHPStan/Psalm annotations into internal types. It is one plugin and one
+   lexer, but **two explicit semantic dialects**: PHPStan and Psalm diverge
+   where it hurts (assertion tags, template variance, purity tags,
+   conditional-return details), and each tool lets its own prefixed tag win
+   when several coexist on one docblock. The bridge carries a documented
+   per-tag precedence and conflict-resolution table rather than one merged
+   grammar that would silently mistranslate one tool's semantics. It also
+   honors inline suppressions (`@phpstan-ignore-line`, `@psalm-suppress`):
+   a codebase's existing suppression decisions are respected by default,
+   because re-reporting them reads as false positives to the user. Internal
+   engine types are **the only currency**: plugins produce internal types,
+   never their own representation.
 
 ## 5. Extensibility
 
@@ -177,12 +357,27 @@ Model: **hybrid Rust native + WASM.**
 - First-party plugins (PHPStan/Psalm bridge, framework rules for
   Laravel/Symfony) are Rust crates compiled into the binary: maximum
   performance on the hot path.
-- Community plugins go through a WASM API (writable in Rust, Go,
-  AssemblyScript, and potentially compiled PHP later). WASM plugins are
-  sandboxed: a plugin that crashes or hangs is isolated, killed cleanly, and
-  reported — never fatal to the analysis. The WASM host is out of scope for
-  v0.1; the native plugin API (traits) ships first and the same extension
-  points back both.
+- Between configuration and WASM sits a **declarative tier**, the primary
+  community extension mechanism and the day-1 authoring path for PHP
+  developers (who should not need to learn Rust to extend a PHP tool): stub
+  files written in annotation form for virtual symbols, and
+  configuration-declared dynamic return types (the functionMap pattern).
+  This covers most of what framework ecosystem packages actually need, and
+  it is deterministic and sandboxed for free.
+- Community plugins that need real computation go through a WASM API
+  (writable in Rust, Go, AssemblyScript, and potentially compiled PHP
+  later). WASM plugins are sandboxed with **deterministic failure
+  semantics**: runaway plugins are bounded by deterministic fuel metering
+  (wasmtime fuel), so "this plugin exceeded its budget on this input" is a
+  pure function of the input and can be memoized; a plugin that crashes is
+  disabled for the **entire run** — its contributions removed uniformly,
+  the run reported as degraded, nothing from it entering the persistent
+  cache. Never a per-query fallback: a wall-clock kill inside the
+  dependency graph would make results machine-speed-dependent and poison
+  the cache. Plugin identity (name, version, configuration) is itself a
+  salsa input, so upgrading a plugin invalidates its contributions. The
+  WASM host is out of scope for v0.1; the native plugin API (traits) ships
+  first and the same extension points back both.
 
 Extension points span **every layer**, as declared interfaces:
 
@@ -191,7 +386,12 @@ Extension points span **every layer**, as declared interfaces:
   `$class`; Eloquent magic members).
 - Virtual symbols and stubs (symbols absent from sources: PHP extensions,
   framework magic).
-- Project discovery (non-standard autoload, DI container bootstrap).
+- Project discovery (non-standard autoload, DI container dumps). Discovery
+  plugins only **declare additional input files** (container dumps, route
+  caches, generated manifests) that enter salsa as tracked inputs like any
+  source file; they never execute project code or read the environment, and
+  staleness of a dump is the user's visible responsibility, not hidden
+  nondeterminism.
 - Rules and diagnostics with their autofixes — same API for core and plugins.
 - Later: migration/codegen recipes, architecture rules, LSP actions.
 
@@ -200,6 +400,29 @@ inputs** — plugin contributions enter salsa's dependency graph, so imperative
 hooks mutating internal state would break cache correctness. Declared APIs
 also stay stable while internals evolve, which is the same contract the WASM
 API imposes anyway.
+
+Three commitments keep that contract honest as the API ages:
+
+- **The native API is WASM-projectable from day 1.** Plugins hold opaque
+  handles (`TypeId`, `SymbolId`) and query the engine back through a narrow
+  host interface — no borrowed internals, no retained database references,
+  no closures. Dynamic type providers are bidirectional (they query types
+  while producing types), which is trivial for native traits and the hard
+  case across a WASM boundary; shaping the API for that case now is what
+  makes "the same extension points back both" true rather than hopeful. A
+  sketch of the WASM-level interface is an acceptance artifact of the
+  type-engine sub-project, even though the host ships later, and the API is
+  not called v1 before at least two dissimilar first-party consumers
+  exercise it (the compat bridge plus one framework dynamic type provider).
+- **The type representation is never exposed.** Plugins construct types
+  through builders and interrogate them through query methods; there is no
+  exhaustively matchable type enum in the public API, because the
+  representation is exactly the internal that evolves most. The plugin API
+  carries an explicit version, checked at plugin load.
+- **First-party plugins go through the public API, mechanically.** They
+  depend only on `celerrate_plugin`, enforced in CI like the zero-panic
+  policy. An extension point that proves insufficient is extended, never
+  bypassed — otherwise the public API becomes an untested facade.
 
 Deliberate exception (decided later): the formatter will likely be
 non-extensible (opinionated, Prettier/rustfmt-style) — a product choice, not
@@ -231,7 +454,13 @@ Rust-ecosystem-level DX is a hard requirement. Four commitments:
 4. **Anti-false-positive policy.** A doubtful diagnostic does not ship. Every
    rule is tested against a corpus of real projects (Symfony, Laravel, and
    their ecosystems); a reported false positive is a priority bug, not an
-   opinion. The corpus runs in Celerrate's own CI.
+   opinion. The corpus runs in Celerrate's own CI. The policy is structural,
+   not heroic: corpus projects are **pinned to commit SHAs** with a
+   scheduled bump cadence (unpinned HEADs would destroy the regression
+   signal), and a rule with a confirmed open false positive is
+   **automatically demoted** out of the default tier (nursery-style) until
+   fixed — the promise "no false positive ships at default severity" is
+   enforced by process, not by maintainer response time.
 
 Rule framework: a rule is a declarative unit (metadata, consumed queries,
 visit function), registrable by core or by a plugin through the same API.
@@ -269,7 +498,22 @@ per-group severity, plugin activation.
 `celerrate check --baseline` records current diagnostics in a versionable
 file; only new problems fail afterwards. The format is designed to survive
 line movement (structural fingerprint rather than line number). Essential for
-adoption on existing codebases.
+adoption on existing codebases. The fingerprint format and its failure modes
+(collisions, renames orphaning entries, one entry masking a genuinely new
+duplicate) are designed in the CLI sub-project's spec; this document fixes
+the invariants: an entry survives line movement, dies with its diagnostic,
+and never suppresses more than one occurrence.
+
+### Migration from PHPStan
+
+The bridge covers annotations; migration covers workflow. `celerrate migrate
+--from-phpstan` imports `phpstan.neon` (paths, excludes, level mapped to a
+severity profile) and converts an existing `phpstan-baseline.neon`, so a
+PHPStan project's first run needs zero configuration and keeps its "only new
+problems fail" continuity at the exact moment of switching. Inline
+suppression comments are honored by the bridge (section 4). This is the
+Ruff-versus-flake8 lesson: the difference between a one-command migration
+and a weekend project decides adoption.
 
 ### Outputs
 
@@ -282,13 +526,29 @@ annotations); SARIF (GitLab, IDEs, security platforms).
 Single static binary per platform (Linux x64/arm64, macOS x64/arm64,
 Windows). Channels: install script, Homebrew, a bootstrap Composer package
 that downloads the binary (the bridge to PHP habits, as Biome does via npm),
-official Docker image, GitHub Action.
+official Docker image, GitHub Action. Platform tiers are explicit: Linux and
+macOS are tier 1 (the corpus and benchmarks run there in CI); Windows is
+tier 2 — built and tested, best-effort analysis correctness — until the
+corpus runs on it, because path separators and case-insensitive filesystems
+affect autoload resolution and cache identity, which is real analysis work,
+not packaging.
 
 ### Published performance targets
 
 Held in CI by benchmarks: at least ~20x faster than PHPStan on a cold full
 analysis, and sub-second incremental updates on single-file changes in a
 Symfony-sized project.
+
+Published numbers follow a **pinned benchmark protocol**, committed to the
+repository with the harness: PHPStan version, rule level, result cache
+explicitly off, `--parallel` setting, PHP version and opcache state, corpus
+commit SHA, corpus size (files and lines), and hardware. Since v0.1 runs a
+handful of diagnostic families while PHPStan runs hundreds of rules, the
+comparison either matches enabled-rule scope or discloses the asymmetry
+explicitly. The incremental target names its execution mode: a warm
+one-shot CLI run, including process startup and artifact-cache loading. A
+benchmark that would not survive third-party scrutiny is not published —
+the anti-false-positive policy applies to performance claims too.
 
 ## 8. Safety, error handling
 
@@ -305,8 +565,9 @@ Symfony-sized project.
   files continues) and surface rustc-style: a clean "internal error" report
   with minimal context and a pre-filled issue invitation. Per-file
   `catch_unwind` remains as a last-resort safety belt, not a handling mode.
-- WASM plugins are sandboxed (crash/hang isolation), as specified in the
-  extensibility section.
+- WASM plugins are sandboxed with deterministic failure semantics (fuel
+  metering for runaways, whole-run disablement on crash), as specified in
+  the extensibility section.
 - Continuous fuzzing verifies the promise.
 
 ## 9. Testing strategy
@@ -320,8 +581,15 @@ TDD as the default development loop, with five tiers:
 3. **Incremental correctness harness** — the most critical of the project:
    after any simulated modification, the incremental result must be
    **byte-for-byte identical** to a from-scratch analysis. A dedicated
-   harness replays edit sequences over the corpus. Most of a salsa engine's
-   subtle bugs live here.
+   harness replays edit sequences over the corpus, under varying thread
+   counts to flush ordering nondeterminism. Most of a salsa engine's subtle
+   bugs live here. Its complement, **invalidation-scope tests**, instruments
+   salsa's execution events and asserts, per canonical edit class (body
+   edit, signature edit, comment-only edit, new file, configuration change),
+   exactly which queries re-executed — e.g. editing a function body must not
+   re-run inference for its callers. The correctness harness verifies the
+   result; the scope tests verify how little work produced it, which is what
+   the section 7 targets actually depend on.
 4. **Real-project corpus in CI** (Symfony, Laravel, popular packages):
    diagnostic regression detection, the anti-false-positive policy, and
    continuous parser fuzzing (never panics; the tree is always lossless:
@@ -373,19 +641,39 @@ Each sub-project gets its own spec → plan → implementation cycle:
    parser producing the lossless syntax tree; span and source-file
    infrastructure.
 2. **Semantic core** — the salsa query database; project discovery (Composer
-   autoload); symbol indexing; name resolution; compiled stubs; incremental
+   autoload); symbol indexing; name resolution; compiled stubs; the
+   persistent artifact cache (pulled forward from the CLI sub-project: the
+   flagship incremental number cannot be measured without it); incremental
    by construction.
-3. **Type engine** — inference; the Celerrate type norm (own syntax spec);
-   the native plugin API with the PHPStan/Psalm bridge as first plugin
-   (enabled by default).
+
+   **Public milestone: a `v0.0.x` preview ships at the end of this
+   sub-project** — unknown-symbol and version-gating checks, watch mode, and
+   a published incremental benchmark on the Symfony corpus. It proves the
+   differentiator (interprocedural + incremental) against real feedback
+   before the riskiest sub-project begins, while the competitive window is
+   open.
+3. **Type engine** — inference; the Celerrate type norm as an internal draft
+   (no public freeze; section 4); the native plugin API with the
+   PHPStan/Psalm bridge as first plugin (enabled by default); the stdlib
+   type provider. **Stub curation** (the Celerrate refinements overlay, the
+   functionMap equivalent) is a named workstream inside this sub-project
+   with a "good enough for the corpus" exit criterion, not completeness —
+   this is where PHPStan spent years, and treating it as a bullet point is
+   how plans stall.
 4. **Diagnostics and fixes** — rule framework; the structured-edit library;
    autofix engine; rustc-style rendering; `celerrate explain`.
 5. **CLI product v0.1** — `celerrate check` with the `correctness` group:
-   configuration, persistent disk cache, baseline, output formats, the
-   public release.
-6. **Later** — WASM plugin host; `style` (lint), `security` (taint), and
-   `architecture` rule groups; `format`; LSP; `migrate`; `generate`;
-   `daemon` mode.
+   configuration, baseline, `migrate --from-phpstan`, output formats, the
+   public release (the disk cache moved to sub-project 2).
+6. **Framework providers** — the first post-v0.1 sub-project: dynamic type
+   providers for Eloquent (magic members, builder chains), Laravel facades,
+   and the Symfony container. Laravel joins the measured corpus and the
+   public claims when this ships (section 1).
+7. **Later** — WASM plugin host; the declarative plugin tier as a public
+   surface; the Celerrate norm freeze and `migrate --to-celerrate-types`;
+   `style` (lint), `security` (taint), and `architecture` rule groups;
+   `format`; LSP; `migrate`; `generate`; `daemon` mode.
 
 Out of scope for v0.1: daemon/LSP, WASM host, taint analysis, lint group,
-formatter, multi-version analysis.
+formatter, multi-version analysis, the Celerrate norm as a public surface,
+Laravel in the measured corpus.

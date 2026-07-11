@@ -5,7 +5,7 @@ const UTF8_BOM: &[u8] = b"\xEF\xBB\xBF";
 /// The decoded text would exceed the 4 GiB cap of [`TextSize`].
 ///
 /// This is the only way decoding fails; the caller renders it as a
-/// diagnostic. Everything else — invalid bytes, a byte-order mark — is
+/// diagnostic. Everything else (invalid bytes, a byte-order mark) is
 /// provenance data on the decoded [`SourceText`], not an error.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SourceTooLarge {

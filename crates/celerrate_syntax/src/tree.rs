@@ -31,8 +31,16 @@ pub type SyntaxToken = rowan::SyntaxToken<PhpLanguage>;
 /// A node or a token.
 pub type SyntaxElement = rowan::SyntaxElement<PhpLanguage>;
 
+/// A stable, lightweight pointer to a node: its kind and range, no
+/// tree handle. Upper layers (the salsa database) key derived data
+/// with it instead of holding red nodes.
+pub type SyntaxNodePtr = rowan::ast::SyntaxNodePtr<PhpLanguage>;
+
 #[cfg(test)]
 mod tests {
+    //! `expect` is fine here: failing loudly is what a test should do.
+    #![allow(clippy::expect_used)]
+
     use rowan::Language as _;
 
     use super::{PhpLanguage, SyntaxNode};
@@ -56,5 +64,14 @@ mod tests {
         let tree = SyntaxNode::new_root(builder.finish());
         assert_eq!(tree.kind(), SyntaxKind::SourceFile);
         assert_eq!(tree.text(), "<p>hi</p>");
+    }
+
+    #[test]
+    fn a_node_pointer_resolves_back_to_its_node() {
+        let parse = crate::parse::parse("<?php echo 1;");
+        let root = parse.tree();
+        let statement = root.first_child().expect("a first statement");
+        let pointer = super::SyntaxNodePtr::new(&statement);
+        assert_eq!(pointer.to_node(&root), statement);
     }
 }

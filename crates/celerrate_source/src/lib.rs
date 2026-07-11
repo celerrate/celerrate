@@ -1,7 +1,7 @@
 //! Source text primitives for the Celerrate toolchain: file identifiers,
 //! decoded source text, text sizes, ranges, and line/column indexing.
 //! This is the bottom layer of the workspace: it depends on no other
-//! Celerrate crate and performs no I/O — file contents arrive as bytes
+//! Celerrate crate and performs no I/O: file contents arrive as bytes
 //! from whoever discovers files (command-line walk, editor buffers,
 //! tests) and are decoded by [`SourceText::from_bytes`].
 //!
