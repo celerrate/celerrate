@@ -6,7 +6,10 @@
 //! `Option` or an iterator: the partial trees error recovery produces
 //! are normal citizens, not special cases.
 
+mod generated;
 pub(crate) mod support;
+
+pub use generated::*;
 
 use std::marker::PhantomData;
 
@@ -30,11 +33,6 @@ pub struct AstChildren<N> {
 }
 
 impl<N> AstChildren<N> {
-    // Only `support::children` calls this today, and only the test
-    // module below calls that; Task 7's generated accessors become the
-    // real callers, so the dead-code lint would otherwise fire on the
-    // production build.
-    #[allow(dead_code)]
     pub(crate) fn new(parent: &SyntaxNode) -> Self {
         AstChildren {
             inner: parent.children(),

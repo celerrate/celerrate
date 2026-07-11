@@ -3,6 +3,7 @@
 //! writes them to the workspace. The freshness test compares
 //! `artifacts()` against the committed files.
 
+pub mod emit_ast;
 pub mod emit_kinds;
 pub mod grammar;
 pub mod tokens;
@@ -22,10 +23,16 @@ pub struct Artifact {
 pub fn artifacts() -> Result<Vec<Artifact>> {
     let text = php_ungram_source()?;
     let grammar = grammar::load(&text)?;
-    Ok(vec![Artifact {
-        relative_path: PathBuf::from("crates/celerrate_syntax/src/syntax_kind/generated.rs"),
-        text: reformat(&emit_kinds::syntax_kind_file(&grammar))?,
-    }])
+    Ok(vec![
+        Artifact {
+            relative_path: PathBuf::from("crates/celerrate_syntax/src/syntax_kind/generated.rs"),
+            text: reformat(&emit_kinds::syntax_kind_file(&grammar))?,
+        },
+        Artifact {
+            relative_path: PathBuf::from("crates/celerrate_syntax/src/ast/generated.rs"),
+            text: reformat(&emit_ast::ast_file(&grammar))?,
+        },
+    ])
 }
 
 /// The raw text of `php.ungram`.
