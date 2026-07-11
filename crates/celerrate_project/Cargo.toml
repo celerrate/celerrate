@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_vfs = { path = "../celerrate_vfs" }
 serde_json = { workspace = true }
 
