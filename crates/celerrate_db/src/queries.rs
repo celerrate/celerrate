@@ -52,6 +52,7 @@ pub fn file_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagn
             severity: Severity::Error,
             file: file_id,
             range: TextRange::empty(TextSize::from(0)),
+            message: "the file exceeds the 4 GiB source size limit".to_owned(),
         }],
         Ok(_) => parse(db, file)
             .diagnostics()

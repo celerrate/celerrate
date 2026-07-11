@@ -12,7 +12,7 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
     SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, resolve_name,
-    source_symbol_table,
+    semantic_diagnostics, source_symbol_table,
 };
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 
@@ -195,6 +195,70 @@ fn resolution_matches_a_from_scratch_analysis_after_every_edit() {
                 resolution_answers(from_scratch, fresh_context),
                 "the resolution answers diverged",
             );
+        },
+    );
+}
+
+#[test]
+fn semantic_diagnostics_match_from_scratch_analysis() {
+    let initial: &[&[u8]] = &[
+        b"<?php namespace App; use Lib\\Helper; $x = new Helper(); missing();",
+        b"<?php namespace Lib; class Helper {}",
+    ];
+    let edits: &[(usize, &[u8])] = &[
+        // The reference becomes unknown: the declaration disappears.
+        (1, b"<?php namespace Lib;"),
+        // It comes back, and a gated construct appears in the consumer.
+        (1, b"<?php namespace Lib; class Helper {}"),
+        (
+            0,
+            b"<?php namespace App; use Lib\\Helper; $x = new Helper(); readonly class C {}",
+        ),
+        // Degenerate bytes stay consistent.
+        (0, b"<?php class"),
+    ];
+    assert_incremental_consistency_with_context(
+        initial,
+        edits,
+        &|db, files| {
+            (
+                AnalyzedFileSet::new(db, files.to_vec()),
+                StubIndexInput::builder(StubIndex::default())
+                    .durability(salsa::Durability::HIGH)
+                    .new(db),
+                ProjectConfiguration::builder(PhpVersionRange::new(
+                    PhpVersion::new(8, 1),
+                    PhpVersion::new(8, 5),
+                ))
+                .durability(salsa::Durability::MEDIUM)
+                .new(db),
+                files.to_vec(),
+            )
+        },
+        &|incremental_db, incremental, scratch_db, scratch| {
+            let (incremental_set, incremental_stubs, incremental_configuration, incremental_files) =
+                incremental;
+            let (scratch_set, scratch_stubs, scratch_configuration, scratch_files) = scratch;
+            for (incremental_file, scratch_file) in
+                incremental_files.iter().zip(scratch_files.iter())
+            {
+                assert_eq!(
+                    semantic_diagnostics(
+                        incremental_db,
+                        *incremental_file,
+                        *incremental_set,
+                        *incremental_stubs,
+                        *incremental_configuration,
+                    ),
+                    semantic_diagnostics(
+                        scratch_db,
+                        *scratch_file,
+                        *scratch_set,
+                        *scratch_stubs,
+                        *scratch_configuration,
+                    ),
+                );
+            }
         },
     );
 }

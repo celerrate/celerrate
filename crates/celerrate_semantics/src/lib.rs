@@ -11,8 +11,11 @@ mod item_nodes;
 mod items;
 mod lookup;
 mod queries;
+mod reference_checks;
+mod references;
 mod resolve;
 mod symbols;
+mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
 pub use index::{
@@ -21,6 +24,12 @@ pub use index::{
 };
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
-pub use queries::{ast_id_map, item_tree};
+pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
+pub use reference_checks::{
+    SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS, UNKNOWN_CONSTANT,
+    UNKNOWN_FUNCTION, reference_diagnostics,
+};
+pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
+pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};

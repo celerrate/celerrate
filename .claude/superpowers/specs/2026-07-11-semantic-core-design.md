@@ -260,6 +260,33 @@ are documented engine semantics, not scope workarounds:
   declared: no reachability analysis of conditional declarations
   (`if (!function_exists(...))` guards are too common to punish).
 
+Deliberate narrowings and shapes, recorded here after implementation
+review (part 6). Reference collection is a pure per-file walk over the
+file's own tree, and the skip lists are engine semantics in their own
+right: the relative class names (`self`, `parent`, `static`), the
+built-in type names in type positions, and the language and magic
+constants (`true`, `false`, `null`, `__DIR__` and siblings, including
+8.4's `__PROPERTY__`) are never symbol-table lookups. A name is
+classified by its syntactic role, decided from its parent node: the
+callee of a call is a function, the subject of `::` and the right-hand
+side of `instanceof` are class-likes, every other bare name is a
+constant. Names inside a trait adaptation body (`use A, B { A::f
+insteadof B; }`) are not collected: only the `use` list itself is. That
+is a false negative, not a false positive, so it is tolerable under the
+anti-false-positive policy; it is worth closing when members arrive
+with the type engine.
+
+**One gap is known and deliberately left open here: `define()`.** The
+symbol index only carries `const` declarations, so a constant
+introduced by `define('NAME', ...)` resolves to nothing and would be
+reported unknown. Nothing ships to users in this part, so it is not a
+false positive yet — but it is a **release blocker for part 7**, which
+is the part that first renders diagnostics to a user, and PHP code that
+uses `define()` is far too common to punish. The fix belongs with the
+same tolerance the conditional-declaration stance already applies:
+index `define()` calls whose first argument is a literal string as
+constant declarations.
+
 **Version gating.** The syntax family: a construct-to-minimum-version
 table over the typed AST (`readonly class` is 8.2, property hooks and
 asymmetric visibility are 8.4, `|>` and clone-with are 8.5, and so on),
@@ -267,6 +294,18 @@ checked against the range **min**. The symbol family, derived from the
 stub availability metadata: availability checked at **min**, removal
 and deprecation checked at **max**: the parent spec's range rule,
 applied without signatures.
+
+Recorded after implementation review (part 6): the two families tile
+the version space exactly, and the seam is load-bearing. The
+version-filtered stub view drops any symbol that exists nowhere in the
+range (`introduced <= max && removed > min`), so a reference to it
+reports *unknown symbol*, not a gating diagnostic; gating fires only
+for a symbol that exists somewhere in the range but not everywhere
+(`introduced > min`, `removed <= max`) or is deprecated by the max.
+Only stub symbols are gated: project declarations carry no availability
+metadata. All gated syntax constructs share one identifier, the message
+carrying the construct — the identifier names the problem class, and
+growing the table never mints a new identifier.
 
 **`celerrate_diagnostics`, the minimal shared model.** The extraction
 recorded as assumed debt takes this shape: a stable identifier, a
@@ -282,6 +321,20 @@ suppressions and tooling. The rich anatomy (annotated spans, notes,
 structured suggestions) remains sub-project 4. `LexerDiagnostic` and
 `ParserDiagnostic` project into the shared model with their own
 identifiers.
+
+Recorded after implementation review (part 6): the parameterized detail
+arrived as a rendered `message` on the shared model, which the checks
+populate with the written name and the versions involved. Identifiers
+are permanent from here: `CEL0001` (source too large), `CEL0002`-`0017`
+(lexer and parser), `CEL0018`-`0020` (unknown class, function,
+constant), `CEL0021`-`0023` (symbol not available at the minimum,
+removed by the maximum, deprecated by the maximum — the last a
+warning), `CEL0024` (syntax construct newer than the minimum). Messages
+themselves are not permanent, and one of them is **a release blocker
+for part 7**: the parser's `Expected(kind)` family renders its message
+through the syntax kind's `Debug` form, so a user would read
+`expected OpenBrace` instead of ``expected `{` ``. The kind needs a
+display mapping before the CLI renders anything.
 
 **The preview product.** `celerrate_cli` ships `celerrate check`:
 zero-configuration Composer detection, parallel per-file fan-out
