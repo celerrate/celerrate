@@ -42,7 +42,7 @@ fn collect(
             ast::Statement::NamespaceDeclaration(declaration) => {
                 let name = declaration
                     .name()
-                    .map(|name| name_text(&name))
+                    .map(|name| name.text())
                     .unwrap_or_default();
                 match declaration.block() {
                     Some(block) => collect(block.statements(), &name, symbols),
@@ -132,7 +132,7 @@ fn define_constant(statement: &ast::ExpressionStatement) -> Option<StubSymbol> {
         return None;
     };
     // Function names are case-insensitive in PHP.
-    let callee_name = name_text(&callee.name()?);
+    let callee_name = callee.name()?.text();
     if !callee_name
         .trim_start_matches('\\')
         .eq_ignore_ascii_case("define")
@@ -146,16 +146,6 @@ fn define_constant(statement: &ast::ExpressionStatement) -> Option<StubSymbol> {
         kind: StubSymbolKind::Constant,
         availability: availability_of(statement.syntax()),
     })
-}
-
-/// The text of a `Name` node with any interior trivia stripped.
-fn name_text(name: &ast::Name) -> String {
-    name.syntax()
-        .text()
-        .to_string()
-        .chars()
-        .filter(|character| !character.is_whitespace())
-        .collect()
 }
 
 /// The content of a simple string literal naming a `define()` constant:
@@ -288,7 +278,7 @@ fn apply_attributes(node: &SyntaxNode, availability: &mut StubAvailability) {
             let Some(name) = attribute.name() else {
                 continue;
             };
-            let name = name_text(&name);
+            let name = name.text();
             let name = name.trim_start_matches('\\');
             let simple = name.rsplit('\\').next().unwrap_or(name);
             if simple.eq_ignore_ascii_case("PhpStormStubsElementAvailable") {

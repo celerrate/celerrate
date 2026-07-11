@@ -1,0 +1,17 @@
+[package]
+name = "celerrate_semantics"
+description = "Stable declaration identities and per-file item trees for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_syntax = { path = "../celerrate_syntax" }
+salsa = { workspace = true }
+
+[lints]
+workspace = true

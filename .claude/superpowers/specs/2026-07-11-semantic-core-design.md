@@ -190,6 +190,23 @@ syntax tree. Body queries do not exist yet, but their boundary is
 already the correct one. Syntax trees themselves are LRU-evicted and
 reparsed on demand.
 
+Deliberate narrowings, recorded here after implementation review. The
+traversal that defines "the declaration nodes" (shared by the `AstIdMap`
+and the `ItemTree`, so their numbering agrees by construction) descends
+into control-flow blocks and function bodies — a declaration behind an
+`if (!function_exists(...))` guard is an item, the section 7 stance
+honored structurally — but never into a member list: class constants
+and declarations nested inside method bodies are invisible to the
+boundary, and nameless declarations (anonymous classes, error-recovery
+wreckage) are skipped until the type engine gives them meaning.
+Namespaces are carried as a field on each declaration and import rather
+than as standalone items: the same information, in the `Eq`-stable
+encoding the early cutoff wants. LRU eviction of syntax trees is
+deferred to part 8, where the memory economics are measured alongside
+the persistent cache; part 4 delivers the structural property that
+makes eviction safe (no layer above the boundary holds a syntax node —
+the `AstIdMap` and the `ItemTree` are plain `Send + Sync` values).
+
 **The symbol index.** The project and vendor `ItemTree`s plus the stub
 index merge into a global FQN-to-symbol index. Lookups go through
 per-name queries, not through a dependency on "the whole index", so

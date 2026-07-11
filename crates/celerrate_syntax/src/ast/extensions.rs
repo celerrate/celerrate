@@ -427,3 +427,14 @@ impl TraitAlias {
             .find(|token| token.text_range().start() >= minimum && is_name_token(token.kind()))
     }
 }
+
+impl Name {
+    /// The written name with interior trivia stripped: every non-trivia
+    /// token's text joined in order. Qualifiers are preserved
+    /// (`Foo\Bar`, `\Baz\Qux`, `namespace\Child`).
+    pub fn text(&self) -> String {
+        tokens_of(self.syntax())
+            .map(|token| token.text().to_owned())
+            .collect()
+    }
+}

@@ -75,6 +75,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_semantics"
+version = "0.1.0"
+dependencies = [
+ "celerrate_db",
+ "celerrate_source",
+ "celerrate_syntax",
+ "salsa",
+]
+
+[[package]]
 name = "celerrate_source"
 version = "0.1.0"
 dependencies = [

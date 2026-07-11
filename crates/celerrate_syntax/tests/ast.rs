@@ -366,3 +366,39 @@ fn typed_casts_are_consistent_over_the_whole_corpus() {
     }
     assert!(checked > 20, "the corpus was actually traversed");
 }
+
+#[test]
+fn a_name_reads_back_as_its_written_text() {
+    use celerrate_syntax::ast::{AstNode, Name};
+
+    let parse = celerrate_syntax::parse("<?php use Foo\\Bar; new \\Baz\\Qux();");
+    let names: Vec<String> = parse
+        .tree()
+        .descendants()
+        .filter_map(Name::cast)
+        .map(|name| name.text())
+        .collect();
+    assert_eq!(names, vec!["Foo\\Bar".to_owned(), "\\Baz\\Qux".to_owned()]);
+}
+
+#[test]
+fn a_name_strips_interior_trivia() {
+    use celerrate_syntax::ast::{AstNode, Name};
+
+    // The lexer's trivia-free token view cannot see adjacency, so a
+    // qualified name with whitespace or a comment between its segments
+    // still parses as one `Name` node, trivia and all. `text()` must
+    // strip that interior trivia rather than reproduce it verbatim.
+    let parse = celerrate_syntax::parse("<?php use Foo \\ /*c*/ Bar;");
+    let name: Name = parse
+        .tree()
+        .descendants()
+        .find_map(Name::cast)
+        .expect("a name node");
+    assert_ne!(
+        name.syntax().text().to_string(),
+        "Foo\\Bar",
+        "the node itself carries the interior trivia"
+    );
+    assert_eq!(name.text(), "Foo\\Bar");
+}
