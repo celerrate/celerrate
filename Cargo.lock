@@ -81,6 +81,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_stubs"
+version = "0.1.0"
+dependencies = [
+ "celerrate_project",
+ "celerrate_syntax",
+]
+
+[[package]]
 name = "celerrate_syntax"
 version = "0.1.0"
 dependencies = [

@@ -11,6 +11,9 @@ mod blob;
 mod index;
 mod symbol;
 
+#[cfg(any(test, feature = "compiler"))]
+pub mod compiler;
+
 pub use blob::{
     BLOB_FORMAT_VERSION, BLOB_MAGIC, SECTION_OVERLAYS, SECTION_SIGNATURES, SECTION_SYMBOL_TABLE,
     StubBlobError, decode, encode,

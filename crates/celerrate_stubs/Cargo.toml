@@ -7,8 +7,18 @@ license.workspace = true
 authors.workspace = true
 repository.workspace = true
 
+[features]
+# The stub compiler: parses the pinned phpstorm-stubs snapshot. Behind a
+# feature so the runtime dependency graph stays free of the parser; the
+# same code is a dev-dependency so its tests run in the default suite.
+compiler = ["dep:celerrate_syntax"]
+
 [dependencies]
 celerrate_project = { path = "../celerrate_project" }
+celerrate_syntax = { path = "../celerrate_syntax", optional = true }
+
+[dev-dependencies]
+celerrate_syntax = { path = "../celerrate_syntax" }
 
 [lints]
 workspace = true
