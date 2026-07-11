@@ -472,8 +472,10 @@ In `crates/celerrate_syntax/src/parse.rs`, extend the `Parse` derive:
 pub struct Parse {
 ```
 
-(`rowan::GreenNode` compares by pointer identity, which is reflexive and cheap;
-salsa uses the comparison for backdating in Task 5.)
+(`rowan::GreenNode` equality is structural — header plus children, recursively,
+short-circuiting at the first divergence — not pointer-based; salsa uses the
+comparison for backdating in Task 5, where structural equality is the
+semantically correct choice.)
 
 - [ ] **Step 5: Run the tests to verify they pass**
 

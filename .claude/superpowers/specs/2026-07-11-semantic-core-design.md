@@ -227,8 +227,13 @@ applied without signatures.
 
 **`celerrate_diagnostics`, the minimal shared model.** The extraction
 recorded as assumed debt takes this shape: a stable identifier, a
-severity, a primary span (`FileId` plus `TextRange`), and a structured
-kind. Stable identifiers (`CEL####`) are born here, with the first
+severity, and a primary span (`FileId` plus `TextRange`). Deliberate
+narrowing, recorded here after implementation review: the structured
+kind this section originally listed stays with the producing crate —
+the identifier names the kind class, and the parameterized detail a
+renderer needs (for example which token was expected) joins the shared
+model when the preview renderer consumes it (parts 6 and 7), not
+before. Stable identifiers (`CEL####`) are born here, with the first
 publication: renumbering after users script against them would break
 suppressions and tooling. The rich anatomy (annotated spans, notes,
 structured suggestions) remains sub-project 4. `LexerDiagnostic` and
