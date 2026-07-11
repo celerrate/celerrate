@@ -1,0 +1,11 @@
+[package]
+name = "celerrate_project"
+description = "Composer discovery, autoload rules, and the PHP version range for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

@@ -63,6 +63,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_project"
+version = "0.1.0"
+
+[[package]]
 name = "celerrate_source"
 version = "0.1.0"
 dependencies = [
