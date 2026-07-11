@@ -100,6 +100,21 @@ diagnostics", which asks for per-file diagnostics, which ask for types, which
 ask for name resolution, which asks for indexes, which ask for syntax trees.
 File-level fan-out is parallelized with rayon.
 
+**Invalidation boundary.** Semantic queries must not depend on raw syntax
+trees: any edit rebuilds the whole tree, so a query reading it directly is
+invalidated by every keystroke, and the engine degrades to batch behind an
+incremental facade. `celerrate_semantics` therefore exposes stable-identifier
+representations (the rust-analyzer `ItemTree`/`AstId` pattern) as the sole
+input of everything above it, with signatures and bodies split into separate
+queries so that editing a function body does not invalidate dependents of its
+signature. The exact identifier scheme, the signature/body query split, and
+whether bodies are lowered to a desugared form before inference are designed
+in the semantic-core sub-project's spec; this document fixes the principle,
+because the published incremental performance targets (section 7) depend on
+it, and the incremental correctness harness (section 9) cannot catch its
+absence: that harness verifies the incremental result, not how little work
+was redone to produce it.
+
 ### Crate layout (Cargo workspace, strict layering)
 
 ```
