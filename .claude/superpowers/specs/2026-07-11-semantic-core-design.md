@@ -137,11 +137,17 @@ diagnostic and defaults, never a failure. It derives three things:
 (vendored, bumped deliberately, like the corpus SHAs) into a versioned
 binary blob:
 
-- Compiled by `xtask`, not by a `build.rs`, consistent with the
-  typed-AST sourcegen pattern: the blob is committed and a freshness
-  test asserts it matches the pinned snapshot. The compiler uses
-  `celerrate_syntax` to parse the stubs (a separate dependency graph in
-  Cargo, no layering violation).
+- Compiled by a dedicated compiler, not by a `build.rs`, consistent
+  with the typed-AST sourcegen pattern: the blob is committed and a
+  freshness test asserts it matches the pinned snapshot. Placement,
+  recorded here after implementation review: the compiler is a
+  feature-gated binary owned by `celerrate_stubs` (parent-spec
+  ownership), because it parses PHP with `celerrate_syntax` while
+  xtask's invariant — no dependency on any `celerrate_*` crate, so a
+  broken generated file can never prevent regenerating it — must
+  survive. `cargo xtask compile-stubs` remains the entry point: xtask
+  fetches the pinned snapshot (git, network only here) and spawns the
+  compiler.
 - Contents, per the sub-project scope: the top-level symbol index
   (classes, interfaces, traits, enums, functions, constants) with
   per-version availability metadata (introduced, removed, deprecated)
