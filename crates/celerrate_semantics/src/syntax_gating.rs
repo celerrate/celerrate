@@ -301,4 +301,25 @@ mod tests {
         let named = gated("<?php $c = clone(object: $point);", PhpVersion::new(8, 1));
         assert_eq!(named.len(), 1);
     }
+
+    #[test]
+    fn an_identifier_class_constant_is_not_a_dynamic_fetch() {
+        assert_eq!(
+            gated("<?php $x = Config::VERSION;", PhpVersion::new(8, 1)),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_promoted_property_with_asymmetric_visibility_is_gated() {
+        let source =
+            "<?php class C { public function __construct(public private(set) string $x) {} }";
+        let diagnostics = gated(source, PhpVersion::new(8, 1));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "`asymmetric visibility` requires PHP 8.4, but the project's minimum PHP version is 8.1",
+        );
+        assert_eq!(gated(source, PhpVersion::new(8, 5)), vec![]);
+    }
 }
