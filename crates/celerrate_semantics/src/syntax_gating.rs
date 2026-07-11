@@ -55,19 +55,126 @@ pub fn syntax_version_diagnostics(
 fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
     let mut uses = Vec::new();
     for node in root.descendants() {
-        if let Some(declaration) = ast::ClassDeclaration::cast(node)
-            && let Some(readonly) = declaration
-                .modifiers()
-                .find(|token| token.kind() == SyntaxKind::Readonly)
-        {
-            uses.push(GatedUse {
-                label: "readonly class",
+        match node.kind() {
+            SyntaxKind::ClassDeclaration => {
+                if let Some(declaration) = ast::ClassDeclaration::cast(node)
+                    && let Some(readonly) = declaration
+                        .modifiers()
+                        .find(|token| token.kind() == SyntaxKind::Readonly)
+                {
+                    uses.push(GatedUse {
+                        label: "readonly class",
+                        required: PhpVersion::new(8, 2),
+                        range: readonly.text_range(),
+                    });
+                }
+            }
+            SyntaxKind::ParenthesizedType => uses.push(GatedUse {
+                label: "parenthesized (DNF) type",
                 required: PhpVersion::new(8, 2),
-                range: readonly.text_range(),
-            });
+                range: node.text_range(),
+            }),
+            SyntaxKind::ConstantDeclaration => {
+                if let Some(declaration) = ast::ConstantDeclaration::cast(node)
+                    && let Some(constant_type) = declaration.ty()
+                {
+                    uses.push(GatedUse {
+                        label: "typed constant",
+                        required: PhpVersion::new(8, 3),
+                        range: constant_type.syntax().text_range(),
+                    });
+                }
+            }
+            SyntaxKind::ScopedAccessExpression => {
+                if let Some(access) = ast::ScopedAccessExpression::cast(node)
+                    && let Some(member) = access.member_name()
+                {
+                    let opens_with_brace = member
+                        .syntax()
+                        .children_with_tokens()
+                        .find(|element| {
+                            element
+                                .as_token()
+                                .is_none_or(|token| !token.kind().is_trivia())
+                        })
+                        .and_then(|element| element.into_token())
+                        .is_some_and(|token| token.kind() == SyntaxKind::OpenBrace);
+                    if opens_with_brace {
+                        uses.push(GatedUse {
+                            label: "dynamic class constant fetch",
+                            required: PhpVersion::new(8, 3),
+                            range: member.syntax().text_range(),
+                        });
+                    }
+                }
+            }
+            SyntaxKind::PropertyHookList => uses.push(GatedUse {
+                label: "property hooks",
+                required: PhpVersion::new(8, 4),
+                range: node.text_range(),
+            }),
+            SyntaxKind::PropertyDeclaration | SyntaxKind::Parameter => {
+                if let Some(range) = asymmetric_visibility(&node) {
+                    uses.push(GatedUse {
+                        label: "asymmetric visibility",
+                        required: PhpVersion::new(8, 4),
+                        range,
+                    });
+                }
+            }
+            SyntaxKind::BinaryExpression => {
+                let operator = ast::BinaryExpression::cast(node)
+                    .and_then(|binary| binary.operator_token())
+                    .filter(|token| token.kind() == SyntaxKind::PipeGreater);
+                if let Some(operator) = operator {
+                    uses.push(GatedUse {
+                        label: "pipe operator",
+                        required: PhpVersion::new(8, 5),
+                        range: operator.text_range(),
+                    });
+                }
+            }
+            SyntaxKind::CloneExpression => {
+                if let Some(clone) = ast::CloneExpression::cast(node)
+                    && let Some(arguments) = clone.argument_list()
+                {
+                    let is_clone_with = arguments.arguments().count() >= 2
+                        || arguments
+                            .arguments()
+                            .any(|argument| argument.label_token().is_some());
+                    if is_clone_with {
+                        uses.push(GatedUse {
+                            label: "clone with arguments",
+                            required: PhpVersion::new(8, 5),
+                            range: arguments.syntax().text_range(),
+                        });
+                    }
+                }
+            }
+            _ => {}
         }
     }
     uses
+}
+
+/// A visibility token directly followed by `(`: the 8.4
+/// `private(set)` form, parsed as flat tokens.
+fn asymmetric_visibility(node: &SyntaxNode) -> Option<TextRange> {
+    let tokens: Vec<_> = node
+        .children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| !token.kind().is_trivia())
+        .collect();
+    tokens
+        .iter()
+        .zip(tokens.iter().skip(1))
+        .find(|(first, second)| {
+            matches!(
+                first.kind(),
+                SyntaxKind::Public | SyntaxKind::Protected | SyntaxKind::Private
+            ) && second.kind() == SyntaxKind::OpenParenthesis
+        })
+        .map(|(first, _)| first.text_range())
 }
 
 #[cfg(test)]
@@ -125,5 +232,73 @@ mod tests {
             ),
             vec![],
         );
+    }
+
+    #[test]
+    fn each_gated_construct_reports_its_version() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "<?php function f((Left&Right)|null $x) {}",
+                "parenthesized (DNF) type",
+                "8.2",
+            ),
+            (
+                "<?php class C { const int LIMIT = 1; }",
+                "typed constant",
+                "8.3",
+            ),
+            (
+                "<?php $x = Config::{$name};",
+                "dynamic class constant fetch",
+                "8.3",
+            ),
+            (
+                "<?php class C { public string $p { get => 'v'; } }",
+                "property hooks",
+                "8.4",
+            ),
+            (
+                "<?php class C { public private(set) string $p; }",
+                "asymmetric visibility",
+                "8.4",
+            ),
+            ("<?php $y = $x |> strlen(...);", "pipe operator", "8.5"),
+            (
+                "<?php $c = clone($point, ['x' => 1]);",
+                "clone with arguments",
+                "8.5",
+            ),
+        ];
+        for (source, label, version) in cases {
+            let diagnostics = gated(source, PhpVersion::new(8, 1));
+            let expected = format!(
+                "`{label}` requires PHP {version}, but the project's minimum PHP version is 8.1",
+            );
+            assert!(
+                diagnostics.iter().any(|d| d.message == expected),
+                "{source}: {diagnostics:?}",
+            );
+            assert_eq!(gated(source, PhpVersion::new(8, 5)), vec![], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_static_property_access_is_not_a_dynamic_constant_fetch() {
+        assert_eq!(
+            gated("<?php $x = Config::$value;", PhpVersion::new(8, 1)),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_single_positional_clone_argument_is_not_gated() {
+        // Pre-8.5 PHP reads `clone($x)` as `clone` of a parenthesized
+        // expression; gating it would be a false positive.
+        assert_eq!(
+            gated("<?php $c = clone($point);", PhpVersion::new(8, 1)),
+            vec![]
+        );
+        let named = gated("<?php $c = clone(object: $point);", PhpVersion::new(8, 1));
+        assert_eq!(named.len(), 1);
     }
 }
