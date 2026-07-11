@@ -17,7 +17,6 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode};
 /// One declaration node with its enclosing namespace (`""` is global).
 pub(crate) struct ItemNode {
     pub(crate) node: SyntaxNode,
-    #[allow(dead_code)]
     pub(crate) namespace: String,
 }
 
