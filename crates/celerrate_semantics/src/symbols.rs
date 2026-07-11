@@ -44,7 +44,8 @@ impl SymbolSpace {
 }
 
 /// Joins a namespace (`""` is global) and a name into the fully
-/// qualified spelling, without a leading backslash.
+/// qualified spelling, without a leading backslash. Both arguments
+/// must be clean segments, without leading or trailing backslashes.
 pub fn fully_qualified_name(namespace: &str, name: &str) -> String {
     if namespace.is_empty() {
         name.to_owned()

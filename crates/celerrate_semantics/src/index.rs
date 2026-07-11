@@ -1,6 +1,7 @@
-//! The source half of the global symbol index: every declaration of
-//! the analyzed file set under its case-folded key. The table is built
-//! from item trees only (the invalidation boundary holds), sorted and
+//! The global symbol index: both the source half (every declaration
+//! of the analyzed file set under its case-folded key, built from item
+//! trees only) and the stub half (`StubSymbolTable` over the
+//! version-filtered stub view). The source table is sorted and
 //! `Eq`-comparable so consumers backdate; lookups themselves go
 //! through the per-name query in `crate::lookup`, never through a
 //! direct dependency on the whole table.

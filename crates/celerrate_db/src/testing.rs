@@ -90,6 +90,7 @@ pub fn assert_incremental_consistency_with(
     assert_incremental_consistency_with_context(
         initial,
         edits,
+        // The per-file form needs no whole-project inputs: its context is the file handles themselves.
         &|_, files| files.to_vec(),
         &|incremental, files, from_scratch, fresh_files| {
             for (index, (file, fresh_file)) in files.iter().zip(fresh_files).enumerate() {
