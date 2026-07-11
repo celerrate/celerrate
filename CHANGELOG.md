@@ -34,6 +34,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `celerrate_diagnostics`: the shared diagnostic data model (stable
   `CEL####` identifiers, severity, primary span); lexer and parser
   diagnostics project into it.
+- `celerrate_vfs`: the virtual file system (interned file identifiers,
+  disk state, in-memory overlays, change draining).
 - `celerrate_vfs`: lexical path normalization and the deterministic
   disk walk (PHP files under declared roots, explicit file entries,
   symbolic-link cycle protection, disk loading into the file state).
