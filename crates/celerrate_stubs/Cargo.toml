@@ -1,0 +1,33 @@
+[package]
+name = "celerrate_stubs"
+description = "Compiled phpstorm-stubs: the embedded standard-library symbol index for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[features]
+# The stub compiler: parses the pinned phpstorm-stubs snapshot. Behind a
+# feature so the runtime dependency graph stays free of the parser; the
+# same code is a dev-dependency so its tests run in the default suite.
+compiler = ["dep:celerrate_syntax"]
+
+[dependencies]
+celerrate_project = { path = "../celerrate_project" }
+celerrate_syntax = { path = "../celerrate_syntax", optional = true }
+salsa = { workspace = true }
+
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_syntax = { path = "../celerrate_syntax" }
+tempfile = { workspace = true }
+
+[[bin]]
+name = "stub-compiler"
+path = "src/bin/stub-compiler.rs"
+required-features = ["compiler"]
+
+[lints]
+workspace = true

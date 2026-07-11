@@ -45,6 +45,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   project/vendor classification, the PHP version range with the
   parent-spec detection precedence at minor precision, and the
   structured discovery notices (`CEL0018` through `CEL0022`).
+- `celerrate_stubs`: the pinned phpstorm-stubs snapshot compiled by
+  `cargo xtask compile-stubs` into a committed, versioned binary blob
+  (top-level symbols with per-version availability metadata), embedded
+  in the binary and exposed as a high-durability salsa input with a
+  version-range-filtered view; the project configuration becomes a
+  salsa input in `celerrate_project`.
 - `celerrate_db`: the salsa base layer (`SourceFile` input;
   `source_text`, `parse`, `line_index`, and `file_diagnostics` as
   incremental queries), with the invalidation-scope tests and the

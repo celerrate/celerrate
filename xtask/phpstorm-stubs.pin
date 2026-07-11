@@ -1,0 +1,5 @@
+# The pinned phpstorm-stubs snapshot. Bump deliberately: change the
+# commit, run `cargo xtask compile-stubs`, and commit the regenerated
+# blob together with this file.
+repository = https://github.com/JetBrains/phpstorm-stubs
+commit = 5168de4fcca52721518ecc81659d26a320db2293

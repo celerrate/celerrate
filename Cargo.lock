@@ -69,6 +69,7 @@ dependencies = [
  "celerrate_db",
  "celerrate_diagnostics",
  "celerrate_vfs",
+ "salsa",
  "serde_json",
  "tempfile",
 ]
@@ -78,6 +79,18 @@ name = "celerrate_source"
 version = "0.1.0"
 dependencies = [
  "text-size",
+]
+
+[[package]]
+name = "celerrate_stubs"
+version = "0.1.0"
+dependencies = [
+ "celerrate_db",
+ "celerrate_project",
+ "celerrate_source",
+ "celerrate_syntax",
+ "salsa",
+ "tempfile",
 ]
 
 [[package]]
