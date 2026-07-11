@@ -225,6 +225,22 @@ then fall back to the global one. The per-file `use` tables (class,
 function, const, with aliases and group forms) are part of the
 `ItemTree`.
 
+Deliberate narrowings and shapes, recorded here after implementation
+review (part 5). The global index is realized as two tables: the source
+table over the analyzed file set's `ItemTree`s and the stub table over
+the version-filtered stub view, consulted in that order by the per-name
+lookup — a project declaration shadows a stub, and a source edit never
+re-copies the stub side. Case folding is ASCII (the engine's own
+folding), and a constant folds its namespace segments while keeping its
+terminal segment case-sensitive. Import tables group by the item tree's
+namespace field (a whole namespace block sees its imports, position
+within the block does not matter); class and function aliases match
+case-insensitively, constant aliases case-sensitively, and a duplicate
+alias keeps the last import. Duplicate declarations of one name resolve
+to the deterministic first entry (file set order, then tree order);
+duplicate-declaration diagnostics are later work. The analyzed file set
+lives in `celerrate_db` as the section 2 input list names it.
+
 **Syntax gating bypasses this boundary, deliberately.** It is a
 per-file query reading its own file's typed AST (the construct-version
 table). The boundary rule forbids cross-file syntax-tree reads; an
