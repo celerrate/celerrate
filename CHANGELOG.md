@@ -36,6 +36,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   diagnostics project into it.
 - `celerrate_vfs`: the virtual file system (interned file identifiers,
   disk state, in-memory overlays, change draining).
+- `celerrate_vfs`: lexical path normalization and the deterministic
+  disk walk (PHP files under declared roots, explicit file entries,
+  symbolic-link cycle protection, disk loading into the file state).
+- `celerrate_project`: zero-configuration Composer discovery — tolerant
+  `composer.json` and `installed.json` readers, autoload rules (PSR-4,
+  PSR-0, classmap, files) deriving the walk roots and the
+  project/vendor classification, the PHP version range with the
+  parent-spec detection precedence at minor precision, and the
+  structured discovery notices (`CEL0018` through `CEL0022`).
 - `celerrate_db`: the salsa base layer (`SourceFile` input;
   `source_text`, `parse`, `line_index`, and `file_diagnostics` as
   incremental queries), with the invalidation-scope tests and the

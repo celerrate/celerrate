@@ -1,0 +1,100 @@
+//! The part-level proof: the whole front door — discovery, walk,
+//! virtual file system, database — is a pure function of the disk
+//! state.
+
+#![allow(clippy::unwrap_used)]
+
+use std::fs;
+use std::path::Path;
+
+use celerrate_db::testing::TestDatabase;
+use celerrate_db::{SourceFile, file_diagnostics};
+use celerrate_project::{FileOrigin, PhpVersion, PhpVersionRange, discover};
+use celerrate_vfs::{Vfs, enumerate_php_files};
+
+fn write(path: &Path, contents: &str) {
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(path, contents).unwrap();
+}
+
+/// One analyzed file, reduced to comparable facts: its root-relative
+/// path, its origin, and its diagnostic count.
+fn analyze(root: &Path) -> Vec<(String, FileOrigin, usize)> {
+    let discovery = discover(root);
+    assert_eq!(
+        discovery.php_version_range,
+        PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
+    );
+    assert!(discovery.notices.is_empty());
+    let files = enumerate_php_files(&discovery.walk_roots());
+    let mut vfs = Vfs::default();
+    let db = TestDatabase::default();
+    files
+        .iter()
+        .map(|path| {
+            let file_id = vfs.load_from_disk(path).unwrap();
+            let bytes = vfs.contents(file_id).unwrap().to_vec();
+            let source = SourceFile::new(&db, file_id, bytes);
+            (
+                path.strip_prefix(root).unwrap().display().to_string(),
+                discovery.classify(path),
+                file_diagnostics(&db, source).len(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn discovery_walk_and_analysis_are_deterministic_end_to_end() {
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    write(
+        &root.join("composer.json"),
+        r#"{
+            "require": { "php": "^8.1" },
+            "autoload": { "psr-4": { "App\\": "src/" } }
+        }"#,
+    );
+    write(&root.join("src/App.php"), "<?php class App {}");
+    write(&root.join("src/Broken.php"), "<?php class {");
+    write(&root.join("stray.php"), "<?php this file is not declared");
+    write(
+        &root.join("vendor/composer/installed.json"),
+        r#"{
+            "packages": [
+                {
+                    "name": "acme/library",
+                    "install-path": "../acme/library",
+                    "autoload": { "psr-4": { "Acme\\": "src/" } }
+                }
+            ]
+        }"#,
+    );
+    write(
+        &root.join("vendor/acme/library/src/Library.php"),
+        "<?php class Library {}",
+    );
+
+    let first = analyze(root);
+    let second = analyze(root);
+    assert_eq!(first, second, "two from-scratch runs diverged");
+
+    let summary: Vec<(&str, FileOrigin, bool)> = first
+        .iter()
+        .map(|(name, origin, diagnostics)| (name.as_str(), *origin, *diagnostics > 0))
+        .collect();
+    assert_eq!(
+        summary,
+        vec![
+            ("src/App.php", FileOrigin::Project, false),
+            ("src/Broken.php", FileOrigin::Project, true),
+            (
+                "vendor/acme/library/src/Library.php",
+                FileOrigin::Vendor,
+                false,
+            ),
+        ],
+        "walked set, origins, or diagnostics changed: \
+         the undeclared stray.php must stay out",
+    );
+}

@@ -1,0 +1,20 @@
+[package]
+name = "celerrate_project"
+description = "Composer discovery, autoload rules, and the PHP version range for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_vfs = { path = "../celerrate_vfs" }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+tempfile = { workspace = true }
+
+[lints]
+workspace = true
