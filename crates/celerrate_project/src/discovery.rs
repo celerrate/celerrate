@@ -97,12 +97,14 @@ pub fn discover_from_sources(
         None => PhpVersionRange::fallback(),
         Some(manifest) => resolve_version_range(manifest, &mut notices),
     };
-    let project_walk_roots = match &manifest {
-        Some(manifest) if !manifest.autoload.is_empty() => manifest.autoload.walk_roots(root),
-        // Zero-configuration never blocks: no declared autoload means
-        // the whole root is analyzed.
-        _ => vec![normalize_path(root, root)],
-    };
+    // Zero-configuration never blocks: when no autoload is declared,
+    // or the declared rules resolve to no walkable root (for example
+    // every directory value was mistyped), the whole root is analyzed.
+    let project_walk_roots = manifest
+        .as_ref()
+        .map(|manifest| manifest.autoload.walk_roots(root))
+        .filter(|walk_roots| !walk_roots.is_empty())
+        .unwrap_or_else(|| vec![normalize_path(root, root)]);
     let vendor_walk_roots = match installed_text {
         None => Vec::new(),
         Some(text) => match parse_installed_packages(text, &vendor_root.join("composer")) {
@@ -364,6 +366,16 @@ mod tests {
         let discovery = discover_from_sources(
             Path::new(ROOT),
             Some(r#"{ "require": { "php": "^8.1" } }"#),
+            None,
+        );
+        assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
+    }
+
+    #[test]
+    fn autoload_that_yields_no_walk_roots_falls_back_to_the_root() {
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            Some(r#"{ "require": { "php": "^8.1" }, "autoload": { "psr-4": { "App\\": 42 } } }"#),
             None,
         );
         assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
