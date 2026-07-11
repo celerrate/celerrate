@@ -98,6 +98,16 @@ fn visit(node: &SyntaxNode, namespace: &str, references: &mut Vec<Reference>) {
                 push_class_like(&name, namespace, references);
             }
         }
+        SyntaxKind::NamedType => {
+            if let Some(named) = ast::NamedType::cast(node.clone())
+                && let Some(ast::NamedTypeName::Name(name)) = named.name_or_keyword()
+            {
+                let written = name.text();
+                if !is_built_in_type_name(&written) {
+                    push_class_like(&name, namespace, references);
+                }
+            }
+        }
         _ => {}
     }
 }
@@ -121,6 +131,18 @@ fn is_relative_class_name(written: &str) -> bool {
     ["self", "parent", "static"]
         .iter()
         .any(|relative| written.eq_ignore_ascii_case(relative))
+}
+
+/// Type names PHP resolves without the symbol table. `array`,
+/// `callable`, and `static` are lexer keywords and never surface as
+/// `Name` nodes; the rest lex as plain identifiers.
+fn is_built_in_type_name(written: &str) -> bool {
+    [
+        "bool", "false", "float", "int", "iterable", "mixed", "never", "null", "object", "parent",
+        "self", "string", "true", "void",
+    ]
+    .iter()
+    .any(|built_in| written.eq_ignore_ascii_case(built_in))
 }
 
 #[cfg(test)]
@@ -220,5 +242,35 @@ mod tests {
         for reference in collect_references(&parse("<?php new ; class extends {}").tree()) {
             assert!(!reference.written.is_empty());
         }
+    }
+
+    #[test]
+    fn type_positions_reference_class_names() {
+        assert_eq!(
+            collected(
+                "<?php function f(?Request $request, int|string $count, (Left&Right)|null $union): Response {}
+                 class C { public UserId $id; }",
+            ),
+            vec![
+                class_like("Request", ""),
+                class_like("Left", ""),
+                class_like("Right", ""),
+                class_like("Response", ""),
+                class_like("UserId", ""),
+            ],
+        );
+    }
+
+    #[test]
+    fn built_in_type_names_are_not_references() {
+        assert_eq!(
+            collected(
+                "<?php function f(int $a, float $b, string $c, bool $d, mixed $e,
+                     iterable $f, object $g, array $h, callable $i, self $j,
+                     null|false|true $k): void {}
+                 enum Suit: string {}",
+            ),
+            vec![],
+        );
     }
 }
