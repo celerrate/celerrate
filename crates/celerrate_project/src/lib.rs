@@ -10,10 +10,12 @@
 
 mod autoload;
 mod constraint;
+mod manifest;
 mod version;
 
 pub use autoload::{AutoloadRules, NamespaceMapping};
 pub use constraint::{php_version_from_text, version_range_for_constraint};
+pub use manifest::{ComposerManifest, parse_manifest};
 pub use version::{
     LATEST_STABLE_VERSION, OLDEST_SUPPORTED_VERSION, PhpVersion, PhpVersionRange,
     SUPPORTED_VERSIONS,
