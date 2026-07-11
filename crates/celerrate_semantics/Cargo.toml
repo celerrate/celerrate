@@ -8,8 +8,10 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+celerrate_db = { path = "../celerrate_db" }
 celerrate_source = { path = "../celerrate_source" }
 celerrate_syntax = { path = "../celerrate_syntax" }
+salsa = { workspace = true }
 
 [lints]
 workspace = true

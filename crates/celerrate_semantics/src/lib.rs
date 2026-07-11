@@ -7,7 +7,9 @@
 
 mod ast_id;
 mod item_nodes;
-mod item_tree;
+mod items;
+mod queries;
 
 pub use ast_id::{AstId, AstIdMap};
-pub use item_tree::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
+pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
+pub use queries::{ast_id_map, item_tree};
