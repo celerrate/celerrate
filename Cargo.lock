@@ -75,6 +75,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_semantics"
+version = "0.1.0"
+dependencies = [
+ "celerrate_source",
+ "celerrate_syntax",
+]
+
+[[package]]
 name = "celerrate_source"
 version = "0.1.0"
 dependencies = [
