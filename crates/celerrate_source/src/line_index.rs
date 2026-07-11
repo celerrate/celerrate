@@ -10,7 +10,7 @@ pub struct LineColumn {
 }
 
 /// Maps byte offsets to line/column positions and back for one text.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LineIndex {
     line_starts: Vec<TextSize>,
     len: TextSize,

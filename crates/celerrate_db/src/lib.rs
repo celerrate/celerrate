@@ -8,6 +8,8 @@
 //! [`FileId`]: celerrate_source::FileId
 
 mod input;
+mod queries;
 pub mod testing;
 
 pub use input::SourceFile;
+pub use queries::{line_index, parse, source_text};
