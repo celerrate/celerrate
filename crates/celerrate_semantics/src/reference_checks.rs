@@ -1,16 +1,21 @@
-//! The unknown-symbol family: every statically named reference of one
-//! file, resolved; an unresolved reference is a diagnostic. Two
-//! conservative stances are documented engine semantics: dynamic
-//! references are out of scope, and a symbol declared anywhere in
-//! project, vendor, or stubs counts as declared — no reachability
-//! analysis of conditional declarations.
+//! Two diagnostic families over the statically named references of one
+//! file: the unknown-symbol family (CEL0018-CEL0020), reporting a
+//! reference that resolves to no declaration, and the symbol
+//! version-gating family (CEL0021-CEL0023), reporting a reference that
+//! resolves to a stub symbol whose availability window does not fully
+//! cover the project's supported PHP version range. Two conservative
+//! stances are documented engine semantics: dynamic references are out
+//! of scope, and a symbol declared anywhere in project, vendor, or
+//! stubs counts as declared, no reachability analysis of conditional
+//! declarations.
 
 use std::collections::HashMap;
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
-use celerrate_project::ProjectConfiguration;
-use celerrate_stubs::StubIndexInput;
+use celerrate_project::{PhpVersionRange, ProjectConfiguration};
+use celerrate_source::FileId;
+use celerrate_stubs::{StubAvailability, StubIndexInput};
 
 use crate::lookup::SymbolResolution;
 use crate::queries::item_tree;
@@ -31,8 +36,11 @@ pub const SYMBOL_REMOVED: DiagnosticId = DiagnosticId::new("CEL0022");
 /// A stub symbol deprecated at the range maximum.
 pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
 
-/// The per-file reference diagnostics: unknown symbols now, the symbol
-/// version-gating family joins in the same pass (task 6).
+/// The per-file reference diagnostics: for every statically named
+/// reference, either an unknown-symbol diagnostic when it fails to
+/// resolve, or a symbol version-gating diagnostic when it resolves to a
+/// stub symbol whose availability does not fully cover the project's
+/// supported PHP version range.
 #[salsa::tracked(returns(ref))]
 pub fn reference_diagnostics(
     db: &dyn salsa::Database,
@@ -49,7 +57,7 @@ pub fn reference_diagnostics(
     let tree = item_tree(db, file);
     let root = celerrate_db::parse(db, file).tree();
     let file_id = file.file_id(db);
-    let range = configuration.php_version_range(db);
+    let version_range = configuration.php_version_range(db);
     let mut tables_by_namespace: HashMap<String, UseTables> = HashMap::new();
     let mut diagnostics = Vec::new();
     for reference in collect_references(&root) {
@@ -69,7 +77,7 @@ pub fn reference_diagnostics(
                 availability_diagnostics(
                     &reference,
                     availability,
-                    range,
+                    version_range,
                     file_id,
                     &mut diagnostics,
                 );
@@ -87,13 +95,13 @@ pub fn reference_diagnostics(
 /// deprecated at the maximum.
 fn availability_diagnostics(
     reference: &Reference,
-    availability: celerrate_stubs::StubAvailability,
-    range: celerrate_project::PhpVersionRange,
-    file: celerrate_source::FileId,
+    availability: StubAvailability,
+    version_range: PhpVersionRange,
+    file: FileId,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
     if let Some(introduced) = availability.introduced
-        && introduced > range.minimum
+        && introduced > version_range.minimum
     {
         diagnostics.push(Diagnostic {
             id: SYMBOL_NOT_AVAILABLE,
@@ -102,12 +110,12 @@ fn availability_diagnostics(
             range: reference.range,
             message: format!(
                 "`{}` requires PHP {introduced}, but the project's minimum PHP version is {}",
-                reference.written, range.minimum,
+                reference.written, version_range.minimum,
             ),
         });
     }
     if let Some(removed) = availability.removed
-        && removed <= range.maximum
+        && removed <= version_range.maximum
     {
         diagnostics.push(Diagnostic {
             id: SYMBOL_REMOVED,
@@ -116,12 +124,14 @@ fn availability_diagnostics(
             range: reference.range,
             message: format!(
                 "`{}` was removed in PHP {removed}, but the project's maximum PHP version is {}",
-                reference.written, range.maximum,
+                reference.written, version_range.maximum,
             ),
         });
     }
     if let Some(deprecation) = availability.deprecated {
-        let applies = deprecation.since.is_none_or(|since| since <= range.maximum);
+        let applies = deprecation
+            .since
+            .is_none_or(|since| since <= version_range.maximum);
         if applies {
             let message = match deprecation.since {
                 Some(since) => format!("`{}` is deprecated since PHP {since}", reference.written),
@@ -138,7 +148,7 @@ fn availability_diagnostics(
     }
 }
 
-fn unknown_symbol(reference: &Reference, file: celerrate_source::FileId) -> Diagnostic {
+fn unknown_symbol(reference: &Reference, file: FileId) -> Diagnostic {
     let (id, kind) = match reference.space {
         SymbolSpace::ClassLike => (UNKNOWN_CLASS, "class"),
         SymbolSpace::Function => (UNKNOWN_FUNCTION, "function"),

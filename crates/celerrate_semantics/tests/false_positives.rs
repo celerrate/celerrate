@@ -3,12 +3,7 @@
 //! here is a priority bug (parent spec, section 6); the full pinned
 //! Symfony corpus enters CI in part 8.
 
-#![allow(
-    clippy::unwrap_used,
-    clippy::expect_used,
-    clippy::indexing_slicing,
-    clippy::panic
-)]
+#![allow(clippy::unwrap_used)]
 
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
@@ -54,6 +49,37 @@ const REALISTIC_SOURCES: &[&str] = &[
          }
          $mapper = fn (mixed $value): bool => $value instanceof \\Countable;
          yield from array_filter([$when, $id], $mapper);
+     }",
+    // Strict types, group/function/const imports, an interface
+    // constant, and a trait adaptation block.
+    "<?php
+     declare(strict_types=1);
+     namespace Lib;
+     class A {}
+     class B {}
+     trait TraitA { public function f(): void {} }
+     trait TraitB { public function f(): void {} }
+     function helper(): string { return 'lib'; }
+     const VERSION = '1.0';
+     interface HasVersion { const VERSION = '2.0'; }
+     #[\\Attribute]
+     class Marker {
+         public function __construct(public string $value) {}
+     }
+     namespace App;
+     use Lib\\{A, B};
+     use function Lib\\helper;
+     use const Lib\\VERSION;
+     #[\\Lib\\Marker(A::class)]
+     class Combined {
+         use \\Lib\\TraitA, \\Lib\\TraitB {
+             \\Lib\\TraitA::f insteadof \\Lib\\TraitB;
+         }
+         public function run(): string {
+             $a = new A();
+             $ok = $a instanceof B;
+             return helper() . VERSION . ($ok ? '1' : '0');
+         }
      }",
 ];
 

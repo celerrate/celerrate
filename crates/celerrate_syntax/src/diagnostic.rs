@@ -271,8 +271,39 @@ mod tests {
 
     #[test]
     fn every_kind_has_a_non_empty_message() {
-        let parse = crate::parse("<?php class { $");
-        for diagnostic in parse.diagnostics() {
+        let lexer_kinds = [
+            LexerDiagnosticKind::UnexpectedCharacter,
+            LexerDiagnosticKind::UnterminatedBlockComment,
+            LexerDiagnosticKind::UnterminatedString,
+            LexerDiagnosticKind::UnterminatedHeredoc,
+            LexerDiagnosticKind::UnterminatedInterpolation,
+        ];
+        for kind in lexer_kinds {
+            let diagnostic = SyntaxDiagnostic {
+                kind: SyntaxDiagnosticKind::Lexer(kind),
+                range: TextRange::new(TextSize::from(0), TextSize::from(0)),
+            };
+            assert!(!diagnostic.to_diagnostic(FileId::new(0)).message.is_empty());
+        }
+
+        let parser_kinds = [
+            ParserDiagnosticKind::ExpectedExpression,
+            ParserDiagnosticKind::ExpectedSemicolon,
+            ParserDiagnosticKind::Expected(SyntaxKind::Semicolon),
+            ParserDiagnosticKind::UnexpectedToken,
+            ParserDiagnosticKind::NestingTooDeep,
+            ParserDiagnosticKind::NonAssociativeOperator,
+            ParserDiagnosticKind::NoProgress,
+            ParserDiagnosticKind::ExpectedMemberName,
+            ParserDiagnosticKind::ExpectedStatement,
+            ParserDiagnosticKind::ExpectedType,
+            ParserDiagnosticKind::ExpectedDeclaration,
+        ];
+        for kind in parser_kinds {
+            let diagnostic = SyntaxDiagnostic {
+                kind: SyntaxDiagnosticKind::Parser(kind),
+                range: TextRange::new(TextSize::from(0), TextSize::from(0)),
+            };
             assert!(!diagnostic.to_diagnostic(FileId::new(0)).message.is_empty());
         }
     }
