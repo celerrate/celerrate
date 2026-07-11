@@ -477,4 +477,31 @@ mod tests {
             vec![],
         );
     }
+
+    #[test]
+    fn a_call_argument_name_is_a_constant_not_a_function() {
+        assert_eq!(
+            collected("<?php log_event(LEVEL_INFO);"),
+            vec![
+                function_reference("log_event", ""),
+                constant_reference("LEVEL_INFO", ""),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_named_static_property_fetch_yields_only_its_class() {
+        assert_eq!(
+            collected("<?php $x = Config::$value;"),
+            vec![class_like("Config", "")],
+        );
+    }
+
+    #[test]
+    fn a_qualified_name_sharing_a_magic_constant_tail_is_a_reference() {
+        assert_eq!(
+            collected("<?php $x = App\\true;"),
+            vec![constant_reference("App\\true", "")],
+        );
+    }
 }
