@@ -1,3 +1,5 @@
+use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
+use celerrate_source::FileId;
 use celerrate_source::TextRange;
 
 use crate::syntax_kind::SyntaxKind;
@@ -89,4 +91,126 @@ pub enum SyntaxDiagnosticKind {
 pub struct SyntaxDiagnostic {
     pub kind: SyntaxDiagnosticKind,
     pub range: TextRange,
+}
+
+impl LexerDiagnosticKind {
+    /// The stable identifier of this kind. Permanent once published.
+    pub const fn diagnostic_id(self) -> DiagnosticId {
+        match self {
+            Self::UnexpectedCharacter => DiagnosticId::new("CEL0002"),
+            Self::UnterminatedBlockComment => DiagnosticId::new("CEL0003"),
+            Self::UnterminatedString => DiagnosticId::new("CEL0004"),
+            Self::UnterminatedHeredoc => DiagnosticId::new("CEL0005"),
+            Self::UnterminatedInterpolation => DiagnosticId::new("CEL0006"),
+        }
+    }
+}
+
+impl ParserDiagnosticKind {
+    /// The stable identifier of this kind. The `Expected` family shares
+    /// one identifier: the identifier names the problem class, not the
+    /// missing token. Permanent once published.
+    pub const fn diagnostic_id(self) -> DiagnosticId {
+        match self {
+            Self::ExpectedExpression => DiagnosticId::new("CEL0007"),
+            Self::ExpectedSemicolon => DiagnosticId::new("CEL0008"),
+            Self::Expected(_) => DiagnosticId::new("CEL0009"),
+            Self::UnexpectedToken => DiagnosticId::new("CEL0010"),
+            Self::NestingTooDeep => DiagnosticId::new("CEL0011"),
+            Self::NonAssociativeOperator => DiagnosticId::new("CEL0012"),
+            Self::NoProgress => DiagnosticId::new("CEL0013"),
+            Self::ExpectedMemberName => DiagnosticId::new("CEL0014"),
+            Self::ExpectedStatement => DiagnosticId::new("CEL0015"),
+            Self::ExpectedType => DiagnosticId::new("CEL0016"),
+            Self::ExpectedDeclaration => DiagnosticId::new("CEL0017"),
+        }
+    }
+}
+
+impl SyntaxDiagnostic {
+    /// The stable identifier of this diagnostic's kind.
+    pub const fn diagnostic_id(&self) -> DiagnosticId {
+        match self.kind {
+            SyntaxDiagnosticKind::Lexer(kind) => kind.diagnostic_id(),
+            SyntaxDiagnosticKind::Parser(kind) => kind.diagnostic_id(),
+        }
+    }
+
+    /// Projects this syntax diagnostic into the shared model. Every
+    /// syntax finding is an error: the file does not parse as written.
+    pub fn to_diagnostic(&self, file: FileId) -> Diagnostic {
+        Diagnostic {
+            id: self.diagnostic_id(),
+            severity: Severity::Error,
+            file,
+            range: self.range,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use celerrate_diagnostics::Severity;
+    use celerrate_source::{FileId, TextRange, TextSize};
+
+    use super::*;
+
+    #[test]
+    fn lexer_kinds_map_to_their_stable_identifiers() {
+        let expected = [
+            (LexerDiagnosticKind::UnexpectedCharacter, "CEL0002"),
+            (LexerDiagnosticKind::UnterminatedBlockComment, "CEL0003"),
+            (LexerDiagnosticKind::UnterminatedString, "CEL0004"),
+            (LexerDiagnosticKind::UnterminatedHeredoc, "CEL0005"),
+            (LexerDiagnosticKind::UnterminatedInterpolation, "CEL0006"),
+        ];
+        for (kind, identifier) in expected {
+            assert_eq!(kind.diagnostic_id().as_str(), identifier);
+        }
+    }
+
+    #[test]
+    fn parser_kinds_map_to_their_stable_identifiers() {
+        use crate::syntax_kind::SyntaxKind;
+        let expected = [
+            (ParserDiagnosticKind::ExpectedExpression, "CEL0007"),
+            (ParserDiagnosticKind::ExpectedSemicolon, "CEL0008"),
+            (
+                ParserDiagnosticKind::Expected(SyntaxKind::Semicolon),
+                "CEL0009",
+            ),
+            (ParserDiagnosticKind::UnexpectedToken, "CEL0010"),
+            (ParserDiagnosticKind::NestingTooDeep, "CEL0011"),
+            (ParserDiagnosticKind::NonAssociativeOperator, "CEL0012"),
+            (ParserDiagnosticKind::NoProgress, "CEL0013"),
+            (ParserDiagnosticKind::ExpectedMemberName, "CEL0014"),
+            (ParserDiagnosticKind::ExpectedStatement, "CEL0015"),
+            (ParserDiagnosticKind::ExpectedType, "CEL0016"),
+            (ParserDiagnosticKind::ExpectedDeclaration, "CEL0017"),
+        ];
+        for (kind, identifier) in expected {
+            assert_eq!(kind.diagnostic_id().as_str(), identifier);
+        }
+    }
+
+    #[test]
+    fn projection_carries_identifier_severity_file_and_range() {
+        let syntax_diagnostic = SyntaxDiagnostic {
+            kind: SyntaxDiagnosticKind::Lexer(LexerDiagnosticKind::UnterminatedString),
+            range: TextRange::new(TextSize::from(3), TextSize::from(8)),
+        };
+        let diagnostic = syntax_diagnostic.to_diagnostic(FileId::new(7));
+        assert_eq!(diagnostic.id.as_str(), "CEL0004");
+        assert_eq!(diagnostic.severity, Severity::Error);
+        assert_eq!(diagnostic.file, FileId::new(7));
+        assert_eq!(diagnostic.range, syntax_diagnostic.range);
+    }
+
+    #[test]
+    fn parses_compare_equal_to_themselves() {
+        let parse = crate::parse("<?php echo 1;");
+        assert_eq!(parse.clone(), parse);
+    }
 }

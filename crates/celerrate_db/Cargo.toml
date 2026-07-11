@@ -1,6 +1,6 @@
 [package]
-name = "celerrate_syntax"
-description = "PHP lexer and parser for the Celerrate toolchain"
+name = "celerrate_db"
+description = "Salsa inputs and foundational queries for the Celerrate toolchain"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -10,11 +10,8 @@ repository.workspace = true
 [dependencies]
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_source = { path = "../celerrate_source" }
-rowan = { workspace = true }
-text-size = { workspace = true }
-
-[dev-dependencies]
-insta = { workspace = true }
+celerrate_syntax = { path = "../celerrate_syntax" }
+salsa = { workspace = true }
 
 [lints]
 workspace = true

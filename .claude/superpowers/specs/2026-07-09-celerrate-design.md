@@ -12,6 +12,10 @@ Amendment history:
   dependency inversion, re-scoped v0.1 success criterion, deterministic
   plugin failure semantics, pinned benchmark protocol, and sequencing
   adjustments (preview milestone, framework-providers sub-project).
+- 2026-07-11 — recorded the `celerrate_diagnostics` extraction as assumed
+  debt from Foundations toward the semantic-core sub-project (section 11):
+  lexer and parser diagnostics stay in `celerrate_syntax` until the second
+  diagnostic producer appears.
 
 ## 1. Vision
 
@@ -644,7 +648,12 @@ Each sub-project gets its own spec → plan → implementation cycle:
    autoload); symbol indexing; name resolution; compiled stubs; the
    persistent artifact cache (pulled forward from the CLI sub-project: the
    flagship incremental number cannot be measured without it); incremental
-   by construction.
+   by construction. Also carries an assumed debt from Foundations: the
+   extraction of the shared diagnostic data model into
+   `celerrate_diagnostics` (section 3) was deliberately deferred — with
+   `celerrate_syntax` as sole producer the crate would have been an empty
+   shell — and must be scheduled here, where the second diagnostic
+   producer (unknown-symbol and version-gating checks) appears.
 
    **Public milestone: a `v0.0.x` preview ships at the end of this
    sub-project** — unknown-symbol and version-gating checks, watch mode, and

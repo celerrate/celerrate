@@ -39,6 +39,13 @@ Out of scope (deliberately):
   (sub-project 3).
 - Diagnostic rendering. Parser diagnostics are structured kinds and
   ranges; messages, annotated spans, and suggestions are sub-project 4.
+- The `celerrate_diagnostics` crate. The parent spec places the shared
+  diagnostic data model in its own crate, but with a single producer
+  (`celerrate_syntax`) the extraction would be an empty shell. Lexer and
+  parser diagnostics stay in `celerrate_syntax` for now; the extraction
+  is assumed debt toward sub-project 2 (semantic core), whose spec must
+  schedule it when the second diagnostic producer (unknown-symbol,
+  version-gating checks) appears.
 - Measured performance. Benchmarks arrive with the full pipeline; the
   design is performance-oriented (green node deduplication, no
   allocation in the parser hot loop beyond the event buffer).

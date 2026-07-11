@@ -4,7 +4,7 @@ use crate::tree::builder::build_tree;
 
 /// The result of parsing one source file: the lossless syntax tree and
 /// every diagnostic, lexer and parser merged, in source order.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Parse {
     root: rowan::GreenNode,
     diagnostics: Vec<SyntaxDiagnostic>,

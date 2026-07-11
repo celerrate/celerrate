@@ -13,6 +13,7 @@ repository = "https://github.com/celerrate/celerrate"
 [workspace.dependencies]
 insta = { version = "1", features = ["glob"] }
 rowan = "0.16"
+salsa = "0.27"
 text-size = "1"
 ungrammar = "1"
 
