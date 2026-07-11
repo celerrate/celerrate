@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_vfs = { path = "../celerrate_vfs" }
+salsa = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]

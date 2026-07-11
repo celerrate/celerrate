@@ -16,8 +16,11 @@ compiler = ["dep:celerrate_syntax"]
 [dependencies]
 celerrate_project = { path = "../celerrate_project" }
 celerrate_syntax = { path = "../celerrate_syntax", optional = true }
+salsa = { workspace = true }
 
 [dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_source = { path = "../celerrate_source" }
 celerrate_syntax = { path = "../celerrate_syntax" }
 tempfile = { workspace = true }
 
