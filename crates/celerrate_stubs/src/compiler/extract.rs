@@ -2,10 +2,11 @@
 //! Tolerant end to end: malformed PHP still yields whatever
 //! declarations the error-resilient parser recovered.
 
+use celerrate_project::PhpVersion;
 use celerrate_syntax::ast::{self, AstNode};
 use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
-use crate::symbol::{StubAvailability, StubSymbol, StubSymbolKind};
+use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
 
 /// The result of extracting one stub file. `had_parse_errors` lets the
 /// compiler count warnings without ever failing.
@@ -213,10 +214,176 @@ fn qualify(namespace: &str, name: &str) -> String {
     }
 }
 
-/// Availability metadata arrives with the next task; until then every
-/// symbol is unconstrained.
-fn availability_of(_node: &SyntaxNode) -> StubAvailability {
-    StubAvailability::ALWAYS
+/// Availability from the declaration's own metadata: leading doc tags,
+/// then attributes. Each field is set once; the first source wins.
+fn availability_of(node: &SyntaxNode) -> StubAvailability {
+    let mut availability = doc_availability(node);
+    apply_attributes(node, &mut availability);
+    availability
+}
+
+fn doc_availability(node: &SyntaxNode) -> StubAvailability {
+    let mut availability = StubAvailability::ALWAYS;
+    let Some(comment) = leading_doc_comment(node) else {
+        return availability;
+    };
+    for line in comment.text().lines() {
+        let line = line.trim_start_matches(['/', '*', ' ', '\t']).trim_end();
+        if let Some(rest) = line.strip_prefix("@since") {
+            if availability.introduced.is_none() {
+                availability.introduced = parse_version(rest);
+            }
+        } else if let Some(rest) = line.strip_prefix("@removed") {
+            if availability.removed.is_none() {
+                availability.removed = parse_version(rest);
+            }
+        } else if let Some(rest) = line.strip_prefix("@deprecated")
+            && availability.deprecated.is_none()
+        {
+            availability.deprecated = Some(StubDeprecation {
+                since: parse_version(rest),
+            });
+        }
+    }
+    availability
+}
+
+/// The closest `/** ... */` before the node, separated from it only by
+/// trivia. The doc comment is not a descendant of the declaration node
+/// it decorates (trivia flushes into the parent before the declaration
+/// node opens), so the walk starts at the first meaningful token of the
+/// subtree and follows the flat token stream backwards regardless of
+/// node boundaries.
+fn leading_doc_comment(node: &SyntaxNode) -> Option<SyntaxToken> {
+    let mut token = first_meaningful_token(node)?.prev_token();
+    while let Some(current) = token {
+        match current.kind() {
+            SyntaxKind::DocComment => return Some(current),
+            SyntaxKind::Whitespace | SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+                token = current.prev_token();
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
+fn first_meaningful_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    let mut token = node.first_token()?;
+    while matches!(
+        token.kind(),
+        SyntaxKind::Whitespace
+            | SyntaxKind::LineComment
+            | SyntaxKind::BlockComment
+            | SyntaxKind::DocComment
+    ) {
+        token = token.next_token()?;
+    }
+    Some(token)
+}
+
+fn apply_attributes(node: &SyntaxNode, availability: &mut StubAvailability) {
+    for group in node.children().filter_map(ast::AttributeGroup::cast) {
+        for attribute in group.attributes() {
+            let Some(name) = attribute.name() else {
+                continue;
+            };
+            let name = name_text(&name);
+            let name = name.trim_start_matches('\\');
+            let simple = name.rsplit('\\').next().unwrap_or(name);
+            if simple.eq_ignore_ascii_case("PhpStormStubsElementAvailable") {
+                apply_element_available(&attribute, availability);
+            } else if simple.eq_ignore_ascii_case("Deprecated") && availability.deprecated.is_none()
+            {
+                availability.deprecated = Some(StubDeprecation {
+                    since: labeled_version(&attribute, "since"),
+                });
+            }
+        }
+    }
+}
+
+/// `#[PhpStormStubsElementAvailable(from:, to:)]`: labeled or
+/// positional (first positional is `from`, second is `to`). `to` is
+/// the last version that still has the symbol, so removal is its
+/// successor.
+fn apply_element_available(attribute: &ast::Attribute, availability: &mut StubAvailability) {
+    let Some(argument_list) = attribute.argument_list() else {
+        return;
+    };
+    let mut positional_index = 0usize;
+    for argument in argument_list.arguments() {
+        let label = argument.label_token().map(|token| token.text().to_owned());
+        let version = argument
+            .expression()
+            .as_ref()
+            .and_then(string_literal)
+            .as_deref()
+            .and_then(parse_version);
+        let role = match label.as_deref() {
+            Some("from") => Some(0),
+            Some("to") => Some(1),
+            Some(_) => None,
+            None => {
+                let role = positional_index;
+                positional_index += 1;
+                (role < 2).then_some(role)
+            }
+        };
+        match (role, version) {
+            (Some(0), Some(version)) if availability.introduced.is_none() => {
+                availability.introduced = Some(version);
+            }
+            (Some(1), Some(version)) if availability.removed.is_none() => {
+                availability.removed = Some(successor(version));
+            }
+            _ => {}
+        }
+    }
+}
+
+fn labeled_version(attribute: &ast::Attribute, label: &str) -> Option<PhpVersion> {
+    attribute
+        .argument_list()?
+        .arguments()
+        .find(|argument| {
+            argument
+                .label_token()
+                .is_some_and(|token| token.text() == label)
+        })?
+        .expression()
+        .as_ref()
+        .and_then(string_literal)
+        .as_deref()
+        .and_then(parse_version)
+}
+
+/// Parses `8.1`, `8.1.2`, `8.1RC1`, or `8` into a major.minor version;
+/// anything unparseable is `None`, never an error.
+fn parse_version(text: &str) -> Option<PhpVersion> {
+    let mut parts = text.trim().split('.');
+    let major = parts.next()?.parse::<u8>().ok()?;
+    let minor = parts.next().map_or(0, leading_digits);
+    Some(PhpVersion::new(major, minor))
+}
+
+fn leading_digits(part: &str) -> u8 {
+    let digits: String = part
+        .chars()
+        .take_while(|character: &char| character.is_ascii_digit())
+        .collect();
+    digits.parse().unwrap_or(0)
+}
+
+/// The first version after `version` on PHP's actual release line:
+/// minors increment, except the two historical jumps (5.6 → 7.0,
+/// PHP 6 never shipped, and 7.4 → 8.0).
+fn successor(version: PhpVersion) -> PhpVersion {
+    match (version.major, version.minor) {
+        (5, 6) => PhpVersion::new(7, 0),
+        (7, 4) => PhpVersion::new(8, 0),
+        (major, minor) => PhpVersion::new(major, minor.saturating_add(1)),
+    }
 }
 
 #[cfg(test)]
@@ -368,5 +535,168 @@ mod tests {
     fn empty_and_html_only_files_extract_nothing() {
         assert!(extract("").symbols.is_empty());
         assert!(extract("plain text, no PHP").symbols.is_empty());
+    }
+
+    use celerrate_project::PhpVersion;
+
+    use crate::symbol::{StubAvailability, StubDeprecation};
+
+    fn only_availability(source: &str) -> StubAvailability {
+        let extraction = extract(source);
+        assert_eq!(
+            extraction.symbols.len(),
+            1,
+            "expected one symbol in {source}"
+        );
+        extraction
+            .symbols
+            .first()
+            .map(|symbol| symbol.availability)
+            .unwrap_or(StubAvailability::ALWAYS)
+    }
+
+    #[test]
+    fn doc_tags_set_the_availability_window() {
+        let availability = only_availability(
+            "<?php\n\
+             /**\n\
+              * Frobnicates.\n\
+              * @since 8.1\n\
+              * @deprecated 8.3\n\
+              */\n\
+             function frobnicate() {}\n",
+        );
+        assert_eq!(
+            availability,
+            StubAvailability {
+                introduced: Some(PhpVersion::new(8, 1)),
+                removed: None,
+                deprecated: Some(StubDeprecation {
+                    since: Some(PhpVersion::new(8, 3)),
+                }),
+            },
+        );
+    }
+
+    #[test]
+    fn a_removed_tag_sets_the_removal_version() {
+        let availability =
+            only_availability("<?php\n/** @removed 8.0 */\nfunction create_function() {}\n");
+        assert_eq!(availability.removed, Some(PhpVersion::new(8, 0)));
+    }
+
+    #[test]
+    fn a_deprecation_without_a_version_is_recorded_as_unversioned() {
+        let availability =
+            only_availability("<?php\n/** @deprecated */\nfunction old_thing() {}\n");
+        assert_eq!(
+            availability.deprecated,
+            Some(StubDeprecation { since: None })
+        );
+    }
+
+    #[test]
+    fn patch_components_and_suffixes_are_truncated() {
+        let availability =
+            only_availability("<?php\n/** @since 5.3.0 */\nfunction with_patch() {}\n");
+        assert_eq!(availability.introduced, Some(PhpVersion::new(5, 3)));
+    }
+
+    #[test]
+    fn unparseable_versions_are_ignored_not_fatal() {
+        let availability = only_availability("<?php\n/** @since forever */\nfunction murky() {}\n");
+        assert_eq!(availability, StubAvailability::ALWAYS);
+    }
+
+    #[test]
+    fn a_doc_comment_only_binds_to_the_declaration_that_follows_it() {
+        let extraction = extract(
+            "<?php\n\
+             /** @since 8.1 */\n\
+             function first() {}\n\
+             function second() {}\n",
+        );
+        let introduced: Vec<Option<PhpVersion>> = extraction
+            .symbols
+            .iter()
+            .map(|symbol| symbol.availability.introduced)
+            .collect();
+        assert_eq!(introduced, vec![Some(PhpVersion::new(8, 1)), None]);
+    }
+
+    #[test]
+    fn the_availability_attribute_sets_the_window_with_labels() {
+        let availability = only_availability(
+            "<?php\n\
+             #[PhpStormStubsElementAvailable(from: '8.2')]\n\
+             function fresh() {}\n",
+        );
+        assert_eq!(availability.introduced, Some(PhpVersion::new(8, 2)));
+    }
+
+    #[test]
+    fn the_availability_attribute_accepts_positional_arguments() {
+        let availability = only_availability(
+            "<?php\n\
+             #[PhpStormStubsElementAvailable('7.0', '7.4')]\n\
+             function spanned() {}\n",
+        );
+        assert_eq!(availability.introduced, Some(PhpVersion::new(7, 0)));
+        // `to: 7.4` means present up to 7.4: gone in the successor, 8.0.
+        assert_eq!(availability.removed, Some(PhpVersion::new(8, 0)));
+    }
+
+    #[test]
+    fn the_to_bound_uses_the_real_php_release_line() {
+        let availability = only_availability(
+            "<?php\n\
+             #[PhpStormStubsElementAvailable(from: '8.0', to: '8.1')]\n\
+             function narrow() {}\n",
+        );
+        assert_eq!(availability.removed, Some(PhpVersion::new(8, 2)));
+    }
+
+    #[test]
+    fn the_deprecated_attribute_matches_by_last_segment_and_reads_since() {
+        let availability = only_availability(
+            "<?php\n\
+             #[\\JetBrains\\PhpStorm\\Deprecated(reason: 'use something else', since: '8.1')]\n\
+             function dated() {}\n",
+        );
+        assert_eq!(
+            availability.deprecated,
+            Some(StubDeprecation {
+                since: Some(PhpVersion::new(8, 1)),
+            }),
+        );
+    }
+
+    #[test]
+    fn a_doc_comment_reaches_its_declaration_across_the_attributes() {
+        let availability = only_availability(
+            "<?php\n\
+             /** @since 8.1 */\n\
+             #[PhpStormStubsElementAvailable(from: '8.2')]\n\
+             function both() {}\n",
+        );
+        // Each field is set once, first source wins: the doc tag came first.
+        assert_eq!(availability.introduced, Some(PhpVersion::new(8, 1)));
+    }
+
+    #[test]
+    fn a_define_call_carries_its_leading_doc_metadata() {
+        let availability = only_availability("<?php\n/** @since 8.4 */\ndefine('BRAND_NEW', 1);\n");
+        assert_eq!(availability.introduced, Some(PhpVersion::new(8, 4)));
+    }
+
+    #[test]
+    fn line_comments_between_doc_and_declaration_do_not_break_the_binding() {
+        let availability = only_availability(
+            "<?php\n\
+             /** @since 8.1 */\n\
+             // implementation note\n\
+             function commented() {}\n",
+        );
+        assert_eq!(availability.introduced, Some(PhpVersion::new(8, 1)));
     }
 }
