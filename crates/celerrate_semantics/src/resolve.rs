@@ -9,8 +9,13 @@
 
 use std::collections::HashMap;
 
+use celerrate_db::AnalyzedFileSet;
+use celerrate_project::ProjectConfiguration;
+use celerrate_stubs::StubIndexInput;
+
 use crate::items::{ImportKind, ItemTree};
-use crate::symbols::{SymbolSpace, fully_qualified_name};
+use crate::lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
+use crate::symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 
 /// The import tables of one namespace within one file: alias to
 /// written absolute target, one map per symbol space. Class and
@@ -130,8 +135,54 @@ pub fn resolve_candidates(
     }
 }
 
+/// The three inputs the global symbol index reads, bundled so
+/// consumers thread one handle set through resolution calls. A plain
+/// value, not a salsa struct: tracked functions take the three handles
+/// separately.
+#[derive(Clone, Copy)]
+pub struct SymbolSources {
+    pub files: AnalyzedFileSet,
+    pub stubs: StubIndexInput,
+    pub configuration: ProjectConfiguration,
+}
+
+// The three fields are salsa input handles; none of them implement
+// `Debug` (matching `celerrate_db::SourceFile`'s own precedent), so
+// this impl is written by hand rather than derived.
+impl std::fmt::Debug for SymbolSources {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SymbolSources").finish()
+    }
+}
+
+/// Resolves one written reference: candidate names in PHP's order,
+/// each looked up through the per-name firewall; the first hit wins.
+pub fn resolve_name(
+    db: &dyn salsa::Database,
+    sources: SymbolSources,
+    namespace: &str,
+    tables: &UseTables,
+    written: &str,
+    space: SymbolSpace,
+) -> Option<SymbolResolution> {
+    resolve_candidates(written, space, namespace, tables)
+        .into_iter()
+        .find_map(|candidate| {
+            let query = SymbolQuery::new(db, space, folded_symbol_key(space, &candidate));
+            lookup_symbol(
+                db,
+                sources.files,
+                sources.stubs,
+                sources.configuration,
+                query,
+            )
+        })
+}
+
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::unwrap_used)]
+
     use celerrate_source::FileId;
 
     use super::{UseTables, resolve_candidates};
@@ -335,6 +386,108 @@ mod tests {
         assert_eq!(
             candidates("<?php", "App", "\\", SymbolSpace::ClassLike),
             Vec::<String>::new(),
+        );
+    }
+
+    use celerrate_db::testing::TestDatabase;
+    use celerrate_db::{AnalyzedFileSet, SourceFile};
+    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
+    use celerrate_stubs::{
+        StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
+    };
+
+    use super::{SymbolSources, resolve_name};
+    use crate::items::DeclarationKind;
+    use crate::lookup::SymbolResolution;
+    use crate::queries::item_tree;
+
+    fn sources_of(db: &TestDatabase, sources: &[&str]) -> SymbolSources {
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        SymbolSources {
+            files: AnalyzedFileSet::new(db, handles),
+            stubs: StubIndexInput::builder(StubIndex::from_symbols(vec![StubSymbol {
+                name: "strlen".to_owned(),
+                kind: StubSymbolKind::Function,
+                availability: StubAvailability::ALWAYS,
+            }]))
+            .durability(salsa::Durability::HIGH)
+            .new(db),
+            configuration: ProjectConfiguration::builder(PhpVersionRange::new(
+                PhpVersion::new(8, 1),
+                PhpVersion::new(8, 5),
+            ))
+            .durability(salsa::Durability::MEDIUM)
+            .new(db),
+        }
+    }
+
+    #[test]
+    fn a_reference_resolves_through_its_import_to_the_declaration() {
+        let db = TestDatabase::default();
+        let sources = sources_of(
+            &db,
+            &[
+                "<?php namespace App; use Lib\\Helper;",
+                "<?php namespace Lib; class Helper {}",
+            ],
+        );
+        let file = *sources.files.files(&db).first().unwrap();
+        let tables = UseTables::for_namespace(item_tree(&db, file), "App");
+        assert_eq!(
+            resolve_name(
+                &db,
+                sources,
+                "App",
+                &tables,
+                "Helper",
+                SymbolSpace::ClassLike
+            ),
+            Some(SymbolResolution::Source {
+                kind: DeclarationKind::Class,
+            }),
+        );
+    }
+
+    #[test]
+    fn an_unqualified_function_falls_back_to_the_global_stub() {
+        let db = TestDatabase::default();
+        let sources = sources_of(&db, &["<?php namespace App;"]);
+        assert_eq!(
+            resolve_name(
+                &db,
+                sources,
+                "App",
+                &UseTables::default(),
+                "strlen",
+                SymbolSpace::Function,
+            ),
+            Some(SymbolResolution::Stub {
+                kind: StubSymbolKind::Function,
+                availability: StubAvailability::ALWAYS,
+            }),
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_reference_answers_none() {
+        let db = TestDatabase::default();
+        let sources = sources_of(&db, &["<?php namespace App;"]);
+        assert_eq!(
+            resolve_name(
+                &db,
+                sources,
+                "App",
+                &UseTables::default(),
+                "Missing",
+                SymbolSpace::ClassLike,
+            ),
+            None,
         );
     }
 }

@@ -22,5 +22,5 @@ pub use index::{
 pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use queries::{ast_id_map, item_tree};
-pub use resolve::{UseTables, resolve_candidates};
+pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
