@@ -5,7 +5,10 @@
 //! their domain crate; the concrete database is assembled at the
 //! composition root.
 
-use celerrate_db::SourceFile;
+use celerrate_db::{AnalyzedFileSet, SourceFile};
+use celerrate_diagnostics::Diagnostic;
+use celerrate_project::ProjectConfiguration;
+use celerrate_stubs::StubIndexInput;
 
 use crate::ast_id::AstIdMap;
 use crate::items::ItemTree;
@@ -26,17 +29,44 @@ pub fn item_tree(db: &dyn salsa::Database, file: SourceFile) -> ItemTree {
     ItemTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 
+/// Every semantic diagnostic of one file: the reference families
+/// (unknown symbols, symbol version gating) and syntax version gating,
+/// merged and deterministically ordered. Syntax and decode findings
+/// live in `celerrate_db::file_diagnostics`; the CLI composes both.
+#[salsa::tracked(returns(ref))]
+pub fn semantic_diagnostics(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+) -> Vec<Diagnostic> {
+    let mut diagnostics =
+        crate::reference_checks::reference_diagnostics(db, file, files, stubs, configuration)
+            .clone();
+    diagnostics.extend(
+        crate::syntax_gating::syntax_version_diagnostics(db, file, configuration)
+            .iter()
+            .cloned(),
+    );
+    diagnostics.sort();
+    diagnostics
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
+    use celerrate_db::AnalyzedFileSet;
     use celerrate_db::SourceFile;
     use celerrate_db::testing::TestDatabase;
+    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
+    use celerrate_stubs::{StubIndex, StubIndexInput};
     use celerrate_syntax::SyntaxKind;
     use salsa::Setter;
 
-    use super::{ast_id_map, item_tree};
+    use super::{ast_id_map, item_tree, semantic_diagnostics};
 
     #[test]
     fn the_item_tree_query_projects_a_file() {
@@ -100,5 +130,33 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(&db, FileId::new(0), b"\xFF\xFE<?php".to_vec());
         let _ = item_tree(&db, file);
+    }
+
+    #[test]
+    fn semantic_diagnostics_merge_both_families_in_order() {
+        // One unknown class after one gated construct: the merged output
+        // is sorted by range, families interleaved.
+        let db = TestDatabase::default();
+        let file = SourceFile::new(
+            &db,
+            FileId::new(0),
+            b"<?php readonly class Point {} $x = new Missing();".to_vec(),
+        );
+        let files = AnalyzedFileSet::new(&db, vec![file]);
+        let stubs = StubIndexInput::builder(StubIndex::default())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
+        let identifiers: Vec<&str> = diagnostics.iter().map(|d| d.id.as_str()).collect();
+        assert_eq!(identifiers, vec!["CEL0024", "CEL0018"]);
+        let mut sorted = diagnostics.clone();
+        sorted.sort();
+        assert_eq!(&sorted, diagnostics);
     }
 }
