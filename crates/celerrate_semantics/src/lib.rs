@@ -15,6 +15,7 @@ mod reference_checks;
 mod references;
 mod resolve;
 mod symbols;
+mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
 pub use index::{
@@ -31,3 +32,4 @@ pub use reference_checks::{
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
+pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};
