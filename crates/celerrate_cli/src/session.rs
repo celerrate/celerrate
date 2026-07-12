@@ -26,6 +26,13 @@ pub enum InternalError {
     /// The embedded stub blob did not decode. The run falls back to an
     /// empty index and reports; it never panics.
     StubBlobUndecodable(StubBlobError),
+    /// A walked file could not be read (permission denied, a dangling
+    /// symlink, a deletion race between the walk and the load). The
+    /// file still enters the analyzed set with empty bytes; only the
+    /// `io::Error`, rendered as a string, is kept, since `InternalError`
+    /// derives `Clone`, `PartialEq`, and `Eq` and `std::io::Error` does
+    /// not.
+    FileUnreadable { path: PathBuf, reason: String },
     /// Analyzing one file panicked. Every other file still reports.
     FilePanicked { file: FileId },
     /// The analysis loop itself panicked, outside any file's guard.
@@ -101,7 +108,16 @@ impl Session {
     fn load(&mut self, paths: &[PathBuf]) {
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
         for path in paths {
-            let contents = std::fs::read(path).unwrap_or_default();
+            let contents = match std::fs::read(path) {
+                Ok(contents) => contents,
+                Err(error) => {
+                    self.internal_errors.push(InternalError::FileUnreadable {
+                        path: path.clone(),
+                        reason: error.to_string(),
+                    });
+                    Vec::new()
+                }
+            };
             let file_id = self.vfs.set_file_contents(path, Some(contents.clone()));
             let source = match self.sources.get(&file_id) {
                 Some(&source) => {
@@ -140,7 +156,7 @@ impl Session {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use celerrate_project::{PhpVersion, ProjectNotice};
 
@@ -206,5 +222,54 @@ mod tests {
         let session = Session::start(root.path());
         assert!(!session.stubs.index(&session.database).is_empty());
         assert!(session.internal_errors.is_empty());
+    }
+
+    /// A file the walk finds but cannot be read (permission denied) is
+    /// recorded as an `InternalError`, not silently swallowed into an
+    /// empty `SourceFile`. Unreadability is simulated by stripping all
+    /// permission bits on Unix; this is the same real failure mode as a
+    /// permission-denied file in a real project, so the test exercises
+    /// the actual `std::fs::read` failure path, not a stand-in for it.
+    /// It does not prove behavior for other read failures (a dangling
+    /// symlink, a deletion race), since those are not exercised here,
+    /// but they go through the same `Err(error)` arm.
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_file_is_recorded_and_the_run_still_continues() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = project(&[("src/Locked.php", "<?php class Locked {}")]);
+        let locked = root.path().join("src/Locked.php");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let session = Session::start(root.path());
+
+        // Restore permissions so the temporary directory can be cleaned
+        // up regardless of test outcome.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        assert_eq!(
+            session.sources.len(),
+            1,
+            "the unreadable file still enters the analyzed set, with empty bytes",
+        );
+        let (_, source) = session.sources.iter().next().unwrap();
+        assert!(source.bytes(&session.database).is_empty());
+
+        assert_eq!(
+            session.internal_errors.len(),
+            1,
+            "the read failure is recorded, not swallowed",
+        );
+        match &session.internal_errors[0] {
+            super::InternalError::FileUnreadable { path, reason } => {
+                assert_eq!(path, &locked);
+                assert!(
+                    !reason.is_empty(),
+                    "the io::Error is rendered as a non-empty reason",
+                );
+            }
+            other => panic!("expected FileUnreadable, got {other:?}"),
+        }
     }
 }
