@@ -123,11 +123,39 @@ impl Session {
         }
     }
 
+    /// Drops what the last analysis pass, and only it, concluded.
+    ///
+    /// A single `check` never needs this: it analyzes once. `--watch`
+    /// analyzes on every save and reprints the whole picture each time, so
+    /// without it a file that panics every cycle would add a line to the
+    /// internal-error block on every keystroke, and the block would become
+    /// precisely the stale log of past edits the format exists to avoid.
+    ///
+    /// Only the pass's own verdicts go. An undecodable stub blob and an
+    /// unreadable file describe the loaded session, not the pass, and they
+    /// do not stop being true because a file was saved: `load` is what
+    /// recomputes those.
+    pub fn forget_analysis_errors(&mut self) {
+        self.internal_errors.retain(|error| {
+            !matches!(
+                error,
+                InternalError::FilePanicked { .. } | InternalError::AnalysisPanicked
+            )
+        });
+    }
+
     /// Makes the analyzed set exactly `paths`: bytes read for each, files
     /// that left the walk dropped. `SourceFile` has no deleted state, and
     /// a tombstone would leave the set lying about what it contains, so a
     /// departing file leaves the set outright.
     fn load(&mut self, paths: &[PathBuf]) {
+        // This load decides, for the file list it is given, exactly which
+        // files cannot be read. The previous load's verdict is superseded,
+        // not added to: a lockfile saved twice under `--watch` re-runs
+        // discovery twice, and an unreadable file must be reported once,
+        // not once per save.
+        self.internal_errors
+            .retain(|error| !matches!(error, InternalError::FileUnreadable { .. }));
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
         for path in paths {
             let contents = match std::fs::read(path) {
@@ -266,7 +294,7 @@ mod tests {
 
     use celerrate_project::{PhpVersion, ProjectNotice};
 
-    use super::Session;
+    use super::{InternalError, Session};
 
     /// A project on disk, written into a temporary directory.
     fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -377,6 +405,65 @@ mod tests {
             }
             other => panic!("expected FileUnreadable, got {other:?}"),
         }
+    }
+
+    /// `--watch` re-analyzes on every save, and every cycle reprints the
+    /// whole picture. A file that panics each time must therefore be
+    /// reported once per picture, not once per save: otherwise the
+    /// internal-error block grows a duplicate line on every keystroke and
+    /// becomes exactly the stale log of past edits the format forbids.
+    #[test]
+    fn successive_passes_replace_the_previous_panics_rather_than_piling_onto_them() {
+        let root = project(&[("Broken.php", "<?php echo 1;")]);
+        let mut session = Session::start(root.path());
+        let file = *session.sources.keys().next().unwrap();
+
+        let outcome = crate::analysis::AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: vec![file],
+        };
+        for _ in 0..3 {
+            session.forget_analysis_errors();
+            session.absorb_outcome(&outcome);
+        }
+
+        assert_eq!(
+            session.internal_errors.len(),
+            1,
+            "three cycles over one panicking file is one report, not three: {:?}",
+            session.internal_errors,
+        );
+    }
+
+    /// The errors that describe the loaded session, rather than a single
+    /// analysis pass, are still true when the next pass starts: an
+    /// undecodable stub blob does not become decodable because a file was
+    /// saved.
+    #[test]
+    fn forgetting_a_passs_panics_leaves_the_sessions_own_errors_alone() {
+        let root = project(&[("a.php", "<?php echo 1;")]);
+        let mut session = Session::start(root.path());
+        session
+            .internal_errors
+            .push(super::InternalError::StubBlobUndecodable(
+                celerrate_stubs::StubBlobError::BadMagic,
+            ));
+        session.internal_errors.push(InternalError::FileUnreadable {
+            path: root.path().join("Locked.php"),
+            reason: "Permission denied (os error 13)".to_owned(),
+        });
+        session
+            .internal_errors
+            .push(InternalError::AnalysisPanicked);
+
+        session.forget_analysis_errors();
+
+        assert_eq!(
+            session.internal_errors.len(),
+            2,
+            "the pass's panic goes, the session's own errors stay: {:?}",
+            session.internal_errors,
+        );
     }
 
     #[test]

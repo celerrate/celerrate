@@ -58,6 +58,32 @@ pub fn render_check(
     render_internal_errors(output, session)
 }
 
+/// One watch cycle: the screen cleared, the complete current state
+/// reprinted, then the cost. The picture is always complete, never a
+/// stale log of past edits.
+pub fn render_cycle(
+    output: &mut dyn Write,
+    session: &Session,
+    outcome: &AnalysisOutcome,
+    reanalyzed: usize,
+    elapsed: std::time::Duration,
+) -> io::Result<()> {
+    // The two ANSI codes a plain format is allowed: clear, and home. No
+    // color, no styling, no terminal crate.
+    write!(output, "\x1b[2J\x1b[H")?;
+    render_check(output, session, outcome)?;
+    writeln!(output)?;
+    writeln!(
+        output,
+        "{}  |  {}  |  {}ms",
+        count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
+        count(reanalyzed, "file re-analyzed", "files re-analyzed"),
+        elapsed.as_millis(),
+    )?;
+    writeln!(output, "watching for changes...")?;
+    output.flush()
+}
+
 /// `path:line:column identifier message`, one-based, relative to the
 /// project root.
 fn render_diagnostic(session: &Session, diagnostic: &Diagnostic) -> String {
@@ -246,6 +272,34 @@ mod tests {
             !text.contains("github.com"),
             "no issue link when there is nothing to report: {text}",
         );
+    }
+
+    #[test]
+    fn a_cycle_reprints_the_complete_state_and_the_timing() {
+        // The picture is always complete, never a stale log of past edits,
+        // and the timing line is where the differentiator stops being a
+        // claim: the user sees that number on every save.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let session = Session::start(root.path());
+
+        let mut output = Vec::new();
+        render::render_cycle(
+            &mut output,
+            &session,
+            &AnalysisOutcome::default(),
+            1,
+            std::time::Duration::from_millis(4),
+        )
+        .unwrap();
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(
+            text.starts_with("\x1b[2J\x1b[H"),
+            "the screen is cleared first"
+        );
+        assert!(text.contains("0 diagnostics  |  1 file re-analyzed  |  4ms"));
+        assert!(text.trim_end().ends_with("watching for changes..."));
     }
 
     /// When an unreadable file sits alongside a genuine Celerrate bug,
