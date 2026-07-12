@@ -9,7 +9,9 @@
 pub mod analysis;
 pub mod arguments;
 pub mod database;
+pub mod render;
 pub mod session;
+pub mod watch;
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -72,10 +74,20 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
         }
     };
     match arguments.command {
-        Command::Check { path: _, watch: _ } => {
-            // Task 6 wires startup, Task 7 the analysis, Task 8 the
-            // rendering, Task 10 the watch loop.
-            Outcome::Clean
+        Command::Check { path, watch } => {
+            let mut session = session::Session::start(&path);
+            if watch {
+                return watch::watch(&mut session, output);
+            }
+            // Nothing mutates the inputs in a single pass, so `Cancelled`
+            // is unreachable here; treating it as an empty run is still
+            // honest, and it costs nothing.
+            let outcome = analysis::analyze(&session.inputs()).unwrap_or_default();
+            session.absorb_outcome(&outcome);
+            if render::render_check(output, &session, &outcome).is_err() {
+                return Outcome::InternalError;
+            }
+            Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
     }
 }
