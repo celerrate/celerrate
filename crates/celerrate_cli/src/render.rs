@@ -23,6 +23,12 @@ const ISSUE_INVITATION: &str = "https://github.com/celerrate/celerrate/issues/ne
 /// their own shape because a project-level finding has no span:
 /// `MISSING_COMPOSER_MANIFEST` describes a file that by definition does
 /// not exist, and anchoring it to `composer.json:1:1` would be a fiction.
+///
+/// A notice announces itself as a notice, never as a warning. It is
+/// counted as a notice in the summary and it never touches the exit code,
+/// so the other word would contradict the same screen twice: a warning
+/// diagnostic exits 1, and every notice announces a fallback already
+/// taken.
 pub fn render_check(
     output: &mut dyn Write,
     session: &Session,
@@ -33,7 +39,7 @@ pub fn render_check(
         for notice in notices {
             writeln!(
                 output,
-                "warning {}: {}",
+                "notice {}: {}",
                 notice.identifier().as_str(),
                 notice.message(),
             )?;

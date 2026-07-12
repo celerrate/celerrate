@@ -114,6 +114,25 @@ fn notices_alone_are_not_a_failure() {
     assert!(text.contains("0 diagnostics"));
 }
 
+#[test]
+fn a_notice_announces_itself_as_a_notice() {
+    // One screen must not use one word two ways. A notice is counted as a
+    // notice in the summary and never touches the exit code, so calling it
+    // a warning on the line above contradicts both: a warning diagnostic
+    // exits 1, and this does not.
+    let root = project(&[("src/Kernel.php", "<?php\nnamespace App;\nclass Kernel {}\n")]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean);
+    assert!(
+        text.contains("notice CEL0025: "),
+        "the notice names itself: {text}",
+    );
+    assert!(
+        !text.contains("warning"),
+        "nothing that leaves the exit code at zero calls itself a warning: {text}",
+    );
+}
+
 /// A real Composer project has thousands of third-party files, and a
 /// report dominated by their findings is no report at all: they are not
 /// the user's code, not the user's to fix, and failing the build on them
