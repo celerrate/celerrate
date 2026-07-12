@@ -77,13 +77,13 @@ pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
 /// One file's total: decode and syntax, then references and gating.
 /// Nothing composes those two families below this line.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
-    let database = inputs.database.clone();
-    let file_id = file.file_id(&database);
-    guarded(file_id, move || {
-        let mut diagnostics = celerrate_db::file_diagnostics(&database, file).clone();
+    let database = &inputs.database;
+    let file_id = file.file_id(database);
+    guarded(file_id, || {
+        let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
         diagnostics.extend(
             celerrate_semantics::semantic_diagnostics(
-                &database,
+                database,
                 file,
                 inputs.files,
                 inputs.stubs,
@@ -173,9 +173,14 @@ mod tests {
     fn the_guard_is_transparent_to_cancellation() {
         // Cancellation is not a bug: it is `--watch` telling the analysis
         // its inputs moved. It must pass straight through the guard.
+        //
+        // Real salsa throws with `resume_unwind`, not `panic!`, precisely
+        // to skip the panic hook and keep test and terminal output clean.
+        // Reproduce that here rather than `panic_any`, which would print
+        // panic hook noise even on a passing run.
         let escaped = std::panic::catch_unwind(|| {
             let _: Result<(), FileId> = guarded(FileId::new(0), || {
-                std::panic::panic_any(salsa::Cancelled::PendingWrite)
+                std::panic::resume_unwind(Box::new(salsa::Cancelled::PendingWrite))
             });
         });
         let payload = escaped.expect_err("cancellation is re-raised");
