@@ -70,6 +70,63 @@ fn notices_alone_are_not_a_failure() {
     assert!(text.contains("0 diagnostics"));
 }
 
+/// A real Composer project has thousands of third-party files, and a
+/// report dominated by their findings is no report at all: they are not
+/// the user's code, not the user's to fix, and failing the build on them
+/// is failing it on someone else's work.
+///
+/// They must still be analyzed, though. Their symbols are exactly what
+/// makes `use Acme\Thing;` resolve, which is what the `Kernel` here
+/// proves: drop the vendor files from the analyzed set and it reports an
+/// unknown class instead, so this test cannot pass by silencing vendor
+/// the lazy way.
+///
+/// And the count that reaches the exit code must be the count that was
+/// printed. A vendor finding that exits 1 over an empty report is worse
+/// than either half of the bug.
+#[test]
+fn a_finding_in_vendor_is_analyzed_but_never_reported() {
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "vendor/composer/installed.json",
+            r#"{"packages": [{"name": "acme/lib", "install-path": "../acme/lib",
+               "autoload": {"psr-4": {"Acme\\": "src/"}}}]}"#,
+        ),
+        (
+            "vendor/acme/lib/src/Broken.php",
+            "<?php\nnamespace Acme;\nclass Broken extends TotallyMissing {}\n",
+        ),
+        (
+            "vendor/acme/lib/src/Thing.php",
+            "<?php\nnamespace Acme;\nclass Thing {}\n",
+        ),
+        (
+            "src/Kernel.php",
+            "<?php\nnamespace App;\nuse Acme\\Thing;\nclass Kernel extends Thing {}\n",
+        ),
+    ]);
+    let (outcome, text) = check(root.path());
+
+    assert!(
+        !text.contains("TotallyMissing"),
+        "a third-party finding is not the user's to fix: {text}",
+    );
+    assert!(
+        !text.contains("vendor"),
+        "nothing from vendor reaches the report at all: {text}",
+    );
+    assert!(text.contains("0 diagnostics"), "{text}");
+    assert_eq!(
+        outcome,
+        Outcome::Clean,
+        "the count the exit code is derived from is the count that was printed: {text}",
+    );
+}
+
 #[test]
 fn a_warning_alone_still_exits_one() {
     // 1 means "any diagnostic reported", warning or error alike.

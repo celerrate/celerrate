@@ -9,9 +9,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
-use celerrate_project::{ProjectConfiguration, ProjectDiscovery, ProjectNotice, discover};
+use celerrate_project::{
+    FileOrigin, ProjectConfiguration, ProjectDiscovery, ProjectNotice, discover,
+};
 use celerrate_source::FileId;
 use celerrate_stubs::{StubBlobError, StubIndex, StubIndexInput, embedded_stub_index};
 use celerrate_vfs::{Vfs, enumerate_php_files};
@@ -114,14 +117,46 @@ impl Session {
     }
 
     /// The fan-out's view of the session: a fresh database handle over the
-    /// same storage, plus the three input handles.
+    /// same storage, the three input handles, and the files the report
+    /// speaks about.
     pub fn inputs(&self) -> AnalysisInputs {
         AnalysisInputs {
             database: self.database.clone(),
             files: self.files,
             stubs: self.stubs,
             configuration: self.configuration,
+            reported: self.reported_files(),
         }
+    }
+
+    /// The files whose diagnostics the run reports: the project's own.
+    ///
+    /// An installed dependency's files stay in the analyzed set, because
+    /// their symbols are what make `use Vendor\Package\Thing;` resolve.
+    /// What they do not do is speak: a third-party finding is not the
+    /// user's to fix, and on a real Composer project it would drown the
+    /// report and fail the build on code the user does not own. This is
+    /// what `FileOrigin` and `ProjectDiscovery::classify` were built for.
+    ///
+    /// Derived on demand rather than cached, and deliberately: it is one
+    /// prefix comparison per file against a set that only `load` and
+    /// `apply` can move, next to a full re-analysis. A cache here would
+    /// buy nothing and would have to be invalidated from both, which is
+    /// exactly the kind of second place a wrong answer hides in.
+    ///
+    /// A file the `Vfs` cannot name counts as the project's. Erring that
+    /// way reports a diagnostic that might have been a dependency's;
+    /// erring the other way silences one that is certainly the user's.
+    fn reported_files(&self) -> Arc<[SourceFile]> {
+        self.sources
+            .iter()
+            .filter(|(file, _)| {
+                self.vfs
+                    .path(**file)
+                    .is_none_or(|path| self.discovery.classify(path) == FileOrigin::Project)
+            })
+            .map(|(_, source)| *source)
+            .collect()
     }
 
     /// Absorbs a completed pass: its panicked files become internal

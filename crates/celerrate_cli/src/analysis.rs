@@ -5,6 +5,8 @@
 //! are pure functions of their inputs, so the fan-out happens at the
 //! declared boundary, over database snapshots, never inside a query.
 
+use std::sync::Arc;
+
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
@@ -20,9 +22,31 @@ use crate::database::AnalysisDatabase;
 #[derive(Clone)]
 pub struct AnalysisInputs {
     pub database: AnalysisDatabase,
+    /// Every file the analysis may *read*: the project's own and its
+    /// installed dependencies'. This is the salsa input the semantic
+    /// queries resolve names against, so it is the whole set.
     pub files: AnalyzedFileSet,
     pub stubs: StubIndexInput,
     pub configuration: ProjectConfiguration,
+    /// Every file the analysis *reports on*: the project's own, and only
+    /// those. A dependency's symbols are what make `use Vendor\Package
+    /// \Thing;` resolve, so its files stay in `files` above; what they
+    /// must not do is speak. A third-party finding is not the user's to
+    /// fix, it drowns the report on any real Composer project, and it
+    /// fails the build on code the user does not own.
+    ///
+    /// The distinction is drawn here, at the fan-out's input, rather than
+    /// in the renderer, and that is the whole point. The exit code comes
+    /// from the length of `AnalysisOutcome::diagnostics`, so filtering at
+    /// the render would leave a vendor finding exiting 1 over a report
+    /// that printed nothing: worse than either half of the bug. Filtering
+    /// the input makes the count the run reports and the count it prints
+    /// the same set by construction. It also means a dependency's
+    /// diagnostics are never computed at all, which is the bulk of the
+    /// files on a real project.
+    ///
+    /// An `Arc` because `AnalysisInputs` is cloned once per file.
+    pub reported: Arc<[SourceFile]>,
 }
 
 /// An input was mutated while the fan-out ran. Not an error: a restart
@@ -39,7 +63,8 @@ pub struct AnalysisOutcome {
     pub panicked: Vec<FileId>,
 }
 
-/// Analyzes every file in the set, in parallel.
+/// Analyzes every reported file, in parallel, resolving names against the
+/// whole set.
 ///
 /// The salsa storage is `Send` but not `Sync`: cloning it hands a thread
 /// its own independent local state over shared underlying revisions, but
@@ -50,8 +75,7 @@ pub struct AnalysisOutcome {
 /// own.
 pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
     let tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
-        .files
-        .files(&inputs.database)
+        .reported
         .iter()
         .map(|&file| (file, inputs.clone()))
         .collect();
