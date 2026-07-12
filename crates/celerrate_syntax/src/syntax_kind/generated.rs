@@ -802,7 +802,7 @@ impl SyntaxKind {
             SyntaxKind::SingleQuotedString => "a single-quoted string",
             SyntaxKind::StringFragment => "a string fragment",
             SyntaxKind::DoubleQuote => "`\"`",
-            SyntaxKind::Backtick => "```",
+            SyntaxKind::Backtick => "a backtick",
             SyntaxKind::HeredocStart => "a heredoc opener",
             SyntaxKind::HeredocEnd => "a heredoc closer",
             SyntaxKind::DollarOpenBrace => "`${`",

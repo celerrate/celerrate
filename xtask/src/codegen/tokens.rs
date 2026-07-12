@@ -145,7 +145,14 @@ pub const TOKEN_KINDS: &[TokenKindDefinition] = &[
         Some("\""),
         &["A `\"` delimiter (or the opening `b\"`)."],
     ),
-    token("Backtick", Some("`"), &["A `` ` `` delimiter."]),
+    // The one spelling that cannot be quoted: the generic rule would wrap a
+    // backtick in backticks and print a code fence into the message.
+    described(
+        "Backtick",
+        Some("`"),
+        "a backtick",
+        &["A `` ` `` delimiter."],
+    ),
     described(
         "HeredocStart",
         Some("heredoc_start"),
@@ -412,6 +419,29 @@ mod tests {
                 definition.variant,
             );
         }
+    }
+
+    /// The generic rule wraps a token's source spelling in backticks. That
+    /// is exactly wrong for the one token whose spelling *is* a backtick:
+    /// `Backtick` rendered as three of them, a stray code fence in every
+    /// message that named it. A spelling that cannot survive being quoted
+    /// needs an explicit phrase in the exception table.
+    #[test]
+    fn no_token_describes_as_a_stray_code_fence() {
+        let fenced: Vec<&str> = TOKEN_KINDS
+            .iter()
+            .filter(|definition| {
+                definition
+                    .describe()
+                    .is_some_and(|described| described.contains("``"))
+            })
+            .map(|definition| definition.variant)
+            .collect();
+        assert!(
+            fenced.is_empty(),
+            "these read as a code fence rather than as a phrase, and no user may ever read one: \
+             give each an explicit description in the table: {fenced:?}",
+        );
     }
 
     #[test]
