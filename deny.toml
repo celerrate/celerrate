@@ -1,8 +1,11 @@
 [licenses]
 # Zlib (foldhash) arrives with the salsa dependency tree; Unicode-3.0
 # (unicode-ident, via proc-macro2) was already in the tree through the
-# dev-dependency proc-macro stack. Both are permissive and OSI-approved.
-allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0"]
+# dev-dependency proc-macro stack. ISC (inotify, inotify-sys) and
+# CC0-1.0 (notify itself) arrive with the `notify` dependency added for
+# `--watch`. All four are permissive and OSI-approved (CC0-1.0 is a
+# public domain dedication, FSF Free/Libre).
+allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0", "ISC", "CC0-1.0"]
 
 [advisories]
 yanked = "deny"
