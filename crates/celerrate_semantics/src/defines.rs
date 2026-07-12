@@ -188,55 +188,202 @@ fn single_quoted_value(text: &str) -> Option<String> {
 /// The value of the literal run of a double-quoted string, which honours
 /// escapes a single-quoted one does not.
 ///
-/// How far the unescaping goes is a deliberate choice, and it is drawn
-/// where the name stops being knowable rather than where it stops being
-/// pretty:
+/// The escapes are PHP's, decoded the way PHP decodes them, and the line
+/// is drawn where the name stops being *representable* rather than where
+/// it stops being pretty:
 ///
 /// - `\\`, `\"` and `\$` are unescaped. They are the escapes a real
 ///   constant name meets, and `\\` is the one that matters: it is how a
 ///   qualified name is written.
-/// - A backslash before anything PHP does not read as an escape stays
-///   literal, which is exactly how PHP reads it, and is what makes
-///   `"Vendor\Product\LIMIT"` index under the name it declares.
 /// - `\n`, `\r`, `\t`, `\v`, `\e` and `\f` are unescaped faithfully.
 ///   Nothing is guessed: a constant whose name holds a newline is indexed
 ///   under that name, and no identifier can ever reference it, so it is
 ///   inert rather than wrong.
-/// - A byte escape (`\x41`, `\101`, `\u{41}`) returns `None`. These
-///   denote raw bytes; a PHP constant name is a byte string while this
-///   model holds a UTF-8 `String`, so a faithful value may not even be
-///   representable. Rather than guess at one, the name is out of scope,
-///   the same stance `define($name, ...)` already takes.
+/// - `\x` with one or two hexadecimal digits, and `\` with one to three
+///   octal digits, denote a byte, which is emitted as written.
+/// - `\u{...}` denotes a *code point* and emits its UTF-8 encoding.
+/// - **Every other backslash sequence is a literal backslash followed by
+///   that character**, exactly as PHP reads it, and that is what makes
+///   `"Vendor\Product\LIMIT"` index under the name it declares. It covers
+///   `\u` not followed by `{` and `\x` not followed by a hexadecimal
+///   digit, which are no escapes at all in PHP: `"Acme\utils\VERSION"`
+///   names exactly what it looks like.
+///
+/// `None` is reserved for the one name this model genuinely cannot hold:
+/// a byte sequence that is not valid UTF-8. A PHP constant name is a byte
+/// string while `DefinedConstant::name` is a `String`, so `"\xff"` names a
+/// constant we will not guess at, the same stance `define($name, ...)`
+/// takes. Everything else is indexed, because an unseen `define()` is a
+/// false positive at every use site, the one direction the policy forbids.
 fn double_quoted_value(text: &str) -> Option<String> {
-    let mut value = String::with_capacity(text.len());
-    let mut characters = text.chars();
-    while let Some(character) = characters.next() {
-        if character != '\\' {
-            value.push(character);
-            continue;
-        }
-        match characters.next() {
-            Some(escaped @ ('\\' | '"' | '$')) => value.push(escaped),
-            Some('n') => value.push('\n'),
-            Some('r') => value.push('\r'),
-            Some('t') => value.push('\t'),
-            Some('v') => value.push('\u{0b}'),
-            Some('e') => value.push('\u{1b}'),
-            Some('f') => value.push('\u{0c}'),
-            // The byte escapes: a name we will not guess at.
-            Some('x' | 'u' | '0'..='7') => return None,
-            // Every other backslash is literal, exactly as PHP reads it.
-            Some(other) => {
-                value.push('\\');
-                value.push(other);
+    let mut bytes: Vec<u8> = Vec::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(character) = rest.chars().next() {
+        let after = rest.get(character.len_utf8()..).unwrap_or_default();
+        rest = if character == '\\' {
+            read_escape(after, &mut bytes)?
+        } else {
+            push_character(&mut bytes, character);
+            after
+        };
+    }
+    String::from_utf8(bytes).ok()
+}
+
+/// Reads the escape that opens `rest`, which is what follows a backslash,
+/// appends the bytes it denotes, and returns what is left.
+///
+/// A sequence PHP reads as no escape leaves the backslash behind literally
+/// and hands the character back unread, so it is emitted as itself. `None`
+/// means the escape denotes a code point no `String` can hold.
+///
+/// Terminating: the caller has already consumed the backslash, so `rest`
+/// is shorter than what it was called with even when nothing here is.
+fn read_escape<'a>(rest: &'a str, bytes: &mut Vec<u8>) -> Option<&'a str> {
+    let literal = |bytes: &mut Vec<u8>| {
+        bytes.push(b'\\');
+        Some(rest)
+    };
+    let Some(character) = rest.chars().next() else {
+        // Unreachable: the lexer consumes the escaped character with the
+        // backslash, so a fragment never ends on one. Literal, for totality.
+        return literal(bytes);
+    };
+    let after = rest.get(character.len_utf8()..).unwrap_or_default();
+
+    if let Some(byte) = single_character_escape(character) {
+        bytes.push(byte);
+        return Some(after);
+    }
+    if character == 'x'
+        && let Some((byte, remaining)) = hexadecimal_escape(after)
+    {
+        bytes.push(byte);
+        return Some(remaining);
+    }
+    if character == 'u' {
+        match code_point_escape(after) {
+            CodePoint::Scalar(scalar, remaining) => {
+                push_character(bytes, scalar);
+                return Some(remaining);
             }
-            // Unreachable: the lexer consumes the escaped character with
-            // the backslash, so a fragment never ends on one. Literal, for
-            // totality.
-            None => value.push('\\'),
+            // A code point that is not a Unicode scalar value: no `String`
+            // holds it, so the name is out of scope.
+            CodePoint::Unrepresentable => return None,
+            CodePoint::NoEscape => {}
         }
     }
-    Some(value)
+    if let Some((byte, remaining)) = octal_escape(rest) {
+        bytes.push(byte);
+        return Some(remaining);
+    }
+    literal(bytes)
+}
+
+/// The escapes that stand for one byte and read no further.
+fn single_character_escape(character: char) -> Option<u8> {
+    const VERTICAL_TAB: u8 = 0x0b;
+    const ESCAPE: u8 = 0x1b;
+    const FORM_FEED: u8 = 0x0c;
+    match character {
+        '\\' => Some(b'\\'),
+        '"' => Some(b'"'),
+        '$' => Some(b'$'),
+        'n' => Some(b'\n'),
+        'r' => Some(b'\r'),
+        't' => Some(b'\t'),
+        'v' => Some(VERTICAL_TAB),
+        'e' => Some(ESCAPE),
+        'f' => Some(FORM_FEED),
+        _ => None,
+    }
+}
+
+/// `\x` followed by one or two hexadecimal digits, the byte it spells and
+/// what is left. `rest` starts after the `x`. `None` when no digit
+/// follows, which is no escape at all: PHP reads `"Foo\xml"` literally.
+fn hexadecimal_escape(rest: &str) -> Option<(u8, &str)> {
+    digits(rest, 16, 2)
+        .and_then(|(value, remaining)| u8::try_from(value).ok().map(|byte| (byte, remaining)))
+}
+
+/// `\` followed by one to three octal digits. `rest` starts at the first
+/// digit. A value above 255 wraps, as PHP wraps it.
+fn octal_escape(rest: &str) -> Option<(u8, &str)> {
+    const BYTE: u32 = 256;
+    digits(rest, 8, 3).and_then(|(value, remaining)| {
+        u8::try_from(value % BYTE)
+            .ok()
+            .map(|byte| (byte, remaining))
+    })
+}
+
+/// The value of up to `most` leading digits in `radix`, and what is left.
+/// `None` when there is not even one, so the caller can read the sequence
+/// as the literal text it is.
+fn digits(rest: &str, radix: u32, most: usize) -> Option<(u32, &str)> {
+    let mut value = 0_u32;
+    let mut read = 0_usize;
+    let mut remaining = rest;
+    while read < most {
+        let Some(digit) = remaining
+            .chars()
+            .next()
+            .and_then(|character| character.to_digit(radix))
+        else {
+            break;
+        };
+        // Bounded by `most`: three octal digits reach 511, two hexadecimal
+        // ones 255. Neither overflows a `u32`.
+        value = value.saturating_mul(radix).saturating_add(digit);
+        remaining = remaining.get(1..).unwrap_or_default();
+        read = read.saturating_add(1);
+    }
+    (read > 0).then_some((value, remaining))
+}
+
+/// What a `\u` turned out to be.
+enum CodePoint<'a> {
+    /// A well-formed `\u{...}` naming a Unicode scalar value, and what is
+    /// left after it.
+    Scalar(char, &'a str),
+    /// A well-formed `\u{...}` naming a code point that is no scalar value
+    /// (a surrogate, or one past the last), which no `String` can hold.
+    Unrepresentable,
+    /// No escape: a `\u` PHP reads literally, because nothing shaped like
+    /// `{...}` follows it. PHP rejects an unclosed `\u{` outright, so
+    /// reading it literally indexes a name PHP would never accept, which is
+    /// inert, rather than dropping a `define()` we could have seen.
+    NoEscape,
+}
+
+/// `\u{...}`, whose body is a code point in hexadecimal. `rest` starts
+/// after the `u`.
+fn code_point_escape(rest: &str) -> CodePoint<'_> {
+    let Some(body) = rest.strip_prefix('{') else {
+        return CodePoint::NoEscape;
+    };
+    let Some(end) = body.find('}') else {
+        return CodePoint::NoEscape;
+    };
+    let (Some(written), Some(remaining)) = (body.get(..end), body.get(end.saturating_add(1)..))
+    else {
+        return CodePoint::NoEscape;
+    };
+    let Ok(code_point) = u32::from_str_radix(written, 16) else {
+        // Empty, or not hexadecimal, or wider than a `u32`: no escape PHP
+        // would accept, and nothing to decode.
+        return CodePoint::NoEscape;
+    };
+    match char::from_u32(code_point) {
+        Some(scalar) => CodePoint::Scalar(scalar, remaining),
+        None => CodePoint::Unrepresentable,
+    }
+}
+
+fn push_character(bytes: &mut Vec<u8>, character: char) {
+    let mut buffer = [0_u8; 4];
+    bytes.extend_from_slice(character.encode_utf8(&mut buffer).as_bytes());
 }
 
 /// The argument holding the name: the one labeled `constant_name` when
@@ -264,7 +411,7 @@ mod tests {
 
     use celerrate_syntax::parse;
 
-    use super::{DefinedConstant, defines_in};
+    use super::{DefinedConstant, defines_in, double_quoted_value};
 
     fn names(source: &str) -> Vec<String> {
         defines_in(&parse(source).tree())
@@ -341,14 +488,59 @@ mod tests {
     }
 
     #[test]
-    fn a_byte_escape_names_a_constant_we_will_not_guess_at() {
-        // `\x41`, `\101` and `\u{41}` denote raw bytes. A PHP constant name
-        // is a byte string and this model holds a UTF-8 `String`, so a
-        // faithful value may not even be representable. Out of scope, like
-        // a dynamic `define`.
-        assert!(names(r#"<?php define("\x41PP", 1);"#).is_empty());
-        assert!(names(r#"<?php define("\101PP", 1);"#).is_empty());
-        assert!(names(r#"<?php define("\u{41}PP", 1);"#).is_empty());
+    fn a_backslash_that_starts_no_escape_stays_literal_even_before_x_or_u() {
+        // `\u` is an escape only before `{`, and `\x` only before a
+        // hexadecimal digit. Everywhere else PHP reads both literally, and
+        // a lowercase namespace segment, unusual as it is, is legal. Both
+        // names below are knowable and representable, so refusing them
+        // would be a false positive at every use site.
+        assert_eq!(
+            names(r#"<?php define("Acme\utils\VERSION", 1);"#),
+            [r"Acme\utils\VERSION"],
+        );
+        assert_eq!(names(r#"<?php define("Foo\xml\NS", 1);"#), [r"Foo\xml\NS"]);
+    }
+
+    #[test]
+    fn a_byte_or_code_point_escape_is_decoded_the_way_php_decodes_it() {
+        // `\u{...}` denotes a code point and emits its UTF-8 encoding, so it
+        // is always representable. `\x41` and `\101` denote a byte, and an
+        // ASCII one is representable too.
+        assert_eq!(names(r#"<?php define("\u{41}PP", 1);"#), ["APP"]);
+        assert_eq!(names(r#"<?php define("\u{e9}TAT", 1);"#), ["éTAT"]);
+        assert_eq!(names(r#"<?php define("\x41PP", 1);"#), ["APP"]);
+        assert_eq!(names(r#"<?php define("\101PP", 1);"#), ["APP"]);
+        // Two byte escapes that spell one valid UTF-8 character.
+        assert_eq!(names(r#"<?php define("\xc3\xa9TAT", 1);"#), ["éTAT"]);
+    }
+
+    #[test]
+    fn a_name_that_is_not_valid_utf8_is_out_of_scope() {
+        // The only case left: a PHP constant name is a byte string, and this
+        // model holds a UTF-8 `String`. A byte sequence no `String` can hold
+        // is not guessed at, the same stance a dynamic `define` takes.
+        assert!(names(r#"<?php define("\xffPP", 1);"#).is_empty());
+        assert!(names(r#"<?php define("\377PP", 1);"#).is_empty());
+        // A lone surrogate is a code point, but not a Unicode scalar value.
+        assert!(names(r#"<?php define("\u{d800}PP", 1);"#).is_empty());
+    }
+
+    #[test]
+    fn a_truncated_escape_terminates_and_stays_literal() {
+        // No user input may crash the tool. PHP rejects an unclosed `\u{`
+        // outright, so whatever we index for it is inert either way; the
+        // backslash stays literal, which is the direction that never drops
+        // a real `define()`.
+        assert_eq!(names(r#"<?php define("\u{41", 1);"#), [r"\u{41"]);
+        assert_eq!(names(r#"<?php define("A\u{", 1);"#), [r"A\u{"]);
+        // A fragment never ends on a backslash: the lexer takes the escaped
+        // character with it, and here that character is the closing quote,
+        // which leaves the string unterminated and the name unknown.
+        assert!(names(r#"<?php define("A\", 1);"#).is_empty());
+        // The unescaper is total regardless, on any input the lexer could
+        // never hand it.
+        assert_eq!(double_quoted_value("A\\").as_deref(), Some("A\\"));
+        assert_eq!(double_quoted_value("\\x").as_deref(), Some("\\x"));
     }
 
     #[test]

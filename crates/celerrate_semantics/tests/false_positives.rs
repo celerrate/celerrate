@@ -215,3 +215,22 @@ fn a_qualified_double_quoted_define_literal_resolves_where_it_says() {
         "#,
     );
 }
+
+/// `\u` is an escape only before `{`, and `\x` only before a hexadecimal
+/// digit. PHP reads every other `\u` and `\x` literally, so a namespace
+/// segment that happens to start with one names exactly what it looks
+/// like. A lowercase segment is unconventional and perfectly legal, and
+/// refusing to index the name would be an unknown-constant diagnostic at
+/// every use site.
+#[test]
+fn a_double_quoted_define_whose_segment_starts_like_a_byte_escape_still_resolves() {
+    assert_no_diagnostics(
+        r#"<?php
+        namespace App;
+        define("Acme\utils\VERSION", 1);
+        define("Foo\xml\NS", 2);
+        echo \Acme\utils\VERSION;
+        echo \Foo\xml\NS;
+        "#,
+    );
+}
