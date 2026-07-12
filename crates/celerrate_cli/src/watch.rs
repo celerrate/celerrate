@@ -110,17 +110,23 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
 }
 
 /// The watcher observes the project walk roots plus `composer.json` and
-/// `composer.lock`. It never watches `vendor/`: thousands of files that
-/// only move when the lockfile does, and a lockfile change triggers full
-/// re-discovery anyway.
+/// `composer.lock`. The vendor walk roots are never watched on their own:
+/// thousands of files that only move when the lockfile does, and a
+/// lockfile change triggers full re-discovery anyway.
+///
+/// That is not a promise that `vendor/` goes unwatched. When a manifest
+/// declares no autoload, or none that resolves, `celerrate_project` falls
+/// back to the project root as the single walk root, and the recursive
+/// watch placed on it reaches `vendor/` like any other subdirectory. The
+/// fallback analyzes the whole root in that case too, so watching it is
+/// exactly coherent with what is analyzed.
 pub fn spawn_watcher(session: &Session) -> notify::Result<(RecommendedWatcher, Receiver<PathBuf>)> {
     let (sender, receiver) = channel();
-    let root = session.discovery.root.clone();
-    let real_root = real_path(&root);
+    let roots = watched_roots(session);
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
         if let Ok(event) = event {
             for path in event.paths {
-                let _ = sender.send(as_the_project_names_it(&root, &real_root, path));
+                let _ = sender.send(as_the_project_names_it(&roots, path));
             }
         }
     })?;
@@ -134,6 +140,48 @@ pub fn spawn_watcher(session: &Session) -> notify::Result<(RecommendedWatcher, R
     Ok((watcher, receiver))
 }
 
+/// One watched root under the two names it answers to: `reported` is how
+/// the operating system will name it back to us, `spelled` is how the
+/// project names it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct WatchedRoot {
+    reported: PathBuf,
+    spelled: PathBuf,
+}
+
+/// Every root a reported path can arrive from, each paired with the
+/// project's spelling of it.
+///
+/// A walk root is not necessarily under the project root: it comes from
+/// the declared Composer autoload directories, normalized lexically, so a
+/// manifest saying `"App\\": "../packages/core/src"` (or naming an
+/// absolute directory) puts one outside. Rewriting against the project
+/// root alone would leave such an event untouched, and the identity bug
+/// that [`as_the_project_names_it`] exists to kill would come straight
+/// back for those files. So every watched root maps back on its own terms.
+///
+/// The project root is in the table even when it is no walk root: it is
+/// where `composer.json` and `composer.lock` are watched, and those events
+/// must map too.
+///
+/// Roots are ordered by descending depth so that the most specific one
+/// wins: a walk root nested inside another, or reached through a symlink
+/// of its own, must not be rewritten by its ancestor's mapping.
+fn watched_roots(session: &Session) -> Vec<WatchedRoot> {
+    let mut roots: Vec<WatchedRoot> = session
+        .discovery
+        .project_walk_roots
+        .iter()
+        .chain(std::iter::once(&session.discovery.root))
+        .map(|root| WatchedRoot {
+            reported: real_path(root),
+            spelled: root.clone(),
+        })
+        .collect();
+    roots.sort_by_key(|root| std::cmp::Reverse(root.reported.components().count()));
+    roots
+}
+
 /// The operating system reports a watched path in its own terms, and they
 /// are not the project's. macOS resolves every symlink before it notifies
 /// (`/var` really is `/private/var`), and a project given by a relative
@@ -145,17 +193,22 @@ pub fn spawn_watcher(session: &Session) -> notify::Result<(RecommendedWatcher, R
 ///
 /// The prefix is rewritten rather than the path canonicalized, because a
 /// deletion must survive the trip: the file is already gone by the time
-/// the event arrives, and `canonicalize` needs it to exist.
-fn as_the_project_names_it(root: &Path, real_root: &Path, path: PathBuf) -> PathBuf {
-    match path.strip_prefix(real_root) {
-        Ok(relative) => root.join(relative),
-        Err(_) => path,
+/// the event arrives, and `canonicalize` needs it to exist. That keeps
+/// this a pure operation on components, which is also why a path under no
+/// watched root can only be handed back exactly as it came.
+fn as_the_project_names_it(roots: &[WatchedRoot], path: PathBuf) -> PathBuf {
+    for root in roots {
+        if let Ok(relative) = path.strip_prefix(&root.reported) {
+            return root.spelled.join(relative);
+        }
     }
+    path
 }
 
 /// The root with every symlink resolved, which is how the operating system
 /// will name it back to us. A root that cannot be resolved is its own real
-/// path as far as this is concerned: there is then nothing to rewrite.
+/// path as far as this is concerned: the mapping degrades to identity,
+/// which rewrites nothing rather than rewriting it wrongly.
 fn real_path(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
@@ -244,12 +297,12 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use std::collections::BTreeSet;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
 
     use celerrate_source::FileId;
     use celerrate_vfs::ChangedFile;
 
-    use super::{InputMutation, as_the_project_names_it, reconcile};
+    use super::{InputMutation, WatchedRoot, as_the_project_names_it, reconcile, watched_roots};
     use crate::analysis::{Cancelled, analyze};
     use crate::session::Session;
 
@@ -367,6 +420,15 @@ mod tests {
         assert_eq!(reconcile(&changes, &analyzed(&[0])), Vec::new());
     }
 
+    /// The watched roots of a project whose only walk root is its own
+    /// source directory, as the operating system would name them back.
+    fn project_roots() -> Vec<WatchedRoot> {
+        vec![WatchedRoot {
+            reported: PathBuf::from("/private/var/project"),
+            spelled: PathBuf::from("/var/project"),
+        }]
+    }
+
     /// The `Vfs` interns by path, so a file the walk knows as
     /// `/var/project/a.php` and the operating system reports as
     /// `/private/var/project/a.php` would be two files: the edit would
@@ -375,12 +437,9 @@ mod tests {
     /// spelling.
     #[test]
     fn a_reported_path_comes_back_in_the_projects_own_spelling() {
-        let root = Path::new("/var/project");
-        let real_root = Path::new("/private/var/project");
         assert_eq!(
             as_the_project_names_it(
-                root,
-                real_root,
+                &project_roots(),
                 PathBuf::from("/private/var/project/src/A.php"),
             ),
             PathBuf::from("/var/project/src/A.php"),
@@ -395,8 +454,7 @@ mod tests {
     fn a_vanished_file_is_still_renamed_into_the_projects_spelling() {
         assert_eq!(
             as_the_project_names_it(
-                Path::new("/var/project"),
-                Path::new("/private/var/project"),
+                &project_roots(),
                 PathBuf::from("/private/var/project/gone.php"),
             ),
             PathBuf::from("/var/project/gone.php"),
@@ -408,12 +466,81 @@ mod tests {
     #[test]
     fn a_path_that_does_not_start_at_the_real_root_is_left_alone() {
         assert_eq!(
-            as_the_project_names_it(
-                Path::new("/var/project"),
-                Path::new("/private/var/project"),
-                PathBuf::from("/elsewhere/b.php"),
-            ),
+            as_the_project_names_it(&project_roots(), PathBuf::from("/elsewhere/b.php")),
             PathBuf::from("/elsewhere/b.php"),
+        );
+    }
+
+    /// A walk root comes from a declared autoload directory, and nothing
+    /// obliges that directory to sit under the project root: a manifest
+    /// saying `"App\\": "../packages/core/src"` puts one beside it. The
+    /// project root's mapping cannot reach such a path, so the root itself
+    /// must map: otherwise every save in that package would arrive under
+    /// the operating system's spelling, enter the analyzed set as a brand
+    /// new file, and leave the walked one with its stale bytes.
+    #[test]
+    fn a_walk_root_outside_the_project_root_maps_back_on_its_own_terms() {
+        let roots = vec![
+            WatchedRoot {
+                reported: PathBuf::from("/private/var/workspace/packages/core/src"),
+                spelled: PathBuf::from("/var/workspace/packages/core/src"),
+            },
+            WatchedRoot {
+                reported: PathBuf::from("/private/var/workspace/app"),
+                spelled: PathBuf::from("/var/workspace/app"),
+            },
+        ];
+        assert_eq!(
+            as_the_project_names_it(
+                &roots,
+                PathBuf::from("/private/var/workspace/packages/core/src/Core.php"),
+            ),
+            PathBuf::from("/var/workspace/packages/core/src/Core.php"),
+        );
+    }
+
+    /// The same, end to end: the walk root really is outside the project
+    /// root, and the table `spawn_watcher` builds really does map an event
+    /// reported from it, and an event reported for the manifest, which is
+    /// under no walk root at all.
+    #[test]
+    fn the_watched_roots_map_a_walk_root_that_is_not_under_the_project_root() {
+        let workspace = tempfile::tempdir().unwrap();
+        let application = workspace.path().join("app");
+        let package = workspace.path().join("packages/core/src");
+        std::fs::create_dir_all(&application).unwrap();
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::write(
+            application.join("composer.json"),
+            r#"{"autoload": {"psr-4": {"App\\": "../packages/core/src"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(package.join("Core.php"), "<?php class Core {}").unwrap();
+
+        let session = Session::start(&application);
+        assert_eq!(
+            session.discovery.project_walk_roots,
+            vec![package.clone()],
+            "the declared autoload directory is the walk root, and it is outside the project root",
+        );
+        assert_eq!(session.sources.len(), 1);
+
+        let roots = watched_roots(&session);
+        let reported = std::fs::canonicalize(&package).unwrap().join("Core.php");
+        assert_eq!(
+            as_the_project_names_it(&roots, reported),
+            package.join("Core.php"),
+            "an event from the outside walk root comes back in the project's spelling",
+        );
+
+        let manifest = application.join("composer.json");
+        let reported = std::fs::canonicalize(&application)
+            .unwrap()
+            .join("composer.json");
+        assert_eq!(
+            as_the_project_names_it(&roots, reported),
+            manifest,
+            "the manifest is under no walk root, and still maps through the project root",
         );
     }
 
