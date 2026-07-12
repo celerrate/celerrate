@@ -114,10 +114,16 @@ fn display_path(session: &Session, file: FileId) -> String {
         .unwrap_or_else(|| format!("<file {}>", file.as_u32()))
 }
 
-/// Every path in the report is relative to the project root: a walked
-/// file's `FileId` resolves through the `Vfs`, and an unreadable file
-/// (which never gets a `FileId`) carries its raw walked path instead.
-/// Both go through the same trimming, so the report reads consistently.
+/// Every path in the report is relative to the project root.
+///
+/// It is reached two ways, and both are trimmed here so the report reads
+/// consistently. A diagnostic names a `FileId`, which resolves back to a
+/// path through the `Vfs`. An `InternalError` carries a `PathBuf` outright:
+/// `FileUnreadable` and `PathUnwatchable` are about a path, not about a
+/// file that reported. (An unreadable file does still get a `FileId`:
+/// `Session::load` interns it through the `Vfs` on the failing arm too, and
+/// enters it into the analyzed set with empty bytes. It is the internal
+/// error that carries the path, not the absence of an identity.)
 ///
 /// The project root is the one path the trimming cannot shorten: a
 /// manifest that declares no autoload makes the root its own walk root, so
