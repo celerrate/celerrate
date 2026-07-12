@@ -195,11 +195,26 @@ enum Resynchronized {
 /// cycle, forever, dropping the queued events each time. A path refused
 /// because it was not there can start being there, and that refusal, and
 /// only that one, is worth retrying.
+///
+/// `declared` is what decides whether the refusal is worth *saying*, which
+/// is a different question and must stay one. A walk root comes from the
+/// autoload section, so a project asked for it and its absence is news.
+/// `composer.json` and `composer.lock` are asked for by nobody, and a
+/// project with no lockfile is ordinary, so a refusal that only reports
+/// their absence tells the user nothing they do not know, and would print
+/// on every cycle forever.
+///
+/// Every refusal is recorded either way. Filtering the unreportable ones
+/// out at record time is what left a `composer.lock` written mid-session
+/// by an ordinary `composer install` unwatched for the life of the
+/// process: nothing was left for `can_be_retried` to see, so the watch
+/// never picked it up, and no lockfile change ever re-ran discovery again.
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct UnwatchablePath {
     path: PathBuf,
     reason: String,
     existed: bool,
+    declared: bool,
 }
 
 impl UnwatchablePath {
@@ -209,10 +224,20 @@ impl UnwatchablePath {
     /// Retrying is bounded by construction. The respawn it asks for either
     /// registers the path, which drops the refusal, or refuses it again,
     /// and that second refusal is over a path that does exist, so it is
-    /// never retried. Each declared root therefore costs at most one extra
-    /// respawn in the life of a set of declared roots.
+    /// never retried. Each path therefore costs at most one extra respawn
+    /// in the life of a set of declared roots.
     fn can_be_retried(&self) -> bool {
         !self.existed && self.path.exists()
+    }
+
+    /// A refusal worth printing: the path is there and could not be watched
+    /// anyway, which is a watch gone partly dead; or the project declared
+    /// it and it is not there, which the user can act on.
+    ///
+    /// What is left is the absence of a manifest nobody declared, and that
+    /// is not news.
+    fn is_worth_reporting(&self) -> bool {
+        self.existed || self.declared
     }
 }
 
@@ -252,21 +277,27 @@ impl Watch {
             })?;
         let mut unwatchable = Vec::new();
         for root in &session.discovery.project_walk_roots {
-            unwatchable.extend(register(&mut watcher, root, RecursiveMode::Recursive));
+            unwatchable.extend(register(
+                &mut watcher,
+                root,
+                RecursiveMode::Recursive,
+                Declared::ByTheProject,
+            ));
         }
         for manifest in ["composer.json", "composer.lock"] {
             let path = session.discovery.root.join(manifest);
             // A project may perfectly well have neither file: a missing
             // manifest is already a notice, and a project with no lockfile
-            // is ordinary. Neither is declared by anyone, so a refusal that
-            // only says "it is not there" tells the user nothing they do
-            // not know, and printing it every cycle would be noise. A
-            // refusal of a manifest that *is* there is a watch gone partly
-            // dead, and that is worth saying.
-            unwatchable.extend(
-                register(&mut watcher, &path, RecursiveMode::NonRecursive)
-                    .filter(|refusal| refusal.existed),
-            );
+            // is ordinary. Neither is declared by anyone, so neither
+            // refusal is reported while the file is absent. The refusal is
+            // still *recorded*, because that is a different question: it is
+            // what lets a lockfile that appears mid-session be picked up.
+            unwatchable.extend(register(
+                &mut watcher,
+                &path,
+                RecursiveMode::NonRecursive,
+                Declared::ByNobody,
+            ));
         }
         Ok(Self {
             _watcher: watcher,
@@ -298,11 +329,19 @@ impl Watch {
     /// reprints the whole picture, so a path that is watched now must stop
     /// being reported, and a path still refused must be reported once per
     /// picture, not once per save.
+    /// The filter is here, at report time, and not where the refusal is
+    /// recorded: "not worth reporting" and "not worth retrying" are two
+    /// questions, and answering the first by discarding the record answered
+    /// the second by accident.
     fn report_unwatchable_paths(&self, session: &mut Session) {
         session
             .internal_errors
             .retain(|error| !matches!(error, InternalError::PathUnwatchable { .. }));
-        for refused in &self.unwatchable {
+        for refused in self
+            .unwatchable
+            .iter()
+            .filter(|refusal| refusal.is_worth_reporting())
+        {
             session
                 .internal_errors
                 .push(InternalError::PathUnwatchable {
@@ -362,6 +401,15 @@ impl Watch {
     }
 }
 
+/// Whether a project asked for the path being registered. A walk root comes
+/// from the autoload section; `composer.json` and `composer.lock` come from
+/// nobody, and their mere absence is not news.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Declared {
+    ByTheProject,
+    ByNobody,
+}
+
 /// Registers one path, and answers with the refusal when the operating
 /// system produces one.
 ///
@@ -374,6 +422,7 @@ fn register(
     watcher: &mut RecommendedWatcher,
     path: &Path,
     mode: RecursiveMode,
+    declared: Declared,
 ) -> Option<UnwatchablePath> {
     let existed = path.exists();
     watcher
@@ -383,6 +432,7 @@ fn register(
             path: path.to_path_buf(),
             reason: error.to_string(),
             existed,
+            declared: declared == Declared::ByTheProject,
         })
 }
 
@@ -810,6 +860,9 @@ mod tests {
             r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src"}}}"#,
         )
         .unwrap();
+        // Every path this watch registers is there, so it refuses nothing:
+        // the assertion below is about the roots not moving, and only that.
+        std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
 
         let mut session = Session::start(root.path());
         let mut watcher = Watch::spawn(&session).unwrap();
@@ -843,6 +896,11 @@ mod tests {
     /// The ordinary shape of a scaffold: `composer.json` declares `tests/`
     /// before anyone has written it. The declared roots are lexical, so the
     /// directory that does not exist is a walk root all the same.
+    ///
+    /// The lockfile is written so that the only refusal these tests see is
+    /// the one they are about. A project without a lockfile records a
+    /// refusal for it too (which is what lets one created mid-session be
+    /// picked up), and that has its own test.
     fn project_declaring_a_directory_that_does_not_exist() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
@@ -852,6 +910,7 @@ mod tests {
             r#"{"autoload": {"psr-4": {"App\\": "src", "Tests\\": "tests"}}}"#,
         )
         .unwrap();
+        std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
         root
     }
 
@@ -983,6 +1042,114 @@ mod tests {
         );
     }
 
+    /// A `composer.lock` that is not there when the watch spawns is
+    /// ordinary: a project may perfectly well have none, and saying so on
+    /// every cycle would be noise. So the refusal is not reported.
+    ///
+    /// It was not *recorded* either, and that conflated "not worth
+    /// reporting" with "not worth retrying". Nothing was left for
+    /// `can_be_retried` to see, so a lockfile written mid-session by an
+    /// ordinary `composer install` was never watched, and no lockfile
+    /// change from then on ever re-ran discovery: the project's whole
+    /// dependency set could move under the watch, in silence.
+    ///
+    /// Recording it and filtering at report time closes that for free, and
+    /// cannot livelock: while the file is absent `can_be_retried` is false,
+    /// and it is true exactly once, when the file appears.
+    #[test]
+    fn a_lockfile_created_mid_session_is_watched_from_then_on() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/A.php"), "<?php class A {}").unwrap();
+        std::fs::write(
+            root.path().join("composer.json"),
+            r#"{"autoload": {"psr-4": {"App\\": "src"}}}"#,
+        )
+        .unwrap();
+        let lockfile = root.path().join("composer.lock");
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+
+        assert_eq!(
+            watcher
+                .unwatchable
+                .iter()
+                .map(|refusal| refusal.path.clone())
+                .collect::<Vec<_>>(),
+            vec![lockfile.clone()],
+            "the refusal is recorded, which is what lets the retry see it",
+        );
+        watcher.report_unwatchable_paths(&mut session);
+        assert!(
+            session.internal_errors.is_empty(),
+            "and it is not reported: a project with no lockfile is ordinary, and a refusal that \
+             only says so tells the user nothing: {:?}",
+            session.internal_errors,
+        );
+
+        // An ordinary `composer install`.
+        std::fs::write(&lockfile, "{}").unwrap();
+
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Respawned,
+            "the lockfile is there now, and that is the one refusal a respawn can overturn",
+        );
+        assert!(
+            watcher.unwatchable.is_empty(),
+            "the lockfile that could not be registered is registered now",
+        );
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Unchanged,
+            "the retry is spent: one respawn, not one on every cycle from here on",
+        );
+
+        std::fs::write(&lockfile, r#"{"packages": []}"#).unwrap();
+        let seen = reported_until(watcher.events(), &lockfile);
+        assert!(
+            seen.contains(&lockfile),
+            "and a lockfile change is observed from now on, which is what re-runs discovery and \
+             rebuilds the configuration: {seen:?}",
+        );
+    }
+
+    /// A manifest that *is* there and is refused anyway is a watch gone
+    /// partly dead, and that is worth saying: the picture would silently
+    /// stop following the project's dependencies. Reporting turns on the
+    /// path's existence, not on whether the project declared it.
+    #[test]
+    fn a_manifest_refused_while_it_exists_is_reported() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let manifest = root.path().join("composer.json");
+        std::fs::write(&manifest, "{}").unwrap();
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+
+        // No portable test can exhaust a real watch budget, so the refusal
+        // is fabricated in the exact shape the operating system produces: a
+        // path that is there, refused anyway.
+        watcher.unwatchable = vec![UnwatchablePath {
+            path: manifest.clone(),
+            reason: "OS file watch limit reached.".to_owned(),
+            existed: true,
+            declared: false,
+        }];
+        watcher.report_unwatchable_paths(&mut session);
+
+        assert_eq!(
+            session.internal_errors,
+            vec![InternalError::PathUnwatchable {
+                path: manifest,
+                reason: "OS file watch limit reached.".to_owned(),
+            }],
+            "the user is never left with `watching for changes...` over a watch that is dead",
+        );
+    }
+
     /// A refusal no respawn can overturn must not respawn the watch.
     ///
     /// Two shapes, and neither may cost a teardown. A root that is still not
@@ -1015,6 +1182,7 @@ mod tests {
             path: source.clone(),
             reason: "OS file watch limit reached.".to_owned(),
             existed: true,
+            declared: true,
         }];
         for _ in 0..5 {
             assert_eq!(
