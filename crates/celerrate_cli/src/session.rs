@@ -7,7 +7,7 @@
 //! the lockfile does. The file bytes and the analyzed set are LOW: they
 //! change on every keystroke.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
@@ -19,6 +19,7 @@ use salsa::Setter as _;
 
 use crate::analysis::{AnalysisInputs, AnalysisOutcome};
 use crate::database::AnalysisDatabase;
+use crate::watch::{InputMutation, reconcile};
 
 /// Something that must never happen happened. The run continues, the
 /// report prints at the end, and the exit code is 2.
@@ -173,6 +174,90 @@ impl Session {
         // only ever sees what happened since the last cycle.
         let _ = self.vfs.take_changes();
     }
+
+    /// Applies the mutations. A setter takes `&mut AnalysisDatabase`,
+    /// which cancels every in-flight query on every other handle: that is
+    /// how `--watch` restarts an analysis that a change overtook.
+    pub fn apply(&mut self, mutations: &[InputMutation]) {
+        let mut membership_changed = false;
+        for mutation in mutations {
+            match mutation {
+                InputMutation::SetBytes { file, bytes } => {
+                    if let Some(&source) = self.sources.get(file) {
+                        source.set_bytes(&mut self.database).to(bytes.clone());
+                    }
+                }
+                InputMutation::AddFile { file, bytes } => {
+                    let source = SourceFile::new(&self.database, *file, bytes.clone());
+                    self.sources.insert(*file, source);
+                    membership_changed = true;
+                }
+                InputMutation::RemoveFile { file } => {
+                    if self.sources.remove(file).is_some() {
+                        membership_changed = true;
+                    }
+                }
+            }
+        }
+        if membership_changed {
+            let members: Vec<SourceFile> = self.sources.values().copied().collect();
+            self.files.set_files(&mut self.database).to(members);
+        }
+    }
+
+    /// Absorbs a coalesced burst of changed paths. A changed manifest or
+    /// lockfile re-runs discovery, because the walk roots and the PHP
+    /// version both come from it; everything else is a file change the
+    /// VFS diffs and `reconcile` classifies.
+    pub fn absorb(&mut self, changed: &[PathBuf]) {
+        if changed.iter().any(|path| self.is_project_manifest(path)) {
+            self.rediscover();
+            return;
+        }
+        for path in changed {
+            if !is_php(path) {
+                continue;
+            }
+            let contents = std::fs::read(path).ok();
+            self.vfs.set_file_contents(path, contents);
+        }
+        let changes = self.vfs.take_changes();
+        let analyzed: BTreeSet<FileId> = self.sources.keys().copied().collect();
+        let mutations = reconcile(&changes, &analyzed);
+        self.apply(&mutations);
+    }
+
+    fn is_project_manifest(&self, path: &Path) -> bool {
+        let root = &self.discovery.root;
+        path == root.join("composer.json") || path == root.join("composer.lock")
+    }
+
+    /// A changed lockfile re-runs discovery and rebuilds the
+    /// configuration. The vendor tree is never watched: thousands of files
+    /// that only move when the lockfile does, and this is what a lockfile
+    /// change triggers anyway.
+    fn rediscover(&mut self) {
+        let root = self.discovery.root.clone();
+        let discovery = discover(&root);
+        if discovery.php_version_range != self.discovery.php_version_range {
+            self.configuration
+                .set_php_version_range(&mut self.database)
+                .to(discovery.php_version_range);
+        }
+        self.discovery = discovery;
+        let paths = enumerate_php_files(&self.discovery.walk_roots());
+        self.load(&paths);
+    }
+}
+
+/// Only PHP files enter the analyzed set, judged from the path alone: the
+/// watcher reports every path under a walk root, directories and editor
+/// swap files included, and a deleted file no longer exists to be
+/// `is_file`-tested, yet still must be recognized as PHP so its removal
+/// reaches the VFS.
+fn is_php(path: &Path) -> bool {
+    path.extension()
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("php"))
 }
 
 #[cfg(test)]
@@ -292,5 +377,68 @@ mod tests {
             }
             other => panic!("expected FileUnreadable, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn absorbing_a_new_file_grows_the_analyzed_set() {
+        let root = project(&[("a.php", "<?php class A {}")]);
+        let mut session = Session::start(root.path());
+        assert_eq!(session.sources.len(), 1);
+
+        let added = root.path().join("b.php");
+        std::fs::write(&added, "<?php class B {}").unwrap();
+        session.absorb(&[added]);
+
+        assert_eq!(session.sources.len(), 2);
+        assert_eq!(session.files.files(&session.database).len(), 2);
+    }
+
+    #[test]
+    fn absorbing_a_deletion_shrinks_the_analyzed_set() {
+        let root = project(&[("a.php", "<?php class A {}"), ("b.php", "<?php class B {}")]);
+        let mut session = Session::start(root.path());
+        assert_eq!(session.sources.len(), 2);
+
+        let removed = root.path().join("b.php");
+        std::fs::remove_file(&removed).unwrap();
+        session.absorb(&[removed]);
+
+        assert_eq!(session.sources.len(), 1);
+        assert_eq!(session.files.files(&session.database).len(), 1);
+    }
+
+    #[test]
+    fn absorbing_a_lockfile_change_reruns_discovery() {
+        let root = project(&[
+            (
+                "composer.json",
+                r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+            ),
+            ("src/Kernel.php", "<?php namespace App; class Kernel {}"),
+        ]);
+        let mut session = Session::start(root.path());
+        assert_eq!(
+            session
+                .configuration
+                .php_version_range(&session.database)
+                .minimum,
+            PhpVersion::new(8, 1),
+        );
+
+        let manifest = root.path().join("composer.json");
+        std::fs::write(
+            &manifest,
+            r#"{"require": {"php": "^8.4"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        )
+        .unwrap();
+        session.absorb(&[manifest]);
+
+        assert_eq!(
+            session
+                .configuration
+                .php_version_range(&session.database)
+                .minimum,
+            PhpVersion::new(8, 4),
+        );
     }
 }
