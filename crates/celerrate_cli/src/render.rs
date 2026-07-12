@@ -84,13 +84,19 @@ fn display_path(session: &Session, file: FileId) -> String {
     session
         .vfs
         .path(file)
-        .map(|path| {
-            path.strip_prefix(&session.discovery.root)
-                .unwrap_or(path)
-                .display()
-                .to_string()
-        })
+        .map(|path| relative_path(session, path))
         .unwrap_or_else(|| format!("<file {}>", file.as_u32()))
+}
+
+/// Every path in the report is relative to the project root: a walked
+/// file's `FileId` resolves through the `Vfs`, and an unreadable file
+/// (which never gets a `FileId`) carries its raw walked path instead.
+/// Both go through the same trimming, so the report reads consistently.
+fn relative_path(session: &Session, path: &std::path::Path) -> String {
+    path.strip_prefix(&session.discovery.root)
+        .unwrap_or(path)
+        .display()
+        .to_string()
 }
 
 fn count(total: usize, singular: &str, plural: &str) -> String {
@@ -130,7 +136,7 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
             InternalError::FileUnreadable { path, reason } => writeln!(
                 output,
                 "internal error: {} could not be read: {reason}",
-                path.display(),
+                relative_path(session, path),
             )?,
             InternalError::FilePanicked { file } => {
                 has_celerrate_bug = true;
