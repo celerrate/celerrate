@@ -35,6 +35,16 @@ pub enum InternalError {
     /// derives `Clone`, `PartialEq`, and `Eq` and `std::io::Error` does
     /// not.
     FileUnreadable { path: PathBuf, reason: String },
+    /// A path `--watch` asked the operating system to observe, and the
+    /// operating system refused: a declared autoload directory that has not
+    /// been created yet, or a watch budget that is exhausted. Like
+    /// `FileUnreadable` this is the environment's condition and not
+    /// Celerrate's bug, and like it, only the refusal rendered as a string
+    /// is kept: the watch's own error type belongs to the watch, and
+    /// nothing else may learn about it. The run continues over the paths it
+    /// could register and says which one it could not, because a watch that
+    /// is partly dead must never look like a watch that is whole.
+    PathUnwatchable { path: PathBuf, reason: String },
     /// Analyzing one file panicked. Every other file still reports.
     FilePanicked { file: FileId },
     /// The analysis loop itself panicked, outside any file's guard.

@@ -118,11 +118,17 @@ fn display_path(session: &Session, file: FileId) -> String {
 /// file's `FileId` resolves through the `Vfs`, and an unreadable file
 /// (which never gets a `FileId`) carries its raw walked path instead.
 /// Both go through the same trimming, so the report reads consistently.
+///
+/// The project root is the one path the trimming cannot shorten: a
+/// manifest that declares no autoload makes the root its own walk root, so
+/// a refused watch can name it, and trimming it against itself would leave
+/// nothing to print. It names itself in full instead.
 fn relative_path(session: &Session, path: &std::path::Path) -> String {
-    path.strip_prefix(&session.discovery.root)
-        .unwrap_or(path)
-        .display()
-        .to_string()
+    let relative = path.strip_prefix(&session.discovery.root).unwrap_or(path);
+    if relative.as_os_str().is_empty() {
+        return path.display().to_string();
+    }
+    relative.display().to_string()
 }
 
 fn count(total: usize, singular: &str, plural: &str) -> String {
@@ -137,13 +143,15 @@ fn count(total: usize, singular: &str, plural: &str) -> String {
 /// tell us. A panic does not kill the run, so this prints at the end,
 /// after every file that did report.
 ///
-/// `FileUnreadable` is named like every other internal error, but it is
-/// not Celerrate's bug: a permission-denied file or a dangling symlink is
-/// the environment's fault, and inviting a bug report for it would be a
-/// lie. The "please report it" trailer therefore only prints when at
-/// least one internal error is a genuine Celerrate bug (any variant other
-/// than `FileUnreadable`). When every internal error is an unreadable
-/// file, the report ends after listing them.
+/// `FileUnreadable` and `PathUnwatchable` are named like every other
+/// internal error, but they are not Celerrate's bug: a permission-denied
+/// file, a dangling symlink, an autoload directory the project declares
+/// before creating it, an operating system that will not extend its watch
+/// budget, are all the environment's condition, and inviting a bug report
+/// for one would be a lie. The "please report it" trailer therefore only
+/// prints when at least one internal error is a genuine Celerrate bug.
+/// When every internal error is the environment's, the report ends after
+/// listing them.
 pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::Result<()> {
     if session.internal_errors.is_empty() {
         return Ok(());
@@ -162,6 +170,11 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
             InternalError::FileUnreadable { path, reason } => writeln!(
                 output,
                 "internal error: {} could not be read: {reason}",
+                relative_path(session, path),
+            )?,
+            InternalError::PathUnwatchable { path, reason } => writeln!(
+                output,
+                "internal error: {} could not be watched: {reason}",
                 relative_path(session, path),
             )?,
             InternalError::FilePanicked { file } => {
@@ -271,6 +284,68 @@ mod tests {
         assert!(
             !text.contains("github.com"),
             "no issue link when there is nothing to report: {text}",
+        );
+    }
+
+    /// A directory the project declares before creating it, and an
+    /// operating system that will not extend its watch budget, are both the
+    /// environment's condition, not Celerrate's bug. The report names the
+    /// path and the refusal, so the user is never left with `watching for
+    /// changes...` printed over a watch that is partly dead, and it invites
+    /// no bug report for something that is not one.
+    #[test]
+    fn an_unwatchable_path_alone_is_reported_without_a_bug_invitation() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let mut session = Session::start(root.path());
+        session
+            .internal_errors
+            .push(InternalError::PathUnwatchable {
+                path: root.path().join("tests"),
+                reason: "No path was found.".to_owned(),
+            });
+
+        let mut output = Vec::new();
+        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(
+            text.contains("internal error: tests could not be watched"),
+            "{text}"
+        );
+        assert!(text.contains("No path was found."));
+        assert!(
+            !text.contains("Please report it"),
+            "an environment condition is not a Celerrate bug: {text}",
+        );
+        assert!(!text.contains("github.com"), "{text}");
+    }
+
+    /// A manifest that declares no autoload makes the project root its own
+    /// walk root, and trimming that path against itself would leave nothing
+    /// to print: a refusal must never be reported about the empty path.
+    #[test]
+    fn an_unwatchable_project_root_names_itself_in_full() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let mut session = Session::start(root.path());
+        session
+            .internal_errors
+            .push(InternalError::PathUnwatchable {
+                path: root.path().to_path_buf(),
+                reason: "OS file watch limit reached.".to_owned(),
+            });
+
+        let mut output = Vec::new();
+        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        let text = String::from_utf8(output).unwrap();
+
+        assert!(
+            text.contains(&format!(
+                "internal error: {} could not be watched",
+                root.path().display(),
+            )),
+            "{text}",
         );
     }
 

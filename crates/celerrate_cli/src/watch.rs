@@ -89,6 +89,11 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
             Err(error) => return unwatchable(output, &error),
         };
         session.absorb_outcome(&outcome);
+        // What the watch is not observing is part of the picture, and it is
+        // read from the watch that is in place now: `cycle` may have
+        // respawned it, and the picture must describe the watch the next
+        // burst will come from, not the one this cycle started with.
+        watcher.report_unwatchable_paths(session);
         if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
             return Outcome::InternalError;
         }
@@ -129,44 +134,86 @@ fn unwatchable(output: &mut dyn Write, error: &notify::Error) -> Outcome {
     Outcome::UsageError
 }
 
-/// The `notify` watcher, the channel it reports through, and the walk
-/// roots that both the registrations and the rewrite table were built
-/// from.
+/// The `notify` watcher, the channel it reports through, the walk roots
+/// that both the registrations and the rewrite table were built from, and
+/// the paths the operating system refused.
 ///
-/// The three are one object because they are one decision. The
-/// registrations and the rewrite table are two views of the same set of
-/// roots, and discovery can replace that set in the middle of a session: a
-/// manifest whose autoload section grows a directory declares a root that
-/// nothing watches and nothing maps, so every edit under it is silently
-/// ignored; a manifest that loses one leaves a root still watched and
-/// still mapped after the walk dropped its files, so an edit under it
-/// arrives, misses the analyzed set, and puts the file straight back into
-/// the set `load` had just dropped it from. Both are silent wrong results,
-/// and both come from letting the two views drift apart. Nothing here is
-/// rebuilt alone.
+/// They are one object because they are one decision. The registrations
+/// and the rewrite table are two views of the same set of roots, and
+/// discovery can replace that set in the middle of a session: a manifest
+/// whose autoload section grows a directory declares a root that nothing
+/// watches and nothing maps, so every edit under it is silently ignored; a
+/// manifest that loses one leaves a root still watched and still mapped
+/// after the walk dropped its files, so an edit under it arrives, misses
+/// the analyzed set, and puts the file straight back into the set `load`
+/// had just dropped it from. Both are silent wrong results, and both come
+/// from letting the two views drift apart. Nothing here is rebuilt alone.
 pub struct Watch {
     /// Dropping it ends the watch and closes the channel, so it is held
     /// for as long as the watch lives even though nothing calls it again.
     _watcher: RecommendedWatcher,
     events: Receiver<PathBuf>,
-    /// The walk roots the watcher above is registered over, and the roots
-    /// its rewrite table was built from. Keeping them is what makes "is
-    /// the watch still watching what the project declares?" answerable,
-    /// and answerable without asking discovery to remember that it re-ran:
-    /// these roots are the truth about the watcher, and comparing them
-    /// with what discovery declares now is the whole of the decision to
-    /// respawn.
-    registered: Vec<PathBuf>,
+    /// The walk roots the watcher above was built over, and the roots its
+    /// rewrite table was built from. Declared, not necessarily observed:
+    /// `unwatchable` names the ones the operating system refused. Keeping
+    /// them is what makes "is the watch still built over what the project
+    /// declares?" answerable, and answerable without asking discovery to
+    /// remember that it re-ran: these roots are the truth about the
+    /// watcher, and comparing them with what discovery declares now is
+    /// half of the decision to respawn.
+    declared: Vec<PathBuf>,
+    /// The paths the operating system refused to observe. They are the
+    /// other half of the decision to respawn, and they are what the picture
+    /// says about a watch that is only partly alive.
+    unwatchable: Vec<UnwatchablePath>,
 }
 
 /// What a resynchronization did. The loop does not branch on it, but the
 /// distinction is a contract worth pinning: a respawn drops every event
 /// already queued on the channel it replaces, so a manifest save that
-/// leaves the declared roots alone must not cause one.
+/// leaves the declared roots alone, over a watch that refused nothing it
+/// could now accept, must not cause one.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Resynchronized {
+enum Resynchronized {
     Unchanged,
     Respawned,
+}
+
+/// A path the watch asked the operating system to observe, and the
+/// operating system refused.
+///
+/// Both halves of the record matter. `reason` is what the user is told:
+/// the alternative is a tool that prints `watching for changes...` over a
+/// watch that is partly dead, and then reports a picture that never
+/// updates, which is the silent wrong result this whole module exists to
+/// forbid.
+///
+/// `existed` is what keeps the retry from becoming a livelock. A path
+/// refused while it was there was refused for a reason no respawn can
+/// change (an exhausted watch budget is exhausted for the next watcher
+/// too), so retrying it would tear the watch down and rebuild it on every
+/// cycle, forever, dropping the queued events each time. A path refused
+/// because it was not there can start being there, and that refusal, and
+/// only that one, is worth retrying.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct UnwatchablePath {
+    path: PathBuf,
+    reason: String,
+    existed: bool,
+}
+
+impl UnwatchablePath {
+    /// A refusal a respawn could overturn: the path was not there when the
+    /// registration was attempted, and it is there now.
+    ///
+    /// Retrying is bounded by construction. The respawn it asks for either
+    /// registers the path, which drops the refusal, or refuses it again,
+    /// and that second refusal is over a path that does exist, so it is
+    /// never retried. Each declared root therefore costs at most one extra
+    /// respawn in the life of a set of declared roots.
+    fn can_be_retried(&self) -> bool {
+        !self.existed && self.path.exists()
+    }
 }
 
 impl Watch {
@@ -182,6 +229,16 @@ impl Watch {
     /// like any other subdirectory. The fallback analyzes the whole root
     /// in that case too, so watching it is exactly coherent with what is
     /// analyzed.
+    ///
+    /// A registration the operating system refuses is kept, never
+    /// discarded. The walk roots are lexical: `AutoloadRules::walk_roots`
+    /// normalizes what the manifest declares and stats none of it, so an
+    /// ordinary scaffold, a `composer.json` declaring `"Tests\\": "tests/"`
+    /// before `tests/` has been written, yields a walk root that cannot be
+    /// registered. Discarding that failure would leave the tool blind to
+    /// the directory for the life of the process, and blind in silence.
+    /// The same goes for an exhausted watch budget, which refuses a
+    /// directory that is there. Both are reported; the first is retried.
     pub fn spawn(session: &Session) -> notify::Result<Self> {
         let (sender, receiver) = channel();
         let roots = watched_roots(session);
@@ -193,17 +250,29 @@ impl Watch {
                     }
                 }
             })?;
+        let mut unwatchable = Vec::new();
         for root in &session.discovery.project_walk_roots {
-            let _ = watcher.watch(root, RecursiveMode::Recursive);
+            unwatchable.extend(register(&mut watcher, root, RecursiveMode::Recursive));
         }
         for manifest in ["composer.json", "composer.lock"] {
             let path = session.discovery.root.join(manifest);
-            let _ = watcher.watch(&path, RecursiveMode::NonRecursive);
+            // A project may perfectly well have neither file: a missing
+            // manifest is already a notice, and a project with no lockfile
+            // is ordinary. Neither is declared by anyone, so a refusal that
+            // only says "it is not there" tells the user nothing they do
+            // not know, and printing it every cycle would be noise. A
+            // refusal of a manifest that *is* there is a watch gone partly
+            // dead, and that is worth saying.
+            unwatchable.extend(
+                register(&mut watcher, &path, RecursiveMode::NonRecursive)
+                    .filter(|refusal| refusal.existed),
+            );
         }
         Ok(Self {
             _watcher: watcher,
             events: receiver,
-            registered: session.discovery.project_walk_roots.clone(),
+            declared: session.discovery.project_walk_roots.clone(),
+            unwatchable,
         })
     }
 
@@ -213,14 +282,54 @@ impl Watch {
         &self.events
     }
 
-    /// Makes the watch observe exactly the roots the project declares now.
+    /// Tells the session which paths the watch is not observing, so that
+    /// the next picture says so.
+    ///
+    /// This is the honest channel: a declared directory that does not exist
+    /// yet, and an operating system that will not extend its watch budget,
+    /// are the environment's condition and not a bug in Celerrate, which is
+    /// exactly the distinction the internal-error report already draws
+    /// around `FileUnreadable`. So the refusal is reported there, in the
+    /// block that names what went wrong and invites no bug report for
+    /// something that is not one.
+    ///
+    /// The report replaces the previous one rather than adding to it, for
+    /// the same reason `load` replaces its unreadable files: every cycle
+    /// reprints the whole picture, so a path that is watched now must stop
+    /// being reported, and a path still refused must be reported once per
+    /// picture, not once per save.
+    fn report_unwatchable_paths(&self, session: &mut Session) {
+        session
+            .internal_errors
+            .retain(|error| !matches!(error, InternalError::PathUnwatchable { .. }));
+        for refused in &self.unwatchable {
+            session
+                .internal_errors
+                .push(InternalError::PathUnwatchable {
+                    path: refused.path.clone(),
+                    reason: refused.reason.clone(),
+                });
+        }
+    }
+
+    /// Makes the watch observe exactly the roots the project declares now,
+    /// and every one of them it can.
     ///
     /// Called after every absorption, because absorbing a manifest change
     /// re-runs discovery, and discovery reads the autoload section from
-    /// disk: the walk roots of a session are not fixed at startup. When
-    /// they have not moved this is a comparison and nothing else, which is
-    /// what a `composer.json` save that touches only the PHP version must
-    /// cost.
+    /// disk: the walk roots of a session are not fixed at startup. It
+    /// respawns when the declared roots have moved, and when a root that
+    /// could not be registered could be registered now, because a declared
+    /// root is lexical and can be created long after it is declared:
+    /// creating it moves nothing that discovery can see, so comparing the
+    /// declared roots alone would leave the tool blind to it forever. When
+    /// neither holds, this is a comparison and a stat and nothing else,
+    /// which is what a `composer.json` save that touches only the PHP
+    /// version must cost. Over a watch that refused nothing, which is the
+    /// ordinary case, it is the comparison alone.
+    ///
+    /// The stat is a filesystem read, and it is allowed: this runs on the
+    /// main thread, after the join, outside every salsa query.
     ///
     /// The project root itself is not compared: `rediscover` rediscovers
     /// the same root it was given, so the two manifest watches, which hang
@@ -240,7 +349,9 @@ impl Watch {
     /// one the session already accepts at startup, between the first walk
     /// and the first registration.
     fn resynchronize(&mut self, session: &Session) -> notify::Result<Resynchronized> {
-        if self.registered == session.discovery.project_walk_roots {
+        let declared_the_same = self.declared == session.discovery.project_walk_roots;
+        let nothing_to_retry = !self.unwatchable.iter().any(UnwatchablePath::can_be_retried);
+        if declared_the_same && nothing_to_retry {
             return Ok(Resynchronized::Unchanged);
         }
         // The new watch is built before the old one is dropped, so a
@@ -249,6 +360,30 @@ impl Watch {
         *self = Self::spawn(session)?;
         Ok(Resynchronized::Respawned)
     }
+}
+
+/// Registers one path, and answers with the refusal when the operating
+/// system produces one.
+///
+/// The existence is read before the attempt and not after: a path created
+/// in between must look like one that was missing, so the retry picks it
+/// up, rather than like one the operating system refused while it was
+/// there, which is never retried. Erring that way costs at most one
+/// respawn; erring the other way would be permanent blindness.
+fn register(
+    watcher: &mut RecommendedWatcher,
+    path: &Path,
+    mode: RecursiveMode,
+) -> Option<UnwatchablePath> {
+    let existed = path.exists();
+    watcher
+        .watch(path, mode)
+        .err()
+        .map(|error| UnwatchablePath {
+            path: path.to_path_buf(),
+            reason: error.to_string(),
+            existed,
+        })
 }
 
 /// One watched root under the two names it answers to: `reported` is how
@@ -432,11 +567,12 @@ mod tests {
     use celerrate_vfs::ChangedFile;
 
     use super::{
-        InputMutation, Resynchronized, Watch, WatchedRoot, as_the_project_names_it, reconcile,
-        watched_roots,
+        InputMutation, Resynchronized, UnwatchablePath, Watch, WatchedRoot,
+        as_the_project_names_it, reconcile, watched_roots,
     };
-    use crate::analysis::{Cancelled, analyze};
-    use crate::session::Session;
+    use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
+    use crate::render;
+    use crate::session::{InternalError, Session};
 
     /// The invariant the whole loop is built on, and the one the umbrella
     /// design called unretrofittable: a setter on the main thread's `&mut`
@@ -561,7 +697,7 @@ mod tests {
 
         let mut session = Session::start(root.path());
         let mut watcher = Watch::spawn(&session).unwrap();
-        assert_eq!(watcher.registered, vec![source.clone()]);
+        assert_eq!(watcher.declared, vec![source.clone()]);
 
         std::fs::write(
             &manifest,
@@ -580,7 +716,7 @@ mod tests {
             Resynchronized::Respawned,
         );
         assert_eq!(
-            watcher.registered,
+            watcher.declared,
             vec![library.clone(), source.clone()],
             "the watch is registered over the roots the project declares now",
         );
@@ -619,7 +755,7 @@ mod tests {
 
         let mut session = Session::start(root.path());
         let mut watcher = Watch::spawn(&session).unwrap();
-        assert_eq!(watcher.registered, vec![library.clone(), source.clone()]);
+        assert_eq!(watcher.declared, vec![library.clone(), source.clone()]);
         assert_eq!(session.sources.len(), 2);
 
         std::fs::write(&manifest, r#"{"autoload": {"psr-4": {"App\\": "src"}}}"#).unwrap();
@@ -633,7 +769,7 @@ mod tests {
             watcher.resynchronize(&session).unwrap(),
             Resynchronized::Respawned,
         );
-        assert_eq!(watcher.registered, vec![source.clone()]);
+        assert_eq!(watcher.declared, vec![source.clone()]);
 
         std::fs::write(
             library.join("B.php"),
@@ -697,7 +833,201 @@ mod tests {
             watcher.resynchronize(&session).unwrap(),
             Resynchronized::Unchanged,
         );
-        assert_eq!(watcher.registered, vec![root.path().join("src")]);
+        assert_eq!(watcher.declared, vec![root.path().join("src")]);
+        assert!(
+            watcher.unwatchable.is_empty(),
+            "every declared root registered, so there is nothing to retry either",
+        );
+    }
+
+    /// The ordinary shape of a scaffold: `composer.json` declares `tests/`
+    /// before anyone has written it. The declared roots are lexical, so the
+    /// directory that does not exist is a walk root all the same.
+    fn project_declaring_a_directory_that_does_not_exist() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/A.php"), "<?php class A {}").unwrap();
+        std::fs::write(
+            root.path().join("composer.json"),
+            r#"{"autoload": {"psr-4": {"App\\": "src", "Tests\\": "tests"}}}"#,
+        )
+        .unwrap();
+        root
+    }
+
+    /// A registration the operating system refuses must reach the user. The
+    /// declared directory that is not there yet is the common case, and
+    /// discarding its refusal leaves the tool blind to that directory for
+    /// the life of the process, printing `watching for changes...` over a
+    /// watch that is only partly alive: the silent wrong result the whole
+    /// module exists to forbid.
+    ///
+    /// It reaches the user through the internal-error block, which is where
+    /// an environment condition that is not a Celerrate bug already goes,
+    /// and it must not invite a bug report, exactly as an unreadable file
+    /// does not: a directory a project has not created yet is nobody's bug.
+    #[test]
+    fn a_declared_walk_root_that_does_not_exist_is_reported_not_swallowed() {
+        let root = project_declaring_a_directory_that_does_not_exist();
+        let tests = root.path().join("tests");
+
+        let mut session = Session::start(root.path());
+        assert_eq!(
+            session.discovery.project_walk_roots,
+            vec![root.path().join("src"), tests.clone()],
+            "the declared roots are lexical: nothing stats them, so the missing one is a root",
+        );
+
+        let watcher = Watch::spawn(&session).unwrap();
+        assert_eq!(
+            watcher
+                .unwatchable
+                .iter()
+                .map(|refusal| refusal.path.clone())
+                .collect::<Vec<_>>(),
+            vec![tests.clone()],
+            "the refusal is kept, not discarded",
+        );
+        assert!(
+            !watcher.unwatchable[0].reason.is_empty(),
+            "the operating system's own words are kept, so the user can act on them",
+        );
+        assert!(
+            !watcher.unwatchable[0].existed,
+            "it was refused because it is not there, which is the refusal a respawn can overturn",
+        );
+
+        watcher.report_unwatchable_paths(&mut session);
+        assert_eq!(
+            session.internal_errors,
+            vec![InternalError::PathUnwatchable {
+                path: tests.clone(),
+                reason: watcher.unwatchable[0].reason.clone(),
+            }],
+        );
+        watcher.report_unwatchable_paths(&mut session);
+        assert_eq!(
+            session.internal_errors.len(),
+            1,
+            "reported once per picture, not once per cycle: the picture is never a log",
+        );
+
+        let mut output = Vec::new();
+        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("tests could not be watched"),
+            "the path the watch is blind to is named: {text}",
+        );
+        assert!(
+            !text.contains("Please report it"),
+            "a directory the project has not created is not a bug in Celerrate: {text}",
+        );
+    }
+
+    /// The other half: the directory is created, and the watch must pick it
+    /// up. Nothing discovery can see has moved (the root was declared all
+    /// along, and discovery never stats it), so comparing the declared roots
+    /// alone would leave the tool blind to it forever.
+    ///
+    /// This asserts the whole chain, not that a function was called: the
+    /// registration really follows (the operating system really reports a
+    /// file created in the directory that has just appeared) and the rewrite
+    /// table really follows too (the report arrives in the project's own
+    /// spelling of it, not the operating system's). And it asserts the
+    /// retry is spent: the cycle after it respawns nothing.
+    #[test]
+    fn a_walk_root_that_was_missing_and_now_exists_is_watched_and_mapped() {
+        let root = project_declaring_a_directory_that_does_not_exist();
+        let source = root.path().join("src");
+        let tests = root.path().join("tests");
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        assert_eq!(watcher.unwatchable.len(), 1);
+
+        // The scaffold is completed, and an ordinary edit lands. No declared
+        // root moves: only the filesystem changed.
+        std::fs::create_dir_all(&tests).unwrap();
+        let edited = source.join("A.php");
+        std::fs::write(&edited, "<?php class A { public int $x = 1; }").unwrap();
+        session.absorb(std::slice::from_ref(&edited));
+        assert_eq!(
+            session.discovery.project_walk_roots,
+            vec![source.clone(), tests.clone()],
+            "the declared roots are exactly what they were: creating a directory declares nothing",
+        );
+
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Respawned,
+        );
+        assert!(
+            watcher.unwatchable.is_empty(),
+            "the root that could not be registered is registered now",
+        );
+        assert_eq!(watcher.declared, vec![source.clone(), tests.clone()]);
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Unchanged,
+            "the retry is spent: one respawn, not one on every cycle from here on",
+        );
+
+        let created = tests.join("FooTest.php");
+        std::fs::write(&created, "<?php class FooTest {}").unwrap();
+        let seen = reported_until(watcher.events(), &created);
+        assert!(
+            seen.contains(&created),
+            "a file created in the root that has just appeared is watched, and maps back into \
+             the project's own spelling: {seen:?}",
+        );
+    }
+
+    /// A refusal no respawn can overturn must not respawn the watch.
+    ///
+    /// Two shapes, and neither may cost a teardown. A root that is still not
+    /// there cannot be registered now either. And a root the operating
+    /// system refused while it *was* there was refused for a reason a new
+    /// watcher meets unchanged: an exhausted watch budget is exhausted for
+    /// the next watcher too. Retrying either would rebuild the watch on
+    /// every single cycle, forever, dropping every queued event each time.
+    ///
+    /// The budget refusal is fabricated, because no portable test can
+    /// exhaust a real watch budget, but it is fabricated in the exact shape
+    /// the operating system produces: a path that is there, refused anyway.
+    #[test]
+    fn a_root_that_can_never_be_registered_does_not_respawn_the_watch_forever() {
+        let root = project_declaring_a_directory_that_does_not_exist();
+        let source = root.path().join("src");
+        let session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        assert_eq!(watcher.unwatchable.len(), 1, "the missing root was refused");
+
+        for _ in 0..5 {
+            assert_eq!(
+                watcher.resynchronize(&session).unwrap(),
+                Resynchronized::Unchanged,
+                "a root that is still missing cannot be registered now: nothing is torn down",
+            );
+        }
+
+        watcher.unwatchable = vec![UnwatchablePath {
+            path: source.clone(),
+            reason: "OS file watch limit reached.".to_owned(),
+            existed: true,
+        }];
+        for _ in 0..5 {
+            assert_eq!(
+                watcher.resynchronize(&session).unwrap(),
+                Resynchronized::Unchanged,
+                "a refusal over a path that exists is never retried: no livelock",
+            );
+        }
+        assert_eq!(
+            watcher.unwatchable.len(),
+            1,
+            "and it keeps being reported, cycle after cycle: the user is never left blind",
+        );
     }
 
     fn analyzed(ids: &[u32]) -> BTreeSet<FileId> {
