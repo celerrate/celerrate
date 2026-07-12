@@ -98,6 +98,32 @@ pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
     }
 }
 
+/// The analysis loop itself panicked, outside every file's guard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Panicked;
+
+/// Runs one pass with the loop itself behind a guard.
+///
+/// `analyze` deliberately re-raises anything that is not one file's panic,
+/// because `guarded` already caught that one. Under `--watch` the pass runs
+/// on its own thread and `worker.join()` hands that escape back, which
+/// becomes `InternalError::AnalysisPanicked` and exit 2. A single `check`
+/// has no thread to join: without this guard the panic escaped `run` and
+/// `main`, and the user got a raw Rust panic and exit 101 rather than the
+/// internal-error report. The variant existed with no path that could
+/// produce it.
+///
+/// Catching here is panic *handling*, not panic *raising*. The zero-panic
+/// rule forbids the second; the first is what it is for.
+///
+/// A `salsa::Cancelled` never arrives here as a panic: `analyze` turns it
+/// into `Err(Cancelled)` before it can escape, and `guarded` re-raises it
+/// so that it can. That is what keeps a cancellation from ever being read
+/// as a bug, and this guard does not weaken it.
+pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass)).map_err(|_| Panicked)
+}
+
 /// One file's total: decode and syntax, then references and gating.
 /// Nothing composes those two families below this line.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
@@ -168,7 +194,7 @@ mod tests {
     use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
     use celerrate_source::{FileId, TextRange, TextSize};
 
-    use super::{assemble, guarded};
+    use super::{Panicked, assemble, guarded, isolated};
 
     fn diagnostic(file: u32, offset: u32) -> Diagnostic {
         Diagnostic {
@@ -212,6 +238,21 @@ mod tests {
             payload.downcast_ref::<salsa::Cancelled>().is_some(),
             "the guard must re-raise the cancellation, not swallow it",
         );
+    }
+
+    /// The panic `guarded` does not catch: one in the loop itself, outside
+    /// every file. Under `--watch` the thread's join catches it; the single
+    /// pass has no thread, so it needs this, or the user gets a raw Rust
+    /// panic and exit 101 instead of the report and exit 2.
+    #[test]
+    fn a_panic_in_the_loop_itself_is_caught_rather_than_escaping_the_process() {
+        let result: Result<(), Panicked> = isolated(|| panic!("a bug in the loop"));
+        assert_eq!(result, Err(Panicked));
+    }
+
+    #[test]
+    fn a_pass_that_does_not_panic_passes_straight_through() {
+        assert_eq!(isolated(|| 7), Ok(7));
     }
 
     #[test]

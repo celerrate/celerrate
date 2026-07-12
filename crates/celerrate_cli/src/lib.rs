@@ -19,7 +19,9 @@ use std::process::ExitCode;
 
 use clap::Parser as _;
 
+use crate::analysis::{AnalysisOutcome, Cancelled, Panicked};
 use crate::arguments::{Arguments, Command};
+use crate::session::{InternalError, Session};
 
 /// How the run ended, and therefore what the shell is told.
 ///
@@ -75,14 +77,12 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
     };
     match arguments.command {
         Command::Check { path, watch } => {
-            let mut session = session::Session::start(&path);
+            let mut session = Session::start(&path);
             if watch {
                 return watch::watch(&mut session, output);
             }
-            // Nothing mutates the inputs in a single pass, so `Cancelled`
-            // is unreachable here; treating it as an empty run is still
-            // honest, and it costs nothing.
-            let outcome = analysis::analyze(&session.inputs()).unwrap_or_default();
+            let inputs = session.inputs();
+            let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
             session.absorb_outcome(&outcome);
             if render::render_check(output, &session, &outcome).is_err() {
                 return Outcome::InternalError;
@@ -92,11 +92,81 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
     }
 }
 
+/// One analysis pass, with the loop itself guarded.
+///
+/// A panic outside any file's guard is an internal error the run reports
+/// and survives, exactly as it already is under `--watch`, where the
+/// worker's join catches it. The single pass runs on the main thread, so
+/// without this it escaped `run` and `main` and the user got a raw Rust
+/// panic and exit 101 instead of the internal-error report and exit 2.
+///
+/// The pass is a parameter rather than a call, so a test can inject the
+/// panic at the one place it can come from: there is no way to make the
+/// real fan-out panic on demand, and a guard nothing ever proves catches
+/// anything is a guard that quietly stops catching.
+fn single_pass(
+    session: &mut Session,
+    pass: impl FnOnce() -> Result<AnalysisOutcome, Cancelled>,
+) -> AnalysisOutcome {
+    match analysis::isolated(pass) {
+        // Nothing mutates the inputs in a single pass, so `Cancelled` is
+        // unreachable here; treating it as an empty run is still honest,
+        // and it costs nothing.
+        Ok(result) => result.unwrap_or_default(),
+        Err(Panicked) => {
+            session
+                .internal_errors
+                .push(InternalError::AnalysisPanicked);
+            AnalysisOutcome::default()
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::panic)]
 
-    use super::{Outcome, run};
+    use super::{InternalError, Outcome, Session, render, run, single_pass};
+
+    /// The single-pass path had no way to produce
+    /// `InternalError::AnalysisPanicked`: `analyze` re-raises a panic that
+    /// is not one file's, and `run` called it straight on the main thread,
+    /// so the user got a raw Rust panic and exit 101 rather than the
+    /// internal-error report and exit 2. Under `--watch` the same panic was
+    /// caught by the worker's join and reported properly, which is the seam
+    /// the per-task reviews could not see.
+    ///
+    /// This drives exactly what `run` drives, with the panic injected at the
+    /// only place it can come from.
+    #[test]
+    fn a_panic_in_the_analysis_loop_is_reported_rather_than_killing_the_process() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let mut session = Session::start(root.path());
+
+        let outcome = single_pass(&mut session, || panic!("a bug in the analysis loop"));
+
+        assert!(outcome.diagnostics.is_empty());
+        assert_eq!(
+            session.internal_errors,
+            vec![InternalError::AnalysisPanicked],
+            "the panic is recorded, not propagated",
+        );
+
+        let mut output = Vec::new();
+        render::render_check(&mut output, &session, &outcome).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("internal error: the analysis loop panicked"),
+            "{text}",
+        );
+        assert!(text.contains("Please report it:"), "{text}");
+        assert_eq!(
+            Outcome::of(outcome.diagnostics.len(), session.internal_errors.len()),
+            Outcome::InternalError,
+            "and it exits 2, not 101",
+        );
+    }
 
     #[test]
     fn the_exit_codes_are_the_ones_the_design_fixes() {
