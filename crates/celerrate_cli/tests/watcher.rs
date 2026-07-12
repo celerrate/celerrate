@@ -13,7 +13,7 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 use celerrate_cli::session::Session;
-use celerrate_cli::watch::spawn_watcher;
+use celerrate_cli::watch::Watch;
 
 /// How long the channel must stay silent before the events of an edit are
 /// taken to be all in. Generous, because it is paid once and a leftover
@@ -59,7 +59,8 @@ fn the_adapter_reports_creation_modification_and_deletion() {
     std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
 
     let session = Session::start(root.path());
-    let (_watcher, events) = spawn_watcher(&session).unwrap();
+    let watcher = Watch::spawn(&session).unwrap();
+    let events = watcher.events();
 
     let created = root.path().join("b.php");
     std::fs::write(&created, "<?php class B {}").unwrap();
@@ -67,7 +68,7 @@ fn the_adapter_reports_creation_modification_and_deletion() {
     std::fs::write(&modified, "<?php class A { public int $x = 1; }").unwrap();
 
     let wanted: BTreeSet<PathBuf> = [created.clone(), modified.clone()].into_iter().collect();
-    let seen = collect_until(&events, &wanted, Duration::from_secs(5));
+    let seen = collect_until(events, &wanted, Duration::from_secs(5));
     assert!(
         seen.contains(&created) && seen.contains(&modified),
         "the watcher reported {seen:?}",
@@ -82,11 +83,11 @@ fn the_adapter_reports_creation_modification_and_deletion() {
     // the assertion real, and the deletion is precisely the case that
     // justifies rewriting a reported path as a string rather than
     // canonicalizing it, since by then the file is gone.
-    drain(&events);
+    drain(events);
 
     std::fs::remove_file(&created).unwrap();
     let wanted: BTreeSet<PathBuf> = [created.clone()].into_iter().collect();
-    let seen = collect_until(&events, &wanted, Duration::from_secs(5));
+    let seen = collect_until(events, &wanted, Duration::from_secs(5));
     assert!(
         seen.contains(&created),
         "the deletion was reported: {seen:?}"

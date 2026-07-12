@@ -66,15 +66,13 @@ pub fn reconcile(changes: &[ChangedFile], analyzed: &BTreeSet<FileId>) -> Vec<In
         .collect()
 }
 
-/// Watches, analyzes, reprints, forever. Returns only when the watcher
-/// itself cannot be created, or when the output stream is gone.
+/// Watches, analyzes, reprints, forever. Returns only when the watch
+/// itself cannot be established or re-established, or when the output
+/// stream is gone.
 pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
-    let (_watcher, events) = match spawn_watcher(session) {
-        Ok(pair) => pair,
-        Err(error) => {
-            let _ = writeln!(output, "error: cannot watch the project: {error}");
-            return Outcome::UsageError;
-        }
+    let mut watcher = match Watch::spawn(session) {
+        Ok(watcher) => watcher,
+        Err(error) => return unwatchable(output, &error),
     };
 
     let mut reanalyzed = session.sources.len();
@@ -86,13 +84,16 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
         // stale log of past edits, and that has to hold for the
         // internal-error block too.
         session.forget_analysis_errors();
-        let outcome = cycle(session, &events);
+        let outcome = match cycle(session, &mut watcher) {
+            Ok(outcome) => outcome,
+            Err(error) => return unwatchable(output, &error),
+        };
         session.absorb_outcome(&outcome);
         if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
             return Outcome::InternalError;
         }
 
-        let changed = wait_for_a_burst(&events);
+        let changed = wait_for_a_burst(watcher.events());
         if changed.is_empty() {
             // The channel holds its sender inside the watcher's event
             // handler, and the watcher outlives this loop, so a
@@ -105,39 +106,149 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
             return Outcome::of(outcome.diagnostics.len(), session.internal_errors.len());
         }
         session.absorb(&changed);
+        // The burst may have carried a manifest change, and a manifest
+        // change re-runs discovery, and discovery may declare different
+        // walk roots. The watch follows them here, before the next cycle
+        // reads the channel again: the next read must come from the roots
+        // the project declares now, not the ones it declared when the
+        // session started.
+        if let Err(error) = watcher.resynchronize(session) {
+            return unwatchable(output, &error);
+        }
         reanalyzed = changed.len();
     }
 }
 
-/// The watcher observes the project walk roots plus `composer.json` and
-/// `composer.lock`. The vendor walk roots are never watched on their own:
-/// thousands of files that only move when the lockfile does, and a
-/// lockfile change triggers full re-discovery anyway.
+/// The watch cannot be established, or cannot be re-established over the
+/// roots the project now declares. Both are the same failure, and it is
+/// the operating system's: the resources a watch needs were refused. The
+/// run stops and says so, rather than carrying on over a picture it can no
+/// longer keep complete.
+fn unwatchable(output: &mut dyn Write, error: &notify::Error) -> Outcome {
+    let _ = writeln!(output, "error: cannot watch the project: {error}");
+    Outcome::UsageError
+}
+
+/// The `notify` watcher, the channel it reports through, and the walk
+/// roots that both the registrations and the rewrite table were built
+/// from.
 ///
-/// That is not a promise that `vendor/` goes unwatched. When a manifest
-/// declares no autoload, or none that resolves, `celerrate_project` falls
-/// back to the project root as the single walk root, and the recursive
-/// watch placed on it reaches `vendor/` like any other subdirectory. The
-/// fallback analyzes the whole root in that case too, so watching it is
-/// exactly coherent with what is analyzed.
-pub fn spawn_watcher(session: &Session) -> notify::Result<(RecommendedWatcher, Receiver<PathBuf>)> {
-    let (sender, receiver) = channel();
-    let roots = watched_roots(session);
-    let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
-        if let Ok(event) = event {
-            for path in event.paths {
-                let _ = sender.send(as_the_project_names_it(&roots, path));
-            }
+/// The three are one object because they are one decision. The
+/// registrations and the rewrite table are two views of the same set of
+/// roots, and discovery can replace that set in the middle of a session: a
+/// manifest whose autoload section grows a directory declares a root that
+/// nothing watches and nothing maps, so every edit under it is silently
+/// ignored; a manifest that loses one leaves a root still watched and
+/// still mapped after the walk dropped its files, so an edit under it
+/// arrives, misses the analyzed set, and puts the file straight back into
+/// the set `load` had just dropped it from. Both are silent wrong results,
+/// and both come from letting the two views drift apart. Nothing here is
+/// rebuilt alone.
+pub struct Watch {
+    /// Dropping it ends the watch and closes the channel, so it is held
+    /// for as long as the watch lives even though nothing calls it again.
+    _watcher: RecommendedWatcher,
+    events: Receiver<PathBuf>,
+    /// The walk roots the watcher above is registered over, and the roots
+    /// its rewrite table was built from. Keeping them is what makes "is
+    /// the watch still watching what the project declares?" answerable,
+    /// and answerable without asking discovery to remember that it re-ran:
+    /// these roots are the truth about the watcher, and comparing them
+    /// with what discovery declares now is the whole of the decision to
+    /// respawn.
+    registered: Vec<PathBuf>,
+}
+
+/// What a resynchronization did. The loop does not branch on it, but the
+/// distinction is a contract worth pinning: a respawn drops every event
+/// already queued on the channel it replaces, so a manifest save that
+/// leaves the declared roots alone must not cause one.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resynchronized {
+    Unchanged,
+    Respawned,
+}
+
+impl Watch {
+    /// The watcher observes the project walk roots plus `composer.json`
+    /// and `composer.lock`. The vendor walk roots are never watched on
+    /// their own: thousands of files that only move when the lockfile
+    /// does, and a lockfile change triggers full re-discovery anyway.
+    ///
+    /// That is not a promise that `vendor/` goes unwatched. When a
+    /// manifest declares no autoload, or none that resolves,
+    /// `celerrate_project` falls back to the project root as the single
+    /// walk root, and the recursive watch placed on it reaches `vendor/`
+    /// like any other subdirectory. The fallback analyzes the whole root
+    /// in that case too, so watching it is exactly coherent with what is
+    /// analyzed.
+    pub fn spawn(session: &Session) -> notify::Result<Self> {
+        let (sender, receiver) = channel();
+        let roots = watched_roots(session);
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                if let Ok(event) = event {
+                    for path in event.paths {
+                        let _ = sender.send(as_the_project_names_it(&roots, path));
+                    }
+                }
+            })?;
+        for root in &session.discovery.project_walk_roots {
+            let _ = watcher.watch(root, RecursiveMode::Recursive);
         }
-    })?;
-    for root in &session.discovery.project_walk_roots {
-        let _ = watcher.watch(root, RecursiveMode::Recursive);
+        for manifest in ["composer.json", "composer.lock"] {
+            let path = session.discovery.root.join(manifest);
+            let _ = watcher.watch(&path, RecursiveMode::NonRecursive);
+        }
+        Ok(Self {
+            _watcher: watcher,
+            events: receiver,
+            registered: session.discovery.project_walk_roots.clone(),
+        })
     }
-    for manifest in ["composer.json", "composer.lock"] {
-        let path = session.discovery.root.join(manifest);
-        let _ = watcher.watch(&path, RecursiveMode::NonRecursive);
+
+    /// The channel the watch reports through. It is replaced by every
+    /// respawn, so nothing may hold it across one.
+    pub fn events(&self) -> &Receiver<PathBuf> {
+        &self.events
     }
-    Ok((watcher, receiver))
+
+    /// Makes the watch observe exactly the roots the project declares now.
+    ///
+    /// Called after every absorption, because absorbing a manifest change
+    /// re-runs discovery, and discovery reads the autoload section from
+    /// disk: the walk roots of a session are not fixed at startup. When
+    /// they have not moved this is a comparison and nothing else, which is
+    /// what a `composer.json` save that touches only the PHP version must
+    /// cost.
+    ///
+    /// The project root itself is not compared: `rediscover` rediscovers
+    /// the same root it was given, so the two manifest watches, which hang
+    /// off that root, cannot move.
+    ///
+    /// A respawn replaces the channel, and the events already queued on
+    /// the old one are dropped with it. That is deliberate. A respawn
+    /// happens only just after `rediscover`, which re-walks the project
+    /// and re-reads every file the walk finds, so a queued event about a
+    /// file the project still declares says nothing that load did not
+    /// already read from disk, and a queued event about a file the project
+    /// no longer declares must not be replayed at all: it would arrive
+    /// after `load` dropped the file, miss the analyzed set, and be
+    /// classified as an arrival, resurrecting exactly what the walk just
+    /// removed. What is left is a change landing in the instant between
+    /// that re-read and the new registrations, and that window is the same
+    /// one the session already accepts at startup, between the first walk
+    /// and the first registration.
+    fn resynchronize(&mut self, session: &Session) -> notify::Result<Resynchronized> {
+        if self.registered == session.discovery.project_walk_roots {
+            return Ok(Resynchronized::Unchanged);
+        }
+        // The new watch is built before the old one is dropped, so a
+        // failure here leaves the old watch running and the loop able to
+        // report it rather than blind.
+        *self = Self::spawn(session)?;
+        Ok(Resynchronized::Respawned)
+    }
 }
 
 /// One watched root under the two names it answers to: `reported` is how
@@ -228,20 +339,25 @@ fn real_path(root: &Path) -> PathBuf {
 /// lets the setter proceed. Joining first would make the setter cheap and
 /// the cancellation dead code, at the price of always paying for an
 /// analysis whose answer is already stale.
-fn cycle(session: &mut Session, events: &Receiver<PathBuf>) -> AnalysisOutcome {
+///
+/// The only error it returns is a watch that could not be re-established
+/// over roots the project changed under it; there is no analysis error,
+/// because a panicking analysis is an internal error the run reports and
+/// survives.
+fn cycle(session: &mut Session, watcher: &mut Watch) -> notify::Result<AnalysisOutcome> {
     loop {
         let inputs = session.inputs();
         let worker = std::thread::spawn(move || analyze(&inputs));
 
         let mut changed: Vec<PathBuf> = Vec::new();
         loop {
-            match events.recv_timeout(POLL_INTERVAL) {
+            match watcher.events().recv_timeout(POLL_INTERVAL) {
                 Ok(path) => changed.push(path),
                 Err(RecvTimeoutError::Timeout) => {}
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             if !changed.is_empty() {
-                drain_burst(events, &mut changed);
+                drain_burst(watcher.events(), &mut changed);
                 break;
             }
             if worker.is_finished() {
@@ -256,16 +372,26 @@ fn cycle(session: &mut Session, events: &Receiver<PathBuf>) -> AnalysisOutcome {
         }
         let result = worker.join();
         if !changed.is_empty() {
+            // That absorption may have been a manifest change, and a
+            // manifest change re-runs discovery, which may declare
+            // different walk roots. The watch follows them here, after the
+            // worker has unwound and before the restarted analysis begins,
+            // so the analysis that is about to run is the first one able to
+            // be overtaken by an edit in a root that has only just
+            // appeared. Resynchronizing before the join would work too, but
+            // it would put a filesystem call between the setter and the
+            // unwind it is waiting on, for no gain.
+            watcher.resynchronize(session)?;
             continue;
         }
         match result {
-            Ok(Ok(outcome)) => return outcome,
+            Ok(Ok(outcome)) => return Ok(outcome),
             Ok(Err(Cancelled)) => continue,
             Err(_) => {
                 session
                     .internal_errors
                     .push(InternalError::AnalysisPanicked);
-                return AnalysisOutcome::default();
+                return Ok(AnalysisOutcome::default());
             }
         }
     }
@@ -297,12 +423,18 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use std::collections::BTreeSet;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
+    use std::sync::mpsc::Receiver;
+    use std::time::{Duration, Instant};
 
+    use celerrate_project::PhpVersion;
     use celerrate_source::FileId;
     use celerrate_vfs::ChangedFile;
 
-    use super::{InputMutation, WatchedRoot, as_the_project_names_it, reconcile, watched_roots};
+    use super::{
+        InputMutation, Resynchronized, Watch, WatchedRoot, as_the_project_names_it, reconcile,
+        watched_roots,
+    };
     use crate::analysis::{Cancelled, analyze};
     use crate::session::Session;
 
@@ -359,6 +491,213 @@ mod tests {
             }
         }
         panic!("the analysis was never caught in flight: cancellation was never observed");
+    }
+
+    /// A project with a manifest, a `src` walk root holding `A.php`, and a
+    /// `lib` directory that exists on disk but that the manifest does not
+    /// declare yet.
+    fn project_with_an_undeclared_directory() -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::create_dir_all(root.path().join("lib")).unwrap();
+        std::fs::write(root.path().join("src/A.php"), "<?php class A {}").unwrap();
+        std::fs::write(
+            root.path().join("composer.json"),
+            r#"{"autoload": {"psr-4": {"App\\": "src"}}}"#,
+        )
+        .unwrap();
+        root
+    }
+
+    /// Everything the watch reports until `wanted` has been reported, plus
+    /// everything that arrives in the quiet period after it.
+    ///
+    /// The quiet period is what lets a caller assert that something is
+    /// *not* reported: notification is asynchronous, and stopping at the
+    /// first sight of `wanted` would leave a slower event still in flight,
+    /// so an absence proven that way would prove nothing.
+    fn reported_until(events: &Receiver<PathBuf>, wanted: &Path) -> BTreeSet<PathBuf> {
+        let deadline = Duration::from_secs(5);
+        let quiet = Duration::from_millis(500);
+        let started = Instant::now();
+        let mut seen = BTreeSet::new();
+        while started.elapsed() < deadline {
+            match events.recv_timeout(Duration::from_millis(100)) {
+                Ok(path) => {
+                    let found = path == wanted;
+                    seen.insert(path);
+                    if found {
+                        break;
+                    }
+                }
+                Err(_) => continue,
+            }
+        }
+        while let Ok(path) = events.recv_timeout(quiet) {
+            seen.insert(path);
+        }
+        seen
+    }
+
+    /// The walk roots of a session are not fixed at startup: a manifest
+    /// whose autoload section grows a directory declares a walk root that
+    /// the watch, spawned once at the top of the loop, neither watches nor
+    /// maps. Every edit under it would then be silently ignored, and the
+    /// picture would go stale with no error at all, which is precisely what
+    /// the format's central promise forbids.
+    ///
+    /// This asserts the whole chain, not that a function was called: the
+    /// declared root really moves, the registration really follows (the
+    /// operating system really reports a file created in the brand new
+    /// directory), and the rewrite table really follows too (the report
+    /// arrives in the project's own spelling of that directory, not the
+    /// operating system's).
+    #[test]
+    fn a_walk_root_the_manifest_grows_is_watched_and_mapped() {
+        let root = project_with_an_undeclared_directory();
+        let source = root.path().join("src");
+        let library = root.path().join("lib");
+        let manifest = root.path().join("composer.json");
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        assert_eq!(watcher.registered, vec![source.clone()]);
+
+        std::fs::write(
+            &manifest,
+            r#"{"autoload": {"psr-4": {"App\\": "src", "Lib\\": "lib"}}}"#,
+        )
+        .unwrap();
+        session.absorb(std::slice::from_ref(&manifest));
+        assert_eq!(
+            session.discovery.project_walk_roots,
+            vec![library.clone(), source.clone()],
+            "discovery re-ran, and the directory the manifest now declares is a walk root",
+        );
+
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Respawned,
+        );
+        assert_eq!(
+            watcher.registered,
+            vec![library.clone(), source.clone()],
+            "the watch is registered over the roots the project declares now",
+        );
+
+        let created = library.join("B.php");
+        std::fs::write(&created, "<?php class B {}").unwrap();
+        let seen = reported_until(watcher.events(), &created);
+        assert!(
+            seen.contains(&created),
+            "a file created in the brand new walk root is watched, and maps back into the \
+             project's own spelling: {seen:?}",
+        );
+    }
+
+    /// The other half of the same bug. A walk root the manifest drops is
+    /// still watched and still mapped by a watch that never respawns, so an
+    /// edit to a file that has just left the analyzed set still arrives,
+    /// misses the set, and `reconcile` classifies it as an arrival: the
+    /// file re-enters the very set `load` had just dropped it from.
+    ///
+    /// The edit inside the root that stayed is the control. Without it, the
+    /// assertion that nothing arrives from the dropped root would pass just
+    /// as well on a watch that reports nothing at all.
+    #[test]
+    fn a_walk_root_the_manifest_drops_stops_being_watched() {
+        let root = project_with_an_undeclared_directory();
+        let source = root.path().join("src");
+        let library = root.path().join("lib");
+        let manifest = root.path().join("composer.json");
+        std::fs::write(library.join("B.php"), "<?php class B {}").unwrap();
+        std::fs::write(
+            &manifest,
+            r#"{"autoload": {"psr-4": {"App\\": "src", "Lib\\": "lib"}}}"#,
+        )
+        .unwrap();
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        assert_eq!(watcher.registered, vec![library.clone(), source.clone()]);
+        assert_eq!(session.sources.len(), 2);
+
+        std::fs::write(&manifest, r#"{"autoload": {"psr-4": {"App\\": "src"}}}"#).unwrap();
+        session.absorb(std::slice::from_ref(&manifest));
+        assert_eq!(
+            session.sources.len(),
+            1,
+            "the walk dropped the file of the root the project no longer declares",
+        );
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Respawned,
+        );
+        assert_eq!(watcher.registered, vec![source.clone()]);
+
+        std::fs::write(
+            library.join("B.php"),
+            "<?php class B { public int $x = 1; }",
+        )
+        .unwrap();
+        let edited = source.join("A.php");
+        std::fs::write(&edited, "<?php class A { public int $x = 1; }").unwrap();
+
+        let seen = reported_until(watcher.events(), &edited);
+        assert!(
+            seen.contains(&edited),
+            "the watch is alive and reports the root that stayed: {seen:?}",
+        );
+        assert!(
+            !seen.iter().any(|path| path.starts_with(&library)),
+            "nothing is reported from the root the project dropped, so nothing can resurrect \
+             the file the walk removed: {seen:?}",
+        );
+    }
+
+    /// A respawn drops every event already queued on the channel it
+    /// replaces, and saving `composer.json` is a common event: most saves
+    /// leave the autoload section exactly as it was. Such a save must cost
+    /// a comparison, not a teardown.
+    ///
+    /// The version assertion is what keeps this honest: discovery really
+    /// did re-run, and really did change the session. It is the walk roots
+    /// that did not move.
+    #[test]
+    fn a_manifest_save_that_leaves_the_roots_alone_does_not_respawn() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/A.php"), "<?php class A {}").unwrap();
+        let manifest = root.path().join("composer.json");
+        std::fs::write(
+            &manifest,
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src"}}}"#,
+        )
+        .unwrap();
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+
+        std::fs::write(
+            &manifest,
+            r#"{"require": {"php": "^8.4"}, "autoload": {"psr-4": {"App\\": "src"}}}"#,
+        )
+        .unwrap();
+        session.absorb(std::slice::from_ref(&manifest));
+        assert_eq!(
+            session
+                .configuration
+                .php_version_range(&session.database)
+                .minimum,
+            PhpVersion::new(8, 4),
+            "discovery really re-ran: this is not a save that absorbed into nothing",
+        );
+
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Unchanged,
+        );
+        assert_eq!(watcher.registered, vec![root.path().join("src")]);
     }
 
     fn analyzed(ids: &[u32]) -> BTreeSet<FileId> {
@@ -500,7 +839,7 @@ mod tests {
     }
 
     /// The same, end to end: the walk root really is outside the project
-    /// root, and the table `spawn_watcher` builds really does map an event
+    /// root, and the table `Watch::spawn` builds really does map an event
     /// reported from it, and an event reported for the manifest, which is
     /// under no walk root at all.
     #[test]
