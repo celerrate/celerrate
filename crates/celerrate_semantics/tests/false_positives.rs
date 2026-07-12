@@ -167,3 +167,51 @@ fn a_qualified_define_literal_resolves_where_it_says() {
         ",
     );
 }
+
+/// A double-quoted `define()` is at least as common as a single-quoted
+/// one in real PHP, and the parser builds a different node for it: a
+/// `Literal` only wraps a single-quoted string, while a double-quoted
+/// one is an `InterpolatedString`. Reading only the first left every
+/// double-quoted constant unindexed, and an unseen `define()` is a false
+/// positive.
+#[test]
+fn a_double_quoted_define_is_not_an_unknown_constant() {
+    assert_no_diagnostics(
+        r#"<?php
+        define("APP_ROOT", 1);
+        define('OTHER_ROOT', 2);
+        echo APP_ROOT;
+        echo OTHER_ROOT;
+        "#,
+    );
+}
+
+#[test]
+fn a_double_quoted_define_in_a_method_body_is_not_an_unknown_constant() {
+    assert_no_diagnostics(
+        r#"<?php
+        class Bootstrap {
+            public static function boot(): void {
+                define("APP_ROOT", __DIR__);
+            }
+        }
+        echo APP_ROOT;
+        "#,
+    );
+}
+
+/// The escapes are where the two quotings part company: `\\` is one
+/// backslash in double quotes, and every other backslash PHP does not
+/// read as an escape stays exactly where it is.
+#[test]
+fn a_qualified_double_quoted_define_literal_resolves_where_it_says() {
+    assert_no_diagnostics(
+        r#"<?php
+        namespace App;
+        define("Vendor\\Product\\LIMIT", 10);
+        define("Other\Product\BOUND", 20);
+        echo \Vendor\Product\LIMIT;
+        echo \Other\Product\BOUND;
+        "#,
+    );
+}
