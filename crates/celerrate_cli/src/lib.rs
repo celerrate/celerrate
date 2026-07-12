@@ -8,6 +8,7 @@
 
 pub mod arguments;
 pub mod database;
+pub mod session;
 
 use std::ffi::OsString;
 use std::io::Write;
