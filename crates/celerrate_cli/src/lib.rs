@@ -6,6 +6,7 @@
 //! the end-to-end tests drive the whole product in process: no spawning,
 //! no timing flakiness, and the rendering pinned exactly.
 
+pub mod analysis;
 pub mod arguments;
 pub mod database;
 pub mod session;

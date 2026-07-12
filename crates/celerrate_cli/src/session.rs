@@ -17,6 +17,7 @@ use celerrate_stubs::{StubBlobError, StubIndex, StubIndexInput, embedded_stub_in
 use celerrate_vfs::{Vfs, enumerate_php_files};
 use salsa::Setter as _;
 
+use crate::analysis::{AnalysisInputs, AnalysisOutcome};
 use crate::database::AnalysisDatabase;
 
 /// Something that must never happen happened. The run continues, the
@@ -99,6 +100,26 @@ impl Session {
     /// fiction about a file that by definition does not exist.
     pub fn notices(&self) -> &[ProjectNotice] {
         &self.discovery.notices
+    }
+
+    /// The fan-out's view of the session: a fresh database handle over the
+    /// same storage, plus the three input handles.
+    pub fn inputs(&self) -> AnalysisInputs {
+        AnalysisInputs {
+            database: self.database.clone(),
+            files: self.files,
+            stubs: self.stubs,
+            configuration: self.configuration,
+        }
+    }
+
+    /// Absorbs a completed pass: its panicked files become internal
+    /// errors, and the exit code becomes 2.
+    pub fn absorb_outcome(&mut self, outcome: &AnalysisOutcome) {
+        for &file in &outcome.panicked {
+            self.internal_errors
+                .push(InternalError::FilePanicked { file });
+        }
     }
 
     /// Makes the analyzed set exactly `paths`: bytes read for each, files
