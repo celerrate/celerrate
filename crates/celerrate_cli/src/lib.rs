@@ -106,21 +106,35 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
 /// A typo'd path that passes is the one thing a CI-facing checker must
 /// never do, and the notice was untrue on top of it.
 ///
+/// A root that cannot be *read* is the same failure wearing a disguise.
+/// `is_dir` stats the path through its parent, so it succeeds on a
+/// directory whose contents no one may list. The walk then yields nothing,
+/// the run reports nothing, and it exits 0 again: a green build over a
+/// project nothing looked at. Listing the directory is the cheapest
+/// question that separates "empty" from "unreadable", and the two must not
+/// answer alike.
+///
 /// This is checked here, before `Session::start`, because discovery's own
 /// contract is that it never fails: a path it cannot use is not its
 /// question to answer, it is the command line's.
 fn unusable_root(path: &std::path::Path) -> Option<String> {
-    if path.is_dir() {
-        return None;
+    if !path.is_dir() {
+        return Some(if path.exists() {
+            format!(
+                "error: {} is not a directory; celerrate check takes a project root",
+                path.display(),
+            )
+        } else {
+            format!("error: {} does not exist", path.display())
+        });
     }
-    Some(if path.exists() {
-        format!(
-            "error: {} is not a directory; celerrate check takes a project root",
+    match std::fs::read_dir(path) {
+        Ok(_) => None,
+        Err(reason) => Some(format!(
+            "error: {} cannot be read: {reason}",
             path.display(),
-        )
-    } else {
-        format!("error: {} does not exist", path.display())
-    })
+        )),
+    }
 }
 
 /// One analysis pass, with the loop itself guarded.

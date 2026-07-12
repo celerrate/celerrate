@@ -100,6 +100,47 @@ fn a_root_that_is_a_file_rather_than_a_directory_is_a_usage_error() {
     assert!(text.contains("a.php"), "{text}");
 }
 
+/// Permissions are the only portable way to make a directory unreadable,
+/// and only Unix has them in the form this needs.
+#[cfg(unix)]
+#[test]
+fn a_root_that_cannot_be_read_is_a_usage_error() {
+    // `is_dir` succeeds on a directory whose contents cannot be listed:
+    // the stat goes through the parent. So the walk yielded nothing, the
+    // run reported nothing, and it exited 0. A green build over a project
+    // nothing looked at is the one failure a checker must never have.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = project(&[("src/Kernel.php", "<?php class Kernel {}")]);
+    let unreadable = root.path().join("src");
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let mut output = Vec::new();
+    let outcome = run(
+        vec![
+            "celerrate".into(),
+            "check".into(),
+            unreadable.as_os_str().into(),
+        ],
+        &mut output,
+    );
+    let text = String::from_utf8(output).unwrap();
+
+    // Restore before asserting, so a failure does not leave the temporary
+    // directory undeletable.
+    std::fs::set_permissions(&unreadable, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(outcome, Outcome::UsageError, "{text}");
+    assert!(
+        text.contains("src"),
+        "the message names the path the user gave: {text}",
+    );
+    assert!(
+        !text.contains("0 diagnostics"),
+        "it must not report a clean run over a directory it never read: {text}",
+    );
+}
+
 #[test]
 fn notices_alone_are_not_a_failure() {
     // Every notice announces a fallback already taken. Zero-configuration
