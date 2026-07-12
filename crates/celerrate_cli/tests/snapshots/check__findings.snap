@@ -1,0 +1,9 @@
+---
+source: crates/celerrate_cli/tests/check.rs
+expression: text
+---
+notice CEL0025: no composer.json found; analyzing the whole project root
+
+src/Kernel.php:4:22 CEL0018 unknown class `Missing`
+
+1 notice, 1 diagnostic

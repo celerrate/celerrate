@@ -308,6 +308,27 @@ impl ResolutionFixture {
     }
 }
 
+impl ResolutionFixture {
+    /// Adds a file to the analyzed set: a new `SourceFile`, and the set
+    /// input rewritten. This is the mutation `--watch` performs when a
+    /// file appears.
+    fn add_file(&mut self, source: &str) -> SourceFile {
+        let file_id = FileId::new(u32::try_from(self.files.len()).unwrap());
+        let file = SourceFile::new(&self.db, file_id, source.as_bytes().to_vec());
+        self.files.push(file);
+        self.set.set_files(&mut self.db).to(self.files.clone());
+        file
+    }
+
+    /// Drops a file from the analyzed set. `SourceFile` has no deleted
+    /// state, and a tombstone (empty bytes) would leave the set lying
+    /// about what it contains, so the member leaves the set outright.
+    fn remove_file(&mut self, index: usize) {
+        self.files.remove(index);
+        self.set.set_files(&mut self.db).to(self.files.clone());
+    }
+}
+
 #[test]
 fn adding_an_unrelated_symbol_spares_every_consumer() {
     // The spec's firewall sentence, observed directly: adding a symbol
@@ -592,5 +613,71 @@ fn a_comment_only_edit_elsewhere_spares_the_consumer() {
         1,
         "the edited file re-checks over its new tree; the consumer's \
          lookups backdate behind the unchanged symbol table: {log:?}",
+    );
+}
+
+#[test]
+fn adding_a_file_that_declares_nothing_invalidates_nothing_downstream() {
+    // The benign case backdating is supposed to absorb: the symbol table
+    // re-runs once because its input set changed, produces an identical
+    // value, and no consumer of a lookup re-runs.
+    let mut fixture = ResolutionFixture::new(&[
+        "<?php namespace App; class Consumer extends Base {}",
+        "<?php namespace App; class Base {}",
+    ]);
+    assert_eq!(fixture.unresolved(0), Vec::<String>::new());
+    fixture.db.take_executed();
+
+    fixture.add_file("<?php echo 1;");
+    assert_eq!(fixture.unresolved(0), Vec::<String>::new());
+
+    let log = fixture.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "source_symbol_table"),
+        1,
+        "the set changed, so the table rebuilds once: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "unresolved_inheritance_names"),
+        0,
+        "the table backdates, so no consumer re-runs: {log:?}",
+    );
+}
+
+#[test]
+fn adding_a_file_that_declares_the_missing_symbol_reaches_the_consumer() {
+    let mut fixture =
+        ResolutionFixture::new(&["<?php namespace App; class Consumer extends Base {}"]);
+    assert_eq!(fixture.unresolved(0), vec!["Base".to_owned()]);
+    fixture.db.take_executed();
+
+    fixture.add_file("<?php namespace App; class Base {}");
+    assert_eq!(fixture.unresolved(0), Vec::<String>::new());
+
+    let log = fixture.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "unresolved_inheritance_names"),
+        1,
+        "a changed lookup answer must reach the consumer: {log:?}",
+    );
+}
+
+#[test]
+fn deleting_the_file_that_declares_the_symbol_reaches_the_consumer() {
+    let mut fixture = ResolutionFixture::new(&[
+        "<?php namespace App; class Consumer extends Base {}",
+        "<?php namespace App; class Base {}",
+    ]);
+    assert_eq!(fixture.unresolved(0), Vec::<String>::new());
+    fixture.db.take_executed();
+
+    fixture.remove_file(1);
+    assert_eq!(fixture.unresolved(0), vec!["Base".to_owned()]);
+
+    let log = fixture.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "unresolved_inheritance_names"),
+        1,
+        "a deleted declaration must reach the consumer: {log:?}",
     );
 }

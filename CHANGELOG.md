@@ -44,7 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   PSR-0, classmap, files) deriving the walk roots and the
   project/vendor classification, the PHP version range with the
   parent-spec detection precedence at minor precision, and the
-  structured discovery notices (`CEL0018` through `CEL0022`).
+  structured discovery notices (`CEL0025` through `CEL0029`).
 - `celerrate_stubs`: the pinned phpstorm-stubs snapshot compiled by
   `cargo xtask compile-stubs` into a committed, versioned binary blob
   (top-level symbols with per-version availability metadata), embedded

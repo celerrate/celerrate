@@ -336,6 +336,21 @@ through the syntax kind's `Debug` form, so a user would read
 `expected OpenBrace` instead of ``expected `{` ``. The kind needs a
 display mapping before the CLI renders anything.
 
+**The enumeration above was incomplete, and the omission is a third
+release blocker for part 7.** It names only the checks; part 2 had
+already allocated `CEL0018`-`CEL0022` to the Composer discovery notices,
+so `CEL0018` currently means both "no `composer.json`" and "unknown
+class". Each crate carries a passing test asserting its own numbering is
+stable, and neither can see the other: there is no registry and no
+workspace-wide uniqueness check. Nothing is broken while nothing renders,
+but part 7 is the publication, and identifiers are the one thing this
+design declares un-renumberable afterwards. Part 7 keeps `CEL0018`-`0024`
+for the checks as written above, moves the notices to `CEL0025`-`0029`,
+and adds the registry plus a uniqueness test at the composition root,
+which is the only layer in the DAG that sees every producer at once.
+The mechanism, and the two blockers above, are designed in
+`.claude/superpowers/specs/2026-07-12-semantic-core-7-product-design.md`.
+
 **The preview product.** `celerrate_cli` ships `celerrate check`:
 zero-configuration Composer detection, parallel per-file fan-out
 through snapshots, a simple text rendering
@@ -402,7 +417,11 @@ TDD cycle, in order:
 6. **Checks**: unknown-symbol and version-gating diagnostics, with
    their `CEL####` identifiers.
 7. **Product**: `celerrate_cli`, `check`, `--watch`, panic isolation,
-   the internal-error report.
+   the internal-error report, and the three release blockers this part
+   must close before it renders anything (the identifier collision, the
+   `define()` gap, the `Expected(kind)` display mapping). It has its own
+   design:
+   `.claude/superpowers/specs/2026-07-12-semantic-core-7-product-design.md`.
 8. **Closure**: the persistent artifact cache, the Symfony corpus in
    CI, the committed benchmark protocol and published number, the
    `v0.0.x` release.

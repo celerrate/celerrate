@@ -36,6 +36,19 @@ pub const SYMBOL_REMOVED: DiagnosticId = DiagnosticId::new("CEL0022");
 /// A stub symbol deprecated at the range maximum.
 pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
 
+/// Every identifier this crate allocates, for the registry check at the
+/// composition root. `SYNTAX_NOT_AVAILABLE` lives in `syntax_gating`,
+/// and joins the list here so there is exactly one list per crate.
+pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
+    UNKNOWN_CLASS,
+    UNKNOWN_FUNCTION,
+    UNKNOWN_CONSTANT,
+    SYMBOL_NOT_AVAILABLE,
+    SYMBOL_REMOVED,
+    SYMBOL_DEPRECATED,
+    crate::syntax_gating::SYNTAX_NOT_AVAILABLE,
+];
+
 /// The per-file reference diagnostics: for every statically named
 /// reference, either an unknown-symbol diagnostic when it fails to
 /// resolve, or a symbol version-gating diagnostic when it resolves to a
@@ -441,5 +454,27 @@ mod tests {
             PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
         );
         assert_eq!(diagnostics, vec![]);
+    }
+
+    #[test]
+    fn a_dynamically_named_define_is_not_indexed() {
+        let diagnostics = checked_in_range(
+            &["<?php define($name, 1); echo APP_ROOT;"],
+            vec![stub("define", StubSymbolKind::Function)],
+            full_range(),
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
+    }
+
+    #[test]
+    fn a_define_keeps_its_terminal_segment_case_sensitive() {
+        let diagnostics = checked_in_range(
+            &["<?php define('APP_ROOT', 1); echo App_Root;"],
+            vec![stub("define", StubSymbolKind::Function)],
+            full_range(),
+        );
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
     }
 }

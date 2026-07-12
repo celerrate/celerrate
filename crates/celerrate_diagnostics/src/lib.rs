@@ -8,8 +8,10 @@
 
 mod diagnostic;
 mod identifier;
+mod registry;
 mod severity;
 
 pub use diagnostic::Diagnostic;
 pub use identifier::DiagnosticId;
+pub use registry::{REGISTRY, RegisteredDiagnostic};
 pub use severity::Severity;

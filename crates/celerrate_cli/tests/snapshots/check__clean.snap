@@ -1,0 +1,5 @@
+---
+source: crates/celerrate_cli/tests/check.rs
+expression: text
+---
+0 notices, 0 diagnostics

@@ -108,3 +108,129 @@ fn realistic_sources_produce_no_diagnostics() {
         assert_eq!(diagnostics, &vec![], "file {:?}", file.file_id(&db));
     }
 }
+
+/// One source, checked alone against the real embedded stub index: zero
+/// semantic diagnostics is the only acceptable outcome.
+fn assert_no_diagnostics(source: &str) {
+    let db = TestDatabase::default();
+    let file = SourceFile::new(&db, FileId::new(0), source.as_bytes().to_vec());
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(embedded_stub_index().unwrap())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
+    assert_eq!(diagnostics, &vec![], "source: {source}");
+}
+
+#[test]
+fn a_define_in_a_method_body_is_not_an_unknown_constant() {
+    // The case that motivated the design: bootstrap code calling
+    // `define()` from a static method is not exotic, and an unseen
+    // `define()` is a false positive.
+    assert_no_diagnostics(
+        r"<?php
+        class Bootstrap {
+            public static function boot(): void {
+                define('APP_ROOT', __DIR__);
+            }
+        }
+        echo APP_ROOT;
+        ",
+    );
+}
+
+#[test]
+fn a_define_inside_a_namespace_declares_globally() {
+    assert_no_diagnostics(
+        r"<?php
+        namespace App;
+        define('APP_ROOT', __DIR__);
+        echo APP_ROOT;
+        echo \APP_ROOT;
+        ",
+    );
+}
+
+#[test]
+fn a_qualified_define_literal_resolves_where_it_says() {
+    assert_no_diagnostics(
+        r"<?php
+        namespace App;
+        define('Vendor\Product\LIMIT', 10);
+        echo \Vendor\Product\LIMIT;
+        ",
+    );
+}
+
+/// A double-quoted `define()` is at least as common as a single-quoted
+/// one in real PHP, and the parser builds a different node for it: a
+/// `Literal` only wraps a single-quoted string, while a double-quoted
+/// one is an `InterpolatedString`. Reading only the first left every
+/// double-quoted constant unindexed, and an unseen `define()` is a false
+/// positive.
+#[test]
+fn a_double_quoted_define_is_not_an_unknown_constant() {
+    assert_no_diagnostics(
+        r#"<?php
+        define("APP_ROOT", 1);
+        define('OTHER_ROOT', 2);
+        echo APP_ROOT;
+        echo OTHER_ROOT;
+        "#,
+    );
+}
+
+#[test]
+fn a_double_quoted_define_in_a_method_body_is_not_an_unknown_constant() {
+    assert_no_diagnostics(
+        r#"<?php
+        class Bootstrap {
+            public static function boot(): void {
+                define("APP_ROOT", __DIR__);
+            }
+        }
+        echo APP_ROOT;
+        "#,
+    );
+}
+
+/// The escapes are where the two quotings part company: `\\` is one
+/// backslash in double quotes, and every other backslash PHP does not
+/// read as an escape stays exactly where it is.
+#[test]
+fn a_qualified_double_quoted_define_literal_resolves_where_it_says() {
+    assert_no_diagnostics(
+        r#"<?php
+        namespace App;
+        define("Vendor\\Product\\LIMIT", 10);
+        define("Other\Product\BOUND", 20);
+        echo \Vendor\Product\LIMIT;
+        echo \Other\Product\BOUND;
+        "#,
+    );
+}
+
+/// `\u` is an escape only before `{`, and `\x` only before a hexadecimal
+/// digit. PHP reads every other `\u` and `\x` literally, so a namespace
+/// segment that happens to start with one names exactly what it looks
+/// like. A lowercase segment is unconventional and perfectly legal, and
+/// refusing to index the name would be an unknown-constant diagnostic at
+/// every use site.
+#[test]
+fn a_double_quoted_define_whose_segment_starts_like_a_byte_escape_still_resolves() {
+    assert_no_diagnostics(
+        r#"<?php
+        namespace App;
+        define("Acme\utils\VERSION", 1);
+        define("Foo\xml\NS", 2);
+        echo \Acme\utils\VERSION;
+        echo \Foo\xml\NS;
+        "#,
+    );
+}

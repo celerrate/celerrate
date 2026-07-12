@@ -1,0 +1,33 @@
+[package]
+name = "celerrate_cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "celerrate"
+path = "src/main.rs"
+
+[dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_project = { path = "../celerrate_project" }
+celerrate_semantics = { path = "../celerrate_semantics" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_stubs = { path = "../celerrate_stubs" }
+celerrate_vfs = { path = "../celerrate_vfs" }
+clap = { workspace = true }
+notify = { workspace = true }
+rayon = { workspace = true }
+salsa = { workspace = true }
+
+[dev-dependencies]
+celerrate_syntax = { path = "../celerrate_syntax" }
+insta = { workspace = true }
+tempfile = { workspace = true }

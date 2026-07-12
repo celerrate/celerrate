@@ -18,8 +18,8 @@ mod tree;
 pub mod ast;
 
 pub use diagnostic::{
-    LexerDiagnostic, LexerDiagnosticKind, ParserDiagnosticKind, SyntaxDiagnostic,
-    SyntaxDiagnosticKind,
+    ALLOCATED_IDENTIFIERS, LexerDiagnostic, LexerDiagnosticKind, ParserDiagnosticKind,
+    SyntaxDiagnostic, SyntaxDiagnosticKind,
 };
 pub use lexer::lex;
 pub use parse::{Parse, parse};
