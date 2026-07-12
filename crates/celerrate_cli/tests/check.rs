@@ -58,9 +58,9 @@ fn a_project_with_findings_renders_notices_diagnostics_and_a_summary() {
 
 /// A typo'd path that exits 0 is the one thing a CI-facing checker must
 /// never do: the build goes green over a project nothing ever looked at.
-/// It used to fall through to zero-configuration discovery, announce
-/// `no composer.json found; analyzing the current directory` about a
-/// directory it was never handed, analyze nothing, and succeed.
+/// It used to fall through to zero-configuration discovery, announce that
+/// it was analyzing a directory it had never been handed, analyze nothing,
+/// and succeed.
 #[test]
 fn a_root_that_does_not_exist_is_a_usage_error_that_names_it() {
     let mut output = Vec::new();

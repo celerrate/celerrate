@@ -57,8 +57,13 @@ impl ProjectNotice {
     /// already taken, which is why none of them affects the exit code.
     pub fn message(&self) -> String {
         match self {
+            // Not "the current directory": `check` takes a project root,
+            // and it is analyzed whether or not it is the one the shell
+            // happens to be sitting in. What the fallback really does is
+            // analyze the whole root, rather than only the directories an
+            // autoload section would have declared.
             Self::MissingComposerManifest => {
-                "no composer.json found; analyzing the current directory".to_owned()
+                "no composer.json found; analyzing the whole project root".to_owned()
             }
             Self::InvalidComposerManifest => {
                 "composer.json is not a JSON object; using defaults".to_owned()
