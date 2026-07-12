@@ -56,6 +56,50 @@ fn a_project_with_findings_renders_notices_diagnostics_and_a_summary() {
     insta::assert_snapshot!("findings", text);
 }
 
+/// A typo'd path that exits 0 is the one thing a CI-facing checker must
+/// never do: the build goes green over a project nothing ever looked at.
+/// It used to fall through to zero-configuration discovery, announce
+/// `no composer.json found; analyzing the current directory` about a
+/// directory it was never handed, analyze nothing, and succeed.
+#[test]
+fn a_root_that_does_not_exist_is_a_usage_error_that_names_it() {
+    let mut output = Vec::new();
+    let outcome = run(
+        vec![
+            "celerrate".into(),
+            "check".into(),
+            "/nonexistent/path/xyz".into(),
+        ],
+        &mut output,
+    );
+    let text = String::from_utf8(output).unwrap();
+
+    assert_eq!(outcome, Outcome::UsageError, "{text}");
+    assert!(
+        text.contains("/nonexistent/path/xyz"),
+        "the message names the path the user gave: {text}",
+    );
+    assert!(
+        !text.contains("CEL0025"),
+        "and it does not announce a fallback it never took: {text}",
+    );
+}
+
+#[test]
+fn a_root_that_is_a_file_rather_than_a_directory_is_a_usage_error() {
+    let root = project(&[("a.php", "<?php echo 1;")]);
+    let file = root.path().join("a.php");
+    let mut output = Vec::new();
+    let outcome = run(
+        vec!["celerrate".into(), "check".into(), file.as_os_str().into()],
+        &mut output,
+    );
+    let text = String::from_utf8(output).unwrap();
+
+    assert_eq!(outcome, Outcome::UsageError, "{text}");
+    assert!(text.contains("a.php"), "{text}");
+}
+
 #[test]
 fn notices_alone_are_not_a_failure() {
     // Every notice announces a fallback already taken. Zero-configuration

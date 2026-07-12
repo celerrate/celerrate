@@ -77,6 +77,10 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
     };
     match arguments.command {
         Command::Check { path, watch } => {
+            if let Some(message) = unusable_root(&path) {
+                let _ = writeln!(output, "{message}");
+                return Outcome::UsageError;
+            }
             let mut session = Session::start(&path);
             if watch {
                 return watch::watch(&mut session, output);
@@ -90,6 +94,33 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
     }
+}
+
+/// Why the given root cannot be analyzed, when it cannot be.
+///
+/// A root that is not an existing directory is a usage error: the run did
+/// not complete, so it exits 2, like every other usage error. It used to
+/// be a silent success. Zero-configuration discovery accepted any path,
+/// found no manifest under it, announced that it was analyzing the current
+/// directory (which it had not been given), walked nothing, and exited 0.
+/// A typo'd path that passes is the one thing a CI-facing checker must
+/// never do, and the notice was untrue on top of it.
+///
+/// This is checked here, before `Session::start`, because discovery's own
+/// contract is that it never fails: a path it cannot use is not its
+/// question to answer, it is the command line's.
+fn unusable_root(path: &std::path::Path) -> Option<String> {
+    if path.is_dir() {
+        return None;
+    }
+    Some(if path.exists() {
+        format!(
+            "error: {} is not a directory; celerrate check takes a project root",
+            path.display(),
+        )
+    } else {
+        format!("error: {} does not exist", path.display())
+    })
 }
 
 /// One analysis pass, with the loop itself guarded.
