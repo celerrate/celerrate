@@ -414,3 +414,54 @@ fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {
         "the persisted diagnostic is the pass's honest recomputation: {diagnostic:?}",
     );
 }
+
+/// The spec's boundary, checkable on disk (audit finding I4): an
+/// installed dependency is indexed — its item tree is in the pack,
+/// which is what makes its symbols resolve on a warm start — but never
+/// reported: no diagnostics entry may exist under its content hash.
+#[test]
+fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
+    let vendor_source = "<?php namespace Lib; class Helper {}";
+    let project_source = "<?php namespace App; use Lib\\Helper; new Helper();";
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.2"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        ("vendor/lib/src/Helper.php", vendor_source),
+        (
+            "vendor/composer/installed.json",
+            r#"{"packages": [{"name": "acme/lib", "install-path": "../lib",
+               "autoload": {"psr-4": {"Lib\\": "src/"}}}]}"#,
+        ),
+        ("src/App.php", project_source),
+    ]);
+    let (_, _) = run_check(root.path());
+
+    // The expected header is derived from the project's own discovered
+    // range, not hard-coded: `^8.2` maps to whatever maximum the binary
+    // supports, and this test must not re-derive that rule.
+    let session = Session::start(root.path());
+    let header = PackHeader::current(session.configuration.php_version_range(&session.database));
+
+    let vendor_hash = *blake3::hash(vendor_source.as_bytes()).as_bytes();
+    let project_hash = *blake3::hash(project_source.as_bytes()).as_bytes();
+
+    let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
+    let trees: Pack<Vec<([u8; 32], StoredItemTree)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let tree_keys: Vec<[u8; 32]> = trees.entries.iter().map(|(key, _)| *key).collect();
+    assert!(tree_keys.contains(&vendor_hash), "the vendor file is indexed");
+    assert!(tree_keys.contains(&project_hash));
+
+    let bytes =
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
+    let verdicts: Pack<Vec<([u8; 32], StoredVerdict)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let verdict_keys: Vec<[u8; 32]> = verdicts.entries.iter().map(|(key, _)| *key).collect();
+    assert!(
+        !verdict_keys.contains(&vendor_hash),
+        "an installed dependency never gets a diagnostics entry",
+    );
+    assert!(verdict_keys.contains(&project_hash), "the project file does");
+}
