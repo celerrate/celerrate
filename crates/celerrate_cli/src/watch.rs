@@ -99,6 +99,7 @@ fn completed_cycle(
         return Err(Outcome::InternalError);
     }
     crate::cache::persist(session, &outcome);
+    session.statistics.report();
     Ok(outcome)
 }
 

@@ -617,3 +617,45 @@ fn persist_records_every_referencing_files_lookups() {
         "a referencing file's verdict must carry its records",
     );
 }
+
+/// Audit finding I8: hit rate, revalidation acceptance, and persist
+/// health were unobservable without a profiler. A warm session over an
+/// unchanged project counts tree hits and served verdicts and nothing
+/// discarded.
+#[test]
+fn a_warm_session_counts_tree_hits_and_served_verdicts() {
+    use std::sync::atomic::Ordering;
+
+    let root = project(&[("a.php", "<?php new Missing();")]);
+    let (_, _) = run_check(root.path());
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert_eq!(outcome.diagnostics.len(), 1);
+
+    let statistics = &session.statistics;
+    assert!(
+        statistics.tree_hits.load(Ordering::Relaxed) >= 1,
+        "the warm pass served at least one tree from the pack",
+    );
+    assert_eq!(statistics.verdicts_served.load(Ordering::Relaxed), 1);
+    assert_eq!(statistics.verdicts_discarded.load(Ordering::Relaxed), 0);
+    assert_eq!(statistics.verdicts_absent.load(Ordering::Relaxed), 0);
+}
+
+/// The cold side: no pack, everything misses and every verdict is
+/// absent.
+#[test]
+fn a_cold_session_counts_misses_and_absences() {
+    use std::sync::atomic::Ordering;
+
+    let root = project(&[("a.php", "<?php new Missing();")]);
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert_eq!(outcome.diagnostics.len(), 1);
+
+    let statistics = &session.statistics;
+    assert!(statistics.tree_misses.load(Ordering::Relaxed) >= 1);
+    assert_eq!(statistics.verdicts_absent.load(Ordering::Relaxed), 1);
+    assert_eq!(statistics.verdicts_served.load(Ordering::Relaxed), 0);
+}

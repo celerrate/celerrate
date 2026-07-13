@@ -29,6 +29,17 @@ use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
 type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
 
+/// How one pack write ended.
+enum PackWrite {
+    /// Already on disk, byte-identical, under the current header.
+    Unchanged,
+    /// Encoded and atomically written.
+    Written,
+    /// Encoding or the atomic write failed; whatever was on disk before
+    /// (if anything) is untouched.
+    Failed,
+}
+
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
 /// replaced by what was actually WRITTEN, and only when both packs
@@ -60,6 +71,10 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     };
 
     if prepare_directory(&session.cache_directory).is_err() {
+        session
+            .statistics
+            .persist_failed
+            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     // The header the on-disk packs were last confirmed to hold, derived
@@ -85,7 +100,16 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.verdicts,
         header_moved,
     );
-    if trees_written && verdicts_written {
+    for write in [&trees_written, &verdicts_written] {
+        let counter = match write {
+            PackWrite::Unchanged => &session.statistics.persist_skipped,
+            PackWrite::Written => &session.statistics.persist_written,
+            PackWrite::Failed => &session.statistics.persist_failed,
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    if !matches!(trees_written, PackWrite::Failed) && !matches!(verdicts_written, PackWrite::Failed)
+    {
         session.cache = Arc::new(CacheSnapshot {
             item_trees: trees.into_iter().collect(),
             verdicts: verdicts.into_iter().collect(),
@@ -220,34 +244,38 @@ fn sweep_crash_debris(cache_directory: &Path) {
 
 /// Rewrites a pack only when its entries differ from the loaded state,
 /// or when `header_moved` says the header the file was last confirmed to
-/// hold is not the current one. Answers whether `path` now holds exactly
-/// `entries` under `header`: true when it was already unchanged, present,
-/// and under the current header, or the write just succeeded; false when
-/// encoding or the atomic write failed, in which case whatever was on
-/// disk before (if anything) is untouched. `persist` only swaps the
-/// session's snapshot when this returns true for every pack.
+/// hold is not the current one. Answers how `path` came to hold `entries`
+/// under `header`: `Unchanged` when it was already unchanged, present,
+/// and under the current header; `Written` when the write just
+/// succeeded; `Failed` when encoding or the atomic write failed, in
+/// which case whatever was on disk before (if anything) is untouched.
+/// `persist` only swaps the session's snapshot when neither pack failed.
 fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
     path: &Path,
     header: &PackHeader,
     entries: &[(ContentHash, Entry)],
     loaded: &HashMap<ContentHash, Entry>,
     header_moved: bool,
-) -> bool {
+) -> PackWrite {
     let unchanged = !header_moved
         && entries.len() == loaded.len()
         && entries
             .iter()
             .all(|(key, value)| loaded.get(key) == Some(value));
     if unchanged && path.is_file() {
-        return true;
+        return PackWrite::Unchanged;
     }
     let Some(bytes) = pack::encode(&Pack {
         header: header.clone(),
         entries: entries.to_vec(),
     }) else {
-        return false;
+        return PackWrite::Failed;
     };
-    pack::write_atomically(path, &bytes).is_ok()
+    if pack::write_atomically(path, &bytes).is_ok() {
+        PackWrite::Written
+    } else {
+        PackWrite::Failed
+    }
 }
 
 #[cfg(test)]
@@ -446,5 +474,41 @@ mod tests {
             cache_directory.join("unrelated.bin").exists(),
             "only the .tmp prefix is ours to sweep",
         );
+    }
+
+    /// Audit finding M5 through I8's counters: a persist that writes, a
+    /// persist that skips, and a persist that fails are each counted, so
+    /// a permanently unwritable cache directory is at least observable.
+    #[test]
+    fn persist_outcomes_are_counted() {
+        use std::sync::atomic::Ordering;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+
+        super::persist(&mut session, &outcome);
+        assert_eq!(
+            session.statistics.persist_written.load(Ordering::Relaxed),
+            2
+        );
+
+        super::persist(&mut session, &outcome);
+        assert_eq!(
+            session.statistics.persist_skipped.load(Ordering::Relaxed),
+            2
+        );
+
+        // Obstruct one pack: its rename fails deterministically (rename
+        // onto a directory), the other pack is unchanged.
+        let cache_directory = root.path().join(".celerrate/cache");
+        std::fs::remove_file(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+        std::fs::create_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+        super::persist(&mut session, &outcome);
+        assert_eq!(session.statistics.persist_failed.load(Ordering::Relaxed), 1);
     }
 }
