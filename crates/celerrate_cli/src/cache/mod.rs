@@ -6,6 +6,7 @@
 pub mod identity;
 pub mod pack;
 pub mod snapshot;
+pub mod statistics;
 pub mod stored;
 pub mod verdict;
 

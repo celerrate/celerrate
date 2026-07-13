@@ -14,14 +14,28 @@ use crate::analysis::AnalysisInputs;
 
 use super::stored::StoredVerdict;
 
-/// The stored verdict for `file`, if one exists under its content
-/// address and every record revalidates. `None` means recompute.
-pub fn validated_verdict(inputs: &AnalysisInputs, file: SourceFile) -> Option<&StoredVerdict> {
+/// What the diagnostics pack answers for one file. The three cases are
+/// distinct because the statistics distinguish them: a `Discarded` is
+/// revalidation doing its job, an `Absent` is an ordinary cold miss.
+pub enum VerdictLookup<'a> {
+    /// Present and every record revalidated: the verdict may speak.
+    Hit(&'a StoredVerdict),
+    /// Present, but a recorded answer no longer holds: recompute.
+    Discarded,
+    /// No entry under this content hash: recompute.
+    Absent,
+}
+
+/// Looks the file's verdict up and revalidates it.
+pub fn lookup_verdict(inputs: &AnalysisInputs, file: SourceFile) -> VerdictLookup<'_> {
     let database = &inputs.database;
-    let stored = inputs
+    let Some(stored) = inputs
         .cache
         .verdicts
-        .get(&celerrate_db::content_hash(database, file))?;
+        .get(&celerrate_db::content_hash(database, file))
+    else {
+        return VerdictLookup::Absent;
+    };
     let sources = SymbolSources {
         files: inputs.files,
         stubs: inputs.stubs,
@@ -42,8 +56,19 @@ pub fn validated_verdict(inputs: &AnalysisInputs, file: SourceFile) -> Option<&S
             record.space(),
         ));
         if !record.matches(answer) {
-            return None;
+            return VerdictLookup::Discarded;
         }
     }
-    Some(stored)
+    VerdictLookup::Hit(stored)
+}
+
+/// The stored verdict if it may speak; `None` means recompute. This is
+/// the persist path's mirror of the pass's decision, deliberately
+/// without statistics attached: only the pass itself counts, or
+/// `persist`'s re-lookup would double-count every file.
+pub fn validated_verdict(inputs: &AnalysisInputs, file: SourceFile) -> Option<&StoredVerdict> {
+    match lookup_verdict(inputs, file) {
+        VerdictLookup::Hit(stored) => Some(stored),
+        VerdictLookup::Discarded | VerdictLookup::Absent => None,
+    }
 }
