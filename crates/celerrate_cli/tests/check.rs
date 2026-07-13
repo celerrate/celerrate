@@ -104,6 +104,39 @@ fn a_root_that_is_a_file_rather_than_a_directory_is_a_usage_error() {
 /// and only Unix has them in the form this needs.
 #[cfg(unix)]
 #[test]
+fn a_subdirectory_that_cannot_be_read_is_reported_and_the_rest_still_analyzed() {
+    // A root that cannot be read is a usage error: nothing can be
+    // analyzed. A subdirectory that cannot be read is not, because the
+    // rest of the project still can. But it must not be skipped in
+    // silence either: that was a green build over a project only half
+    // read. So the run reports it, analyzes everything it could reach,
+    // and exits 2, because it did not analyze the whole project.
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = project(&[
+        ("src/Kernel.php", "<?php\nclass Kernel {}\n"),
+        ("src/locked/Hidden.php", "<?php\nclass Hidden {}\n"),
+    ]);
+    let locked = root.path().join("src/locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (outcome, text) = check(root.path());
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(outcome, Outcome::InternalError, "{text}");
+    assert!(
+        text.contains("src/locked") && text.contains("could not be read"),
+        "the directory it could not look inside is named, with the reason: {text}",
+    );
+    assert!(
+        !text.contains("Please report it"),
+        "a permissions problem is the environment's, not a bug in Celerrate: {text}",
+    );
+}
+
+#[cfg(unix)]
+#[test]
 fn a_root_that_cannot_be_read_is_a_usage_error() {
     // `is_dir` succeeds on a directory whose contents cannot be listed:
     // the stat goes through the parent. So the walk yielded nothing, the

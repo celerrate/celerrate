@@ -155,15 +155,15 @@ fn count(total: usize, singular: &str, plural: &str) -> String {
 /// tell us. A panic does not kill the run, so this prints at the end,
 /// after every file that did report.
 ///
-/// `FileUnreadable` and `PathUnwatchable` are named like every other
-/// internal error, but they are not Celerrate's bug: a permission-denied
-/// file, a dangling symlink, an autoload directory the project declares
-/// before creating it, an operating system that will not extend its watch
-/// budget, are all the environment's condition, and inviting a bug report
-/// for one would be a lie. The "please report it" trailer therefore only
-/// prints when at least one internal error is a genuine Celerrate bug.
-/// When every internal error is the environment's, the report ends after
-/// listing them.
+/// `FileUnreadable`, `DirectoryUnreadable` and `PathUnwatchable` are named
+/// like every other internal error, but they are not Celerrate's bug: a
+/// permission-denied file, a directory nobody may list, a dangling
+/// symlink, an autoload directory the project declares before creating it,
+/// an operating system that will not extend its watch budget, are all the
+/// environment's condition, and inviting a bug report for one would be a
+/// lie. The "please report it" trailer therefore only prints when at least
+/// one internal error is a genuine Celerrate bug. When every internal
+/// error is the environment's, the report ends after listing them.
 pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::Result<()> {
     if session.internal_errors.is_empty() {
         return Ok(());
@@ -182,6 +182,11 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
             InternalError::FileUnreadable { path, reason } => writeln!(
                 output,
                 "internal error: {} could not be read: {reason}",
+                relative_path(session, path),
+            )?,
+            InternalError::DirectoryUnreadable { path, reason } => writeln!(
+                output,
+                "internal error: the directory {} could not be read: {reason}; nothing under it was analyzed",
                 relative_path(session, path),
             )?,
             InternalError::PathUnwatchable { path, reason } => writeln!(

@@ -17,4 +17,4 @@ mod walk;
 
 pub use path::normalize_path;
 pub use vfs::{ChangedFile, Vfs};
-pub use walk::enumerate_php_files;
+pub use walk::{UnreadableDirectory, Walk, enumerate_php_files};

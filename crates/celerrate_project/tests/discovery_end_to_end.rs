@@ -26,10 +26,15 @@ fn analyze(root: &Path) -> Vec<(String, FileOrigin, usize)> {
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
     );
     assert!(discovery.notices.is_empty());
-    let files = enumerate_php_files(&discovery.walk_roots());
+    let walk = enumerate_php_files(&discovery.walk_roots());
+    assert!(
+        walk.unreadable_directories.is_empty(),
+        "every declared root is readable here: {:?}",
+        walk.unreadable_directories,
+    );
     let mut vfs = Vfs::default();
     let db = TestDatabase::default();
-    files
+    walk.files
         .iter()
         .map(|path| {
             let file_id = vfs.load_from_disk(path).unwrap();
