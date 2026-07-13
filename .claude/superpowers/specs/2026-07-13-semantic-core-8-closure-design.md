@@ -20,6 +20,22 @@ Amendment history:
   `parse` returns `Parse` or `&Parse`), so no source change is implied
   either way; the patch was applied only to measure and then reverted.
 
+- 2026-07-13 - the part 8b protocol run on the corpus (9447 PHP files):
+  cold full 1.15 s, warm no-change 1.10 s, warm one-edit 1.10 s
+  (medians of three protocol runs on the maintainer's machine, per
+  `benchmarks/PROTOCOL.md`). Both measured decisions escalate rather
+  than close. Symbol-index pack: the warm one-edit median (1.10 s) is
+  at or over the one-second threshold, not sub-second, so whether to
+  build the pack is a scope decision for the human partner rather than
+  a closed no-build. Diagnostics pack: warm no-change is 0.95 of cold
+  full, well above the one-half criterion the class needed to clear to
+  keep paying for itself, so per the drop-a-losing-class rule of
+  section 2 the pack's continuation also escalates rather than staying
+  automatically. Both outcomes were anticipated: a single earlier local
+  run (machine busy) had already put the same two numbers on the same
+  side of both thresholds. Nothing in 8a code changes as a result of
+  this entry; the decision on both packs is left to the human partner.
+
 ## 1. Goal and scope
 
 Close the semantic-core sub-project: the persistent artifact cache, the

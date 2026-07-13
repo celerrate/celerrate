@@ -85,5 +85,21 @@ comparison is the v0.1 claim.
 
 ## Results
 
-Not yet run. Filled by the protocol run on the hardware above; the
-README links here.
+Protocol run of 2026-07-13, at commit `ff6b406`:
+
+| Scenario | Median |
+| --- | --- |
+| Cold full | 1.15 s |
+| Warm no-change | 1.10 s |
+| Warm one-edit | 1.10 s |
+
+The warm one-edit number is the published number; the README links
+here. (Recorded as the median of three protocol runs; the raw
+hyperfine exports live under `target/bench/` and are not committed.)
+
+Both measured decisions from this run escalated to the human partner
+rather than resolving automatically: the warm one-edit median is at
+or over one second, and warm no-change is not at or under half of
+cold full. See the 2026-07-13 protocol-run entry in the amendment
+history of `.claude/superpowers/specs/2026-07-13-semantic-core-8-closure-design.md`
+for the measured values and the escalation.
