@@ -13,9 +13,11 @@ use serde::de::DeserializeOwned;
 /// The first eight bytes of every pack file.
 pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 
-/// Bumped whenever any stored shape changes. The header also carries
-/// the binary version, so releases invalidate packs on their own; this
-/// constant is what protects development builds within one version.
+/// Bumped on a deliberate break of the stored shapes. The header also
+/// carries the binary's own content hash, so any rebuild already
+/// discards packs on its own; this constant is no longer what protects
+/// development builds (the self-hash carries that), it is the named,
+/// reviewable record of deliberate format breaks.
 ///
 /// 2: `StoredItemTree` gained `defines`, carrying `define()`-detected
 /// constant names into the item-tree pack (see
@@ -46,7 +48,7 @@ impl PackHeader {
     pub fn current(range: PhpVersionRange) -> Self {
         Self {
             schema: CACHE_SCHEMA_VERSION,
-            binary: env!("CARGO_PKG_VERSION").to_owned(),
+            binary: super::identity::binary_identity().to_owned(),
             stub_blob: *blake3::hash(celerrate_stubs::EMBEDDED_STUB_BLOB).as_bytes(),
             php_minimum: (range.minimum.major, range.minimum.minor),
             php_maximum: (range.maximum.major, range.maximum.minor),
@@ -196,5 +198,15 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
         write_atomically(&path, b"second").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
+    }
+
+    /// Audit finding I1: keying the header on `CARGO_PKG_VERSION` alone
+    /// let development rebuilds within one version accept each other's
+    /// packs — stale messages served byte-for-byte, newly added rules
+    /// silently missing. The header now carries the executable's own
+    /// content hash: two different binaries never speak.
+    #[test]
+    fn the_header_carries_the_binary_self_hash() {
+        assert_eq!(header().binary, super::super::identity::binary_identity());
     }
 }

@@ -3,6 +3,7 @@
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
 
+pub mod identity;
 pub mod pack;
 pub mod snapshot;
 pub mod stored;
