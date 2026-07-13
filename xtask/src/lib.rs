@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod codegen;
+pub mod pin;
 pub mod stubs;
 
 /// Errors are rendered once, in `main`; no variant needs matching.
