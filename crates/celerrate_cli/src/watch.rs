@@ -66,6 +66,42 @@ pub fn reconcile(changes: &[ChangedFile], analyzed: &BTreeSet<FileId>) -> Vec<In
         .collect()
 }
 
+/// One complete watch iteration up to and including the persist.
+/// Extracted from the loop so a test can drive exactly what an
+/// iteration does to the packs on disk — the cache spec's "rewritten
+/// after every completed analysis, including every `--watch` iteration"
+/// clause (audit finding I6) — without needing a channel event to stop
+/// the loop.
+fn completed_cycle(
+    session: &mut Session,
+    watcher: &mut Watch,
+    output: &mut dyn Write,
+    reanalyzed: usize,
+) -> Result<AnalysisOutcome, Outcome> {
+    let started = Instant::now();
+    // Every cycle re-analyzes, so every cycle also recomputes what the
+    // analysis can go wrong about. Last cycle's panics are dropped
+    // before this one speaks: the picture is always complete, never a
+    // stale log of past edits, and that has to hold for the
+    // internal-error block too.
+    session.forget_analysis_errors();
+    let outcome = match cycle(session, watcher) {
+        Ok(outcome) => outcome,
+        Err(error) => return Err(unwatchable(output, &error)),
+    };
+    session.absorb_outcome(&outcome);
+    // What the watch is not observing is part of the picture, and it is
+    // read from the watch that is in place now: `cycle` may have
+    // respawned it, and the picture must describe the watch the next
+    // burst will come from, not the one this cycle started with.
+    watcher.report_unwatchable_paths(session);
+    if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
+        return Err(Outcome::InternalError);
+    }
+    crate::cache::persist(session, &outcome);
+    Ok(outcome)
+}
+
 /// Watches, analyzes, reprints, forever. Returns only when the watch
 /// itself cannot be established or re-established, or when the output
 /// stream is gone.
@@ -77,27 +113,10 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
 
     let mut reanalyzed = session.sources.len();
     loop {
-        let started = Instant::now();
-        // Every cycle re-analyzes, so every cycle also recomputes what the
-        // analysis can go wrong about. Last cycle's panics are dropped
-        // before this one speaks: the picture is always complete, never a
-        // stale log of past edits, and that has to hold for the
-        // internal-error block too.
-        session.forget_analysis_errors();
-        let outcome = match cycle(session, &mut watcher) {
+        let outcome = match completed_cycle(session, &mut watcher, output, reanalyzed) {
             Ok(outcome) => outcome,
-            Err(error) => return unwatchable(output, &error),
+            Err(ended) => return ended,
         };
-        session.absorb_outcome(&outcome);
-        // What the watch is not observing is part of the picture, and it is
-        // read from the watch that is in place now: `cycle` may have
-        // respawned it, and the picture must describe the watch the next
-        // burst will come from, not the one this cycle started with.
-        watcher.report_unwatchable_paths(session);
-        if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
-            return Outcome::InternalError;
-        }
-        crate::cache::persist(session, &outcome);
 
         let changed = wait_for_a_burst(watcher.events());
         if changed.is_empty() {
@@ -1379,6 +1398,54 @@ mod tests {
             as_the_project_names_it(&roots, reported),
             manifest,
             "the manifest is under no walk root, and still maps through the project root",
+        );
+    }
+
+    /// The cache spec's persist clause at the watch level (audit finding
+    /// I6): after a cycle absorbs an edit, the packs on disk carry the
+    /// cycle's results — proven by decoding the diagnostics pack and
+    /// finding the edited content's hash keyed in it, not by reading the
+    /// source of `watch`.
+    #[test]
+    fn a_cycle_rewrites_the_packs_with_its_results() {
+        use crate::cache::pack::{Pack, PackHeader, decode};
+        use crate::cache::stored::StoredVerdict;
+
+        let root = tempfile::tempdir().unwrap();
+        let edited = root.path().join("a.php");
+        std::fs::write(&edited, "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        let mut output = Vec::new();
+
+        let first = super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        assert!(
+            first.diagnostics.is_empty(),
+            "sanity: the initial state is clean"
+        );
+        let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
+        let after_first = std::fs::read(&diagnostics_pack).unwrap();
+
+        let edited_source = "<?php class A {} new Missing();";
+        std::fs::write(&edited, edited_source).unwrap();
+        session.absorb(std::slice::from_ref(&edited));
+        let second = super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        assert_eq!(second.diagnostics.len(), 1, "the cycle sees the edit");
+
+        let after_second = std::fs::read(&diagnostics_pack).unwrap();
+        assert_ne!(
+            after_first, after_second,
+            "the cycle's persist rewrote the pack"
+        );
+
+        let header =
+            PackHeader::current(session.configuration.php_version_range(&session.database));
+        let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
+        assert!(
+            pack.entries
+                .iter()
+                .any(|(key, _)| key == blake3::hash(edited_source.as_bytes()).as_bytes()),
+            "the pack on disk is keyed by the edited content",
         );
     }
 
