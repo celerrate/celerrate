@@ -1,10 +1,24 @@
 # Semantic Core Part 8: Closure (Design)
 
-Date: 2026-07-13
+Date: 2026-07-13 (amended 2026-07-13)
 Status: Approved
 Parent spec: `.claude/superpowers/specs/2026-07-11-semantic-core-design.md`
 (sections 6, 8, 9, 10)
 Predecessor plan: `.claude/superpowers/plans/2026-07-12-semantic-core-7-product.md`
+
+Amendment history:
+
+- 2026-07-13 — syntax-tree retention measured on symfony/demo
+  (9448 PHP files): retained build peaked at 507 MiB cold / 497 MiB
+  warm, evicting build (lru = 64 on `parse`) at 508 MiB cold / 497 MiB
+  warm, wall time 3.14 s versus 2.84 s (cold medians of three runs
+  each). Decision: retention stands, no mechanism, by the rule the
+  part 8a plan fixed (cold peak RSS at most 1.5 GiB and at most 2x the
+  evicting build's; measured 0.50 GiB and a 1.00x ratio). The `lru = 64`
+  patch compiled unchanged against every call site (`.tree()` and
+  `.diagnostics()` on a temporary auto-ref regardless of whether
+  `parse` returns `Parse` or `&Parse`), so no source change is implied
+  either way; the patch was applied only to measure and then reverted.
 
 ## 1. Goal and scope
 
