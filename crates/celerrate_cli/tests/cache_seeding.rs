@@ -16,7 +16,9 @@ use celerrate_cli::cache::stored::{
 };
 use celerrate_cli::session::Session;
 use celerrate_project::{PhpVersion, PhpVersionRange};
-use celerrate_semantics::{ItemTree, SymbolSpace, item_tree, source_symbol_table};
+use celerrate_semantics::{
+    AstId, Declaration, DeclarationKind, ItemTree, SymbolSpace, item_tree, source_symbol_table,
+};
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
@@ -469,5 +471,149 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
     assert!(
         verdict_keys.contains(&project_hash),
         "the project file does"
+    );
+}
+
+// ---------------------------------------------------------------------
+// The checksum-valid adversarial matrix (audit finding I7): entries
+// that pass the checksum but could not come from any real computation.
+// This is the only hostile class that reaches the post-decode
+// conversion code. The contract for every row: never a panic, never a
+// user-visible internal error; entries that fail conversion recompute
+// honestly.
+// ---------------------------------------------------------------------
+
+/// A span reaching past the file's end is discarded and the file
+/// recomputed (pins the M4 fix at integration level).
+#[test]
+fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
+    let source = "<?php new Missing();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let mut verdict = probe_verdict();
+    verdict.diagnostics[0].start = 100;
+    verdict.diagnostics[0].end = 200;
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(outcome.panicked.is_empty(), "{:?}", outcome.panicked);
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message != "planted by the cache probe"),
+        "the oversized entry must not be served: {:?}",
+        outcome.diagnostics,
+    );
+    assert_eq!(outcome.diagnostics.len(), 1, "recomputed honestly");
+    assert!(outcome.diagnostics[0].message.contains("Missing"));
+}
+
+/// A stored tree whose declaration names an AST index no tree of this
+/// file has. Whatever the engine answers about the declaration, it must
+/// answer without panicking and without an internal error: `AstId`
+/// lookups never index unchecked.
+#[test]
+fn an_item_tree_with_an_absurd_ast_index_never_panics() {
+    let source = "<?php class Marker {} new Marker();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+
+    let mut lying_tree = ItemTree::default();
+    lying_tree.declarations.push(Declaration {
+        kind: DeclarationKind::Class,
+        name: "Marker".to_owned(),
+        namespace: String::new(),
+        ast_id: AstId {
+            file: celerrate_source::FileId::new(0),
+            index: u32::MAX,
+        },
+        extends: Vec::new(),
+        implements: Vec::new(),
+        trait_uses: Vec::new(),
+    });
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_item_trees_pack(
+        root.path(),
+        &header,
+        vec![(hash, StoredItemTree::of(&lying_tree))],
+    );
+
+    let (outcome, _) = run_check(root.path());
+    assert_ne!(
+        outcome,
+        celerrate_cli::Outcome::InternalError,
+        "an absurd AST index must never surface as an internal error",
+    );
+}
+
+/// Two entries under one content hash: the loader collects into a map,
+/// so one wins; which one is not contractual. What is: no panic, no
+/// internal error.
+#[test]
+fn duplicate_keys_in_a_pack_never_panic() {
+    let source = "<?php class Marker {}";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_item_trees_pack(
+        root.path(),
+        &header,
+        vec![
+            (hash, StoredItemTree::of(&ItemTree::default())),
+            (hash, StoredItemTree::of(&parsed_marker_tree(source))),
+        ],
+    );
+
+    let (outcome, _) = run_check(root.path());
+    assert_ne!(outcome, celerrate_cli::Outcome::InternalError);
+}
+
+/// Builds the honest tree for `source`, so the duplicate above differs.
+fn parsed_marker_tree(source: &str) -> ItemTree {
+    let parse = celerrate_syntax::parse(source);
+    ItemTree::from_root(celerrate_source::FileId::new(0), &parse.tree())
+}
+
+/// An entry with no records vacuously revalidates and its diagnostics
+/// are served as-is. Within the accepted threat model (whoever writes
+/// the pack controls the project), the contract is only no panic and
+/// no internal error — plus the write-side invariant below, which is
+/// why honest packs never look like this.
+#[test]
+fn an_empty_record_list_is_served_without_panicking() {
+    let source = "<?php new Missing();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let mut verdict = probe_verdict();
+    verdict.records = Vec::new();
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
+
+    let (outcome, _) = run_check(root.path());
+    assert_ne!(outcome, celerrate_cli::Outcome::InternalError);
+}
+
+/// The write side of the invariant above: a persisted verdict for a
+/// file that references names always carries revalidation records, so
+/// an honest pack can never hit the vacuous-acceptance path.
+#[test]
+fn persist_records_every_referencing_files_lookups() {
+    let source = "<?php new Missing();";
+    let root = project(&[("a.php", source)]);
+    let (_, _) = run_check(root.path());
+
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let bytes =
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
+    let pack: Pack<Vec<([u8; 32], StoredVerdict)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let (_, persisted) = pack.entries.iter().find(|(key, _)| *key == hash).unwrap();
+    assert!(
+        !persisted.records.is_empty(),
+        "a referencing file's verdict must carry its records",
     );
 }
