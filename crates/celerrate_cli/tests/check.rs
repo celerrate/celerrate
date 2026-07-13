@@ -309,3 +309,48 @@ fn a_warning_alone_still_exits_one() {
     );
     assert_eq!(outcome, Outcome::DiagnosticsReported);
 }
+
+/// Builds the relative spelling of `target` as seen from the current
+/// directory, purely lexically: enough `..` to climb out of every
+/// normal component of the current directory, then the target without
+/// its root. Unix-only, like its caller: on Windows the two paths can
+/// sit on different drives, where no relative spelling exists.
+#[cfg(unix)]
+fn relative_from_current_directory(target: &Path) -> std::path::PathBuf {
+    let current = std::env::current_dir().unwrap();
+    let mut relative = std::path::PathBuf::new();
+    for component in current.components() {
+        if matches!(component, std::path::Component::Normal(_)) {
+            relative.push("..");
+        }
+    }
+    relative.push(target.strip_prefix("/").unwrap());
+    relative
+}
+
+/// A relative project root analyzes exactly like its absolute
+/// spelling. It used to analyze nothing: discovery's zero-configuration
+/// fallback self-joined the relative root (`project` became
+/// `project/project`, `.` the empty path), the walk found no such
+/// directory, and the run exited 0 under an untrue notice - a green
+/// build over a project nothing looked at, from the exact command the
+/// README's quick start names. The lexical absolutization itself is
+/// covered on every platform by the `normalize_path` tests; this pins
+/// the command line actually applying it.
+#[cfg(unix)]
+#[test]
+fn a_relative_root_analyzes_like_its_absolute_spelling() {
+    let root = project(&[("index.php", "<?php\nmissing_function();\n")]);
+    let (absolute_outcome, absolute_text) = check(root.path());
+    let (relative_outcome, relative_text) = check(&relative_from_current_directory(root.path()));
+    assert!(
+        relative_text.contains("CEL0019"),
+        "the unknown function is reported through the relative spelling: {relative_text}",
+    );
+    assert_eq!(relative_outcome, Outcome::DiagnosticsReported);
+    assert_eq!(relative_outcome, absolute_outcome);
+    assert_eq!(
+        relative_text, absolute_text,
+        "both spellings name the same project, so they print the same report",
+    );
+}
