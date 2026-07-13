@@ -7,8 +7,11 @@ fn main() -> ExitCode {
         (Some("fetch-stubs"), None) => xtask::stubs::fetch(),
         (Some("compile-stubs"), None) => xtask::stubs::compile(false),
         (Some("compile-stubs"), Some("--check")) => xtask::stubs::compile(true),
+        (Some("fetch-corpus"), None) => xtask::corpus::prepare().map(|_| ()),
         _ => {
-            eprintln!("usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check]>");
+            eprintln!(
+                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus>"
+            );
             return ExitCode::FAILURE;
         }
     };

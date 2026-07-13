@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 
 pub mod codegen;
+pub mod corpus;
 pub mod pin;
 pub mod stubs;
 
