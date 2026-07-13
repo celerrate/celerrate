@@ -15,6 +15,7 @@ pub mod bench;
 pub mod codegen;
 pub mod corpus;
 pub mod pin;
+pub mod release;
 pub mod stubs;
 
 /// Errors are rendered once, in `main`; no variant needs matching.

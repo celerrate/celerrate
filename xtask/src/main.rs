@@ -12,9 +12,10 @@ fn main() -> ExitCode {
         (Some("fetch-corpus"), None) => xtask::corpus::prepare().map(|_| ()),
         (Some("corpus"), None) => xtask::corpus::check_snapshot(false),
         (Some("corpus"), Some("--bless")) => xtask::corpus::check_snapshot(true),
+        (Some("release-notes"), Some(version)) => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | bench [--ceilings]>"
+                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | bench [--ceilings] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }
