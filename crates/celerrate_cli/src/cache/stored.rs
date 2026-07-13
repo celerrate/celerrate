@@ -296,6 +296,11 @@ impl StoredRecord {
     pub fn matches(&self, answer: ResolutionAnswer) -> bool {
         self.answer == StoredAnswer::of(answer)
     }
+
+    /// The record's symbol space, in domain form.
+    pub fn space(&self) -> SymbolSpace {
+        self.space.to_space()
+    }
 }
 
 /// One reported file's persisted verdict: its composed diagnostics and
@@ -390,6 +395,7 @@ mod tests {
                 answer: StoredAnswer::of(answer),
             };
             assert!(record.matches(answer), "{answer:?} must match itself");
+            assert_eq!(record.space(), celerrate_semantics::SymbolSpace::ClassLike);
             for other in answers {
                 if other != answer {
                     assert!(
