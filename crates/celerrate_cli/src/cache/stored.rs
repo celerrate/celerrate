@@ -95,11 +95,16 @@ pub struct StoredUseImport {
 
 /// One file's item tree with its process-local file identity removed:
 /// only the declaration indexes survive, and `to_item_tree` stamps the
-/// current identity back in.
+/// current identity back in. `defines` carries no index of its own to
+/// strip: it is already the range-free, position-order list `ItemTree`
+/// keeps it as (see `celerrate_semantics::items`'s module doc), and
+/// `DefineId` reconstructs its position from this list's order, exactly
+/// as the live query does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredItemTree {
     declarations: Vec<StoredDeclaration>,
     imports: Vec<StoredUseImport>,
+    defines: Vec<String>,
 }
 
 impl StoredItemTree {
@@ -129,6 +134,7 @@ impl StoredItemTree {
                     ast_index: import.ast_id.index,
                 })
                 .collect(),
+            defines: tree.defines.clone(),
         }
     }
 
@@ -164,6 +170,7 @@ impl StoredItemTree {
                     },
                 })
                 .collect(),
+            defines: self.defines.clone(),
         }
     }
 }
@@ -198,9 +205,18 @@ impl StoredDiagnostic {
         }
     }
 
-    /// `None` when the stored identifier is unknown to the registry:
-    /// the entry comes from another era and is discarded.
+    /// `None` when the stored identifier is unknown to the registry (the
+    /// entry comes from another era) or the stored range has `start > end`
+    /// (the entry cannot come from any real computation: `TextRange::new`
+    /// asserts the ordering and panics otherwise). Either way the answer
+    /// is the same: discard the entry and let the file recompute. The
+    /// blake3 checksum a pack carries proves only that its bytes were not
+    /// corrupted in transit, never that whoever wrote them was honest, so
+    /// this ordering must be checked here rather than trusted.
     pub fn to_diagnostic(&self, file: FileId) -> Option<Diagnostic> {
+        if self.start > self.end {
+            return None;
+        }
         Some(Diagnostic {
             id: find_identifier(&self.id)?,
             severity: match self.severity {
@@ -320,7 +336,7 @@ mod tests {
     use celerrate_source::{FileId, TextRange, TextSize};
     use celerrate_stubs::{StubAvailability, StubDeprecation};
 
-    use super::{StoredAnswer, StoredDiagnostic, StoredItemTree, StoredRecord};
+    use super::{StoredAnswer, StoredDiagnostic, StoredItemTree, StoredRecord, StoredSeverity};
 
     fn parsed_tree(file: u32, source: &str) -> ItemTree {
         let parse = celerrate_syntax::parse(source);
@@ -334,11 +350,18 @@ mod tests {
                       interface Contract {} \
                       trait Sharable {} \
                       enum Status {} \
-                      function run() {} const LIMIT = 3;";
+                      function run() {} const LIMIT = 3; \
+                      function boot() { define('APP_ROOT', __DIR__); }";
         let original = parsed_tree(3, source);
+        assert_eq!(
+            original.defines,
+            vec!["APP_ROOT".to_owned()],
+            "sanity: the fixture actually carries a define",
+        );
         let stored = StoredItemTree::of(&original);
         let remapped = stored.to_item_tree(FileId::new(9));
         assert_eq!(remapped, parsed_tree(9, source));
+        assert_eq!(remapped.defines, vec!["APP_ROOT".to_owned()]);
     }
 
     #[test]
@@ -363,6 +386,42 @@ mod tests {
             ..stored
         };
         assert!(unknown.to_diagnostic(FileId::new(9)).is_none());
+    }
+
+    /// A stored range with `start > end` cannot come from any real
+    /// computation: `TextRange::new` asserts `start <= end` and panics
+    /// otherwise. The blake3 checksum a hostile pack carries only proves
+    /// nothing bit-flipped in transit, not that the entry is honest, so
+    /// this must be rejected here, like an unknown identifier, rather than
+    /// reach `TextRange::new` at all.
+    #[test]
+    fn a_reversed_range_is_rejected_without_panicking() {
+        let reversed = StoredDiagnostic {
+            id: "CEL0018".to_owned(),
+            severity: StoredSeverity::Error,
+            start: 17,
+            end: 10,
+            message: "crafted".to_owned(),
+        };
+        assert!(reversed.to_diagnostic(FileId::new(9)).is_none());
+    }
+
+    /// The boundary itself, an empty range (`start == end`), is a real
+    /// shape ordinary diagnostics use and must keep round-tripping.
+    #[test]
+    fn an_empty_range_round_trips() {
+        let empty = StoredDiagnostic {
+            id: "CEL0018".to_owned(),
+            severity: StoredSeverity::Error,
+            start: 10,
+            end: 10,
+            message: "empty span".to_owned(),
+        };
+        let diagnostic = empty.to_diagnostic(FileId::new(9)).unwrap();
+        assert_eq!(
+            diagnostic.range,
+            TextRange::new(TextSize::from(10), TextSize::from(10))
+        );
     }
 
     #[test]

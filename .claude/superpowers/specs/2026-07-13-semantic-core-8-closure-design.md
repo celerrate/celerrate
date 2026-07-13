@@ -20,6 +20,71 @@ Amendment history:
   `parse` returns `Parse` or `&Parse`), so no source change is implied
   either way; the patch was applied only to measure and then reverted.
 
+- 2026-07-13 - the part 8b protocol run on the corpus (9447 PHP files):
+  cold full 1.15 s, warm no-change 1.10 s, warm one-edit 1.10 s
+  (medians of three protocol runs on the maintainer's machine, per
+  `benchmarks/PROTOCOL.md`). Both measured decisions escalate rather
+  than close. Symbol-index pack: the warm one-edit median (1.10 s) is
+  at or over the one-second threshold, not sub-second, so whether to
+  build the pack is a scope decision for the human partner rather than
+  a closed no-build. Diagnostics pack: warm no-change is 0.95 of cold
+  full, well above the one-half criterion the class needed to clear to
+  keep paying for itself, so per the drop-a-losing-class rule of
+  section 2 the pack's continuation also escalates rather than staying
+  automatically. Both outcomes were anticipated: a single earlier local
+  run (machine busy) had already put the same two numbers on the same
+  side of both thresholds. Nothing in 8a code changes as a result of
+  this entry; the decision on both packs is left to the human partner.
+  A cache-hit check grounds the escalation: with `RAYON_NUM_THREADS=1`
+  on the same working copy, cold full measured 1.99 s and warm 1.09 s
+  wall clock, so the cache does load and hit (about 0.9 s of
+  single-thread work skipped). Warm approaches cold in the flagship
+  multithreaded scenario only because that saved work amortizes across
+  ten cores while fixed costs (process start, walk, hashing every file,
+  rebuilding the symbol index, rewriting the packs) dominate both runs.
+  The 0.95 ratio is therefore an economics fact, not a cache-loading
+  failure.
+
+- 2026-07-13 - the human decisions on the two escalations above: both
+  packs are kept. The diagnostics pack's wall-clock parity with cold was
+  an amortization artifact, not a cache-loading failure (the
+  `RAYON_NUM_THREADS=1` check in the entry above already showed the
+  cache hits and skips about 0.9 s of single-thread work), so the pack
+  stands. The symbol-index pack is not built: profiling
+  (`.superpowers/sdd/profiling-report.md`) attributed the entire warm
+  cost to `define()` constants re-parsed outside the item-tree boundary
+  artifact, not to index assembly, which measured about 3 ms on its
+  own. The architecturally right fix was to widen the boundary artifact
+  instead of adding a new pack: `define()`-detected constant names now
+  ride the item-tree pack as a range-free list, cache schema version
+  bumped to 2 (schema-1 packs discard wholesale, the designed
+  mechanism, no migration).
+
+  The re-run protocol (same corpus, same machine, medians of three
+  protocol runs, per `benchmarks/PROTOCOL.md`) now reads: cold full
+  1.11 s, warm no-change 0.28 s, warm one-edit 0.29 s, at commit
+  `24b6950`. This supersedes the numbers in the entry above (cold full
+  1.15 s, warm no-change 1.10 s, warm one-edit 1.10 s): both warm
+  scenarios are now comfortably sub-second, and both escalations from
+  the prior entry are closed by these numbers rather than by a scope
+  decision.
+
+  The cache audit's Critical finding (a crafted verdict entry with a
+  reversed stored range could panic through `TextRange::new`) is fixed:
+  reversed-range verdict entries are discarded at decode, the same way
+  an unknown-identifier entry already was, and the analysis recomputes
+  honestly instead of surfacing an internal error.
+
+  Audit debt remains open and is not addressed by this entry: the cache
+  audit's Important findings (binary identity keyed on
+  `CARGO_PKG_VERSION` alone, several contract clauses with no test
+  including a stub-blob mismatch and concurrent writers, revalidation
+  sufficiency enforced only by convention rather than construction, and
+  no hit/miss instrumentation to observe the economics contract in
+  tree) and the architecture audit's note that `source_symbol_table`
+  assembly remains the one global serial loop at the next scale-up are
+  recorded in full under `.claude/superpowers/audits/`.
+
 ## 1. Goal and scope
 
 Close the semantic-core sub-project: the persistent artifact cache, the

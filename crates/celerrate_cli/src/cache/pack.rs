@@ -16,7 +16,14 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// Bumped whenever any stored shape changes. The header also carries
 /// the binary version, so releases invalidate packs on their own; this
 /// constant is what protects development builds within one version.
-pub const CACHE_SCHEMA_VERSION: u32 = 1;
+///
+/// 2: `StoredItemTree` gained `defines`, carrying `define()`-detected
+/// constant names into the item-tree pack (see
+/// `celerrate_semantics::items`'s module doc). A pack written under
+/// schema 1 has no such field and must be discarded wholesale, exactly
+/// like any other header mismatch: there is no migration, only a cold
+/// rebuild.
+pub const CACHE_SCHEMA_VERSION: u32 = 2;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, and the PHP version range. Any mismatch

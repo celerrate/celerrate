@@ -1,0 +1,7 @@
+# The pinned regression and benchmark corpus: symfony/demo, a real user
+# project with application code, a composer.json, and a full vendor tree
+# from its committed lock file. Bump deliberately: change the commit,
+# run `cargo xtask corpus --bless`, and commit the regenerated snapshot
+# together with this file after reviewing the diff.
+repository = https://github.com/symfony/demo
+commit = 03fe25671b720b15103a2ff26934e94c87bd4d82

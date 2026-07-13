@@ -16,8 +16,9 @@ use celerrate_db::SourceFile;
 use celerrate_db::testing::TestDatabase;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, reference_diagnostics,
-    resolve_name, syntax_version_diagnostics,
+    SymbolQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map,
+    folded_symbol_key, item_tree, lookup_symbol, reference_diagnostics, resolve_name,
+    source_symbol_table, syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
@@ -659,6 +660,123 @@ fn adding_a_file_that_declares_the_missing_symbol_reaches_the_consumer() {
         executions_of(&log, "unresolved_inheritance_names"),
         1,
         "a changed lookup answer must reach the consumer: {log:?}",
+    );
+}
+
+/// The coverage gap the architecture audit named directly: no test
+/// exercised a `define()` edit's effect on the table. A `define()` added
+/// inside a body is invisible to the item traversal itself, but visible
+/// to the item tree's separate `defines` list (see `items.rs`'s module
+/// doc), so the tree value changes, the table rebuilds once, and a
+/// lookup that used to answer `None` now answers `Source`.
+#[test]
+fn a_body_edit_adding_a_define_reaches_the_table_and_the_lookup() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php function boot() { return 1; }".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    fn query(db: &TestDatabase) -> SymbolQuery<'_> {
+        SymbolQuery::new(
+            db,
+            SymbolSpace::Constant,
+            folded_symbol_key(SymbolSpace::Constant, "APP_ROOT"),
+        )
+    }
+    assert_eq!(
+        lookup_symbol(&db, files, stubs, configuration, query(&db)),
+        None
+    );
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php function boot() { define('APP_ROOT', 1); return 1; }".to_vec());
+    let resolution = lookup_symbol(&db, files, stubs, configuration, query(&db));
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "item_tree"),
+        1,
+        "the edited file reprojects, now with a define: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "source_symbol_table"),
+        1,
+        "a define appearing must rebuild the table: {log:?}",
+    );
+    assert!(
+        matches!(resolution, Some(SymbolResolution::Source { .. })),
+        "the new define must resolve: {resolution:?}",
+    );
+}
+
+/// The other half of the same gap: a body edit that leaves a file's set
+/// of `define()` names unchanged must still backdate at the item-tree
+/// level, exactly like any other define-free body edit, and spare the
+/// table and every lookup behind it.
+#[test]
+fn a_define_free_body_edit_in_a_define_carrying_file_backdates_the_table() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php function boot() { define('APP_ROOT', 1); return 1; }".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    fn query(db: &TestDatabase) -> SymbolQuery<'_> {
+        SymbolQuery::new(
+            db,
+            SymbolSpace::Constant,
+            folded_symbol_key(SymbolSpace::Constant, "APP_ROOT"),
+        )
+    }
+    assert!(matches!(
+        lookup_symbol(&db, files, stubs, configuration, query(&db)),
+        Some(SymbolResolution::Source { .. })
+    ));
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php function boot() { define('APP_ROOT', 1); return 2; }".to_vec());
+    let _ = source_symbol_table(&db, files);
+    let _ = lookup_symbol(&db, files, stubs, configuration, query(&db));
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "item_tree"),
+        1,
+        "the edited file still reprojects: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "source_symbol_table"),
+        0,
+        "an unchanged set of defines must backdate the item tree, \
+         sparing the table entirely: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "lookup_symbol"),
+        0,
+        "and every lookup behind it: {log:?}",
     );
 }
 
