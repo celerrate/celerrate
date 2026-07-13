@@ -172,23 +172,12 @@ fn collect_entries(
     (trees, verdicts)
 }
 
-/// One reported file's verdict, composed exactly as `analyze_one`
-/// composes its diagnostics, with the records the entry must
-/// revalidate against. Every query here is memoized from the pass.
+/// One reported file's verdict — its diagnostics through the shared
+/// composition point, with the records the entry must revalidate
+/// against. Every query here is memoized from the pass.
 fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> StoredVerdict {
     let database = &inputs.database;
-    let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
-    diagnostics.extend(
-        celerrate_semantics::semantic_diagnostics(
-            database,
-            file,
-            inputs.files,
-            inputs.stubs,
-            inputs.configuration,
-        )
-        .iter()
-        .cloned(),
-    );
+    let diagnostics = crate::analysis::composed_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
         database,
         file,

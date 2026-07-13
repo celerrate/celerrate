@@ -132,6 +132,28 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass)).map_err(|_| Panicked)
 }
 
+/// One file's diagnostics, computed: decode and syntax, then references
+/// and gating. The single composition point — `analyze_one` serves it on
+/// a cache miss, `persist` re-composes through it, and the equivalence
+/// harness recomputes through it — so the composers cannot drift (audit
+/// finding I2's first hand-maintained mirror).
+pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+    let database = &inputs.database;
+    let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
+    diagnostics.extend(
+        celerrate_semantics::semantic_diagnostics(
+            database,
+            file,
+            inputs.files,
+            inputs.stubs,
+            inputs.configuration,
+        )
+        .iter()
+        .cloned(),
+    );
+    diagnostics
+}
+
 /// One file's total: decode and syntax, then references and gating.
 /// Nothing composes those two families below this line.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
@@ -170,19 +192,7 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
                 statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
             }
         }
-        let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
-        diagnostics.extend(
-            celerrate_semantics::semantic_diagnostics(
-                database,
-                file,
-                inputs.files,
-                inputs.stubs,
-                inputs.configuration,
-            )
-            .iter()
-            .cloned(),
-        );
-        diagnostics
+        composed_diagnostics(inputs, file)
     })
 }
 
