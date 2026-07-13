@@ -134,12 +134,13 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
     let database = &inputs.database;
     let file_id = file.file_id(database);
+    let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
     guarded(file_id, || {
         if let Some(stored) = crate::cache::verdict::validated_verdict(inputs, file)
             && let Some(diagnostics) = stored
                 .diagnostics
                 .iter()
-                .map(|diagnostic| diagnostic.to_diagnostic(file_id))
+                .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
                 .collect::<Option<Vec<_>>>()
         {
             return diagnostics;

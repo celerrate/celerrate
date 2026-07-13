@@ -126,6 +126,7 @@ fn collect_entries(
         if panicked.contains(&file_id) {
             continue;
         }
+        let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
         // Mirrors `analyze_one`: a validated hit is only reused when
         // every stored diagnostic still re-interns, or `persist` would
         // re-persist an entry the pass itself refused to serve.
@@ -134,7 +135,7 @@ fn collect_entries(
                 if stored
                     .diagnostics
                     .iter()
-                    .all(|diagnostic| diagnostic.to_diagnostic(file_id).is_some()) =>
+                    .all(|diagnostic| diagnostic.to_diagnostic(file_id, content_length).is_some()) =>
             {
                 stored.clone()
             }
