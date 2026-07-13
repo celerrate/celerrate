@@ -257,3 +257,35 @@ fn corrupted_packs_never_change_the_rendering() {
     // clean run.
     assert_eq!(normalized(&run_check(root.path()), root.path()), baseline);
 }
+
+/// The invariant that makes two concurrent `celerrate check` processes
+/// safe today, named and pinned (audit finding I5): both packs' entries
+/// are independently content-keyed and revalidated, so packs from two
+/// different generations of the project may be mixed freely — a stale
+/// pack beside a fresh one must render exactly what a fresh run
+/// renders. A future pack keyed over the *set* of tree hashes would
+/// break exactly this; this test is the tripwire that says so.
+#[test]
+fn packs_from_different_generations_mix_safely() {
+    let root = tempfile::tempdir().unwrap();
+    std::fs::write(root.path().join("a.php"), "<?php new Missing();").unwrap();
+    let _ = run_check(root.path());
+    let cache = root.path().join(".celerrate/cache");
+    let stale_verdicts = std::fs::read(cache.join("diagnostics.bin")).unwrap();
+    let stale_trees = std::fs::read(cache.join("item_trees.bin")).unwrap();
+
+    // Second generation: a defining file appears, and a full run
+    // refreshes both packs and the expected rendering.
+    std::fs::write(root.path().join("b.php"), "<?php class Missing {}").unwrap();
+    let baseline = normalized(&run_check(root.path()), root.path());
+
+    // Stale verdicts beside fresh trees: the stale entry's recorded
+    // `Unknown` answer no longer holds, revalidation discards it.
+    std::fs::write(cache.join("diagnostics.bin"), &stale_verdicts).unwrap();
+    assert_eq!(normalized(&run_check(root.path()), root.path()), baseline);
+
+    // Stale trees beside fresh verdicts: the new file's tree is simply
+    // absent from the stale pack, a miss, recomputed.
+    std::fs::write(cache.join("item_trees.bin"), &stale_trees).unwrap();
+    assert_eq!(normalized(&run_check(root.path()), root.path()), baseline);
+}

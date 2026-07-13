@@ -216,4 +216,47 @@ mod tests {
     fn the_header_carries_the_binary_self_hash() {
         assert_eq!(header().binary, super::super::identity::binary_identity());
     }
+
+    /// The atomicity clause is about concurrency (audit finding I5):
+    /// "a reader never sees a torn file and a concurrent writer's last
+    /// rename wins whole". One writer alternates two payloads while
+    /// this thread reads; every observed read must be byte-for-byte one
+    /// of the two payloads and must decode whole.
+    #[test]
+    fn a_reader_racing_a_writer_never_sees_a_torn_pack() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pack.bin");
+        let first = encode(&sample()).unwrap();
+        let second = encode(&Pack {
+            header: header(),
+            entries: vec![(9, "nine".to_owned())],
+        })
+        .unwrap();
+        write_atomically(&path, &first).unwrap();
+
+        let writer_path = path.clone();
+        let writer_first = first.clone();
+        let writer_second = second.clone();
+        let writer = std::thread::spawn(move || {
+            for round in 0..200 {
+                let bytes = if round % 2 == 0 {
+                    &writer_second
+                } else {
+                    &writer_first
+                };
+                write_atomically(&writer_path, bytes).unwrap();
+            }
+        });
+
+        for _ in 0..200 {
+            let bytes = std::fs::read(&path).unwrap();
+            assert!(
+                bytes == first || bytes == second,
+                "a read observed bytes that are neither payload: torn",
+            );
+            let decoded: Option<Pack<Vec<(u32, String)>>> = decode(&bytes, &header());
+            assert!(decoded.is_some(), "every observed read decodes whole");
+        }
+        writer.join().unwrap();
+    }
 }
