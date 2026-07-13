@@ -47,7 +47,8 @@ type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
-    let header = PackHeader::current(session.configuration.php_version_range(database));
+    let current_range = session.configuration.php_version_range(database);
+    let header = PackHeader::current(current_range);
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
     let Ok((trees, verdicts)) =
@@ -59,24 +60,35 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     if prepare_directory(&session.cache_directory).is_err() {
         return;
     }
+    // The header the on-disk packs were last confirmed to hold, derived
+    // from the range the snapshot was loaded or last written under: under
+    // `--watch` a manifest edit can move the range at runtime, and a
+    // cycle whose entries happen to be byte-equal (item trees are
+    // range-independent) must not skip the write in that case, or the
+    // disk keeps a stale header that no later cycle ever revisits. The
+    // schema, binary, and stub hash cannot move mid-process, so comparing
+    // the range alone is exactly comparing the header.
+    let header_moved = current_range != session.cache_loaded_range;
     let trees_written = write_when_changed(
         &session.cache_directory.join(ITEM_TREES_PACK),
         &header,
         &trees,
         &session.cache.item_trees,
+        header_moved,
     );
     let verdicts_written = write_when_changed(
         &session.cache_directory.join(DIAGNOSTICS_PACK),
         &header,
         &verdicts,
         &session.cache.verdicts,
+        header_moved,
     );
     if trees_written && verdicts_written {
         session.cache = Arc::new(CacheSnapshot {
             item_trees: trees.into_iter().collect(),
             verdicts: verdicts.into_iter().collect(),
         });
-        session.cache_loaded_range = session.configuration.php_version_range(database);
+        session.cache_loaded_range = current_range;
     }
 }
 
@@ -182,19 +194,23 @@ fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Rewrites a pack only when its entries differ from the loaded state.
-/// Answers whether `path` now holds exactly `entries`: true when it was
-/// already unchanged and present, or the write just succeeded; false
-/// when encoding or the atomic write failed, in which case whatever was
-/// on disk before (if anything) is untouched. `persist` only swaps the
+/// Rewrites a pack only when its entries differ from the loaded state,
+/// or when `header_moved` says the header the file was last confirmed to
+/// hold is not the current one. Answers whether `path` now holds exactly
+/// `entries` under `header`: true when it was already unchanged, present,
+/// and under the current header, or the write just succeeded; false when
+/// encoding or the atomic write failed, in which case whatever was on
+/// disk before (if anything) is untouched. `persist` only swaps the
 /// session's snapshot when this returns true for every pack.
 fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
     path: &Path,
     header: &PackHeader,
     entries: &[(ContentHash, Entry)],
     loaded: &HashMap<ContentHash, Entry>,
+    header_moved: bool,
 ) -> bool {
-    let unchanged = entries.len() == loaded.len()
+    let unchanged = !header_moved
+        && entries.len() == loaded.len()
         && entries
             .iter()
             .all(|(key, value)| loaded.get(key) == Some(value));
@@ -213,6 +229,9 @@ fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
+
+    use celerrate_project::{PhpVersion, PhpVersionRange};
+    use salsa::Setter as _;
 
     use crate::analysis::AnalysisOutcome;
     use crate::session::Session;
@@ -301,6 +320,75 @@ mod tests {
             session.cache.verdicts.len(),
             1,
             "both packs confirmed, so the snapshot now swaps",
+        );
+    }
+
+    /// A range moved between two persists whose entries happen to be
+    /// byte-equal (item trees are range-independent, so this is exactly
+    /// what a `--watch` cycle sees right after a `composer.json` edit
+    /// moves the PHP range). The unchanged-entries fast path must not
+    /// skip the write in that case, or the pack on disk keeps the OLD
+    /// header forever: every later cycle would keep comparing against the
+    /// swapped in-memory snapshot and keep skipping, and a fresh process
+    /// would reject the pack and start cold every time.
+    #[test]
+    fn a_moved_range_rewrites_the_pack_even_with_unchanged_entries() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+        super::persist(&mut session, &outcome);
+        let original_range = session.cache_loaded_range;
+        let original_header = super::pack::PackHeader::current(original_range);
+
+        let item_trees_path = session
+            .cache_directory
+            .join(super::snapshot::ITEM_TREES_PACK);
+        let written = std::fs::read(&item_trees_path).unwrap();
+        assert!(
+            super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(
+                &written,
+                &original_header,
+            )
+            .is_some(),
+            "sanity: the first persist wrote under the original range's header",
+        );
+
+        // Simulate a `composer.json` edit moving the range mid-watch,
+        // without touching the analyzed files: the entries the next
+        // persist computes are byte-equal to what is already loaded.
+        let moved_range = PhpVersionRange::point(PhpVersion::new(9, 9));
+        session
+            .configuration
+            .set_php_version_range(&mut session.database)
+            .to(moved_range);
+        super::persist(&mut session, &outcome);
+
+        assert_eq!(
+            session.cache_loaded_range, moved_range,
+            "persist adopts the new range once the rewrite is confirmed",
+        );
+        let moved_header = super::pack::PackHeader::current(moved_range);
+        let rewritten = std::fs::read(&item_trees_path).unwrap();
+        assert!(
+            super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(
+                &rewritten,
+                &moved_header,
+            )
+            .is_some(),
+            "the pack on disk now decodes under the moved header",
+        );
+        assert!(
+            super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(
+                &rewritten,
+                &original_header,
+            )
+            .is_none(),
+            "and no longer under the stale one",
         );
     }
 }
