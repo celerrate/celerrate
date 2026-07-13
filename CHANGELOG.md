@@ -7,54 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.1] - 2026-07-13
+
+The first public preview: proof that interprocedural analysis plus
+fine-grained incremental computation hold up on real projects. Two
+diagnostic families, watch mode, a persistent cache, and a published,
+reproducible incremental number.
+
 ### Added
 
-- Cargo workspace with the zero-panic lint policy.
-- `celerrate_source`: source text primitives (spans, line/column index,
-  file identifiers, byte decoding with BOM and invalid-UTF-8 provenance).
-- `celerrate_syntax`: complete PHP 8.1+ lexer (lossless token stream,
-  string interpolation, structured diagnostics), snapshot corpus, and a
-  continuous fuzz target.
-- The parser covers the full PHP 8.5 grammar (except `__halt_compiler`,
-  recorded out of scope for Foundations): the complete expression
-  grammar (Zend precedence table, calls and access chains, `match`,
-  closures, the pipe operator), the complete statement grammar (control
-  flow in classic and alternative syntax, `try`/`catch`/`finally`,
-  inline HTML interruption), and the complete declaration grammar
-  (classes with anonymous forms, interfaces, traits, enums, property
-  hooks and asymmetric visibility, constructor promotion, union /
-  intersection / DNF types, attributes, `const`/`namespace`/`use`).
-- `celerrate_syntax`: a typed AST layer generated from `php.ungram` by
-  the new dev-only `xtask` workspace member: the `SyntaxKind` node
-  kinds and the typed node structs (`Option`/iterator accessors
-  everywhere, so partial trees from error recovery are normal
-  citizens), plus hand-written accessors for semi-reserved names and
-  position-dependent roles. A sourcegen test keeps the committed
-  generated code fresh. This closes the Foundations sub-project.
-- `celerrate_diagnostics`: the shared diagnostic data model (stable
-  `CEL####` identifiers, severity, primary span); lexer and parser
-  diagnostics project into it.
-- `celerrate_vfs`: the virtual file system (interned file identifiers,
-  disk state, in-memory overlays, change draining).
-- `celerrate_vfs`: lexical path normalization and the deterministic
-  disk walk (PHP files under declared roots, explicit file entries,
-  symbolic-link cycle protection, disk loading into the file state).
-- `celerrate_project`: zero-configuration Composer discovery — tolerant
-  `composer.json` and `installed.json` readers, autoload rules (PSR-4,
-  PSR-0, classmap, files) deriving the walk roots and the
-  project/vendor classification, the PHP version range with the
-  parent-spec detection precedence at minor precision, and the
-  structured discovery notices (`CEL0025` through `CEL0029`).
-- `celerrate_stubs`: the pinned phpstorm-stubs snapshot compiled by
-  `cargo xtask compile-stubs` into a committed, versioned binary blob
-  (top-level symbols with per-version availability metadata), embedded
-  in the binary and exposed as a high-durability salsa input with a
-  version-range-filtered view; the project configuration becomes a
-  salsa input in `celerrate_project`.
-- `celerrate_db`: the salsa base layer (`SourceFile` input;
-  `source_text`, `parse`, `line_index`, and `file_diagnostics` as
-  incremental queries), with the invalidation-scope tests and the
-  incremental-consistency harness skeleton. This opens the semantic
-  core sub-project.
+- `celerrate check <path>`: zero-configuration analysis of a PHP
+  project. Composer discovery derives the analyzed roots, the
+  project/vendor split, and the PHP version range; installed
+  dependencies are indexed but never reported on. A complete PHP 8.5
+  parser with error resilience feeds the analysis: no input crashes
+  the tool.
+- The unknown-symbol diagnostic family (`CEL0018`, `CEL0019`,
+  `CEL0020`): references to classes, functions, and constants that
+  resolve nowhere, with the project, its dependencies, and the bundled
+  PHP stubs all considered.
+- The version-gating diagnostic family (`CEL0021` through `CEL0024`):
+  symbols and syntax used outside the project's declared PHP version
+  range, including removals and deprecations.
+- `celerrate check --watch`: re-analysis on every change, incremental
+  by construction.
+- The persistent artifact cache under `.celerrate/cache/` (the
+  directory writes its own `.gitignore`): warm runs reuse parsed and
+  analyzed artifacts across processes, revalidated against fresh
+  inputs; every corruption mode answers with silent regeneration.
+- The published incremental number, measured by the committed
+  protocol ([benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md)) on
+  symfony/demo (9447 PHP files, 1.3 million lines, vendor tree
+  included): warm one-edit median 0.29 s, wall clock, process startup
+  and cache loading included.
+- Pre-built binaries for Linux x64 and arm64 (static musl builds),
+  macOS x64 and arm64, and Windows x64.
 
-[Unreleased]: https://github.com/celerrate/celerrate/commits/main
+[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.1...HEAD
+[0.0.1]: https://github.com/celerrate/celerrate/releases/tag/v0.0.1
