@@ -36,7 +36,7 @@ reproducible incremental number.
   analyzed artifacts across processes, revalidated against fresh
   inputs; every corruption mode answers with silent regeneration.
 - The published incremental number, measured by the committed
-  protocol ([benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md)) on
+  protocol ([benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/v0.0.1/benchmarks/PROTOCOL.md)) on
   symfony/demo (9447 PHP files, 1.3 million lines, vendor tree
   included): warm one-edit median 0.29 s, wall clock, process startup
   and cache loading included.
