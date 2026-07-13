@@ -7,7 +7,6 @@
 
 mod ast_id;
 mod cache;
-mod defines;
 mod index;
 mod item_nodes;
 mod items;
@@ -22,12 +21,11 @@ mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
-pub use defines::{DefineId, DefinedConstant, defined_constants};
 pub use index::{
     StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
     stub_symbol_table,
 };
-pub use items::{Declaration, DeclarationKind, ImportKind, ItemTree, UseImport};
+pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
 pub use reference_checks::{

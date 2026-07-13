@@ -95,11 +95,16 @@ pub struct StoredUseImport {
 
 /// One file's item tree with its process-local file identity removed:
 /// only the declaration indexes survive, and `to_item_tree` stamps the
-/// current identity back in.
+/// current identity back in. `defines` carries no index of its own to
+/// strip: it is already the range-free, position-order list `ItemTree`
+/// keeps it as (see `celerrate_semantics::items`'s module doc), and
+/// `DefineId` reconstructs its position from this list's order, exactly
+/// as the live query does.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredItemTree {
     declarations: Vec<StoredDeclaration>,
     imports: Vec<StoredUseImport>,
+    defines: Vec<String>,
 }
 
 impl StoredItemTree {
@@ -129,6 +134,7 @@ impl StoredItemTree {
                     ast_index: import.ast_id.index,
                 })
                 .collect(),
+            defines: tree.defines.clone(),
         }
     }
 
@@ -164,6 +170,7 @@ impl StoredItemTree {
                     },
                 })
                 .collect(),
+            defines: self.defines.clone(),
         }
     }
 }
@@ -343,11 +350,18 @@ mod tests {
                       interface Contract {} \
                       trait Sharable {} \
                       enum Status {} \
-                      function run() {} const LIMIT = 3;";
+                      function run() {} const LIMIT = 3; \
+                      function boot() { define('APP_ROOT', __DIR__); }";
         let original = parsed_tree(3, source);
+        assert_eq!(
+            original.defines,
+            vec!["APP_ROOT".to_owned()],
+            "sanity: the fixture actually carries a define",
+        );
         let stored = StoredItemTree::of(&original);
         let remapped = stored.to_item_tree(FileId::new(9));
         assert_eq!(remapped, parsed_tree(9, source));
+        assert_eq!(remapped.defines, vec!["APP_ROOT".to_owned()]);
     }
 
     #[test]

@@ -11,8 +11,7 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_stubs::{StubIndexInput, StubSymbol, stubs_in_range};
 
 use crate::ast_id::AstId;
-use crate::defines::{DefineId, defined_constants};
-use crate::items::DeclarationKind;
+use crate::items::{DeclarationKind, DefineId};
 use crate::queries::item_tree;
 use crate::symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 
@@ -83,13 +82,15 @@ impl SymbolTable {
 
 /// The source symbol table of the analyzed file set: every item tree's
 /// declarations, plus every `define()` the file introduces. Depends on
-/// both per-file queries, and on nothing that a body edit can move: a
-/// span never enters an entry, so the table still backdates.
+/// a single per-file query (the item tree), and on nothing that a body
+/// edit can move: a span never enters an entry, so the table still
+/// backdates.
 #[salsa::tracked(returns(ref))]
 pub fn source_symbol_table(db: &dyn salsa::Database, files: AnalyzedFileSet) -> SymbolTable {
     let mut entries = Vec::new();
     for &file in files.files(db) {
-        for declaration in &item_tree(db, file).declarations {
+        let tree = item_tree(db, file);
+        for declaration in &tree.declarations {
             let space = SymbolSpace::of_declaration(declaration.kind);
             let original = fully_qualified_name(&declaration.namespace, &declaration.name);
             entries.push(SymbolEntry {
@@ -100,17 +101,13 @@ pub fn source_symbol_table(db: &dyn salsa::Database, files: AnalyzedFileSet) -> 
                 origin: SymbolOrigin::Item(declaration.ast_id),
             });
         }
-        for (position, defined) in defined_constants(db, file).iter().enumerate() {
+        for (position, name) in tree.defines.iter().enumerate() {
             let Ok(index) = u32::try_from(position) else {
                 break;
             };
             // The name is literal: no namespace is prepended, a leading
             // root qualifier is only spelling.
-            let original = defined
-                .name
-                .strip_prefix('\\')
-                .unwrap_or(defined.name.as_str())
-                .to_owned();
+            let original = name.strip_prefix('\\').unwrap_or(name.as_str()).to_owned();
             let space = SymbolSpace::Constant;
             entries.push(SymbolEntry {
                 space,
@@ -213,8 +210,7 @@ mod tests {
 
     use super::{SymbolOrigin, SymbolTable, source_symbol_table};
     use crate::ast_id::AstId;
-    use crate::defines::DefineId;
-    use crate::items::DeclarationKind;
+    use crate::items::{DeclarationKind, DefineId};
     use crate::symbols::SymbolSpace;
 
     fn set_of(db: &TestDatabase, sources: &[&str]) -> AnalyzedFileSet {

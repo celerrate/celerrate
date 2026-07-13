@@ -139,6 +139,32 @@ fn a_definition_appearing_and_vanishing_replays_consistently() {
     );
 }
 
+/// The exact case the architecture audit named: a `define()` call the
+/// item traversal cannot see, inside a method body, is the whole reason
+/// `define()`-detected names now ride on the `ItemTree` as a separate,
+/// range-free list rather than through a per-file query with no
+/// persisted artifact. This replays it appearing, being edited (the
+/// define's value changes, its name does not, so the item tree's
+/// `defines` list is unchanged and the table must backdate), and
+/// vanishing again, across process restarts.
+#[test]
+fn a_body_level_define_appearing_being_edited_and_vanishing_replays_consistently() {
+    assert_cached_matches_fresh(
+        &[("src/Consumer.php", "<?php echo APP_ROOT;")],
+        &[
+            Step::Write(
+                "src/Definer.php",
+                "<?php function boot() { define('APP_ROOT', 1); } boot();",
+            ),
+            Step::Write(
+                "src/Definer.php",
+                "<?php function boot() { define('APP_ROOT', 2); } boot();",
+            ),
+            Step::Delete("src/Definer.php"),
+        ],
+    );
+}
+
 /// A signature-level edit in one file must be seen by the cached
 /// verdicts of another: renaming the declared class flips its
 /// consumers' resolution.
