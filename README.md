@@ -5,7 +5,7 @@
 
 An extremely fast, all-in-one toolchain for PHP, written in Rust.
 
-> **Status: early preview (v0.0.1).** The engine is real and fast; the
+> **Status: early preview (v0.0.2).** The engine is real and fast; the
 > rule surface is deliberately small. `celerrate check` analyzes a
 > Composer project with zero configuration, incrementally, and it will
 > not crash on any input. It does not do type inference yet.
