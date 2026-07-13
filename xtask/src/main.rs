@@ -3,6 +3,8 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let mut arguments = std::env::args().skip(1);
     let outcome = match (arguments.next().as_deref(), arguments.next().as_deref()) {
+        (Some("bench"), None) => xtask::bench::run(false),
+        (Some("bench"), Some("--ceilings")) => xtask::bench::run(true),
         (Some("codegen"), None) => xtask::codegen::run(),
         (Some("fetch-stubs"), None) => xtask::stubs::fetch(),
         (Some("compile-stubs"), None) => xtask::stubs::compile(false),

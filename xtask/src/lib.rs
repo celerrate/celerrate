@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+pub mod bench;
 pub mod codegen;
 pub mod corpus;
 pub mod pin;
