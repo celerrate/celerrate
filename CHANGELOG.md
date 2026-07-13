@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `celerrate check` with a relative root (including `celerrate
+  check .`) and no `composer.json` analyzed nothing and exited 0 under
+  the CEL0025 notice: the zero-configuration fallback self-joined the
+  relative root, so the walk searched a directory that does not exist.
+  The command line now makes the root absolute before discovery, and a
+  relative spelling produces exactly the report its absolute spelling
+  produces.
+
 ## [0.0.1] - 2026-07-13
 
 The first public preview: proof that interprocedural analysis plus

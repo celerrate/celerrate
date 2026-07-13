@@ -82,7 +82,14 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
                 let _ = writeln!(output, "{message}");
                 return Outcome::UsageError;
             }
-            let mut session = Session::start(&path);
+            let root = match absolute_root(&path) {
+                Ok(root) => root,
+                Err(message) => {
+                    let _ = writeln!(output, "{message}");
+                    return Outcome::UsageError;
+                }
+            };
+            let mut session = Session::start(&root);
             if watch {
                 return watch::watch(&mut session, output);
             }
@@ -95,6 +102,32 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             cache::persist(&mut session, &outcome);
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
+    }
+}
+
+/// The command line's root, made absolute before anything downstream
+/// sees it.
+///
+/// Discovery documents that its root must be absolute, because
+/// `normalize_path` joins a relative path onto its base: a relative
+/// root self-joined (`project` became `project/project`, `.` the empty
+/// path), the walk found no such directory, and the run exited 0 under
+/// an untrue notice - a green build over a project nothing looked at,
+/// from the exact command the README's quick start names. Absolutizing
+/// is the command line's question, like `unusable_root` below: it is
+/// the one place the user's spelling meets the process's current
+/// directory, kept out of every query so analysis stays a pure
+/// function of its inputs.
+fn absolute_root(path: &std::path::Path) -> Result<std::path::PathBuf, String> {
+    if path.is_absolute() {
+        return Ok(path.to_path_buf());
+    }
+    match std::env::current_dir() {
+        Ok(current_directory) => Ok(celerrate_vfs::normalize_path(path, &current_directory)),
+        Err(reason) => Err(format!(
+            "error: {} cannot be resolved: the current directory is unavailable: {reason}",
+            path.display(),
+        )),
     }
 }
 
