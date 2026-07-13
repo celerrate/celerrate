@@ -212,3 +212,79 @@ fn a_verdict_with_an_unknown_identifier_is_discarded() {
     assert_eq!(outcome.diagnostics.len(), 1, "recomputed honestly");
     assert!(outcome.diagnostics[0].message.contains("Missing"));
 }
+
+use celerrate_cli::run;
+
+fn run_check(root: &Path) -> (celerrate_cli::Outcome, String) {
+    let mut output = Vec::new();
+    let outcome = run(
+        vec![
+            "celerrate".into(),
+            "check".into(),
+            root.as_os_str().to_owned(),
+        ],
+        &mut output,
+    );
+    (outcome, String::from_utf8(output).unwrap())
+}
+
+#[test]
+fn a_completed_run_writes_both_packs_and_the_gitignore() {
+    let root = project(&[("a.php", "<?php class A {} new Missing();")]);
+    let (_, _) = run_check(root.path());
+
+    let cache = root.path().join(".celerrate/cache");
+    assert!(cache.join(ITEM_TREES_PACK).is_file());
+    assert!(cache.join(DIAGNOSTICS_PACK).is_file());
+    assert_eq!(
+        std::fs::read_to_string(root.path().join(".celerrate/.gitignore")).unwrap(),
+        "*\n",
+        "the cache directory ignores itself, like Cargo's target directory",
+    );
+}
+
+#[test]
+fn the_written_packs_validate_and_carry_the_analyzed_files() {
+    let source_a = "<?php class A {}";
+    let source_b = "<?php new Missing();";
+    let root = project(&[("a.php", source_a), ("b.php", source_b)]);
+    let (_, _) = run_check(root.path());
+
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
+    let pack: Pack<Vec<([u8; 32], StoredItemTree)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let keys: Vec<[u8; 32]> = pack.entries.iter().map(|(key, _)| *key).collect();
+    assert!(keys.contains(blake3::hash(source_a.as_bytes()).as_bytes()));
+    assert!(keys.contains(blake3::hash(source_b.as_bytes()).as_bytes()));
+    assert!(keys.is_sorted(), "entries are written in key order");
+
+    let bytes =
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
+    let pack: Pack<Vec<([u8; 32], StoredVerdict)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    assert_eq!(pack.entries.len(), 2, "one verdict per reported file");
+}
+
+/// The second run over an unchanged project serves and rewrites
+/// nothing: its packs must decode to exactly the first run's.
+#[test]
+fn a_second_run_leaves_equivalent_packs_behind() {
+    let root = project(&[("a.php", "<?php new Missing();")]);
+    let (_, first_output) = run_check(root.path());
+    let first_trees =
+        std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
+    let first_verdicts =
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
+
+    let (_, second_output) = run_check(root.path());
+    assert_eq!(first_output, second_output, "byte-identical rendering");
+    assert_eq!(
+        first_trees,
+        std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap(),
+    );
+    assert_eq!(
+        first_verdicts,
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap(),
+    );
+}

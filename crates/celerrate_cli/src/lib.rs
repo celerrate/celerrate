@@ -92,6 +92,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             if render::render_check(output, &session, &outcome).is_err() {
                 return Outcome::InternalError;
             }
+            cache::persist(&mut session, &outcome);
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
     }
