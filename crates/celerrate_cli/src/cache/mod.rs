@@ -184,16 +184,38 @@ fn sort_entries<Entry>(entries: &mut Vec<(ContentHash, Entry)>) {
     entries.dedup_by(|left, right| left.0 == right.0);
 }
 
-/// Creates the cache directory and its self-ignoring `.gitignore`.
+/// Creates the cache directory and its self-ignoring `.gitignore`, and
+/// sweeps crash debris. The `.gitignore` goes through the atomic write
+/// (audit finding M8): a plain write torn by a crash left a half-written
+/// file that was never repaired, since only existence is checked.
 fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(cache_directory)?;
+    sweep_crash_debris(cache_directory);
     if let Some(dot_celerrate) = cache_directory.parent() {
         let gitignore = dot_celerrate.join(".gitignore");
         if !gitignore.exists() {
-            std::fs::write(gitignore, "*\n")?;
+            pack::write_atomically(&gitignore, b"*\n")?;
         }
     }
     Ok(())
+}
+
+/// Best-effort removal of temporary files a crash mid-write left behind
+/// (audit finding M2): `write_atomically`'s temporaries carry the `.tmp`
+/// prefix `tempfile` uses, survive SIGKILL and power loss, and nothing
+/// else ever removes them. A concurrent process mid-persist can lose its
+/// temporary to this sweep; its rename then fails, that persist is
+/// skipped, and its next pass rewrites — the same best-effort answer as
+/// any other write failure.
+fn sweep_crash_debris(cache_directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(cache_directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry.file_name().to_string_lossy().starts_with(".tmp") {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
 }
 
 /// Rewrites a pack only when its entries differ from the loaded state,
@@ -391,6 +413,38 @@ mod tests {
             )
             .is_none(),
             "and no longer under the stale one",
+        );
+    }
+
+    /// Audit finding M2: `write_atomically`'s temporary files (the
+    /// `.tmp` prefix `tempfile` uses) survive SIGKILL and power loss in
+    /// `.celerrate/cache/`, and nothing ever swept them. `persist` now
+    /// sweeps them best-effort; anything not matching the prefix is
+    /// someone else's file and stays.
+    #[test]
+    fn crash_debris_is_swept_and_other_files_are_not() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+
+        let cache_directory = root.path().join(".celerrate/cache");
+        std::fs::create_dir_all(&cache_directory).unwrap();
+        std::fs::write(cache_directory.join(".tmpAbC123"), b"debris").unwrap();
+        std::fs::write(cache_directory.join("unrelated.bin"), b"not ours").unwrap();
+
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+        super::persist(&mut session, &outcome);
+
+        assert!(
+            !cache_directory.join(".tmpAbC123").exists(),
+            "the crash debris is gone",
+        );
+        assert!(
+            cache_directory.join("unrelated.bin").exists(),
+            "only the .tmp prefix is ours to sweep",
         );
     }
 }
