@@ -36,27 +36,43 @@ mod tests {
 
     use super::normalize_path;
 
+    /// An absolute path for the platform the tests run on.
+    ///
+    /// `normalize_path` documents that its base must be absolute, and
+    /// `/project` is absolute only on Unix: on Windows an absolute path
+    /// needs a drive prefix, and a rootful path without one keeps the
+    /// excess-parents test from ever reaching the root-stops-popping
+    /// branch it exists to prove. The fixtures honor the contract on
+    /// every platform by growing a drive prefix where one is required.
+    fn absolute(path: &str) -> PathBuf {
+        if cfg!(windows) {
+            PathBuf::from(format!("C:{path}"))
+        } else {
+            PathBuf::from(path)
+        }
+    }
+
     #[test]
     fn a_relative_path_joins_onto_the_base() {
         assert_eq!(
-            normalize_path(Path::new("src/App.php"), Path::new("/project")),
-            PathBuf::from("/project/src/App.php"),
+            normalize_path(Path::new("src/App.php"), &absolute("/project")),
+            absolute("/project/src/App.php"),
         );
     }
 
     #[test]
     fn an_absolute_path_ignores_the_base() {
         assert_eq!(
-            normalize_path(Path::new("/elsewhere/lib"), Path::new("/project")),
-            PathBuf::from("/elsewhere/lib"),
+            normalize_path(&absolute("/elsewhere/lib"), &absolute("/project")),
+            absolute("/elsewhere/lib"),
         );
     }
 
     #[test]
     fn current_directory_components_are_removed() {
         assert_eq!(
-            normalize_path(Path::new("./src/./sub"), Path::new("/project")),
-            PathBuf::from("/project/src/sub"),
+            normalize_path(Path::new("./src/./sub"), &absolute("/project")),
+            absolute("/project/src/sub"),
         );
     }
 
@@ -65,25 +81,25 @@ mod tests {
         assert_eq!(
             normalize_path(
                 Path::new("../acme/library"),
-                Path::new("/project/vendor/composer")
+                &absolute("/project/vendor/composer"),
             ),
-            PathBuf::from("/project/vendor/acme/library"),
+            absolute("/project/vendor/acme/library"),
         );
     }
 
     #[test]
     fn excess_parents_on_an_absolute_path_stop_at_the_root() {
         assert_eq!(
-            normalize_path(Path::new("../../../.."), Path::new("/project")),
-            PathBuf::from("/"),
+            normalize_path(Path::new("../../../.."), &absolute("/project")),
+            absolute("/"),
         );
     }
 
     #[test]
     fn an_already_normalized_path_is_unchanged() {
         assert_eq!(
-            normalize_path(Path::new("/project/src"), Path::new("/project")),
-            PathBuf::from("/project/src"),
+            normalize_path(&absolute("/project/src"), &absolute("/project")),
+            absolute("/project/src"),
         );
     }
 }

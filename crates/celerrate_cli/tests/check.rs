@@ -29,6 +29,27 @@ fn check(root: &Path) -> (Outcome, String) {
     (outcome, String::from_utf8(output).unwrap())
 }
 
+/// Rewrites the location token of every finding line to forward slashes.
+///
+/// The report prints paths in the platform's native spelling: on Windows
+/// the walk hands back `src\Kernel.php`, and that spelling is the right
+/// one to show a Windows user. A committed snapshot can pin only one
+/// spelling, so the location token, and only that token, is normalized
+/// before comparing. The rest of the line stays untouched: PHP namespace
+/// separators are backslashes too, and `App\Missing` in a message is not
+/// a path.
+fn normalize_location_separators(text: &str) -> String {
+    text.lines()
+        .map(|line| match line.split_once(' ') {
+            Some((location, rest)) if location.contains(':') => {
+                format!("{} {rest}", location.replace('\\', "/"))
+            }
+            _ => line.to_owned(),
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 #[test]
 fn a_clean_project_reports_nothing_and_exits_zero() {
     let root = project(&[
@@ -53,7 +74,7 @@ fn a_project_with_findings_renders_notices_diagnostics_and_a_summary() {
     )]);
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::DiagnosticsReported);
-    insta::assert_snapshot!("findings", text);
+    insta::assert_snapshot!("findings", normalize_location_separators(&text));
 }
 
 /// A typo'd path that exits 0 is the one thing a CI-facing checker must

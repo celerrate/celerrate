@@ -93,8 +93,8 @@ Protocol run of 2026-07-13, at commit `24b6950`:
 | Warm no-change | 0.28 s |
 | Warm one-edit | 0.29 s |
 
-The warm one-edit number is the published number; the README will
-link here when the number is published with v0.0.1. (Recorded as the
+The warm one-edit number is the published number; the README links
+here. (Recorded as the
 median of three protocol runs; the raw hyperfine exports live under
 `target/bench/` and are not committed.)
 
