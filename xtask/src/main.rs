@@ -8,9 +8,11 @@ fn main() -> ExitCode {
         (Some("compile-stubs"), None) => xtask::stubs::compile(false),
         (Some("compile-stubs"), Some("--check")) => xtask::stubs::compile(true),
         (Some("fetch-corpus"), None) => xtask::corpus::prepare().map(|_| ()),
+        (Some("corpus"), None) => xtask::corpus::check_snapshot(false),
+        (Some("corpus"), Some("--bless")) => xtask::corpus::check_snapshot(true),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus>"
+                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | bench [--ceilings]>"
             );
             return ExitCode::FAILURE;
         }

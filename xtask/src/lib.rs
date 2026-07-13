@@ -7,6 +7,7 @@
 //! generated file or blob can never prevent regenerating it.
 
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 pub mod codegen;
 pub mod corpus;
@@ -23,4 +24,20 @@ pub fn workspace_root() -> Result<PathBuf> {
         .parent()
         .map(Path::to_path_buf)
         .ok_or_else(|| "xtask must live one level below the workspace root".into())
+}
+
+/// Builds the release binary and returns its path. Every corpus and
+/// benchmark run goes through the optimized build: the numbers and the
+/// snapshot must describe what users download, not a debug build.
+pub fn release_binary() -> Result<PathBuf> {
+    let root = workspace_root()?;
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let status = Command::new(cargo)
+        .current_dir(&root)
+        .args(["build", "--release", "--package", "celerrate_cli"])
+        .status()?;
+    if !status.success() {
+        return Err("the release build failed".into());
+    }
+    Ok(root.join("target/release/celerrate"))
 }
