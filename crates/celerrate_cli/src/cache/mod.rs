@@ -4,4 +4,5 @@
 //! every failure mode of a cache file answers by recomputation.
 
 pub mod pack;
+pub mod snapshot;
 pub mod stored;
