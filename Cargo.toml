@@ -15,7 +15,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 insta = { version = "1", features = ["glob"] }
 notify = "8"
-postcard = { version = "1", features = ["use-std"] }
+postcard = { version = "1", default-features = false, features = ["use-std"] }
 rayon = "1"
 rowan = "0.16"
 salsa = "0.27"

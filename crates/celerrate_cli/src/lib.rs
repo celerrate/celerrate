@@ -8,6 +8,7 @@
 
 pub mod analysis;
 pub mod arguments;
+pub mod cache;
 pub mod database;
 pub mod render;
 pub mod session;
