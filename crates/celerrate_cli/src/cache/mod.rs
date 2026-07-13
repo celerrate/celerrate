@@ -8,11 +8,11 @@ pub mod snapshot;
 pub mod stored;
 pub mod verdict;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
-use celerrate_db::ContentHash;
+use celerrate_db::{ContentHash, SourceFile};
 use celerrate_source::FileId;
 use serde::Serialize;
 
@@ -23,6 +23,10 @@ use pack::{Pack, PackHeader};
 use snapshot::{CacheSnapshot, DIAGNOSTICS_PACK, ITEM_TREES_PACK};
 use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
 
+/// One pack's entries in memory: content-addressed, sorted, deduplicated.
+type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
+type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
+
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
 /// replaced by what was actually WRITTEN, and only when both packs
@@ -31,47 +35,26 @@ use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
 /// old snapshot stays, the next pass recomputes the same entries and
 /// retries the write; an occasional redundant rewrite of the healthy
 /// pack alongside a retried failing one is harmless and best-effort.
+///
+/// Collecting the entries runs the very queries a panicked file left
+/// unmemoized (`item_tree`, `resolution_records`), so it happens behind
+/// `analysis::isolated`: a file `outcome.panicked` names is skipped
+/// before either query runs for it, and anything that panics here
+/// anyway — the guard exists for the unexpected, not the expected —
+/// drops this persist silently rather than escaping `run`/`watch` as a
+/// raw abort. The old snapshot stays and the next pass retries, exactly
+/// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
     let header = PackHeader::current(session.configuration.php_version_range(database));
-
-    let mut trees: Vec<(ContentHash, StoredItemTree)> = session
-        .sources
-        .values()
-        .map(|&file| {
-            (
-                celerrate_db::content_hash(database, file),
-                StoredItemTree::of(celerrate_semantics::item_tree(database, file)),
-            )
-        })
-        .collect();
-    sort_entries(&mut trees);
-
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
-    let mut verdicts: Vec<(ContentHash, StoredVerdict)> = Vec::new();
-    for &file in inputs.reported.iter() {
-        let file_id = file.file_id(database);
-        if panicked.contains(&file_id) {
-            continue;
-        }
-        // Mirrors `analyze_one`: a validated hit is only reused when
-        // every stored diagnostic still re-interns, or `persist` would
-        // re-persist an entry the pass itself refused to serve.
-        let stored = match verdict::validated_verdict(&inputs, file) {
-            Some(stored)
-                if stored
-                    .diagnostics
-                    .iter()
-                    .all(|diagnostic| diagnostic.to_diagnostic(file_id).is_some()) =>
-            {
-                stored.clone()
-            }
-            _ => composed_verdict(&inputs, file),
-        };
-        verdicts.push((celerrate_db::content_hash(database, file), stored));
-    }
-    sort_entries(&mut verdicts);
+
+    let Ok((trees, verdicts)) =
+        crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked))
+    else {
+        return;
+    };
 
     if prepare_directory(&session.cache_directory).is_err() {
         return;
@@ -95,6 +78,60 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         });
         session.cache_loaded_range = session.configuration.php_version_range(database);
     }
+}
+
+/// The trees and verdicts one pass may persist: every analyzed file's
+/// item tree, and every reported file's composed verdict, save for
+/// whatever `panicked` names. A panicked file's per-query memoization is
+/// empty (`guarded` never lets a panicked query's result reach salsa's
+/// cache), so recomputing `item_tree` or `resolution_records` for it here
+/// would deterministically reproduce the same panic; skipping it in both
+/// loops, before either query runs, is what keeps this call free of that
+/// panic rather than merely surviving it.
+fn collect_entries(
+    sources: &BTreeMap<FileId, SourceFile>,
+    inputs: &AnalysisInputs,
+    panicked: &BTreeSet<FileId>,
+) -> (TreeEntries, VerdictEntries) {
+    let database = &inputs.database;
+
+    let mut trees: TreeEntries = sources
+        .iter()
+        .filter(|(file_id, _)| !panicked.contains(file_id))
+        .map(|(_, &file)| {
+            (
+                celerrate_db::content_hash(database, file),
+                StoredItemTree::of(celerrate_semantics::item_tree(database, file)),
+            )
+        })
+        .collect();
+    sort_entries(&mut trees);
+
+    let mut verdicts: VerdictEntries = Vec::new();
+    for &file in inputs.reported.iter() {
+        let file_id = file.file_id(database);
+        if panicked.contains(&file_id) {
+            continue;
+        }
+        // Mirrors `analyze_one`: a validated hit is only reused when
+        // every stored diagnostic still re-interns, or `persist` would
+        // re-persist an entry the pass itself refused to serve.
+        let stored = match verdict::validated_verdict(inputs, file) {
+            Some(stored)
+                if stored
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.to_diagnostic(file_id).is_some()) =>
+            {
+                stored.clone()
+            }
+            _ => composed_verdict(inputs, file),
+        };
+        verdicts.push((celerrate_db::content_hash(database, file), stored));
+    }
+    sort_entries(&mut verdicts);
+
+    (trees, verdicts)
 }
 
 /// One reported file's verdict, composed exactly as `analyze_one`
@@ -180,8 +217,14 @@ mod tests {
     use crate::analysis::AnalysisOutcome;
     use crate::session::Session;
 
-    /// A file the pass reported as panicked yields no verdict entry:
-    /// nothing a panic touched enters the persistent cache.
+    /// A file the pass reported as panicked yields no verdict entry, and
+    /// no item-tree entry either: nothing a panic touched enters the
+    /// persistent cache. A panicked file's `item_tree` query was never
+    /// memoized by the pass (`guarded` catches the panic before salsa
+    /// ever caches a result), so recomputing it here would deterministically
+    /// reproduce the same panic, unguarded, and it would escape
+    /// `run`/`watch` as a raw abort rather than the internal-error report
+    /// the pass itself already produced.
     #[test]
     fn a_panicked_file_is_never_persisted() {
         let root = tempfile::tempdir().unwrap();
@@ -203,8 +246,8 @@ mod tests {
         );
         assert_eq!(
             session.cache.item_trees.len(),
-            2,
-            "item trees are content projections and stay cacheable",
+            1,
+            "the panicked file's tree is absent too: its query was never memoized",
         );
     }
 
