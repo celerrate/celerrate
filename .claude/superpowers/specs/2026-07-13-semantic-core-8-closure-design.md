@@ -85,6 +85,46 @@ Amendment history:
   assembly remains the one global serial loop at the next scale-up are
   recorded in full under `.claude/superpowers/audits/`.
 
+- 2026-07-13 - v0.0.1 is released and part 8 closes, and with it the
+  semantic-core sub-project. The tag sits on `4199f52` (pull request
+  #21): workspace version corrected to `0.0.1`, the `test` job of
+  `ci.yml` a matrix over ubuntu, macos, and windows (three Windows
+  test-fixture fixes, no assertion weakened, no production change), a
+  new `.gitattributes` forcing LF checkouts, the user-facing `0.0.1`
+  changelog entry, `cargo xtask release-notes` extracting it (TDD,
+  four tests), `release.yml` with the five-target build matrix and the
+  tag-gated publish job, and the README as the preview's landing page
+  carrying the protocol's numbers. The GitHub Release carries the four
+  `.tar.gz` archives, the Windows `.zip`, and `SHA256SUMS`; the notes
+  are the changelog entry; the downloaded arm64 macOS binary verified
+  by checksum, by `--version` (`celerrate 0.0.1`), and by a live
+  `check` reporting CEL0018/CEL0019 on a fixture Composer project.
+
+  One deviation from the 8c plan, forced by GitHub: `workflow_dispatch`
+  only discovers workflows on the default branch, so the release dry
+  run could not run pre-merge. It ran post-merge, pre-tag, on main
+  (all five build legs green, publish correctly skipped), with a
+  dedicated adversarial review of the workflow YAML as the pre-merge
+  compensation.
+
+  The release verification surfaced one pre-existing bug, shipped in
+  v0.0.1 and recorded here as open priority debt: with no
+  `composer.json`, `celerrate check <relative path>` (including
+  `celerrate check .`) prints the CEL0025 notice, reports zero
+  diagnostics, and exits 0 without analyzing anything, while the same
+  project through an absolute path is analyzed correctly. Composer
+  projects are analyzed correctly through both path forms, so the
+  README's documented quick start is unaffected. The contract-level
+  cause: `discover()` documents that its root must be absolute
+  (`crates/celerrate_project/src/discovery.rs`), and `Session::start`
+  passes the CLI argument through unabsolutized
+  (`crates/celerrate_cli/src/session.rs`). A tool whose output claims
+  a clean project it never analyzed violates the error-resilience
+  ethos; the fix (absolutize the root at startup, with regression
+  tests over both path forms and both manifest states) is follow-up
+  work for the next part, not a re-tag. The 8a/8b audit debt recorded
+  in the entry above remains open and unchanged.
+
 ## 1. Goal and scope
 
 Close the semantic-core sub-project: the persistent artifact cache, the
