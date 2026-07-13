@@ -228,6 +228,6 @@ fn corrupted_packs_never_change_the_rendering() {
     }
 
     // After all that abuse the packs are healthy again: one more
-    // clean pair of runs.
+    // clean run.
     assert_eq!(normalized(&run_check(root.path()), root.path()), baseline);
 }

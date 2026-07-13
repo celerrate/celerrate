@@ -331,6 +331,9 @@ mod tests {
     fn an_item_tree_round_trips_onto_another_file_identity() {
         let source = "<?php namespace App; use Lib\\Helper as H; \
                       class Service extends Base implements Contract {} \
+                      interface Contract {} \
+                      trait Sharable {} \
+                      enum Status {} \
                       function run() {} const LIMIT = 3;";
         let original = parsed_tree(3, source);
         let stored = StoredItemTree::of(&original);
