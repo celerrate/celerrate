@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.0.2] - 2026-07-13
+
 ### Fixed
 
 - `celerrate check` with a relative root (including `celerrate
@@ -53,5 +55,6 @@ reproducible incremental number.
 - Pre-built binaries for Linux x64 and arm64 (static musl builds),
   macOS x64 and arm64, and Windows x64.
 
-[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.1...HEAD
+[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.2...HEAD
+[0.0.2]: https://github.com/celerrate/celerrate/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/celerrate/celerrate/releases/tag/v0.0.1
