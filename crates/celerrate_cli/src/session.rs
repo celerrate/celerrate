@@ -18,7 +18,7 @@ use celerrate_project::{
 use celerrate_semantics::{ArtifactCacheInput, CacheHandle};
 use celerrate_source::FileId;
 use celerrate_stubs::{StubBlobError, StubIndex, StubIndexInput, embedded_stub_index};
-use celerrate_vfs::{Vfs, enumerate_php_files};
+use celerrate_vfs::{Vfs, Walk, enumerate_php_files};
 use salsa::Setter as _;
 
 use crate::analysis::{AnalysisInputs, AnalysisOutcome};
@@ -41,6 +41,12 @@ pub enum InternalError {
     /// derives `Clone`, `PartialEq`, and `Eq` and `std::io::Error` does
     /// not.
     FileUnreadable { path: PathBuf, reason: String },
+    /// A directory the walk found and could not look inside. Everything it
+    /// could reach is still analyzed, but the run no longer claims to have
+    /// seen the whole project: skipping it in silence was a green build
+    /// over a project only half read. Like `FileUnreadable`, this is the
+    /// environment's condition and not Celerrate's bug.
+    DirectoryUnreadable { path: PathBuf, reason: String },
     /// A path `--watch` asked the operating system to observe, and the
     /// operating system refused: a declared autoload directory that has not
     /// been created yet, or a watch budget that is exhausted. Like
@@ -129,8 +135,8 @@ impl Session {
             cache_directory,
             cache_loaded_range,
         };
-        let paths = enumerate_php_files(&session.discovery.walk_roots());
-        session.load(&paths);
+        let walk = enumerate_php_files(&session.discovery.walk_roots());
+        session.load(&walk);
         session
     }
 
@@ -221,20 +227,36 @@ impl Session {
         });
     }
 
-    /// Makes the analyzed set exactly `paths`: bytes read for each, files
-    /// that left the walk dropped. `SourceFile` has no deleted state, and
-    /// a tombstone would leave the set lying about what it contains, so a
-    /// departing file leaves the set outright.
-    fn load(&mut self, paths: &[PathBuf]) {
-        // This load decides, for the file list it is given, exactly which
-        // files cannot be read. The previous load's verdict is superseded,
-        // not added to: a lockfile saved twice under `--watch` re-runs
-        // discovery twice, and an unreadable file must be reported once,
-        // not once per save.
-        self.internal_errors
-            .retain(|error| !matches!(error, InternalError::FileUnreadable { .. }));
+    /// Makes the analyzed set exactly what the walk reached: bytes read for
+    /// each file, files that left the walk dropped. `SourceFile` has no
+    /// deleted state, and a tombstone would leave the set lying about what
+    /// it contains, so a departing file leaves the set outright.
+    ///
+    /// The walk's own refusals arrive with it, because one load is one
+    /// complete verdict about the filesystem it looked at: these are the
+    /// files it could not read, and these are the directories it could not
+    /// open.
+    fn load(&mut self, walk: &Walk) {
+        // This load decides, for the walk it is given, exactly what could
+        // not be read. The previous load's verdict is superseded, not added
+        // to: a lockfile saved twice under `--watch` re-runs discovery
+        // twice, and an unreadable path must be reported once, not once per
+        // save.
+        self.internal_errors.retain(|error| {
+            !matches!(
+                error,
+                InternalError::FileUnreadable { .. } | InternalError::DirectoryUnreadable { .. }
+            )
+        });
+        for directory in &walk.unreadable_directories {
+            self.internal_errors
+                .push(InternalError::DirectoryUnreadable {
+                    path: directory.path.clone(),
+                    reason: directory.reason.clone(),
+                });
+        }
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
-        for path in paths {
+        for path in &walk.files {
             let contents = match std::fs::read(path) {
                 Ok(contents) => contents,
                 Err(error) => {
@@ -350,8 +372,8 @@ impl Session {
                 .to(discovery.php_version_range);
         }
         self.discovery = discovery;
-        let paths = enumerate_php_files(&self.discovery.walk_roots());
-        self.load(&paths);
+        let walk = enumerate_php_files(&self.discovery.walk_roots());
+        self.load(&walk);
     }
 }
 
