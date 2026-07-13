@@ -213,6 +213,43 @@ fn a_verdict_with_an_unknown_identifier_is_discarded() {
     assert!(outcome.diagnostics[0].message.contains("Missing"));
 }
 
+/// A crafted entry whose stored range has `start > end` cannot come from
+/// any real computation: `TextRange::new` asserts `start <= end` and
+/// panics if it does not. The blake3 checksum a hostile pack carries only
+/// proves nothing bit-flipped in transit, not that whoever wrote the pack
+/// was honest, so a reversed range must be caught before it ever reaches
+/// `TextRange::new`. The entry is discarded and the file recomputed, with
+/// no panic and no internal error surfaced to the user.
+#[test]
+fn a_verdict_with_a_reversed_range_is_discarded() {
+    let source = "<?php new Missing();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let mut verdict = probe_verdict();
+    verdict.diagnostics[0].start = 17;
+    verdict.diagnostics[0].end = 10;
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(
+        outcome.panicked.is_empty(),
+        "a crafted reversed range must never panic the analysis: {:?}",
+        outcome.panicked,
+    );
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.message != "planted by the cache probe"),
+        "a malformed entry must not be served: {:?}",
+        outcome.diagnostics,
+    );
+    assert_eq!(outcome.diagnostics.len(), 1, "recomputed honestly");
+    assert!(outcome.diagnostics[0].message.contains("Missing"));
+}
+
 use celerrate_cli::run;
 
 fn run_check(root: &Path) -> (celerrate_cli::Outcome, String) {
