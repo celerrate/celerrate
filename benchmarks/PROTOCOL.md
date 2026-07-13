@@ -31,9 +31,9 @@ installed from its lock file.
 ## Method
 
 The harness is `cargo xtask bench`. It fetches the corpus at the
-pinned commit, installs the vendor tree, copies the corpus into a
-disposable working tree (`target/bench/corpus`), builds the release
-binary, and measures with [hyperfine](https://github.com/sharkdp/hyperfine),
+pinned commit, installs the vendor tree, builds the release binary,
+copies the corpus into a disposable working tree
+(`target/bench/corpus`), and measures with [hyperfine](https://github.com/sharkdp/hyperfine),
 which times the full process: startup, cache loading, analysis,
 rendering. The umbrella design named criterion; criterion measures
 in-process, and the flagship number is defined end to end, process
@@ -93,9 +93,10 @@ Protocol run of 2026-07-13, at commit `ff6b406`:
 | Warm no-change | 1.10 s |
 | Warm one-edit | 1.10 s |
 
-The warm one-edit number is the published number; the README links
-here. (Recorded as the median of three protocol runs; the raw
-hyperfine exports live under `target/bench/` and are not committed.)
+The warm one-edit number is the published number; the README will
+link here when the number is published with v0.0.1. (Recorded as the
+median of three protocol runs; the raw hyperfine exports live under
+`target/bench/` and are not committed.)
 
 Both measured decisions from this run escalated to the human partner
 rather than resolving automatically: the warm one-edit median is at

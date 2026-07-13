@@ -35,6 +35,15 @@ Amendment history:
   run (machine busy) had already put the same two numbers on the same
   side of both thresholds. Nothing in 8a code changes as a result of
   this entry; the decision on both packs is left to the human partner.
+  A cache-hit check grounds the escalation: with `RAYON_NUM_THREADS=1`
+  on the same working copy, cold full measured 1.99 s and warm 1.09 s
+  wall clock, so the cache does load and hit (about 0.9 s of
+  single-thread work skipped). Warm approaches cold in the flagship
+  multithreaded scenario only because that saved work amortizes across
+  ten cores while fixed costs (process start, walk, hashing every file,
+  rebuilding the symbol index, rewriting the packs) dominate both runs.
+  The 0.95 ratio is therefore an economics fact, not a cache-loading
+  failure.
 
 ## 1. Goal and scope
 

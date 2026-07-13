@@ -2,9 +2,11 @@
 //! the committed sources of `celerrate_syntax` from `php.ungram` and the
 //! token table; `fetch-stubs` and `compile-stubs` fetch the pinned
 //! phpstorm-stubs snapshot and drive the stub compiler to (re)produce
-//! the committed stub blob. xtask deliberately depends on no
-//! `celerrate_*` crate: it only spawns `git` and `cargo`, so a broken
-//! generated file or blob can never prevent regenerating it.
+//! the committed stub blob; `corpus` and `bench` fetch the pinned
+//! benchmark corpus and measure it. xtask deliberately depends on no
+//! `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
+//! `hyperfine`, and the built `celerrate` binary, so a broken generated
+//! file, blob, or build can never prevent regenerating what fixes it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;

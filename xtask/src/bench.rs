@@ -83,7 +83,9 @@ pub fn run(check_ceilings: bool) -> Result<()> {
         },
     ];
 
-    // The no-change scenario needs a cache to not change against.
+    // Cold full's last timed run already leaves a cache behind, but
+    // this explicit prime guarantees the warm scenarios a cache to
+    // start from regardless of scenario order.
     prime(&binary, &working)?;
 
     let mut failures = Vec::new();
