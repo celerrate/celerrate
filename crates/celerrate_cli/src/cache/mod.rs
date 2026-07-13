@@ -25,8 +25,12 @@ use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
 
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
-/// replaced by what this pass concluded, so the next cycle's equality
-/// check compares against the last persisted state.
+/// replaced by what was actually WRITTEN, and only when both packs
+/// confirm — whole or nothing, so the next cycle's equality check never
+/// compares against a snapshot the disk does not hold. On failure the
+/// old snapshot stays, the next pass recomputes the same entries and
+/// retries the write; an occasional redundant rewrite of the healthy
+/// pack alongside a retried failing one is harmless and best-effort.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
@@ -47,12 +51,23 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
     let mut verdicts: Vec<(ContentHash, StoredVerdict)> = Vec::new();
     for &file in inputs.reported.iter() {
-        if panicked.contains(&file.file_id(database)) {
+        let file_id = file.file_id(database);
+        if panicked.contains(&file_id) {
             continue;
         }
+        // Mirrors `analyze_one`: a validated hit is only reused when
+        // every stored diagnostic still re-interns, or `persist` would
+        // re-persist an entry the pass itself refused to serve.
         let stored = match verdict::validated_verdict(&inputs, file) {
-            Some(stored) => stored.clone(),
-            None => composed_verdict(&inputs, file),
+            Some(stored)
+                if stored
+                    .diagnostics
+                    .iter()
+                    .all(|diagnostic| diagnostic.to_diagnostic(file_id).is_some()) =>
+            {
+                stored.clone()
+            }
+            _ => composed_verdict(&inputs, file),
         };
         verdicts.push((celerrate_db::content_hash(database, file), stored));
     }
@@ -61,23 +76,25 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     if prepare_directory(&session.cache_directory).is_err() {
         return;
     }
-    write_when_changed(
+    let trees_written = write_when_changed(
         &session.cache_directory.join(ITEM_TREES_PACK),
         &header,
         &trees,
         &session.cache.item_trees,
     );
-    write_when_changed(
+    let verdicts_written = write_when_changed(
         &session.cache_directory.join(DIAGNOSTICS_PACK),
         &header,
         &verdicts,
         &session.cache.verdicts,
     );
-    session.cache = Arc::new(CacheSnapshot {
-        item_trees: trees.into_iter().collect(),
-        verdicts: verdicts.into_iter().collect(),
-    });
-    session.cache_loaded_range = session.configuration.php_version_range(database);
+    if trees_written && verdicts_written {
+        session.cache = Arc::new(CacheSnapshot {
+            item_trees: trees.into_iter().collect(),
+            verdicts: verdicts.into_iter().collect(),
+        });
+        session.cache_loaded_range = session.configuration.php_version_range(database);
+    }
 }
 
 /// One reported file's verdict, composed exactly as `analyze_one`
@@ -129,26 +146,31 @@ fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
 }
 
 /// Rewrites a pack only when its entries differ from the loaded state.
+/// Answers whether `path` now holds exactly `entries`: true when it was
+/// already unchanged and present, or the write just succeeded; false
+/// when encoding or the atomic write failed, in which case whatever was
+/// on disk before (if anything) is untouched. `persist` only swaps the
+/// session's snapshot when this returns true for every pack.
 fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
     path: &Path,
     header: &PackHeader,
     entries: &[(ContentHash, Entry)],
     loaded: &HashMap<ContentHash, Entry>,
-) {
+) -> bool {
     let unchanged = entries.len() == loaded.len()
         && entries
             .iter()
             .all(|(key, value)| loaded.get(key) == Some(value));
     if unchanged && path.is_file() {
-        return;
+        return true;
     }
     let Some(bytes) = pack::encode(&Pack {
         header: header.clone(),
         entries: entries.to_vec(),
     }) else {
-        return;
+        return false;
     };
-    let _ = pack::write_atomically(path, &bytes);
+    pack::write_atomically(path, &bytes).is_ok()
 }
 
 #[cfg(test)]
@@ -183,6 +205,59 @@ mod tests {
             session.cache.item_trees.len(),
             2,
             "item trees are content projections and stay cacheable",
+        );
+    }
+
+    /// When one pack cannot be written, neither the pack that could not
+    /// be replaced nor the snapshot may pretend the write happened: the
+    /// old snapshot stays so the next pass recomputes and retries.
+    /// `write_atomically`'s rename fails on Linux when the destination
+    /// is a directory, which lets this be reproduced deterministically,
+    /// with no chmod and no root privileges.
+    #[test]
+    fn a_write_failure_leaves_the_old_snapshot_in_place() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        assert!(
+            session.cache.verdicts.is_empty(),
+            "a fresh project starts with no snapshot",
+        );
+
+        let cache_directory = root.path().join(".celerrate/cache");
+        std::fs::create_dir_all(&cache_directory).unwrap();
+        std::fs::create_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+        super::persist(&mut session, &outcome);
+
+        assert!(
+            session.cache.verdicts.is_empty(),
+            "the item-trees pack could not be written, so the snapshot must not swap",
+        );
+        assert!(
+            cache_directory
+                .join(super::snapshot::ITEM_TREES_PACK)
+                .is_dir(),
+            "the obstruction is untouched: the failed rename never replaced it",
+        );
+
+        std::fs::remove_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+        super::persist(&mut session, &outcome);
+
+        assert!(
+            cache_directory
+                .join(super::snapshot::ITEM_TREES_PACK)
+                .is_file(),
+            "the obstruction is gone, so this pass writes the pack",
+        );
+        assert_eq!(
+            session.cache.verdicts.len(),
+            1,
+            "both packs confirmed, so the snapshot now swaps",
         );
     }
 }

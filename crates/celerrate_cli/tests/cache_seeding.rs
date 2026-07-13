@@ -288,3 +288,40 @@ fn a_second_run_leaves_equivalent_packs_behind() {
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap(),
     );
 }
+
+/// A planted entry whose record still holds but whose identifier the
+/// binary no longer knows is exactly what `a_verdict_with_an_unknown_
+/// identifier_is_discarded` above proves the pass recomputes rather than
+/// serves. `persist` must mirror that refusal: it may not re-persist the
+/// unknown-identifier verdict just because `validated_verdict` returned
+/// it, or the honest recomputation the pass reported never reaches the
+/// pack that seeds the next run.
+#[test]
+fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {
+    let source = "<?php new Missing();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let mut verdict = probe_verdict();
+    verdict.diagnostics[0].id = "CEL9999".to_owned();
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
+
+    let (_, _) = run_check(root.path());
+
+    let bytes =
+        std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
+    let pack: Pack<Vec<([u8; 32], StoredVerdict)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let (_, persisted) = pack.entries.iter().find(|(key, _)| *key == hash).unwrap();
+
+    assert_eq!(persisted.diagnostics.len(), 1);
+    let diagnostic = &persisted.diagnostics[0];
+    assert_ne!(
+        diagnostic.id, "CEL9999",
+        "the discarded verdict must not survive into the persisted pack",
+    );
+    assert!(
+        diagnostic.message.contains("Missing"),
+        "the persisted diagnostic is the pass's honest recomputation: {diagnostic:?}",
+    );
+}
