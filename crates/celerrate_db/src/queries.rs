@@ -37,6 +37,17 @@ pub fn line_index(db: &dyn salsa::Database, file: SourceFile) -> LineIndex {
     }
 }
 
+/// The content address of one file: the blake3 hash of its raw bytes.
+/// Every persistent-cache entry is keyed by it. A tracked query so one
+/// revision hashes a file at most once, wherever the address is needed.
+pub type ContentHash = [u8; 32];
+
+/// Hashes a file's raw bytes into its content address.
+#[salsa::tracked]
+pub fn content_hash(db: &dyn salsa::Database, file: SourceFile) -> ContentHash {
+    *blake3::hash(file.bytes(db)).as_bytes()
+}
+
 /// The file's decoded bytes would exceed the 4 GiB engine cap.
 pub const SOURCE_TOO_LARGE: DiagnosticId = DiagnosticId::new("CEL0001");
 
@@ -138,5 +149,26 @@ mod tests {
     #[test]
     fn source_too_large_is_stable() {
         assert_eq!(SOURCE_TOO_LARGE.as_str(), "CEL0001");
+    }
+
+    use crate::content_hash;
+
+    #[test]
+    fn the_content_hash_is_a_function_of_the_bytes_alone() {
+        let db = TestDatabase::default();
+        let first = SourceFile::new(&db, FileId::new(0), b"<?php echo 1;".to_vec());
+        let second = SourceFile::new(&db, FileId::new(9), b"<?php echo 1;".to_vec());
+        let different = SourceFile::new(&db, FileId::new(2), b"<?php echo 2;".to_vec());
+        assert_eq!(content_hash(&db, first), content_hash(&db, second));
+        assert_ne!(content_hash(&db, first), content_hash(&db, different));
+    }
+
+    #[test]
+    fn editing_bytes_changes_the_hash() {
+        let mut db = TestDatabase::default();
+        let file = SourceFile::new(&db, FileId::new(0), b"<?php echo 1;".to_vec());
+        let before = content_hash(&db, file);
+        file.set_bytes(&mut db).to(b"<?php echo 2;".to_vec());
+        assert_ne!(before, content_hash(&db, file));
     }
 }
