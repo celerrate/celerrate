@@ -125,6 +125,32 @@ Amendment history:
   work for the next part, not a re-tag. The 8a/8b audit debt recorded
   in the entry above remains open and unchanged.
 
+- 2026-07-14 - the cache audit's Important debt is settled, per
+  `.claude/superpowers/specs/2026-07-14-cache-audit-debt-design.md`:
+  binary identity is now the blake3 self-hash of the executable
+  (uniform dev and release, `CARGO_PKG_VERSION` only as fallback,
+  header shape unchanged so no schema bump); out-of-bounds stored
+  spans are discarded like reversed ones; crash debris is swept and
+  the `.gitignore` written atomically; the stub-blob field, the
+  vendor boundary, torn-read safety, cross-pack independence, and
+  persist-per-watch-cycle are each pinned by tests; a checksum-valid
+  adversarial entry matrix covers the post-decode conversion surface
+  (the fuzz waiver for the pack format is kept on that ground);
+  cache traffic is countable behind `CELERRATE_CACHE_STATS=1`
+  (stderr, non-contractual); and the served-equals-recomputed
+  equivalence net guards revalidation sufficiency mechanically. The
+  first revalidation mirror (`composed_verdict`/`analyze_one`) is
+  gone — one shared composition point; the second
+  (`resolution_records`/`reference_diagnostics`) is explicitly
+  deferred to the type-engine sub-project, which reshapes those
+  paths. Protocol re-run with the self-hash: cold full 1.13 s, warm
+  no-change 0.28 s, warm one-edit 0.30 s (medians of three, same
+  corpus, same machine, per `benchmarks/PROTOCOL.md`) — warm
+  one-edit remains sub-second, closing I1's cost acceptance. The
+  audit's Minor findings M1, M3, M6, M7 remain recorded, accepted
+  polish; the architecture audit's `source_symbol_table` note is
+  unchanged, separate debt.
+
 ## 1. Goal and scope
 
 Close the semantic-core sub-project: the persistent artifact cache, the
