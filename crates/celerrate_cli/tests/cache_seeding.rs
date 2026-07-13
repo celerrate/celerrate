@@ -120,6 +120,30 @@ fn a_range_mismatch_ignores_the_pack() {
     );
 }
 
+/// A pack written under another stub snapshot is ignored whole (audit
+/// finding I3): the field's whole purpose is "a new snapshot changes
+/// availability answers", and it was the one header field no test
+/// proved discards the pack.
+#[test]
+fn a_stub_blob_mismatch_ignores_the_pack() {
+    let source = "<?php class Marker {}";
+    let root = project(&[("a.php", source)]);
+
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let probe = StoredItemTree::of(&ItemTree::default());
+    let mut foreign_stub = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    foreign_stub.stub_blob[0] ^= 0xFF;
+    write_item_trees_pack(root.path(), &foreign_stub, vec![(hash, probe)]);
+
+    let session = Session::start(root.path());
+    let (_, &file) = session.sources.iter().next().unwrap();
+    assert_eq!(
+        item_tree(&session.database, file).declarations.len(),
+        1,
+        "the mismatched pack is ignored and the file is lowered",
+    );
+}
+
 /// A corrupt pack is silently absent.
 #[test]
 fn a_corrupt_pack_is_silently_absent() {

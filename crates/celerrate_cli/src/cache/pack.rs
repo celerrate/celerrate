@@ -188,6 +188,13 @@ mod tests {
         let mut other_binary = header();
         other_binary.binary = "0.0.0-other".to_owned();
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_binary).is_none());
+
+        let mut other_stub = header();
+        other_stub.stub_blob[0] ^= 0xFF;
+        assert!(
+            decode::<Vec<(u32, String)>>(&bytes, &other_stub).is_none(),
+            "the stub-blob field is load-bearing: a new snapshot changes availability answers",
+        );
     }
 
     #[test]
