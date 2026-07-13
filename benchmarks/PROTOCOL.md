@@ -85,22 +85,23 @@ comparison is the v0.1 claim.
 
 ## Results
 
-Protocol run of 2026-07-13, at commit `ff6b406`:
+Protocol run of 2026-07-13, at commit `24b6950`:
 
 | Scenario | Median |
 | --- | --- |
-| Cold full | 1.15 s |
-| Warm no-change | 1.10 s |
-| Warm one-edit | 1.10 s |
+| Cold full | 1.11 s |
+| Warm no-change | 0.28 s |
+| Warm one-edit | 0.29 s |
 
 The warm one-edit number is the published number; the README will
 link here when the number is published with v0.0.1. (Recorded as the
 median of three protocol runs; the raw hyperfine exports live under
 `target/bench/` and are not committed.)
 
-Both measured decisions from this run escalated to the human partner
-rather than resolving automatically: the warm one-edit median is at
-or over one second, and warm no-change is not at or under half of
-cold full. See the 2026-07-13 protocol-run entry in the amendment
-history of `.claude/superpowers/specs/2026-07-13-semantic-core-8-closure-design.md`
-for the measured values and the escalation.
+This run supersedes the same-day protocol run recorded before the
+define()-constants boundary fix (cold full 1.15 s, warm no-change
+1.10 s, warm one-edit 1.10 s): both warm scenarios are now
+comfortably sub-second. See the 2026-07-13 protocol-run entries in
+the amendment history of
+`.claude/superpowers/specs/2026-07-13-semantic-core-8-closure-design.md`
+for the fix, the measured values, and the resulting decisions.
