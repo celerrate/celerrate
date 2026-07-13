@@ -41,7 +41,17 @@ fn analyze(root: &Path) -> Vec<(String, FileOrigin, usize)> {
             let bytes = vfs.contents(file_id).unwrap().to_vec();
             let source = SourceFile::new(&db, file_id, bytes);
             (
-                path.strip_prefix(root).unwrap().display().to_string(),
+                // The comparable identity of a file is its root-relative
+                // path. `display` would spell it with the platform's own
+                // separator, `src\App.php` on Windows, and the expected
+                // values below can pin only one spelling. Joining the
+                // components with `/` spells it the same way everywhere.
+                path.strip_prefix(root)
+                    .unwrap()
+                    .components()
+                    .map(|component| component.as_os_str().to_string_lossy())
+                    .collect::<Vec<_>>()
+                    .join("/"),
                 discovery.classify(path),
                 file_diagnostics(&db, source).len(),
             )
