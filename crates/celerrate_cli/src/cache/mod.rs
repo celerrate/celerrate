@@ -6,3 +6,4 @@
 pub mod pack;
 pub mod snapshot;
 pub mod stored;
+pub mod verdict;

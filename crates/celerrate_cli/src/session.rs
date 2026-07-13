@@ -146,12 +146,18 @@ impl Session {
     /// same storage, the three input handles, and the files the report
     /// speaks about.
     pub fn inputs(&self) -> AnalysisInputs {
+        let current_range = self.configuration.php_version_range(&self.database);
         AnalysisInputs {
             database: self.database.clone(),
             files: self.files,
             stubs: self.stubs,
             configuration: self.configuration,
             reported: self.reported_files(),
+            cache: if current_range == self.cache_loaded_range {
+                self.cache.clone()
+            } else {
+                Arc::new(CacheSnapshot::default())
+            },
         }
     }
 

@@ -14,6 +14,7 @@ use celerrate_source::FileId;
 use celerrate_stubs::StubIndexInput;
 use rayon::prelude::*;
 
+use crate::cache::snapshot::CacheSnapshot;
 use crate::database::AnalysisDatabase;
 
 /// Everything a fan-out needs, and nothing it must not touch. Owned and
@@ -47,6 +48,10 @@ pub struct AnalysisInputs {
     ///
     /// An `Arc` because `AnalysisInputs` is cloned once per file.
     pub reported: Arc<[SourceFile]>,
+    /// The cache snapshot the pass may serve verdicts from. Attached
+    /// range-gated by `Session::inputs`; an empty default when the
+    /// range moved since the snapshot was loaded.
+    pub cache: Arc<CacheSnapshot>,
 }
 
 /// An input was mutated while the fan-out ran. Not an error: a restart
@@ -130,6 +135,15 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
     let database = &inputs.database;
     let file_id = file.file_id(database);
     guarded(file_id, || {
+        if let Some(stored) = crate::cache::verdict::validated_verdict(inputs, file)
+            && let Some(diagnostics) = stored
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.to_diagnostic(file_id))
+                .collect::<Option<Vec<_>>>()
+        {
+            return diagnostics;
+        }
         let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
         diagnostics.extend(
             celerrate_semantics::semantic_diagnostics(
