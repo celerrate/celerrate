@@ -93,6 +93,14 @@ pub fn unknown_symbol_violations(report: &str) -> Vec<String> {
 /// reported, which is a completed analysis; anything above 1 is not.
 pub fn check_snapshot(bless: bool) -> Result<()> {
     let corpus = prepare()?;
+    // The snapshot check always runs cold: a cache left by an earlier
+    // run (or restored by CI's corpus cache) must not be captured into
+    // the pin-keyed cache entry, and the job is only honest about the
+    // committed report if it never depends on mutable state.
+    let cache_directory = corpus.join(".celerrate");
+    if cache_directory.exists() {
+        std::fs::remove_dir_all(&cache_directory)?;
+    }
     let binary = crate::release_binary()?;
     let output = Command::new(&binary).arg("check").arg(&corpus).output()?;
     if !matches!(output.status.code(), Some(0 | 1)) {
