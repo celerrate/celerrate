@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+blake3 = { workspace = true }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_source = { path = "../celerrate_source" }
 celerrate_syntax = { path = "../celerrate_syntax" }

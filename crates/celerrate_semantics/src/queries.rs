@@ -24,9 +24,20 @@ pub fn ast_id_map(db: &dyn salsa::Database, file: SourceFile) -> AstIdMap {
 
 /// The item tree of one file: range-free, so a body edit produces an
 /// equal value and salsa backdates it — the early-cutoff boundary
-/// every cross-file consumer sits behind.
+/// every cross-file consumer sits behind. A cache registered at the
+/// composition root is consulted first, keyed by the file's content
+/// address; the lookup is a pure function of tracked inputs, so the
+/// query stays deterministic either way.
 #[salsa::tracked(returns(ref))]
 pub fn item_tree(db: &dyn salsa::Database, file: SourceFile) -> ItemTree {
+    if let Some(input) = crate::cache::ArtifactCacheInput::try_get(db)
+        && let Some(tree) = input
+            .cache(db)
+            .0
+            .item_tree(file.file_id(db), celerrate_db::content_hash(db, file))
+    {
+        return tree;
+    }
     ItemTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 

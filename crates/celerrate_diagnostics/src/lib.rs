@@ -13,5 +13,5 @@ mod severity;
 
 pub use diagnostic::Diagnostic;
 pub use identifier::DiagnosticId;
-pub use registry::{REGISTRY, RegisteredDiagnostic};
+pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier};
 pub use severity::Severity;

@@ -13,14 +13,17 @@ use std::sync::Arc;
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{
-    FileOrigin, ProjectConfiguration, ProjectDiscovery, ProjectNotice, discover,
+    FileOrigin, PhpVersionRange, ProjectConfiguration, ProjectDiscovery, ProjectNotice, discover,
 };
+use celerrate_semantics::{ArtifactCacheInput, CacheHandle};
 use celerrate_source::FileId;
 use celerrate_stubs::{StubBlobError, StubIndex, StubIndexInput, embedded_stub_index};
 use celerrate_vfs::{Vfs, enumerate_php_files};
 use salsa::Setter as _;
 
 use crate::analysis::{AnalysisInputs, AnalysisOutcome};
+use crate::cache::pack::PackHeader;
+use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::database::AnalysisDatabase;
 use crate::watch::{InputMutation, reconcile};
 
@@ -67,6 +70,16 @@ pub struct Session {
     /// the renderer resolves a diagnostic's `FileId` through.
     pub sources: BTreeMap<FileId, SourceFile>,
     pub internal_errors: Vec<InternalError>,
+    /// The cache snapshot this session was seeded from: consulted for
+    /// verdicts on the first pass, compared against on persist.
+    pub cache: Arc<CacheSnapshot>,
+    /// Where this project's packs live: `<root>/.celerrate/cache`.
+    pub cache_directory: PathBuf,
+    /// The PHP version range the snapshot validated against. Under
+    /// `--watch` a manifest edit can move the range at runtime, and
+    /// range-dependent verdicts must not survive that: passes compare
+    /// this against the current range before attaching them.
+    pub cache_loaded_range: PhpVersionRange,
 }
 
 impl Session {
@@ -93,6 +106,16 @@ impl Session {
             .new(&database);
         let files = AnalyzedFileSet::new(&database, Vec::new());
 
+        let cache_directory = root.join(".celerrate").join("cache");
+        let cache_loaded_range = discovery.php_version_range;
+        let cache = Arc::new(CacheSnapshot::load(
+            &cache_directory,
+            &PackHeader::current(cache_loaded_range),
+        ));
+        let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache(cache.clone()))))
+            .durability(salsa::Durability::HIGH)
+            .new(&database);
+
         let mut session = Self {
             database,
             vfs: Vfs::default(),
@@ -102,6 +125,9 @@ impl Session {
             files,
             sources: BTreeMap::new(),
             internal_errors,
+            cache,
+            cache_directory,
+            cache_loaded_range,
         };
         let paths = enumerate_php_files(&session.discovery.walk_roots());
         session.load(&paths);
@@ -120,12 +146,18 @@ impl Session {
     /// same storage, the three input handles, and the files the report
     /// speaks about.
     pub fn inputs(&self) -> AnalysisInputs {
+        let current_range = self.configuration.php_version_range(&self.database);
         AnalysisInputs {
             database: self.database.clone(),
             files: self.files,
             stubs: self.stubs,
             configuration: self.configuration,
             reported: self.reported_files(),
+            cache: if current_range == self.cache_loaded_range {
+                self.cache.clone()
+            } else {
+                Arc::new(CacheSnapshot::default())
+            },
         }
     }
 

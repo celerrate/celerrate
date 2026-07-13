@@ -97,6 +97,7 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
         if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
             return Outcome::InternalError;
         }
+        crate::cache::persist(session, &outcome);
 
         let changed = wait_for_a_burst(watcher.events());
         if changed.is_empty() {

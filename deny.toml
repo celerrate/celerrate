@@ -3,10 +3,11 @@
 # (unicode-ident, via proc-macro2) was already in the tree through the
 # dev-dependency proc-macro stack. ISC (inotify, inotify-sys) and
 # CC0-1.0 (notify itself) arrive with the `notify` dependency added for
-# `--watch`. Zlib, Unicode-3.0, and ISC are permissive and OSI-approved;
-# CC0-1.0 is a public-domain dedication recognized by the FSF as
-# Free/Libre, though it has not been reviewed or approved by OSI.
-allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0", "ISC", "CC0-1.0"]
+# `--watch`. BSD-2-Clause (arrayref, via blake3) is OSI-approved and
+# permissive. Zlib, Unicode-3.0, ISC, and BSD-2-Clause are permissive
+# and OSI-approved; CC0-1.0 is a public-domain dedication recognized by
+# the FSF as Free/Libre, though it has not been reviewed or approved by OSI.
+allow = ["MIT", "Apache-2.0", "Zlib", "Unicode-3.0", "ISC", "CC0-1.0", "BSD-2-Clause"]
 
 [advisories]
 yanked = "deny"

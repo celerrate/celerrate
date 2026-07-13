@@ -6,6 +6,7 @@
 //! salsa its early cutoff.
 
 mod ast_id;
+mod cache;
 mod defines;
 mod index;
 mod item_nodes;
@@ -15,10 +16,12 @@ mod queries;
 mod reference_checks;
 mod references;
 mod resolve;
+mod revalidation;
 mod symbols;
 mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
+pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use defines::{DefineId, DefinedConstant, defined_constants};
 pub use index::{
     StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
@@ -33,5 +36,6 @@ pub use reference_checks::{
 };
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
+pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution_records};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};

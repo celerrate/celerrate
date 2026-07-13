@@ -76,11 +76,22 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
     registered("CEL0029", "invalid installed packages", "celerrate_project"),
 ];
 
+/// The registered identifier whose text is `text`, re-interned to its
+/// `'static` form. `None` for anything the registry does not know: a
+/// deserialized identifier that fails this lookup comes from another
+/// binary's era and its carrier is discarded, never guessed at.
+pub fn find_identifier(text: &str) -> Option<DiagnosticId> {
+    REGISTRY
+        .iter()
+        .find(|entry| entry.id.as_str() == text)
+        .map(|entry| entry.id)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-    use super::REGISTRY;
+    use super::{REGISTRY, find_identifier};
 
     #[test]
     fn the_registry_is_sorted_unique_and_gapless() {
@@ -116,5 +127,13 @@ mod tests {
                 entry.id.as_str(),
             );
         }
+    }
+
+    #[test]
+    fn a_registered_identifier_is_found_and_an_unknown_one_is_not() {
+        let found = find_identifier("CEL0018").unwrap();
+        assert_eq!(found.as_str(), "CEL0018");
+        assert!(find_identifier("CEL9999").is_none());
+        assert!(find_identifier("").is_none());
     }
 }
