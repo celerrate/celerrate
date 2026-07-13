@@ -451,7 +451,10 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
     let trees: Pack<Vec<([u8; 32], StoredItemTree)>> =
         celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
     let tree_keys: Vec<[u8; 32]> = trees.entries.iter().map(|(key, _)| *key).collect();
-    assert!(tree_keys.contains(&vendor_hash), "the vendor file is indexed");
+    assert!(
+        tree_keys.contains(&vendor_hash),
+        "the vendor file is indexed"
+    );
     assert!(tree_keys.contains(&project_hash));
 
     let bytes =
@@ -463,5 +466,8 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
         !verdict_keys.contains(&vendor_hash),
         "an installed dependency never gets a diagnostics entry",
     );
-    assert!(verdict_keys.contains(&project_hash), "the project file does");
+    assert!(
+        verdict_keys.contains(&project_hash),
+        "the project file does"
+    );
 }

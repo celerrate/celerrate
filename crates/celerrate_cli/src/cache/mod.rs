@@ -132,10 +132,9 @@ fn collect_entries(
         // re-persist an entry the pass itself refused to serve.
         let stored = match verdict::validated_verdict(inputs, file) {
             Some(stored)
-                if stored
-                    .diagnostics
-                    .iter()
-                    .all(|diagnostic| diagnostic.to_diagnostic(file_id, content_length).is_some()) =>
+                if stored.diagnostics.iter().all(|diagnostic| {
+                    diagnostic.to_diagnostic(file_id, content_length).is_some()
+                }) =>
             {
                 stored.clone()
             }
