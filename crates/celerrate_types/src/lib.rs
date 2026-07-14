@@ -60,6 +60,7 @@ mod judgments;
 mod ordering;
 mod representation;
 mod widening;
+mod written;
 
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
