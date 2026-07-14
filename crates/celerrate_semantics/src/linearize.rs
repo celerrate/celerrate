@@ -43,6 +43,7 @@ use crate::members::{ClassMembers, Member, MemberKind};
 use crate::queries::{item_tree, member_tree};
 use crate::resolve::{UseTables, resolve_candidates};
 use crate::symbols::{SymbolSpace, folded_symbol_key};
+use crate::virtual_symbols::{VirtualMember, VirtualMemberKind, VirtualSymbolRegistry};
 
 /// One class-like to linearize: its **pre-folded** ClassLike key (fold
 /// with [`crate::folded_symbol_key`] before interning, so spelling
@@ -102,6 +103,19 @@ pub struct LinearizedMember {
     pub origin: MemberOrigin,
 }
 
+/// One annotation-declared member in linearized position. Sorted with
+/// the real members' convention: stable by (kind, key), nearest
+/// declaration first — the first entry per (kind, key) wins.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LinearizedVirtualMember {
+    /// Folded member key (method names lowercased, property names
+    /// verbatim), from `folded_member_key`.
+    pub key: String,
+    pub member: VirtualMember,
+    /// Folded key of the declaring class-like.
+    pub owner: String,
+}
+
 /// The per-kind suppression facts a class carries: whether the resolved
 /// table defines a magic method that answers otherwise-unknown members,
 /// and whether the class opts into dynamic properties.
@@ -136,6 +150,10 @@ pub struct MagicMarkers {
 pub struct LinearizedClass {
     /// Sorted by `(kind, key)`; the first entry per `(kind, key)` wins.
     pub members: Vec<LinearizedMember>,
+    /// The annotation-declared members contributed by the registered
+    /// providers, walked and sorted with the same convention as
+    /// `members`. Empty when no registry is set (the no-plugin path).
+    pub virtual_members: Vec<LinearizedVirtualMember>,
     /// The inheritance edges, in walk order.
     pub ancestry: Vec<AncestorEdge>,
     /// The folded keys of ancestors that resolved to stubs, transitively
@@ -179,6 +197,7 @@ pub fn linearized_class<'db>(
 
     let mut visited: HashSet<String> = HashSet::new();
     let mut members: Vec<LinearizedMember> = Vec::new();
+    let mut virtual_entries: Vec<LinearizedVirtualMember> = Vec::new();
     let mut ancestry: Vec<AncestorEdge> = Vec::new();
     let mut stub_ancestors: Vec<String> = Vec::new();
     // Set once any visited source class-like opts into dynamic
@@ -218,6 +237,30 @@ pub fn linearized_class<'db>(
 
         for member in &found.group.members {
             push_member(member, &key, origin, adaptations.as_ref(), &mut members);
+        }
+
+        // Virtual members: annotation-declared, contributed by the
+        // registered providers over the class-like's own docblock. The
+        // registry is a singleton input set once at the composition root;
+        // an unset registry (every plain test database) is the no-plugin
+        // path. Walk order here is the ancestry order, so after the stable
+        // sort the first entry per (kind, key) is the nearest declaration.
+        if let Some(registry) = VirtualSymbolRegistry::try_get(db)
+            && let Some(docblock) = &found.group.docblock
+        {
+            for registration in registry.registrations(db) {
+                for member in registration.provider.virtual_members(docblock) {
+                    let kind = match member.kind {
+                        VirtualMemberKind::Method => MemberKind::Method,
+                        VirtualMemberKind::Property => MemberKind::Property,
+                    };
+                    virtual_entries.push(LinearizedVirtualMember {
+                        key: folded_member_key(kind, &member.name),
+                        member,
+                        owner: key.clone(),
+                    });
+                }
+            }
         }
 
         let Some(declaration) = found.declaration.as_ref() else {
@@ -274,6 +317,14 @@ pub fn linearized_class<'db>(
         (a.member.kind as u8, a.key.as_str()).cmp(&(b.member.kind as u8, b.key.as_str()))
     });
 
+    virtual_entries.sort_by(|left, right| {
+        let rank = |member: &VirtualMember| match member.kind {
+            VirtualMemberKind::Method => 0u8,
+            VirtualMemberKind::Property => 1u8,
+        };
+        (rank(&left.member), &left.key).cmp(&(rank(&right.member), &right.key))
+    });
+
     // An unresolved edge — neither a source nor a stub class-like — is a
     // genuinely opaque boundary from the start.
     let mut has_opaque_edge = ancestry
@@ -319,6 +370,7 @@ pub fn linearized_class<'db>(
 
     Some(LinearizedClass {
         members,
+        virtual_members: virtual_entries,
         ancestry,
         stub_ancestors,
         cyclic,
@@ -775,7 +827,58 @@ mod tests {
 
     use super::{ClassQuery, LinearizedClass, MemberOrigin, linearized_class};
     use crate::members::MemberKind;
+    use crate::plugin::PluginIdentity;
     use crate::symbols::{SymbolSpace, folded_symbol_key};
+    use crate::virtual_symbols::{
+        VirtualMember, VirtualMemberKind, VirtualSymbolProvider, VirtualSymbolRegistration,
+        VirtualSymbolRegistry,
+    };
+
+    /// A provider that answers its fixed member set only when the
+    /// docblock text carries `@fake`. Duplicated from Task 1's test
+    /// module in `virtual_symbols.rs` — the crate has no shared
+    /// test-support module yet, which is already recorded debt.
+    #[derive(Debug)]
+    struct FakeProvider {
+        members: Vec<VirtualMember>,
+    }
+
+    impl VirtualSymbolProvider for FakeProvider {
+        fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
+            if class_docblock.contains("@fake") {
+                self.members.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn identity(name: &str) -> PluginIdentity {
+        PluginIdentity {
+            name: name.to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        }
+    }
+
+    fn register_fake_provider(fixture: &Fixture, members: Vec<VirtualMember>) {
+        let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
+            identity: identity("fake"),
+            provider: std::sync::Arc::new(FakeProvider { members }),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    fn virtual_property(name: &str) -> VirtualMember {
+        VirtualMember {
+            kind: VirtualMemberKind::Property,
+            name: name.to_owned(),
+            is_static: false,
+            type_text: Some("string".to_owned()),
+            parameters: Vec::new(),
+        }
+    }
 
     struct Fixture {
         db: TestDatabase,
@@ -1243,6 +1346,72 @@ mod tests {
         assert_eq!(
             member_owner(&both, MemberKind::ClassConstant, "K"),
             Some(("left".to_owned(), MemberOrigin::Inherited)),
+        );
+    }
+
+    #[test]
+    fn a_class_docblock_contributes_virtual_members() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_provider(&fixture, vec![virtual_property("title")]);
+        let linearized = linearize(&fixture, "Post").unwrap();
+        assert_eq!(linearized.virtual_members.len(), 1);
+        assert_eq!(linearized.virtual_members[0].member.name, "title");
+        assert_eq!(linearized.virtual_members[0].owner, "post");
+    }
+
+    #[test]
+    fn virtual_members_inherit_and_the_nearest_declaration_wins() {
+        let fixture = fixture(&[
+            "<?php /** @fake */ class Base {}",
+            "<?php /** @fake */ class Child extends Base {}",
+        ]);
+        register_fake_provider(&fixture, vec![virtual_property("title")]);
+        let linearized = linearize(&fixture, "Child").unwrap();
+        // Both declarations arrive; the walk order puts the child first.
+        assert_eq!(linearized.virtual_members.len(), 2);
+        assert_eq!(linearized.virtual_members[0].owner, "child");
+        assert_eq!(linearized.virtual_members[1].owner, "base");
+    }
+
+    #[test]
+    fn a_class_without_docblock_contributes_nothing_and_no_registry_means_no_virtual_members() {
+        let fixture = fixture(&["<?php class Plain {}"]);
+        // No registry set at all: the no-plugin path.
+        let linearized = linearize(&fixture, "Plain").unwrap();
+        assert!(linearized.virtual_members.is_empty());
+    }
+
+    #[test]
+    fn providers_are_consulted_in_registered_order() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        let _ = VirtualSymbolRegistry::builder(vec![
+            VirtualSymbolRegistration {
+                identity: identity("first"),
+                provider: std::sync::Arc::new(FakeProvider {
+                    members: vec![virtual_property("alpha")],
+                }),
+            },
+            VirtualSymbolRegistration {
+                identity: identity("second"),
+                provider: std::sync::Arc::new(FakeProvider {
+                    members: vec![virtual_property("alpha"), virtual_property("beta")],
+                }),
+            },
+        ])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+
+        let linearized = linearize(&fixture, "Post").unwrap();
+        let keys: Vec<(&str, &str)> = linearized
+            .virtual_members
+            .iter()
+            .map(|entry| (entry.key.as_str(), entry.owner.as_str()))
+            .collect();
+        // Stable sort by (kind, key): both `alpha` entries stay in
+        // registered order (first provider's first), `beta` follows.
+        assert_eq!(
+            keys,
+            vec![("alpha", "post"), ("alpha", "post"), ("beta", "post")]
         );
     }
 }
