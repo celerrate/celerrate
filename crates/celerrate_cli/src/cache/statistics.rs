@@ -11,7 +11,10 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 
 /// One session's cache traffic. Atomic because the item-tree lookups
-/// happen under the rayon fan-out.
+/// happen under the rayon fan-out. The counters are never reset between
+/// watch cycles: they accumulate for the whole session's lifetime, so
+/// under `--watch` each per-cycle stderr line reports running totals
+/// across cycles, not a per-cycle delta.
 #[derive(Debug, Default)]
 pub struct CacheStatistics {
     /// Item-tree lookups answered from the pack.

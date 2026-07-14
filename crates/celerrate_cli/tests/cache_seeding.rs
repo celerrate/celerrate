@@ -512,9 +512,13 @@ fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
 }
 
 /// A stored tree whose declaration names an AST index no tree of this
-/// file has. Whatever the engine answers about the declaration, it must
-/// answer without panicking and without an internal error: `AstId`
-/// lookups never index unchecked.
+/// file has. This row pins the end-to-end contract: a lying stored
+/// declaration flows through the cache and the engine answers about it
+/// without panicking and without an internal error. It does not pin the
+/// unchecked-index guarantee itself — the traced execution path for this
+/// input never reaches `AstIdMap::pointer` — that guarantee is pinned by
+/// `celerrate_semantics`'s own `ast_id` unit tests and by the workspace-wide
+/// `indexing_slicing` denial.
 #[test]
 fn an_item_tree_with_an_absurd_ast_index_never_panics() {
     let source = "<?php class Marker {} new Marker();";
