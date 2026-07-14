@@ -228,6 +228,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_types"
+version = "0.0.2"
+dependencies = [
+ "celerrate_db",
+ "salsa",
+]
+
+[[package]]
 name = "celerrate_vfs"
 version = "0.0.2"
 dependencies = [

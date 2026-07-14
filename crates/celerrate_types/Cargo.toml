@@ -1,0 +1,17 @@
+[package]
+name = "celerrate_types"
+description = "The type lattice: interned types, canonical ordering, widening, and the typed judgments"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+salsa = { workspace = true }
+
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+
+[lints]
+workspace = true
