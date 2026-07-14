@@ -386,6 +386,33 @@ pub struct MatchCase {
     pub body: ExpressionId,
 }
 
+/// One recognized annotation-bearing comment inside a body: content a
+/// type-engine reader consumes, carried in the IR so an edit to it
+/// invalidates body consumers while prose trivia stays invisible.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct BodyAnnotation {
+    /// The comment text, verbatim.
+    pub text: String,
+    /// The first lowered statement starting after the comment ends;
+    /// `None` when the comment trails every statement of the body.
+    pub anchor: Option<StatementId>,
+}
+
+/// Whether one comment token is recognized annotation content: every
+/// docblock (inline `@var`, assertion tags, anything a tag reader may
+/// consume), plus line and block comments carrying a suppression
+/// directive. The redefined comment-only edit class is exactly the
+/// complement: trivia this predicate rejects never changes a body IR.
+pub fn is_recognized_annotation(kind: SyntaxKind, text: &str) -> bool {
+    match kind {
+        SyntaxKind::DocComment => true,
+        SyntaxKind::LineComment | SyntaxKind::BlockComment => {
+            text.contains("@phpstan-ignore") || text.contains("@psalm-suppress")
+        }
+        _ => false,
+    }
+}
+
 /// The lowered body of one function or method: dense arenas, the
 /// top-level statement list, no text offset anywhere.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -394,6 +421,8 @@ pub struct BodyIr {
     pub statements: Vec<BodyStatement>,
     /// The body's top-level statements, in source order.
     pub root: Vec<StatementId>,
+    /// Recognized annotation-bearing comments, in document order.
+    pub annotations: Vec<BodyAnnotation>,
 }
 
 impl BodyIr {
@@ -587,5 +616,41 @@ mod tests {
         };
         let pointer = map.expression_pointer(*value).unwrap();
         assert_eq!(pointer.kind(), SyntaxKind::Literal);
+    }
+
+    #[test]
+    fn the_recognized_annotation_predicate_is_pinned() {
+        use celerrate_syntax::SyntaxKind;
+
+        use super::is_recognized_annotation;
+
+        assert!(is_recognized_annotation(
+            SyntaxKind::DocComment,
+            "/** anything */"
+        ));
+        assert!(is_recognized_annotation(
+            SyntaxKind::LineComment,
+            "// @phpstan-ignore-line"
+        ));
+        assert!(is_recognized_annotation(
+            SyntaxKind::LineComment,
+            "# @psalm-suppress Foo"
+        ));
+        assert!(is_recognized_annotation(
+            SyntaxKind::BlockComment,
+            "/* @phpstan-ignore */"
+        ));
+        assert!(!is_recognized_annotation(
+            SyntaxKind::LineComment,
+            "// prose"
+        ));
+        assert!(!is_recognized_annotation(
+            SyntaxKind::BlockComment,
+            "/* prose */"
+        ));
+        assert!(!is_recognized_annotation(
+            SyntaxKind::Whitespace,
+            "@phpstan-ignore"
+        ));
     }
 }

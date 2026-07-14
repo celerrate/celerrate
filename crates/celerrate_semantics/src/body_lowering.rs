@@ -10,8 +10,8 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxNodePtr};
 
 use crate::ast_id::{AstId, AstIdMap};
 use crate::body::{
-    ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CallArgument, CatchArm,
-    ClassReference, ClosureUse, ExpressionId, MatchCase, MemberReference, StatementId,
+    ArrayEntry, BodyAnnotation, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CallArgument,
+    CatchArm, ClassReference, ClosureUse, ExpressionId, MatchCase, MemberReference, StatementId,
     StaticVariableDeclaration, StringPart, SwitchArm,
 };
 
@@ -108,6 +108,7 @@ pub(crate) fn lower_body(
     };
     let root = lowering.lower_statements(block.statements());
     lowering.ir.root = root;
+    lowering.collect_annotations(&block);
     Some((lowering.ir, lowering.source_map))
 }
 
@@ -846,6 +847,60 @@ impl Lowering<'_> {
             }
         }
         parts
+    }
+
+    /// Collects the recognized comments of the body, in document
+    /// order, each anchored to the first lowered statement that starts
+    /// after it. Ranges are consumed here and never stored: the IR
+    /// keeps text and arena ids only.
+    fn collect_annotations(&mut self, block: &ast::Block) {
+        let mut comments = Vec::new();
+        collect_recognized_comments(block.syntax(), &mut comments);
+        for token in comments {
+            let end = token.text_range().end();
+            let anchor = self
+                .source_map
+                .statements
+                .iter()
+                .enumerate()
+                .filter(|(_, pointer)| pointer.text_range().start() >= end)
+                .min_by_key(|(_, pointer)| pointer.text_range().start())
+                .and_then(|(index, _)| StatementId::from_index(index));
+            self.ir.annotations.push(BodyAnnotation {
+                text: token.text().to_owned(),
+                anchor,
+            });
+        }
+    }
+}
+
+/// The recognized comment tokens under `node`, nested declaration
+/// subtrees skipped: their bodies are other lowerings' scopes.
+/// Closures are not declarations, so their bodies stay in scope.
+fn collect_recognized_comments(
+    node: &SyntaxNode,
+    comments: &mut Vec<celerrate_syntax::SyntaxToken>,
+) {
+    for element in node.children_with_tokens() {
+        match element {
+            celerrate_syntax::SyntaxElement::Node(child) => {
+                if !matches!(
+                    child.kind(),
+                    SyntaxKind::ClassDeclaration
+                        | SyntaxKind::InterfaceDeclaration
+                        | SyntaxKind::TraitDeclaration
+                        | SyntaxKind::EnumDeclaration
+                        | SyntaxKind::FunctionDeclaration,
+                ) {
+                    collect_recognized_comments(&child, comments);
+                }
+            }
+            celerrate_syntax::SyntaxElement::Token(token) => {
+                if crate::body::is_recognized_annotation(token.kind(), token.text()) {
+                    comments.push(token);
+                }
+            }
+        }
     }
 }
 
@@ -1807,5 +1862,61 @@ mod tests {
                 ..
             },
         ));
+    }
+
+    #[test]
+    fn prose_comments_are_invisible_to_the_body() {
+        // The redefined comment-only edit class: trivia no annotation
+        // reader consumes never changes a body IR.
+        let first = body("<?php function f() { // a prose note\n $x; /* more prose */ }");
+        let second = body("<?php function f() { // an edited note\n $x; /* other prose */ }");
+        assert_eq!(first, second);
+        assert!(first.annotations.is_empty());
+    }
+
+    #[test]
+    fn an_inline_var_docblock_is_carried_and_anchored() {
+        let ir = body("<?php function f() { $a; /** @var User $u */ $u; }");
+        assert_eq!(ir.annotations.len(), 1);
+        assert_eq!(ir.annotations[0].text, "/** @var User $u */");
+        // Anchored to the statement that follows it: `$u;`, the second
+        // root statement.
+        assert_eq!(ir.annotations[0].anchor, Some(ir.root[1]));
+
+        let edited = body("<?php function f() { $a; /** @var Admin $u */ $u; }");
+        assert_ne!(ir, edited);
+    }
+
+    #[test]
+    fn suppression_directives_are_carried_prose_line_comments_are_not() {
+        let ir = body(
+            "<?php function f() { // @phpstan-ignore-next-line\n $x->y; # @psalm-suppress PossiblyNullReference\n $z; }",
+        );
+        assert_eq!(ir.annotations.len(), 2);
+        assert!(ir.annotations[0].text.contains("@phpstan-ignore"));
+        assert!(ir.annotations[1].text.contains("@psalm-suppress"));
+    }
+
+    #[test]
+    fn a_trailing_comment_anchors_to_nothing() {
+        let ir = body("<?php function f() { $x; /** @var int $x */ }");
+        assert_eq!(ir.annotations.len(), 1);
+        assert_eq!(ir.annotations[0].anchor, None);
+    }
+
+    #[test]
+    fn nested_declaration_bodies_keep_their_own_annotations() {
+        // The comment belongs to the anonymous class's method body,
+        // not to the enclosing function's.
+        let outer = body(
+            "<?php function f() { $o = new class { function m() { /** @var A $a */ $a; } }; }",
+        );
+        assert!(outer.annotations.is_empty());
+
+        // A closure's body belongs to this lowering, so its
+        // annotations are carried here.
+        let with_closure =
+            body("<?php function f() { $g = function () { /** @var A $a */ $a; }; }");
+        assert_eq!(with_closure.annotations.len(), 1);
     }
 }
