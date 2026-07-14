@@ -17,6 +17,11 @@ contract violated or unprotected; Minor = polish/debt.
 
 Tally: **1 Critical, 8 Important, 8 Minor.**
 
+Settlement (2026-07-14): C1 was fixed before v0.0.1. I1–I8 and M2, M4,
+M5, M8 are settled by the cache-audit-debt part (spec:
+`.claude/superpowers/specs/2026-07-14-cache-audit-debt-design.md`).
+M1, M3, M6, and M7 remain open as recorded, accepted polish.
+
 ---
 
 ## Critical

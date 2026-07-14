@@ -100,6 +100,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
                 return Outcome::InternalError;
             }
             cache::persist(&mut session, &outcome);
+            session.statistics.report();
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
     }

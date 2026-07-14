@@ -13,9 +13,11 @@ use serde::de::DeserializeOwned;
 /// The first eight bytes of every pack file.
 pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 
-/// Bumped whenever any stored shape changes. The header also carries
-/// the binary version, so releases invalidate packs on their own; this
-/// constant is what protects development builds within one version.
+/// Bumped on a deliberate break of the stored shapes. The header also
+/// carries the binary's own content hash, so any rebuild already
+/// discards packs on its own; this constant is no longer what protects
+/// development builds (the self-hash carries that), it is the named,
+/// reviewable record of deliberate format breaks.
 ///
 /// 2: `StoredItemTree` gained `defines`, carrying `define()`-detected
 /// constant names into the item-tree pack (see
@@ -46,7 +48,7 @@ impl PackHeader {
     pub fn current(range: PhpVersionRange) -> Self {
         Self {
             schema: CACHE_SCHEMA_VERSION,
-            binary: env!("CARGO_PKG_VERSION").to_owned(),
+            binary: super::identity::binary_identity().to_owned(),
             stub_blob: *blake3::hash(celerrate_stubs::EMBEDDED_STUB_BLOB).as_bytes(),
             php_minimum: (range.minimum.major, range.minimum.minor),
             php_maximum: (range.maximum.major, range.maximum.minor),
@@ -92,6 +94,13 @@ pub fn decode<Entries: DeserializeOwned>(
     (pack.header == *expected).then_some(pack)
 }
 
+/// The prefix `write_atomically`'s temporary files carry. Named explicitly,
+/// rather than left to `tempfile`'s crate-default, because two other places
+/// match it by literal: `sweep_crash_debris` (crash debris left behind in
+/// `.celerrate/cache/`) and `prepare_directory`'s sweep of `.celerrate/`
+/// itself (the `.gitignore`'s temporary lands there, one level up).
+pub(crate) const TEMPORARY_FILE_PREFIX: &str = ".tmp";
+
 /// Writes bytes to `path` through a temporary file in the same
 /// directory plus a rename, so a reader never sees a torn file and a
 /// concurrent writer's last rename wins whole.
@@ -99,7 +108,9 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| std::io::Error::other("the pack path has no parent directory"))?;
-    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(TEMPORARY_FILE_PREFIX)
+        .tempfile_in(directory)?;
     std::io::Write::write_all(&mut file, bytes)?;
     file.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -186,6 +197,13 @@ mod tests {
         let mut other_binary = header();
         other_binary.binary = "0.0.0-other".to_owned();
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_binary).is_none());
+
+        let mut other_stub = header();
+        other_stub.stub_blob[0] ^= 0xFF;
+        assert!(
+            decode::<Vec<(u32, String)>>(&bytes, &other_stub).is_none(),
+            "the stub-blob field is load-bearing: a new snapshot changes availability answers",
+        );
     }
 
     #[test]
@@ -196,5 +214,67 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"first");
         write_atomically(&path, b"second").unwrap();
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
+    }
+
+    /// Audit finding I1: keying the header on `CARGO_PKG_VERSION` alone
+    /// let development rebuilds within one version accept each other's
+    /// packs — stale messages served byte-for-byte, newly added rules
+    /// silently missing. The header now carries the executable's own
+    /// content hash: two different binaries never speak.
+    #[test]
+    fn the_header_carries_the_binary_self_hash() {
+        assert_eq!(header().binary, super::super::identity::binary_identity());
+    }
+
+    /// The atomicity clause is about concurrency (audit finding I5):
+    /// "a reader never sees a torn file and a concurrent writer's last
+    /// rename wins whole". One writer alternates two payloads while
+    /// this thread reads; every observed read must be byte-for-byte one
+    /// of the two payloads and must decode whole.
+    #[test]
+    fn a_reader_racing_a_writer_never_sees_a_torn_pack() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("pack.bin");
+        let first = encode(&sample()).unwrap();
+        let second = encode(&Pack {
+            header: header(),
+            entries: vec![(9, "nine".to_owned())],
+        })
+        .unwrap();
+        write_atomically(&path, &first).unwrap();
+
+        let writer_path = path.clone();
+        let writer_first = first.clone();
+        let writer_second = second.clone();
+        let writer = std::thread::spawn(move || {
+            for round in 0..200 {
+                let bytes = if round % 2 == 0 {
+                    &writer_second
+                } else {
+                    &writer_first
+                };
+                // A transiently failed write (e.g. Windows' delete-pending
+                // window on the just-replaced file) is not what this test
+                // pins; the assertions below on every observed read carry
+                // the property.
+                let _ = write_atomically(&writer_path, bytes);
+            }
+        });
+
+        for _ in 0..200 {
+            // An errored read observed nothing: on Windows this can happen
+            // transiently while a concurrent rename is in flight, and it is
+            // not a torn read.
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
+            assert!(
+                bytes == first || bytes == second,
+                "a read observed bytes that are neither payload: torn",
+            );
+            let decoded: Option<Pack<Vec<(u32, String)>>> = decode(&bytes, &header());
+            assert!(decoded.is_some(), "every observed read decodes whole");
+        }
+        writer.join().unwrap();
     }
 }

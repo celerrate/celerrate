@@ -206,15 +206,17 @@ impl StoredDiagnostic {
     }
 
     /// `None` when the stored identifier is unknown to the registry (the
-    /// entry comes from another era) or the stored range has `start > end`
+    /// entry comes from another era), the stored range has `start > end`
     /// (the entry cannot come from any real computation: `TextRange::new`
-    /// asserts the ordering and panics otherwise). Either way the answer
-    /// is the same: discard the entry and let the file recompute. The
-    /// blake3 checksum a pack carries proves only that its bytes were not
-    /// corrupted in transit, never that whoever wrote them was honest, so
-    /// this ordering must be checked here rather than trusted.
-    pub fn to_diagnostic(&self, file: FileId) -> Option<Diagnostic> {
-        if self.start > self.end {
+    /// asserts the ordering and panics otherwise), or the range reaches
+    /// past `content_length` (no computation over these bytes could have
+    /// produced it). Either way the answer is the same: discard the entry
+    /// and let the file recompute. The blake3 checksum a pack carries
+    /// proves only that its bytes were not corrupted in transit, never
+    /// that whoever wrote them was honest, so both bounds must be checked
+    /// here rather than trusted.
+    pub fn to_diagnostic(&self, file: FileId, content_length: u32) -> Option<Diagnostic> {
+        if self.start > self.end || self.end > content_length {
             return None;
         }
         Some(Diagnostic {
@@ -374,7 +376,7 @@ mod tests {
             message: "unknown class Missing".to_owned(),
         };
         let stored = StoredDiagnostic::of(&original);
-        let remapped = stored.to_diagnostic(FileId::new(9)).unwrap();
+        let remapped = stored.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(remapped.id, original.id);
         assert_eq!(remapped.severity, original.severity);
         assert_eq!(remapped.file, FileId::new(9));
@@ -385,7 +387,7 @@ mod tests {
             id: "CEL9999".to_owned(),
             ..stored
         };
-        assert!(unknown.to_diagnostic(FileId::new(9)).is_none());
+        assert!(unknown.to_diagnostic(FileId::new(9), 100).is_none());
     }
 
     /// A stored range with `start > end` cannot come from any real
@@ -403,7 +405,7 @@ mod tests {
             end: 10,
             message: "crafted".to_owned(),
         };
-        assert!(reversed.to_diagnostic(FileId::new(9)).is_none());
+        assert!(reversed.to_diagnostic(FileId::new(9), 100).is_none());
     }
 
     /// The boundary itself, an empty range (`start == end`), is a real
@@ -417,10 +419,31 @@ mod tests {
             end: 10,
             message: "empty span".to_owned(),
         };
-        let diagnostic = empty.to_diagnostic(FileId::new(9)).unwrap();
+        let diagnostic = empty.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(
             diagnostic.range,
             TextRange::new(TextSize::from(10), TextSize::from(10))
+        );
+    }
+
+    /// Audit finding M4: a crafted span past the file's end was accepted
+    /// and rendered with an oversized column — a hit that is not
+    /// byte-for-byte anything the computation could produce. The content
+    /// the entry's key hashes is available at both call sites, so the
+    /// length is checked here, like the ordering.
+    #[test]
+    fn a_span_past_the_files_end_is_rejected() {
+        let oversized = StoredDiagnostic {
+            id: "CEL0018".to_owned(),
+            severity: StoredSeverity::Error,
+            start: 10,
+            end: 40,
+            message: "crafted".to_owned(),
+        };
+        assert!(oversized.to_diagnostic(FileId::new(9), 20).is_none());
+        assert!(
+            oversized.to_diagnostic(FileId::new(9), 40).is_some(),
+            "a span ending exactly at the file's end is valid",
         );
     }
 

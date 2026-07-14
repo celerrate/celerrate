@@ -13,6 +13,7 @@ use celerrate_source::FileId;
 use serde::de::DeserializeOwned;
 
 use super::pack::{PackHeader, decode};
+use super::statistics::CacheStatistics;
 use super::stored::{StoredItemTree, StoredVerdict};
 
 pub const ITEM_TREES_PACK: &str = "item_trees.bin";
@@ -50,14 +51,24 @@ fn load_pack<Entry: DeserializeOwned>(
 
 /// The snapshot as the artifact cache the semantics layer consults:
 /// a lookup by content address, with the current file identity stamped
-/// back in.
-pub struct SnapshotCache(pub Arc<CacheSnapshot>);
+/// back in, counting hits and misses as it answers.
+pub struct SnapshotCache {
+    pub snapshot: Arc<CacheSnapshot>,
+    pub statistics: Arc<CacheStatistics>,
+}
 
 impl ArtifactCache for SnapshotCache {
     fn item_tree(&self, file: FileId, content: ContentHash) -> Option<ItemTree> {
-        self.0
-            .item_trees
-            .get(&content)
-            .map(|stored| stored.to_item_tree(file))
+        use std::sync::atomic::Ordering;
+        match self.snapshot.item_trees.get(&content) {
+            Some(stored) => {
+                self.statistics.tree_hits.fetch_add(1, Ordering::Relaxed);
+                Some(stored.to_item_tree(file))
+            }
+            None => {
+                self.statistics.tree_misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
     }
 }

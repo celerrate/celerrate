@@ -24,6 +24,7 @@ use salsa::Setter as _;
 use crate::analysis::{AnalysisInputs, AnalysisOutcome};
 use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
+use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
 use crate::watch::{InputMutation, reconcile};
 
@@ -86,6 +87,10 @@ pub struct Session {
     /// range-dependent verdicts must not survive that: passes compare
     /// this against the current range before attaching them.
     pub cache_loaded_range: PhpVersionRange,
+    /// The session's cache counters, shared with the registered
+    /// `SnapshotCache` and with every `AnalysisInputs` clone. Never
+    /// read by analysis; rendered to stderr on opt-in.
+    pub statistics: Arc<CacheStatistics>,
 }
 
 impl Session {
@@ -112,15 +117,19 @@ impl Session {
             .new(&database);
         let files = AnalyzedFileSet::new(&database, Vec::new());
 
+        let statistics = Arc::new(CacheStatistics::default());
         let cache_directory = root.join(".celerrate").join("cache");
         let cache_loaded_range = discovery.php_version_range;
         let cache = Arc::new(CacheSnapshot::load(
             &cache_directory,
             &PackHeader::current(cache_loaded_range),
         ));
-        let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache(cache.clone()))))
-            .durability(salsa::Durability::HIGH)
-            .new(&database);
+        let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache {
+            snapshot: cache.clone(),
+            statistics: statistics.clone(),
+        })))
+        .durability(salsa::Durability::HIGH)
+        .new(&database);
 
         let mut session = Self {
             database,
@@ -134,6 +143,7 @@ impl Session {
             cache,
             cache_directory,
             cache_loaded_range,
+            statistics,
         };
         let walk = enumerate_php_files(&session.discovery.walk_roots());
         session.load(&walk);
@@ -164,6 +174,7 @@ impl Session {
             } else {
                 Arc::new(CacheSnapshot::default())
             },
+            statistics: self.statistics.clone(),
         }
     }
 

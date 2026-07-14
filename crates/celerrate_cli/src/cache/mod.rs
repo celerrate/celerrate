@@ -3,8 +3,10 @@
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
 
+pub mod identity;
 pub mod pack;
 pub mod snapshot;
+pub mod statistics;
 pub mod stored;
 pub mod verdict;
 
@@ -26,6 +28,17 @@ use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
 /// One pack's entries in memory: content-addressed, sorted, deduplicated.
 type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
+
+/// How one pack write ended.
+enum PackWrite {
+    /// Already on disk, byte-identical, under the current header.
+    Unchanged,
+    /// Encoded and atomically written.
+    Written,
+    /// Encoding or the atomic write failed; whatever was on disk before
+    /// (if anything) is untouched.
+    Failed,
+}
 
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
@@ -58,6 +71,10 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     };
 
     if prepare_directory(&session.cache_directory).is_err() {
+        session
+            .statistics
+            .persist_failed
+            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     // The header the on-disk packs were last confirmed to hold, derived
@@ -83,7 +100,16 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.verdicts,
         header_moved,
     );
-    if trees_written && verdicts_written {
+    for write in [&trees_written, &verdicts_written] {
+        let counter = match write {
+            PackWrite::Unchanged => &session.statistics.persist_skipped,
+            PackWrite::Written => &session.statistics.persist_written,
+            PackWrite::Failed => &session.statistics.persist_failed,
+        };
+        counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+    if !matches!(trees_written, PackWrite::Failed) && !matches!(verdicts_written, PackWrite::Failed)
+    {
         session.cache = Arc::new(CacheSnapshot {
             item_trees: trees.into_iter().collect(),
             verdicts: verdicts.into_iter().collect(),
@@ -125,15 +151,15 @@ fn collect_entries(
         if panicked.contains(&file_id) {
             continue;
         }
+        let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
         // Mirrors `analyze_one`: a validated hit is only reused when
         // every stored diagnostic still re-interns, or `persist` would
         // re-persist an entry the pass itself refused to serve.
         let stored = match verdict::validated_verdict(inputs, file) {
             Some(stored)
-                if stored
-                    .diagnostics
-                    .iter()
-                    .all(|diagnostic| diagnostic.to_diagnostic(file_id).is_some()) =>
+                if stored.diagnostics.iter().all(|diagnostic| {
+                    diagnostic.to_diagnostic(file_id, content_length).is_some()
+                }) =>
             {
                 stored.clone()
             }
@@ -146,23 +172,12 @@ fn collect_entries(
     (trees, verdicts)
 }
 
-/// One reported file's verdict, composed exactly as `analyze_one`
-/// composes its diagnostics, with the records the entry must
-/// revalidate against. Every query here is memoized from the pass.
+/// One reported file's verdict — its diagnostics through the shared
+/// composition point, with the records the entry must revalidate
+/// against. Every query here is memoized from the pass.
 fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> StoredVerdict {
     let database = &inputs.database;
-    let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
-    diagnostics.extend(
-        celerrate_semantics::semantic_diagnostics(
-            database,
-            file,
-            inputs.files,
-            inputs.stubs,
-            inputs.configuration,
-        )
-        .iter()
-        .cloned(),
-    );
+    let diagnostics = crate::analysis::composed_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
         database,
         file,
@@ -182,48 +197,84 @@ fn sort_entries<Entry>(entries: &mut Vec<(ContentHash, Entry)>) {
     entries.dedup_by(|left, right| left.0 == right.0);
 }
 
-/// Creates the cache directory and its self-ignoring `.gitignore`.
+/// Creates the cache directory and its self-ignoring `.gitignore`, and
+/// sweeps crash debris from both `.celerrate/cache/` and its parent
+/// `.celerrate/`. The `.gitignore` goes through the atomic write (audit
+/// finding M8): a plain write torn by a crash left a half-written file
+/// that was never repaired, since only existence is checked. Its
+/// temporary lands in `.celerrate/` (the `.gitignore`'s own parent), not
+/// in `.celerrate/cache/`, so the parent gets the same best-effort sweep
+/// or a crash during first-time `.gitignore` creation leaves a `.tmp*`
+/// orphan forever (whole-branch review finding, closing the M2/M8 seam).
 fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(cache_directory)?;
+    sweep_crash_debris(cache_directory);
     if let Some(dot_celerrate) = cache_directory.parent() {
+        sweep_crash_debris(dot_celerrate);
         let gitignore = dot_celerrate.join(".gitignore");
         if !gitignore.exists() {
-            std::fs::write(gitignore, "*\n")?;
+            pack::write_atomically(&gitignore, b"*\n")?;
         }
     }
     Ok(())
 }
 
+/// Best-effort removal of temporary files a crash mid-write left behind
+/// (audit finding M2): `write_atomically`'s temporaries carry
+/// `pack::TEMPORARY_FILE_PREFIX`, survive SIGKILL and power loss, and
+/// nothing else ever removes them. A concurrent process mid-persist can
+/// lose its temporary to this sweep; its rename then fails, that persist
+/// is skipped, and its next pass rewrites — the same best-effort answer
+/// as any other write failure.
+fn sweep_crash_debris(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(pack::TEMPORARY_FILE_PREFIX)
+        {
+            let _ = std::fs::remove_file(entry.path());
+        }
+    }
+}
+
 /// Rewrites a pack only when its entries differ from the loaded state,
 /// or when `header_moved` says the header the file was last confirmed to
-/// hold is not the current one. Answers whether `path` now holds exactly
-/// `entries` under `header`: true when it was already unchanged, present,
-/// and under the current header, or the write just succeeded; false when
-/// encoding or the atomic write failed, in which case whatever was on
-/// disk before (if anything) is untouched. `persist` only swaps the
-/// session's snapshot when this returns true for every pack.
+/// hold is not the current one. Answers how `path` came to hold `entries`
+/// under `header`: `Unchanged` when it was already unchanged, present,
+/// and under the current header; `Written` when the write just
+/// succeeded; `Failed` when encoding or the atomic write failed, in
+/// which case whatever was on disk before (if anything) is untouched.
+/// `persist` only swaps the session's snapshot when neither pack failed.
 fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
     path: &Path,
     header: &PackHeader,
     entries: &[(ContentHash, Entry)],
     loaded: &HashMap<ContentHash, Entry>,
     header_moved: bool,
-) -> bool {
+) -> PackWrite {
     let unchanged = !header_moved
         && entries.len() == loaded.len()
         && entries
             .iter()
             .all(|(key, value)| loaded.get(key) == Some(value));
     if unchanged && path.is_file() {
-        return true;
+        return PackWrite::Unchanged;
     }
     let Some(bytes) = pack::encode(&Pack {
         header: header.clone(),
         entries: entries.to_vec(),
     }) else {
-        return false;
+        return PackWrite::Failed;
     };
-    pack::write_atomically(path, &bytes).is_ok()
+    if pack::write_atomically(path, &bytes).is_ok() {
+        PackWrite::Written
+    } else {
+        PackWrite::Failed
+    }
 }
 
 #[cfg(test)]
@@ -390,5 +441,93 @@ mod tests {
             .is_none(),
             "and no longer under the stale one",
         );
+    }
+
+    /// Audit finding M2: `write_atomically`'s temporary files (the
+    /// `.tmp` prefix `tempfile` uses) survive SIGKILL and power loss in
+    /// `.celerrate/cache/`, and nothing ever swept them. `persist` now
+    /// sweeps them best-effort; anything not matching the prefix is
+    /// someone else's file and stays. Whole-branch review finding M2/M8:
+    /// `write_atomically(&gitignore, ...)`'s temporary lands in
+    /// `.celerrate/`, the target's parent, not in `.celerrate/cache/`, so a
+    /// crash during first-time `.gitignore` creation left a `.tmp*` orphan
+    /// no sweep ever reached; `prepare_directory` now sweeps the parent
+    /// too, same prefix, same best-effort.
+    #[test]
+    fn crash_debris_is_swept_and_other_files_are_not() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+
+        let cache_directory = root.path().join(".celerrate/cache");
+        let dot_celerrate = root.path().join(".celerrate");
+        std::fs::create_dir_all(&cache_directory).unwrap();
+        std::fs::write(cache_directory.join(".tmpAbC123"), b"debris").unwrap();
+        std::fs::write(cache_directory.join("unrelated.bin"), b"not ours").unwrap();
+        std::fs::write(dot_celerrate.join(".tmpDeF456"), b"parent debris").unwrap();
+        std::fs::write(
+            dot_celerrate.join("unrelated-parent.bin"),
+            b"not ours either",
+        )
+        .unwrap();
+
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+        super::persist(&mut session, &outcome);
+
+        assert!(
+            !cache_directory.join(".tmpAbC123").exists(),
+            "the crash debris is gone",
+        );
+        assert!(
+            cache_directory.join("unrelated.bin").exists(),
+            "only the .tmp prefix is ours to sweep",
+        );
+        assert!(
+            !dot_celerrate.join(".tmpDeF456").exists(),
+            "the parent directory's crash debris is gone too",
+        );
+        assert!(
+            dot_celerrate.join("unrelated-parent.bin").exists(),
+            "the parent sweep only ever touches the .tmp prefix",
+        );
+    }
+
+    /// Audit finding M5 through I8's counters: a persist that writes, a
+    /// persist that skips, and a persist that fails are each counted, so
+    /// a permanently unwritable cache directory is at least observable.
+    #[test]
+    fn persist_outcomes_are_counted() {
+        use std::sync::atomic::Ordering;
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+
+        super::persist(&mut session, &outcome);
+        assert_eq!(
+            session.statistics.persist_written.load(Ordering::Relaxed),
+            2
+        );
+
+        super::persist(&mut session, &outcome);
+        assert_eq!(
+            session.statistics.persist_skipped.load(Ordering::Relaxed),
+            2
+        );
+
+        // Obstruct one pack: its rename fails deterministically (rename
+        // onto a directory), the other pack is unchanged.
+        let cache_directory = root.path().join(".celerrate/cache");
+        std::fs::remove_file(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+        std::fs::create_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
+        super::persist(&mut session, &outcome);
+        assert_eq!(session.statistics.persist_failed.load(Ordering::Relaxed), 1);
     }
 }

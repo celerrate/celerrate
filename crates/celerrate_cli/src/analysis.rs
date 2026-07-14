@@ -52,6 +52,9 @@ pub struct AnalysisInputs {
     /// range-gated by `Session::inputs`; an empty default when the
     /// range moved since the snapshot was loaded.
     pub cache: Arc<CacheSnapshot>,
+    /// The session's cache counters. Written by the pass, never read
+    /// by it: statistics do not feed analysis.
+    pub statistics: Arc<crate::cache::statistics::CacheStatistics>,
 }
 
 /// An input was mutated while the fan-out ran. Not an error: a restart
@@ -129,34 +132,67 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass)).map_err(|_| Panicked)
 }
 
+/// One file's diagnostics, computed: decode and syntax, then references
+/// and gating. The single composition point — `analyze_one` serves it on
+/// a cache miss, `persist` re-composes through it, and the equivalence
+/// harness recomputes through it — so the composers cannot drift (audit
+/// finding I2's first hand-maintained mirror).
+pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+    let database = &inputs.database;
+    let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
+    diagnostics.extend(
+        celerrate_semantics::semantic_diagnostics(
+            database,
+            file,
+            inputs.files,
+            inputs.stubs,
+            inputs.configuration,
+        )
+        .iter()
+        .cloned(),
+    );
+    diagnostics
+}
+
 /// One file's total: decode and syntax, then references and gating.
 /// Nothing composes those two families below this line.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
+    use std::sync::atomic::Ordering;
+
+    use crate::cache::verdict::VerdictLookup;
+
     let database = &inputs.database;
     let file_id = file.file_id(database);
+    let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
     guarded(file_id, || {
-        if let Some(stored) = crate::cache::verdict::validated_verdict(inputs, file)
-            && let Some(diagnostics) = stored
-                .diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.to_diagnostic(file_id))
-                .collect::<Option<Vec<_>>>()
-        {
-            return diagnostics;
+        let statistics = &inputs.statistics;
+        match crate::cache::verdict::lookup_verdict(inputs, file) {
+            VerdictLookup::Hit(stored) => {
+                if let Some(diagnostics) = stored
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
+                    return diagnostics;
+                }
+                // Revalidated, but a stored diagnostic failed conversion:
+                // the same refusal as a moved answer.
+                statistics
+                    .verdicts_discarded
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            VerdictLookup::Discarded => {
+                statistics
+                    .verdicts_discarded
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            VerdictLookup::Absent => {
+                statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
+            }
         }
-        let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
-        diagnostics.extend(
-            celerrate_semantics::semantic_diagnostics(
-                database,
-                file,
-                inputs.files,
-                inputs.stubs,
-                inputs.configuration,
-            )
-            .iter()
-            .cloned(),
-        );
-        diagnostics
+        composed_diagnostics(inputs, file)
     })
 }
 
