@@ -9,7 +9,7 @@ use crate::representation::{CallableParameter, StringConstraint, TypeData, TypeI
 
 /// The fixed rank of each variant. Extending tasks append new variants
 /// at their documented rank; existing ranks never change.
-fn rank(data: &TypeData<'_>) -> u8 {
+pub(crate) fn rank(data: &TypeData<'_>) -> u8 {
     match data {
         TypeData::Never => 0,
         TypeData::Void => 1,

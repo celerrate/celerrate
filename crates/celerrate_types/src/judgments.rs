@@ -252,6 +252,29 @@ fn judge_class_hierarchy(
     }
 }
 
+/// Whether `of` denotes a value set with exactly one member: `Null`, a
+/// `Bool` literal, a singleton `Int` range (`minimum == maximum`, both
+/// bounded), a `Float` literal, a `String` literal constraint, or an
+/// `EnumCase`. Used by the target-union decomposition to tell a
+/// single-valued candidate (checked exhaustively against each target
+/// constituent) from a splittable one that could straddle a partition.
+fn is_single_valued<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    match of.data(db) {
+        TypeData::Null
+        | TypeData::Bool { literal: Some(_) }
+        | TypeData::Float { literal: Some(_) }
+        | TypeData::String {
+            constraint: StringConstraint::Literal(_),
+        }
+        | TypeData::EnumCase { .. } => true,
+        TypeData::Int {
+            minimum: Some(low),
+            maximum: Some(high),
+        } => low == high,
+        _ => false,
+    }
+}
+
 fn judge<'db>(
     db: &'db dyn salsa::Database,
     context: JudgmentContext,
@@ -283,11 +306,35 @@ fn judge<'db>(
         );
     }
     if let TypeData::Union { constituents } = target.data(db) {
-        return Proof::any(
+        let folded = Proof::any(
             constituents
                 .iter()
                 .map(|part| judge(db, context, candidate, *part)),
         );
+        // A `Fails` here means every constituent refuted the candidate
+        // individually, which is sound only when the candidate cannot
+        // itself straddle the union's partition. A single-valued
+        // candidate (one concrete runtime value) is checked exhaustively
+        // by that per-constituent walk, so its `Fails` stands. So does a
+        // `Fails` against a union where at most one constituent shares
+        // the candidate's top-level kind: there is nothing of that kind
+        // to straddle across. Otherwise the candidate is a splittable
+        // range or set that could be covered by the union's kind-sharing
+        // constituents together without any one of them covering it
+        // alone (`int <: int<min, -1>|int<0, max>` holds even though
+        // `int` fails against each half), so the refutation is demoted
+        // to `CannotProve`.
+        if folded == Proof::Fails && !is_single_valued(db, candidate) {
+            let candidate_rank = crate::ordering::rank(candidate.data(db));
+            let matching_kinds = constituents
+                .iter()
+                .filter(|part| crate::ordering::rank(part.data(db)) == candidate_rank)
+                .count();
+            if matching_kinds >= 2 {
+                return Proof::CannotProve;
+            }
+        }
+        return folded;
     }
     if let TypeData::Intersection { intersectands } = candidate.data(db) {
         return match Proof::any(
@@ -1140,6 +1187,31 @@ mod tests {
             judge(&f, case, TypeId::class(db, "HasLabel", vec![])),
             Proof::Holds
         );
+    }
+
+    #[test]
+    fn a_splittable_candidate_crossing_a_partitioned_union_is_undecidable() {
+        let f = fixture(&[]);
+        let db = &f.db;
+        let split = TypeId::union(
+            db,
+            [
+                TypeId::int_range(db, None, Some(-1)),
+                TypeId::int_range(db, Some(0), None),
+            ],
+        );
+        assert_eq!(judge(&f, TypeId::int(db), split), Proof::CannotProve);
+        // A literal still refutes decisively: 5 is in neither part.
+        let gapped = TypeId::union(
+            db,
+            [
+                TypeId::int_range(db, Some(0), Some(3)),
+                TypeId::int_range(db, Some(10), Some(20)),
+            ],
+        );
+        assert_eq!(judge(&f, TypeId::int_literal(db, 5), gapped), Proof::Fails);
+        // A candidate of a kind absent from the union still refutes.
+        assert_eq!(judge(&f, TypeId::float(db), split), Proof::Fails);
     }
 
     #[test]
