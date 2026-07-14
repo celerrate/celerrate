@@ -10,14 +10,45 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxNodePtr};
 
 use crate::ast_id::{AstId, AstIdMap};
 use crate::body::{
-    ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CatchArm, ExpressionId,
-    MatchCase, StatementId, StaticVariableDeclaration, StringPart, SwitchArm,
+    ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CallArgument, CatchArm,
+    ClassReference, ExpressionId, MatchCase, MemberReference, StatementId,
+    StaticVariableDeclaration, StringPart, SwitchArm,
 };
 
 /// The kind of a wreckage-tolerant operator token: `Error` when error
 /// recovery produced none, keeping the lowering total and deterministic.
 fn token_kind_or_error(token: Option<celerrate_syntax::SyntaxToken>) -> SyntaxKind {
     token.map_or(SyntaxKind::Error, |token| token.kind())
+}
+
+/// Whether the dereference chain rooted at `expression` contains a
+/// `?->` link. Only the four chain kinds are descended; a parenthesized
+/// prefix is not part of the chain (PHP semantics: parentheses stop the
+/// short-circuit), so it answers `false` here and wraps on its own when
+/// its interior is lowered.
+fn chain_contains_null_safe(expression: &ast::Expression) -> bool {
+    let mut current = expression.clone();
+    loop {
+        let subject = match &current {
+            ast::Expression::MemberAccessExpression(access) => {
+                if access
+                    .operator_token()
+                    .is_some_and(|token| token.kind() == SyntaxKind::NullsafeArrow)
+                {
+                    return true;
+                }
+                access.subject()
+            }
+            ast::Expression::CallExpression(call) => call.callee(),
+            ast::Expression::IndexExpression(index) => index.subject(),
+            ast::Expression::ScopedAccessExpression(scoped) => scoped.subject(),
+            _ => return false,
+        };
+        match subject {
+            Some(subject) => current = subject,
+            None => return false,
+        }
+    }
 }
 
 /// Lowers one function or method declaration's body. `None` when the
@@ -343,7 +374,79 @@ impl Lowering<'_> {
     }
 
     fn lower_expression(&mut self, expression: &ast::Expression) -> ExpressionId {
-        self.lower_expression_kind(expression)
+        let id = self.lower_chain_link(expression);
+        if chain_contains_null_safe(expression) {
+            return self.allocate_expression(
+                BodyExpression::NullSafeChain { chain: id },
+                expression.syntax(),
+            );
+        }
+        id
+    }
+
+    fn lower_chain_link(&mut self, expression: &ast::Expression) -> ExpressionId {
+        match expression {
+            ast::Expression::MemberAccessExpression(access) => {
+                let receiver = self.lower_link_or_missing(access.subject(), access.syntax());
+                let null_safe = access
+                    .operator_token()
+                    .is_some_and(|token| token.kind() == SyntaxKind::NullsafeArrow);
+                let member = self.lower_member_reference(access.member_name());
+                self.allocate_expression(
+                    BodyExpression::MemberAccess {
+                        receiver,
+                        member,
+                        null_safe,
+                    },
+                    access.syntax(),
+                )
+            }
+            ast::Expression::ScopedAccessExpression(scoped) => {
+                let subject = self.lower_link_or_missing(scoped.subject(), scoped.syntax());
+                let member = self.lower_member_reference(scoped.member_name());
+                self.allocate_expression(
+                    BodyExpression::ScopedAccess { subject, member },
+                    scoped.syntax(),
+                )
+            }
+            ast::Expression::CallExpression(call) => {
+                let callee = self.lower_link_or_missing(call.callee(), call.syntax());
+                let is_first_class = call.argument_list().is_some_and(|list| {
+                    list.ellipsis_token().is_some() && list.arguments().next().is_none()
+                });
+                let lowered = if is_first_class {
+                    BodyExpression::CallableReference { callee }
+                } else {
+                    BodyExpression::Call {
+                        callee,
+                        arguments: self.lower_call_arguments(call.argument_list()),
+                    }
+                };
+                self.allocate_expression(lowered, call.syntax())
+            }
+            ast::Expression::IndexExpression(index) => {
+                let subject = self.lower_link_or_missing(index.subject(), index.syntax());
+                let lowered = BodyExpression::Index {
+                    subject,
+                    index: index
+                        .index()
+                        .map(|expression| self.lower_expression(&expression)),
+                };
+                self.allocate_expression(lowered, index.syntax())
+            }
+            other => self.lower_expression_kind(other),
+        }
+    }
+
+    fn lower_link_or_missing(
+        &mut self,
+        expression: Option<ast::Expression>,
+        parent: &SyntaxNode,
+    ) -> ExpressionId {
+        match expression {
+            Some(expression) => self.lower_chain_link(&expression),
+            None => self.allocate_expression(BodyExpression::Missing, parent),
+        }
     }
 
     fn lower_expression_or_missing(
@@ -355,6 +458,52 @@ impl Lowering<'_> {
             Some(expression) => self.lower_expression(&expression),
             None => self.allocate_expression(BodyExpression::Missing, parent),
         }
+    }
+
+    fn lower_member_reference(&mut self, member: Option<ast::MemberName>) -> MemberReference {
+        let Some(member) = member else {
+            return MemberReference::Missing;
+        };
+        if let Some(token) = member.name_token() {
+            return MemberReference::Named {
+                name: token.text().to_owned(),
+            };
+        }
+        let braced = member
+            .syntax()
+            .children_with_tokens()
+            .filter_map(|element| element.into_token())
+            .any(|token| token.kind() == SyntaxKind::OpenBrace);
+        match member.expression() {
+            Some(ast::Expression::VariableReference(variable)) if !braced => {
+                match variable.name_token() {
+                    Some(token) => MemberReference::Variable {
+                        name: token.text().trim_start_matches('$').to_owned(),
+                    },
+                    None => MemberReference::Missing,
+                }
+            }
+            Some(expression) => MemberReference::Computed {
+                expression: self.lower_expression(&expression),
+            },
+            None => MemberReference::Missing,
+        }
+    }
+
+    fn lower_call_arguments(&mut self, list: Option<ast::ArgumentList>) -> Vec<CallArgument> {
+        let arguments: Vec<ast::Argument> = list
+            .into_iter()
+            .flat_map(|list| list.arguments().collect::<Vec<_>>())
+            .collect();
+        let mut lowered = Vec::new();
+        for argument in &arguments {
+            lowered.push(CallArgument {
+                label: argument.label_token().map(|token| token.text().to_owned()),
+                spread: argument.spread_token().is_some(),
+                value: self.lower_expression_or_missing(argument.expression(), argument.syntax()),
+            });
+        }
+        lowered
     }
 
     fn lower_expression_kind(&mut self, expression: &ast::Expression) -> ExpressionId {
@@ -507,6 +656,39 @@ impl Lowering<'_> {
                     arms,
                 }
             }
+            ast::Expression::NewExpression(new) => {
+                let (class, arguments) = if let Some(declaration) = new.class_declaration() {
+                    let class = match self.map.index_of(declaration.syntax()) {
+                        Some(index) => ClassReference::Anonymous {
+                            declaration: AstId {
+                                file: self.file,
+                                index,
+                            },
+                        },
+                        None => ClassReference::Missing,
+                    };
+                    // An anonymous class carries its own constructor
+                    // arguments inside the declaration node.
+                    (
+                        class,
+                        self.lower_call_arguments(declaration.argument_list()),
+                    )
+                } else {
+                    let class = if new.static_keyword_token().is_some() {
+                        ClassReference::StaticKeyword
+                    } else if let Some(name) = new.name() {
+                        ClassReference::Named { name: name.text() }
+                    } else if let Some(expression) = new.expression() {
+                        ClassReference::Dynamic {
+                            expression: self.lower_expression(&expression),
+                        }
+                    } else {
+                        ClassReference::Missing
+                    };
+                    (class, self.lower_call_arguments(new.argument_list()))
+                };
+                BodyExpression::New { class, arguments }
+            }
             _ => BodyExpression::Missing,
         };
         self.allocate_expression(lowered, node)
@@ -618,7 +800,8 @@ mod tests {
     use celerrate_syntax::SyntaxKind;
 
     use crate::body::{
-        ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, StringPart,
+        ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, ClassReference,
+        MemberReference, StringPart,
     };
 
     /// Lowers the first function or method of `source`.
@@ -1250,5 +1433,250 @@ mod tests {
             ir.expression(*target).unwrap(),
             BodyExpression::Variable { .. }
         ));
+    }
+
+    fn null_safe_chain_count(ir: &BodyIr) -> usize {
+        ir.expressions
+            .iter()
+            .filter(|expression| matches!(expression, BodyExpression::NullSafeChain { .. }))
+            .count()
+    }
+
+    #[test]
+    fn a_method_call_on_this_lowers_as_call_over_member_access() {
+        let ir = body("<?php function f() { $this->run(1, label: 2, ...$rest); }");
+        let BodyExpression::Call { callee, arguments } = root_expression(&ir, 0) else {
+            panic!("expected a call");
+        };
+        let BodyExpression::MemberAccess {
+            receiver,
+            member,
+            null_safe,
+        } = ir.expression(*callee).unwrap()
+        else {
+            panic!("expected a member access callee");
+        };
+        assert!(!*null_safe);
+        assert_eq!(
+            member,
+            &MemberReference::Named {
+                name: "run".to_owned()
+            }
+        );
+        assert_eq!(
+            ir.expression(*receiver),
+            Some(&BodyExpression::Variable {
+                name: "this".to_owned()
+            }),
+        );
+        assert_eq!(arguments.len(), 3);
+        assert_eq!(arguments[0].label, None);
+        assert_eq!(arguments[1].label.as_deref(), Some("label"));
+        assert!(arguments[2].spread);
+    }
+
+    #[test]
+    fn member_references_distinguish_named_variable_and_computed() {
+        let ir =
+            body("<?php function f() { $a->name; $a->$dynamic; $a->{$computed}; Foo::$property; }");
+        let expect_member = |position: usize| match root_expression(&ir, position) {
+            BodyExpression::MemberAccess { member, .. } => member.clone(),
+            BodyExpression::ScopedAccess { member, .. } => member.clone(),
+            other => panic!("expected an access, got {other:?}"),
+        };
+        assert_eq!(
+            expect_member(0),
+            MemberReference::Named {
+                name: "name".to_owned()
+            }
+        );
+        assert_eq!(
+            expect_member(1),
+            MemberReference::Variable {
+                name: "dynamic".to_owned()
+            }
+        );
+        assert!(matches!(expect_member(2), MemberReference::Computed { .. }));
+        assert_eq!(
+            expect_member(3),
+            MemberReference::Variable {
+                name: "property".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn scoped_access_and_class_constants_lower() {
+        let ir = body("<?php function f() { Foo::bar(); static::create(); Foo::class; }");
+        let BodyExpression::Call { callee, .. } = root_expression(&ir, 0) else {
+            panic!("expected a call");
+        };
+        assert!(matches!(
+            ir.expression(*callee).unwrap(),
+            BodyExpression::ScopedAccess { .. }
+        ));
+        let BodyExpression::Call { callee, .. } = root_expression(&ir, 1) else {
+            panic!("expected a call");
+        };
+        let BodyExpression::ScopedAccess { subject, .. } = ir.expression(*callee).unwrap() else {
+            panic!("expected a scoped access");
+        };
+        assert_eq!(
+            ir.expression(*subject),
+            Some(&BodyExpression::NamedReference {
+                text: "static".to_owned()
+            }),
+        );
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::ScopedAccess { member: MemberReference::Named { name }, .. } if name == "class",
+        ));
+    }
+
+    #[test]
+    fn indexes_lower_and_the_push_form_has_no_index() {
+        let ir = body("<?php function f() { $a[0]; $a[] = 1; }");
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::Index { index: Some(_), .. }
+        ));
+        let BodyExpression::Assignment { target, .. } = root_expression(&ir, 1) else {
+            panic!("expected an assignment");
+        };
+        assert!(matches!(
+            ir.expression(*target).unwrap(),
+            BodyExpression::Index { index: None, .. },
+        ));
+    }
+
+    #[test]
+    fn new_lowers_all_class_reference_shapes() {
+        let ir = body(
+            "<?php function f() { new Foo(1); new self; new static; new $factory; new class(2) {}; }",
+        );
+        let class_of = |position: usize| match root_expression(&ir, position) {
+            BodyExpression::New { class, .. } => class.clone(),
+            other => panic!("expected new, got {other:?}"),
+        };
+        assert_eq!(
+            class_of(0),
+            ClassReference::Named {
+                name: "Foo".to_owned()
+            }
+        );
+        assert_eq!(
+            class_of(1),
+            ClassReference::Named {
+                name: "self".to_owned()
+            }
+        );
+        assert_eq!(class_of(2), ClassReference::StaticKeyword);
+        assert!(matches!(class_of(3), ClassReference::Dynamic { .. }));
+        // The anonymous class is the second numbered declaration of the
+        // file (function = 0, anonymous class = 1), and its constructor
+        // arguments travel on the New expression.
+        let BodyExpression::New {
+            class: ClassReference::Anonymous { declaration },
+            arguments,
+        } = root_expression(&ir, 4)
+        else {
+            panic!("expected an anonymous new");
+        };
+        assert_eq!(declaration.index, 1);
+        assert_eq!(arguments.len(), 1);
+    }
+
+    #[test]
+    fn a_first_class_callable_lowers_to_a_callable_reference() {
+        let ir =
+            body("<?php function f() { strlen(...); $obj->m(...); Foo::bar(...); foo(...$args); }");
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::CallableReference { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::CallableReference { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::CallableReference { .. }
+        ));
+        // Spreading an argument is a call, not a callable reference.
+        assert!(matches!(
+            root_expression(&ir, 3),
+            BodyExpression::Call { arguments, .. } if arguments.len() == 1 && arguments[0].spread,
+        ));
+    }
+
+    #[test]
+    fn a_null_safe_chain_gets_exactly_one_wrapper_at_its_top() {
+        let ir = body("<?php function f() { $a?->b->c()['d']; }");
+        assert_eq!(null_safe_chain_count(&ir), 1);
+        // The wrapper is the outermost expression of the statement.
+        let BodyStatement::Expression { expression } = root_statement(&ir, 0) else {
+            panic!("expected an expression statement");
+        };
+        let BodyExpression::NullSafeChain { chain } = ir.expression(*expression).unwrap() else {
+            panic!("expected the wrapper at the top");
+        };
+        // Inside, the null-safe link carries its flag.
+        let mut current = *chain;
+        let null_safe_flag = loop {
+            match ir.expression(current).unwrap() {
+                BodyExpression::Index { subject, .. } => current = *subject,
+                BodyExpression::Call { callee, .. } => current = *callee,
+                BodyExpression::MemberAccess {
+                    receiver,
+                    null_safe,
+                    ..
+                } => {
+                    if *null_safe {
+                        break true;
+                    }
+                    current = *receiver;
+                }
+                _ => break false,
+            }
+        };
+        assert!(null_safe_flag);
+    }
+
+    #[test]
+    fn a_plain_chain_gets_no_wrapper() {
+        let ir = body("<?php function f() { $a->b->c(); }");
+        assert_eq!(null_safe_chain_count(&ir), 0);
+    }
+
+    #[test]
+    fn parentheses_bound_the_short_circuit() {
+        // PHP semantics: `($a?->b)->c` does not short-circuit `->c`;
+        // the wrapper closes at the parenthesis, and the outer access
+        // sees a possibly-null receiver (exactly what the nullability
+        // family must report).
+        let ir = body("<?php function f() { ($a?->b)->c; }");
+        assert_eq!(null_safe_chain_count(&ir), 1);
+        let BodyStatement::Expression { expression } = root_statement(&ir, 0) else {
+            panic!("expected an expression statement");
+        };
+        let BodyExpression::MemberAccess {
+            receiver,
+            null_safe,
+            ..
+        } = ir.expression(*expression).unwrap()
+        else {
+            panic!("expected the outer access at the top");
+        };
+        assert!(!*null_safe);
+        assert!(matches!(
+            ir.expression(*receiver).unwrap(),
+            BodyExpression::NullSafeChain { .. },
+        ));
+    }
+
+    #[test]
+    fn independent_chains_wrap_independently() {
+        let ir = body("<?php function f() { $a?->b[$c?->d]; }");
+        assert_eq!(null_safe_chain_count(&ir), 2);
     }
 }

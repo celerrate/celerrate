@@ -50,6 +50,35 @@ impl StatementId {
     }
 }
 
+/// A member reference in an access expression: a named property, a
+/// variable property, or a computed expression.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum MemberReference {
+    Missing,
+    Named { name: String },
+    Variable { name: String },
+    Computed { expression: ExpressionId },
+}
+
+/// A class reference in a `new` expression: named class, `self`,
+/// `static`, a dynamic expression, or an anonymous class declaration.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ClassReference {
+    Missing,
+    Named { name: String },
+    StaticKeyword,
+    Dynamic { expression: ExpressionId },
+    Anonymous { declaration: AstId },
+}
+
+/// One argument in a call: optional label, optional spread, and value.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CallArgument {
+    pub label: Option<String>,
+    pub spread: bool,
+    pub value: ExpressionId,
+}
+
 /// One expression, lowered. `Option` fields encode valid absence (a
 /// short ternary's middle); [`BodyExpression::Missing`] encodes
 /// wreckage (a child error recovery could not produce).
@@ -164,6 +193,40 @@ pub enum BodyExpression {
     Match {
         subject: ExpressionId,
         arms: Vec<MatchCase>,
+    },
+    /// `$a->b`, `$a=>b`, or scoped/index dereference.
+    MemberAccess {
+        receiver: ExpressionId,
+        member: MemberReference,
+        null_safe: bool,
+    },
+    /// `Foo::$prop` or `Foo::bar`.
+    ScopedAccess {
+        subject: ExpressionId,
+        member: MemberReference,
+    },
+    /// Exactly-once wrapper of a dereference chain containing `?->`.
+    NullSafeChain {
+        chain: ExpressionId,
+    },
+    /// `foo(1, 2)` or `$obj->m(...args)`.
+    Call {
+        callee: ExpressionId,
+        arguments: Vec<CallArgument>,
+    },
+    /// First-class callable: `strlen(...)`.
+    CallableReference {
+        callee: ExpressionId,
+    },
+    /// `new Foo(1)`, `new self`, `new static`, `new $x`, or `new class { }`.
+    New {
+        class: ClassReference,
+        arguments: Vec<CallArgument>,
+    },
+    /// `$a[0]` or `$a[]` (push).
+    Index {
+        subject: ExpressionId,
+        index: Option<ExpressionId>,
     },
 }
 

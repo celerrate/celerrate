@@ -26,9 +26,9 @@ mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
 pub use body::{
-    ArrayEntry, BodyExpression, BodyIr, BodyQuery, BodySourceMap, BodyStatement, CatchArm,
-    ExpressionId, MatchCase, StatementId, StaticVariableDeclaration, StringPart, SwitchArm,
-    body_ir, body_source_map,
+    ArrayEntry, BodyExpression, BodyIr, BodyQuery, BodySourceMap, BodyStatement, CallArgument,
+    CatchArm, ClassReference, ExpressionId, MatchCase, MemberReference, StatementId,
+    StaticVariableDeclaration, StringPart, SwitchArm, body_ir, body_source_map,
 };
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use index::{
