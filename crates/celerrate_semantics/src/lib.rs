@@ -6,6 +6,8 @@
 //! salsa its early cutoff.
 
 mod ast_id;
+mod body;
+mod body_lowering;
 mod cache;
 mod index;
 mod item_nodes;
@@ -23,6 +25,10 @@ mod symbols;
 mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
+pub use body::{
+    BodyExpression, BodyIr, BodyQuery, BodySourceMap, BodyStatement, ExpressionId, StatementId,
+    body_ir, body_source_map,
+};
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use index::{
     StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
