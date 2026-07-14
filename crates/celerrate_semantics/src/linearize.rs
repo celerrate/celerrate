@@ -445,6 +445,10 @@ fn resolve_clause_context(
         let resolved = resolve_adaptations(&clause.adaptations, &key_of);
         for name in &clause.names {
             if let Some(folded_key) = key_of.get(name.as_str()) {
+                // NOTE: last-clause-wins per trait key. `use T { a as b; }
+                // use T { c as d; }` keeps only this clause's adaptations
+                // for T, though PHP merges adaptations across clauses.
+                // Deterministic; revisit if the corpus proves it matters.
                 context.insert(folded_key.clone(), resolved.clone());
             }
         }

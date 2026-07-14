@@ -24,9 +24,9 @@ use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 use salsa::Setter;
 
-/// The default stub index every scope test shares: two always-available
-/// symbols, exactly what the corpus fixtures need to exercise the stub
-/// side without pulling in the real compiled stubs.
+/// The default stub index every scope test shares: empty, so a scope
+/// test never re-runs a query over stub-side changes it did not make —
+/// the corpus fixtures that need a stub symbol build their own index.
 fn test_stubs(db: &TestDatabase) -> StubIndexInput {
     StubIndexInput::builder(StubIndex::default())
         .durability(salsa::Durability::HIGH)

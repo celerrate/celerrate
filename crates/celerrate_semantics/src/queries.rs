@@ -1,10 +1,10 @@
-//! The boundary as salsa queries. Three per-file queries: the numbering
-//! carries ranges and re-runs whenever they shift; the item tree
-//! carries none, so a body edit backdates and everything downstream is
-//! spared; the semantic diagnostics query merges the reference checks
-//! and the syntax version gating built on top of the item tree. Query
-//! definitions live here, in their domain crate; the concrete database
-//! is assembled at the composition root.
+//! The boundary as salsa queries. Four per-file queries: the numbering
+//! carries ranges and re-runs whenever they shift; the item tree and
+//! the member tree carry none, so a body or member edit backdates and
+//! everything downstream is spared; the semantic diagnostics query
+//! merges the reference checks and the syntax version gating built on
+//! top of the item tree. Query definitions live here, in their domain
+//! crate; the concrete database is assembled at the composition root.
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;

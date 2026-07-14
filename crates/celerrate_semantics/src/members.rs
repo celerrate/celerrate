@@ -146,6 +146,13 @@ impl MemberTree {
                 break;
             };
             let ast_id = AstId { file, index };
+            // Checked before the owner check below: a class-like sitting
+            // directly inside a member list (invalid PHP, error recovery)
+            // still gets its own member group here, even though `owner`
+            // is `Some` and `ItemTree::from_root` skips it as a member.
+            // Intentional asymmetry: the top-level projection ignores a
+            // recovered nested class-like, but its members still need a
+            // home.
             if let Some(group) = class_group(item, ast_id) {
                 classes.push((index, group));
                 continue;
