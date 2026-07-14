@@ -32,8 +32,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_source::FileId;
-use celerrate_stubs::StubIndexInput;
+use celerrate_stubs::{StubIndexInput, StubMember, StubMemberKind};
 
+use crate::index::stub_signature_table;
 use crate::items::Declaration;
 use crate::lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
@@ -79,6 +80,11 @@ pub struct AncestorEdge {
     /// The folded key when the name resolved to a source class-like;
     /// `None` for a stub or an unresolved edge.
     pub resolved: Option<String>,
+    /// The folded key when the edge resolved to a stub class-like;
+    /// `None` for source and unresolved edges. Exactly one of
+    /// `resolved`/`stub` is `Some` on a resolved edge; both `None` means
+    /// the edge is unresolved.
+    pub stub: Option<String>,
     /// The folded key of the class that declared the edge.
     pub owner: String,
 }
@@ -132,11 +138,16 @@ pub struct LinearizedClass {
     pub members: Vec<LinearizedMember>,
     /// The inheritance edges, in walk order.
     pub ancestry: Vec<AncestorEdge>,
-    /// The folded keys of ancestors that resolved to stubs only, sorted
-    /// and deduplicated.
+    /// The folded keys of ancestors that resolved to stubs, transitively
+    /// through the compiled parent links, sorted and deduplicated.
     pub stub_ancestors: Vec<String>,
     /// A genuine inheritance cycle was detected and broken.
     pub cyclic: bool,
+    /// A genuinely opaque boundary remains: an unresolved edge, or a stub
+    /// ancestor whose surface (or a transitive parent surface) is missing
+    /// from the compiled payload. `false` means the hierarchy is fully
+    /// walked.
+    pub has_opaque_edge: bool,
     /// The per-kind magic-method and dynamic-property suppression facts.
     pub magic: MagicMarkers,
 }
@@ -231,6 +242,7 @@ pub fn linearized_class<'db>(
                 relation,
                 written,
                 resolved: answer.source_key(),
+                stub: answer.stub_key(),
                 owner: key.clone(),
             });
             match answer {
@@ -261,18 +273,74 @@ pub fn linearized_class<'db>(
     members.sort_by(|a, b| {
         (a.member.kind as u8, a.key.as_str()).cmp(&(b.member.kind as u8, b.key.as_str()))
     });
+
+    // An unresolved edge — neither a source nor a stub class-like — is a
+    // genuinely opaque boundary from the start.
+    let mut has_opaque_edge = ancestry
+        .iter()
+        .any(|edge| edge.resolved.is_none() && edge.stub.is_none());
+
+    // Expand the stub frontier: breadth-first through the compiled parent
+    // links, seeded by the direct stub edges in walk order. A stub symbol
+    // without a compiled surface leaves the boundary opaque; magic methods
+    // found on a stub ancestor mark the class. The visited set only guards
+    // revisits, so the queue's recorded order fixes the result.
+    let table = stub_signature_table(db, stubs);
+    let mut stub_queue: VecDeque<String> = stub_ancestors.iter().cloned().collect();
+    let mut stub_visited: HashSet<String> = HashSet::new();
+    let mut transitive: Vec<String> = Vec::new();
+    let mut stub_magic = MagicMarkers::default();
+    while let Some(key) = stub_queue.pop_front() {
+        if !stub_visited.insert(key.clone()) {
+            continue;
+        }
+        let Some(surface) = table.class(&key) else {
+            has_opaque_edge = true;
+            transitive.push(key);
+            continue;
+        };
+        for member in &surface.members {
+            merge_stub_magic(member, &mut stub_magic);
+        }
+        for parent in &surface.parents {
+            stub_queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
+        }
+        transitive.push(key);
+    }
+    let mut stub_ancestors = transitive;
     stub_ancestors.sort();
     stub_ancestors.dedup();
 
-    let magic = magic_markers(&members, allows_dynamic);
+    let mut magic = magic_markers(&members, allows_dynamic);
+    magic.has_magic_get |= stub_magic.has_magic_get;
+    magic.has_magic_set |= stub_magic.has_magic_set;
+    magic.has_magic_call |= stub_magic.has_magic_call;
+    magic.has_magic_call_static |= stub_magic.has_magic_call_static;
 
     Some(LinearizedClass {
         members,
         ancestry,
         stub_ancestors,
         cyclic,
+        has_opaque_edge,
         magic,
     })
+}
+
+/// Folds a stub ancestor's magic method into the accumulator: `__get`,
+/// `__set`, `__call`, `__callStatic` suppress otherwise-unknown members.
+/// Method names fold ASCII case, matching source magic detection.
+fn merge_stub_magic(member: &StubMember, magic: &mut MagicMarkers) {
+    if member.kind != StubMemberKind::Method {
+        return;
+    }
+    match member.name.to_ascii_lowercase().as_str() {
+        "__get" => magic.has_magic_get = true,
+        "__set" => magic.has_magic_set = true,
+        "__call" => magic.has_magic_call = true,
+        "__callstatic" => magic.has_magic_call_static = true,
+        _ => {}
+    }
 }
 
 /// One trait-use clause's `insteadof`/`as` adaptations, resolved at the
@@ -651,6 +719,15 @@ impl AncestorAnswer {
             AncestorAnswer::Stub { .. } | AncestorAnswer::Unresolved => None,
         }
     }
+
+    /// The folded key when the name resolved to a stub class-like;
+    /// `None` for a source or unresolved answer.
+    fn stub_key(&self) -> Option<String> {
+        match self {
+            AncestorAnswer::Stub { folded_key } => Some(folded_key.clone()),
+            AncestorAnswer::Source { .. } | AncestorAnswer::Unresolved => None,
+        }
+    }
 }
 
 /// Resolves one written ancestor name at its declaring site: PHP's
@@ -685,14 +762,15 @@ fn resolve_ancestor(
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
     use celerrate_stubs::{
-        StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
+        StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
+        StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
     use super::{ClassQuery, LinearizedClass, MemberOrigin, linearized_class};
@@ -746,6 +824,71 @@ mod tests {
 
     fn fixture_one(source: &str) -> Fixture {
         fixture(&[source])
+    }
+
+    /// A fixture whose stub payload carries real class surfaces. Every
+    /// surface key and every parent it names becomes a `StubSymbol` too,
+    /// so `resolve_ancestor` classifies the source edge as a stub edge;
+    /// the default `Exception`/`strlen` symbols ride along for parity
+    /// with the plain fixture.
+    fn fixture_with_stub_classes(
+        sources: &[&str],
+        classes: Vec<(String, StubClassSurface)>,
+    ) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let stubs =
+            StubIndexInput::builder(StubIndex::new(stub_symbols_for(&classes), vec![], classes))
+                .durability(salsa::Durability::HIGH)
+                .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    /// The class-space stub symbols a surface set implies: every surface
+    /// key, every parent it names, and the default `Exception`/`strlen`
+    /// symbols, deduplicated. `StubIndex::new` merges duplicates.
+    fn stub_symbols_for(classes: &[(String, StubClassSurface)]) -> Vec<StubSymbol> {
+        let mut names: Vec<String> = vec!["Exception".to_owned()];
+        for (name, surface) in classes {
+            names.push(name.clone());
+            for parent in &surface.parents {
+                names.push(parent.clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        let mut symbols: Vec<StubSymbol> = names
+            .into_iter()
+            .map(|name| StubSymbol {
+                name,
+                kind: StubSymbolKind::Class,
+                availability: StubAvailability::ALWAYS,
+            })
+            .collect();
+        symbols.push(StubSymbol {
+            name: "strlen".to_owned(),
+            kind: StubSymbolKind::Function,
+            availability: StubAvailability::ALWAYS,
+        });
+        symbols
     }
 
     fn linearize(fixture: &Fixture, written: &str) -> Option<LinearizedClass> {
@@ -900,6 +1043,79 @@ mod tests {
         let class = linearize(&fixture, "AppException").unwrap();
         assert_eq!(class.stub_ancestors, vec!["exception".to_owned()]);
         assert!(!class.cyclic);
+        // The symbol exists but the payload carries no surface for it:
+        // the boundary is opaque.
+        assert!(class.has_opaque_edge);
+    }
+
+    #[test]
+    fn stub_ancestry_walks_transitively_through_the_blob() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php class MyError extends RuntimeException {}"],
+            vec![
+                (
+                    "RuntimeException".to_owned(),
+                    StubClassSurface {
+                        parents: vec!["Exception".to_owned()],
+                        members: vec![],
+                    },
+                ),
+                (
+                    "Exception".to_owned(),
+                    StubClassSurface {
+                        parents: vec!["Throwable".to_owned()],
+                        members: vec![],
+                    },
+                ),
+                ("Throwable".to_owned(), StubClassSurface::default()),
+            ],
+        );
+        let table = linearize(&fixture, "MyError").unwrap();
+        assert_eq!(
+            table.stub_ancestors,
+            vec![
+                "exception".to_owned(),
+                "runtimeexception".to_owned(),
+                "throwable".to_owned(),
+            ],
+        );
+        assert!(!table.has_opaque_edge, "fully walked");
+        assert_eq!(table.ancestry[0].stub.as_deref(), Some("runtimeexception"));
+    }
+
+    #[test]
+    fn a_missing_stub_surface_is_an_opaque_edge() {
+        // The symbol exists but the payload carries no surface for it
+        // (the pre-plan-3 fixtures everywhere): the boundary is recorded.
+        let fixture = fixture_one("<?php class MyException extends Exception {}");
+        let table = linearize(&fixture, "MyException").unwrap();
+        assert_eq!(table.stub_ancestors, vec!["exception".to_owned()]);
+        assert!(table.has_opaque_edge);
+    }
+
+    #[test]
+    fn magic_methods_on_a_stub_ancestor_mark_the_class() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php class Wrapper extends MagicBase {}"],
+            vec![(
+                "MagicBase".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![StubMember {
+                        kind: StubMemberKind::Method,
+                        name: "__call".to_owned(),
+                        visibility: StubVisibility::Public,
+                        is_static: false,
+                        availability: StubAvailability::ALWAYS,
+                        signature: Some(StubSignature::default()),
+                        type_text: VersionedTypeText::default(),
+                        value_text: None,
+                    }],
+                },
+            )],
+        );
+        let table = linearize(&fixture, "Wrapper").unwrap();
+        assert!(table.magic.has_magic_call);
     }
 
     #[test]

@@ -5,7 +5,9 @@
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
-use celerrate_semantics::{ClassQuery, linearized_class};
+use celerrate_semantics::{
+    ClassQuery, SymbolSpace, folded_symbol_key, linearized_class, stub_signature_table,
+};
 use celerrate_stubs::StubIndexInput;
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
@@ -226,8 +228,8 @@ fn judge_class_hierarchy(
         context.configuration,
         class,
     ) else {
-        // A stub or unknown class: the stub blob carries no hierarchy.
-        return Proof::CannotProve;
+        // Not a source class-like: judge through the stub graph.
+        return judge_stub_hierarchy(db, context, candidate_name, target_name);
     };
     let found = linearized
         .ancestry
@@ -240,12 +242,50 @@ fn judge_class_hierarchy(
     if found {
         return Proof::Holds;
     }
-    let opaque_boundary = linearized.cyclic
-        || linearized
-            .ancestry
-            .iter()
-            .any(|edge| edge.resolved.is_none());
-    if opaque_boundary {
+    if linearized.cyclic || linearized.has_opaque_edge {
+        Proof::CannotProve
+    } else {
+        Proof::Fails
+    }
+}
+
+/// The stub-graph verdict for a candidate with no source declaration:
+/// breadth-first over the compiled parent links. An unknown start key,
+/// or a key whose surface is missing mid-walk, keeps the answer
+/// undecidable; a fully walked graph without the target refutes. The
+/// visited set only guards revisits, so the queue's recorded order fixes
+/// the result.
+fn judge_stub_hierarchy(
+    db: &dyn salsa::Database,
+    context: JudgmentContext,
+    candidate_name: &str,
+    target_name: &str,
+) -> Proof {
+    let table = stub_signature_table(db, context.stubs);
+    if table.class(candidate_name).is_none() {
+        // Unknown class: undecidable, as before.
+        return Proof::CannotProve;
+    }
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut opaque = false;
+    queue.push_back(candidate_name.to_owned());
+    while let Some(key) = queue.pop_front() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        if key == target_name {
+            return Proof::Holds;
+        }
+        let Some(surface) = table.class(&key) else {
+            opaque = true;
+            continue;
+        };
+        for parent in &surface.parents {
+            queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
+        }
+    }
+    if opaque {
         Proof::CannotProve
     } else {
         Proof::Fails
@@ -701,7 +741,9 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::{
+        StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
+    };
 
     use super::{Nullability, Proof, assignable_to, nullability, subtype_of};
     use crate::TypeId;
@@ -738,6 +780,79 @@ mod tests {
             stubs,
             configuration,
         }
+    }
+
+    /// A fixture whose stub payload carries real class surfaces. Every
+    /// surface key and every parent it names becomes a `StubSymbol`, plus
+    /// a default `Exception` symbol without a surface, so a source class
+    /// extending `\Exception` records an opaque stub boundary.
+    fn fixture_with_stub_classes(
+        sources: &[&str],
+        classes: Vec<(String, StubClassSurface)>,
+    ) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let mut names: Vec<String> = vec!["Exception".to_owned()];
+        for (name, surface) in &classes {
+            names.push(name.clone());
+            for parent in &surface.parents {
+                names.push(parent.clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        let symbols: Vec<StubSymbol> = names
+            .into_iter()
+            .map(|name| StubSymbol {
+                name,
+                kind: StubSymbolKind::Class,
+                availability: StubAvailability::ALWAYS,
+            })
+            .collect();
+        let stubs = StubIndexInput::builder(StubIndex::new(symbols, vec![], classes))
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    /// The `RuntimeException -> Exception -> Throwable` stub surface
+    /// chain shared by the transitive-hierarchy tests.
+    fn exception_chain() -> Vec<(String, StubClassSurface)> {
+        vec![
+            (
+                "RuntimeException".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Exception".to_owned()],
+                    members: vec![],
+                },
+            ),
+            (
+                "Exception".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Throwable".to_owned()],
+                    members: vec![],
+                },
+            ),
+            ("Throwable".to_owned(), StubClassSurface::default()),
+        ]
     }
 
     fn judge<'db>(fixture: &'db Fixture, candidate: TypeId<'db>, target: TypeId<'db>) -> Proof {
@@ -1180,6 +1295,51 @@ mod tests {
             ),
             Proof::CannotProve
         );
+    }
+
+    #[test]
+    fn a_transitive_stub_hierarchy_proves_and_a_fully_walked_one_refutes() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php class MyError extends RuntimeException {}"],
+            exception_chain(),
+        );
+        let db = &fixture.db;
+        let my_error = TypeId::class(db, "MyError", vec![]);
+        let exception = TypeId::class(db, "Exception", vec![]);
+        let countable = TypeId::class(db, "Countable", vec![]);
+        assert_eq!(judge(&fixture, my_error, exception), Proof::Holds);
+        // Fully walked and absent: refuted, no longer CannotProve.
+        assert_eq!(judge(&fixture, my_error, countable), Proof::Fails);
+    }
+
+    #[test]
+    fn a_stub_only_candidate_judges_through_the_blob_graph() {
+        let fixture = fixture_with_stub_classes(&["<?php"], exception_chain());
+        let db = &fixture.db;
+        let runtime = TypeId::class(db, "RuntimeException", vec![]);
+        let throwable = TypeId::class(db, "Throwable", vec![]);
+        let countable = TypeId::class(db, "Countable", vec![]);
+        assert_eq!(judge(&fixture, runtime, throwable), Proof::Holds);
+        // Fully walked without the target: refuted.
+        assert_eq!(judge(&fixture, runtime, countable), Proof::Fails);
+    }
+
+    #[test]
+    fn a_missing_stub_surface_stays_undecidable() {
+        // The `Exception` symbol carries no compiled surface: the stub
+        // boundary is opaque, so the answer stays CannotProve.
+        let fixture =
+            fixture_with_stub_classes(&["<?php class AppException extends \\Exception {}"], vec![]);
+        let db = &fixture.db;
+        let app_exception = TypeId::class(db, "AppException", vec![]);
+        let throwable = TypeId::class(db, "Throwable", vec![]);
+        assert_eq!(
+            judge(&fixture, app_exception, throwable),
+            Proof::CannotProve,
+        );
+        // A stub-only candidate whose surface is missing is undecidable too.
+        let unknown = TypeId::class(db, "Exception", vec![]);
+        assert_eq!(judge(&fixture, unknown, throwable), Proof::CannotProve);
     }
 
     #[test]

@@ -38,8 +38,8 @@ pub use body::{
 };
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use index::{
-    StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
-    stub_symbol_table,
+    StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable,
+    source_symbol_table, stub_signature_table, stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{

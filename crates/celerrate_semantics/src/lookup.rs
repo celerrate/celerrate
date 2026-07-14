@@ -254,8 +254,10 @@ mod tests {
 
     #[test]
     fn a_stub_only_class_answers_none_here() {
-        // The stub side has no member tree until plan 3; the walk
-        // treats it as a stub boundary, which Task 8 records.
+        // `lookup_class_declaration` is source-only: a stub class-like
+        // answers `None` here. The stub graph is consulted through
+        // `stub_signature_table` (linearization and member lookup), not
+        // through this source-declaration firewall.
         let fixture = fixture(&["<?php"]);
         assert_eq!(class_declaration(&fixture, "Exception"), None);
     }

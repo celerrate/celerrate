@@ -8,10 +8,10 @@
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    AstId, ClassQuery, LinearizedClass, Member, MemberKind, MemberQuery, SymbolQuery, SymbolSpace,
-    UseTables, analyzed_file_index, folded_member_key, item_tree, linearized_class,
-    lookup_class_declaration, lookup_function_declaration, lookup_member, member_tree,
-    resolve_candidates,
+    AstId, ClassQuery, LinearizedClass, Member, MemberKind, MemberQuery, MemberResolution,
+    SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, folded_member_key, item_tree,
+    linearized_class, lookup_class_declaration, lookup_function_declaration, lookup_member,
+    member_tree, resolve_candidates,
 };
 use celerrate_stubs::StubIndexInput;
 
@@ -279,8 +279,12 @@ pub fn declared_member_signature<'db>(
     configuration: ProjectConfiguration,
     query: MemberQuery<'db>,
 ) -> Option<DeclaredSignature<'db>> {
-    let resolution = lookup_member(db, files, stubs, configuration, query)?;
-    let site_parts = declaring_site(db, files, &resolution.owner)?;
+    let (member, owner) = match lookup_member(db, files, stubs, configuration, query)? {
+        MemberResolution::Source { member, owner, .. } => (member, owner),
+        // Task 11 fills the stub arm.
+        MemberResolution::Stub { .. } => return None,
+    };
+    let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {
         namespace: &site_parts.namespace,
@@ -290,8 +294,7 @@ pub fn declared_member_signature<'db>(
     let root_key = query.class_key(db);
     let class = ClassQuery::new(db, root_key.clone());
     let linearized = linearized_class(db, files, stubs, configuration, class);
-    let parameter_names: Vec<String> = resolution
-        .member
+    let parameter_names: Vec<String> = member
         .signature
         .parameters
         .iter()
@@ -322,8 +325,8 @@ pub fn declared_member_signature<'db>(
         stubs,
         configuration,
         &site,
-        &resolution.owner,
-        &resolution.member,
+        &owner,
+        &member,
         &annotations,
     ))
 }
@@ -407,8 +410,6 @@ fn resolve_member_signature<'db>(
             TypeId::enum_case(db, owner_key, &member.name),
             Trust::NativeOnly,
         ),
-        // Task 10 reshapes `MemberResolution` into an enum; until then
-        // this stays the current struct, destructured as such.
         MemberKind::ClassConstant => {
             let native = match member.signature.type_text.as_deref() {
                 Some(text) => lowered_or_mixed(db, site, Some(text)),
