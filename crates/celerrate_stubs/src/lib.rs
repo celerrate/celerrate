@@ -6,6 +6,23 @@
 //! committed, versioned binary blob. At runtime the embedded blob loads
 //! as a high-durability salsa input and a tracked query filters it by
 //! the project's PHP version range.
+//!
+//! The blob's `SECTION_SIGNATURES` (section 2) is live: it carries the
+//! signature payload, one [`StubSignature`] per free function and one
+//! [`StubClassSurface`] per class-like symbol (parents in
+//! extends-then-implements declared order, plus one [`StubMember`] per
+//! method, property, class constant, and enum case). Every type text is
+//! a [`VersionedTypeText`]: a default plus ascending
+//! `(introduced_version, text)` overrides, the compiled form of
+//! phpstorm-stubs' `#[LanguageLevelTypeAware]` annotation;
+//! [`VersionedTypeText::at`] answers the text effective at one version.
+//! This crate stays deliberately version-agnostic at the consultation
+//! boundary — it answers "what is the text at version V", never "does
+//! this exist at version V" — so the `[min, max]` configured-range rule
+//! that folds per-version texts into a single lattice type (union for
+//! return and value types, most-restrictive-or-silenced for parameter
+//! types) lives upstairs in `celerrate_types`, next to the existence
+//! check against the availability-filtered symbol table.
 
 mod blob;
 mod index;

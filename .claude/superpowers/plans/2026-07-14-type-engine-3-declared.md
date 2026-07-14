@@ -4714,3 +4714,64 @@ git commit -m "📝 docs(types): the declared-type layer, its seam, and the clos
 - `lookup.rs` "The stub side has no member tree until plan 3" →
   Task 10 (comment refreshed).
 
+## Accepted debt at closure
+
+- Bare `callable` lowers to `mixed` (decision 3) — sound but coarse;
+  plan 8 measures how often it actually fires.
+- Stub parent names ignore stub-file `use` imports (decision 7);
+  phpstorm-stubs is overwhelmingly global-namespace and fully
+  qualified, revisit if the corpus proves otherwise.
+- Duplicate stub declarations keep the first signature after the sort
+  (Task 7), never merged.
+- Function annotations have no seam yet — plan 4 adds it once the
+  bridge parses function docblocks (only member annotations are
+  seamed by this plan).
+- Implicit `UnitEnum`/`BackedEnum` parents are not synthesized for
+  stub enums (Task 9); plan 8 revisits with the interface checks.
+- Stub member flags beyond visibility and staticness
+  (abstract/final/readonly) are not compiled.
+- **PLAN-TEXT DEVIATION** (adjudicated at review, human can veto):
+  Task 13's text called `value-of` expansion "top-level only"; the
+  shipped judge instead expands it through its full structural
+  recursion (arrays, unions, and so on) — sound, strictly more
+  precise, and pinned by
+  `a_nested_value_of_also_expands_through_structural_recursion`
+  (`crates/celerrate_types/src/judgments.rs`).
+- Magic markers (`__get`/`__set`/`__call`/`__callStatic`) collected
+  from stub ancestors in the linearize BFS
+  (`crates/celerrate_semantics/src/linearize.rs`, `merge_stub_magic`)
+  are not filtered by the member's availability window, unlike
+  `lookup_member`'s own window filter
+  (`crates/celerrate_semantics/src/member_lookup.rs:121`) — a latent
+  inconsistency plan 8 should resolve.
+- The blob writer's `text.overrides.len() as u16` cast
+  (`crates/celerrate_stubs/src/blob.rs:144`) is unguarded and
+  undocumented — theoretically unsound, practically safe against the
+  five `SUPPORTED_VERSIONS` entries; the truncated/malformed-signature
+  tests assert panic-freedom/clean-rejection only, and the round-trip
+  sample skips the `ClassConstant`/`EnumCase` member kinds and the
+  `Private`/`is_static: true` flags.
+- No direct tests exercise the `EnumCase`, `ClassConstant`, or
+  `Property` arms of `resolve_stub_member_signature`
+  (`crates/celerrate_types/src/declared.rs`) against stub-sourced
+  members — only the `Method` arm is covered.
+- `fixture_with_stub_classes` is triplicated near-verbatim across
+  `crates/celerrate_types/src/judgments.rs`,
+  `crates/celerrate_semantics/src/member_lookup.rs`, and
+  `crates/celerrate_semantics/src/linearize.rs`; no shared
+  test-support crate exists yet to de-duplicate it.
+- `StubSignatureTable::function`/`::class`
+  (`crates/celerrate_semantics/src/index.rs`) answer through
+  `binary_search_by` on a sorted vector; duplicate folded keys would
+  resolve to whichever match the standard library happens to return —
+  unreachable in practice because PHP forbids two declarations of the
+  same class or function name that differ only by case, not because
+  Task 7's raw-name dedup (`celerrate_stubs::index::StubIndex::new`)
+  folds case itself.
+- Leading-zero (octal-form) integer defaults (e.g. `017`) are refused
+  to `mixed` rather than octal-parsed
+  (`crates/celerrate_types/src/declared.rs`, `literal_type_of_default`).
+- `crates/celerrate_stubs/src/stubs.bin` grew from 379.1 KB (388200
+  bytes) to 2.41 MB (2524404 bytes) with the signature payload;
+  accepted against the 8 MB gate recorded in Task 12.
+
