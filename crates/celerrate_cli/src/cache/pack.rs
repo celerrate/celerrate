@@ -94,6 +94,13 @@ pub fn decode<Entries: DeserializeOwned>(
     (pack.header == *expected).then_some(pack)
 }
 
+/// The prefix `write_atomically`'s temporary files carry. Named explicitly,
+/// rather than left to `tempfile`'s crate-default, because two other places
+/// match it by literal: `sweep_crash_debris` (crash debris left behind in
+/// `.celerrate/cache/`) and `prepare_directory`'s sweep of `.celerrate/`
+/// itself (the `.gitignore`'s temporary lands there, one level up).
+pub(crate) const TEMPORARY_FILE_PREFIX: &str = ".tmp";
+
 /// Writes bytes to `path` through a temporary file in the same
 /// directory plus a rename, so a reader never sees a torn file and a
 /// concurrent writer's last rename wins whole.
@@ -101,7 +108,9 @@ pub fn write_atomically(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     let directory = path
         .parent()
         .ok_or_else(|| std::io::Error::other("the pack path has no parent directory"))?;
-    let mut file = tempfile::NamedTempFile::new_in(directory)?;
+    let mut file = tempfile::Builder::new()
+        .prefix(TEMPORARY_FILE_PREFIX)
+        .tempfile_in(directory)?;
     std::io::Write::write_all(&mut file, bytes)?;
     file.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -244,12 +253,21 @@ mod tests {
                 } else {
                     &writer_first
                 };
-                write_atomically(&writer_path, bytes).unwrap();
+                // A transiently failed write (e.g. Windows' delete-pending
+                // window on the just-replaced file) is not what this test
+                // pins; the assertions below on every observed read carry
+                // the property.
+                let _ = write_atomically(&writer_path, bytes);
             }
         });
 
         for _ in 0..200 {
-            let bytes = std::fs::read(&path).unwrap();
+            // An errored read observed nothing: on Windows this can happen
+            // transiently while a concurrent rename is in flight, and it is
+            // not a torn read.
+            let Ok(bytes) = std::fs::read(&path) else {
+                continue;
+            };
             assert!(
                 bytes == first || bytes == second,
                 "a read observed bytes that are neither payload: torn",

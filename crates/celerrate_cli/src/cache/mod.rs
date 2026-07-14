@@ -198,13 +198,19 @@ fn sort_entries<Entry>(entries: &mut Vec<(ContentHash, Entry)>) {
 }
 
 /// Creates the cache directory and its self-ignoring `.gitignore`, and
-/// sweeps crash debris. The `.gitignore` goes through the atomic write
-/// (audit finding M8): a plain write torn by a crash left a half-written
-/// file that was never repaired, since only existence is checked.
+/// sweeps crash debris from both `.celerrate/cache/` and its parent
+/// `.celerrate/`. The `.gitignore` goes through the atomic write (audit
+/// finding M8): a plain write torn by a crash left a half-written file
+/// that was never repaired, since only existence is checked. Its
+/// temporary lands in `.celerrate/` (the `.gitignore`'s own parent), not
+/// in `.celerrate/cache/`, so the parent gets the same best-effort sweep
+/// or a crash during first-time `.gitignore` creation leaves a `.tmp*`
+/// orphan forever (whole-branch review finding, closing the M2/M8 seam).
 fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(cache_directory)?;
     sweep_crash_debris(cache_directory);
     if let Some(dot_celerrate) = cache_directory.parent() {
+        sweep_crash_debris(dot_celerrate);
         let gitignore = dot_celerrate.join(".gitignore");
         if !gitignore.exists() {
             pack::write_atomically(&gitignore, b"*\n")?;
@@ -214,18 +220,22 @@ fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
 }
 
 /// Best-effort removal of temporary files a crash mid-write left behind
-/// (audit finding M2): `write_atomically`'s temporaries carry the `.tmp`
-/// prefix `tempfile` uses, survive SIGKILL and power loss, and nothing
-/// else ever removes them. A concurrent process mid-persist can lose its
-/// temporary to this sweep; its rename then fails, that persist is
-/// skipped, and its next pass rewrites — the same best-effort answer as
-/// any other write failure.
-fn sweep_crash_debris(cache_directory: &Path) {
-    let Ok(entries) = std::fs::read_dir(cache_directory) else {
+/// (audit finding M2): `write_atomically`'s temporaries carry
+/// `pack::TEMPORARY_FILE_PREFIX`, survive SIGKILL and power loss, and
+/// nothing else ever removes them. A concurrent process mid-persist can
+/// lose its temporary to this sweep; its rename then fails, that persist
+/// is skipped, and its next pass rewrites — the same best-effort answer
+/// as any other write failure.
+fn sweep_crash_debris(directory: &Path) {
+    let Ok(entries) = std::fs::read_dir(directory) else {
         return;
     };
     for entry in entries.flatten() {
-        if entry.file_name().to_string_lossy().starts_with(".tmp") {
+        if entry
+            .file_name()
+            .to_string_lossy()
+            .starts_with(pack::TEMPORARY_FILE_PREFIX)
+        {
             let _ = std::fs::remove_file(entry.path());
         }
     }
@@ -437,7 +447,12 @@ mod tests {
     /// `.tmp` prefix `tempfile` uses) survive SIGKILL and power loss in
     /// `.celerrate/cache/`, and nothing ever swept them. `persist` now
     /// sweeps them best-effort; anything not matching the prefix is
-    /// someone else's file and stays.
+    /// someone else's file and stays. Whole-branch review finding M2/M8:
+    /// `write_atomically(&gitignore, ...)`'s temporary lands in
+    /// `.celerrate/`, the target's parent, not in `.celerrate/cache/`, so a
+    /// crash during first-time `.gitignore` creation left a `.tmp*` orphan
+    /// no sweep ever reached; `prepare_directory` now sweeps the parent
+    /// too, same prefix, same best-effort.
     #[test]
     fn crash_debris_is_swept_and_other_files_are_not() {
         let root = tempfile::tempdir().unwrap();
@@ -445,9 +460,16 @@ mod tests {
         let mut session = Session::start(root.path());
 
         let cache_directory = root.path().join(".celerrate/cache");
+        let dot_celerrate = root.path().join(".celerrate");
         std::fs::create_dir_all(&cache_directory).unwrap();
         std::fs::write(cache_directory.join(".tmpAbC123"), b"debris").unwrap();
         std::fs::write(cache_directory.join("unrelated.bin"), b"not ours").unwrap();
+        std::fs::write(dot_celerrate.join(".tmpDeF456"), b"parent debris").unwrap();
+        std::fs::write(
+            dot_celerrate.join("unrelated-parent.bin"),
+            b"not ours either",
+        )
+        .unwrap();
 
         let outcome = AnalysisOutcome {
             diagnostics: Vec::new(),
@@ -462,6 +484,14 @@ mod tests {
         assert!(
             cache_directory.join("unrelated.bin").exists(),
             "only the .tmp prefix is ours to sweep",
+        );
+        assert!(
+            !dot_celerrate.join(".tmpDeF456").exists(),
+            "the parent directory's crash debris is gone too",
+        );
+        assert!(
+            dot_celerrate.join("unrelated-parent.bin").exists(),
+            "the parent sweep only ever touches the .tmp prefix",
         );
     }
 
