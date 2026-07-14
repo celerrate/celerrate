@@ -4,16 +4,23 @@
 //! Every accessor miss lowers to `Missing`; error-recovery wreckage is
 //! tolerated, never a failure.
 
+use celerrate_source::FileId;
 use celerrate_syntax::ast::{self, AstNode};
 use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxNodePtr};
 
+use crate::ast_id::{AstId, AstIdMap};
 use crate::body::{
-    BodyExpression, BodyIr, BodySourceMap, BodyStatement, ExpressionId, StatementId,
+    BodyExpression, BodyIr, BodySourceMap, BodyStatement, CatchArm, ExpressionId, StatementId,
+    StaticVariableDeclaration, SwitchArm,
 };
 
 /// Lowers one function or method declaration's body. `None` when the
 /// node is not a function or method, or carries no body.
-pub(crate) fn lower_body(declaration: &SyntaxNode) -> Option<(BodyIr, BodySourceMap)> {
+pub(crate) fn lower_body(
+    file: FileId,
+    map: &AstIdMap,
+    declaration: &SyntaxNode,
+) -> Option<(BodyIr, BodySourceMap)> {
     let block = match declaration.kind() {
         SyntaxKind::FunctionDeclaration => {
             ast::FunctionDeclaration::cast(declaration.clone())?.block()?
@@ -24,6 +31,8 @@ pub(crate) fn lower_body(declaration: &SyntaxNode) -> Option<(BodyIr, BodySource
         _ => return None,
     };
     let mut lowering = Lowering {
+        file,
+        map,
         ir: BodyIr::default(),
         source_map: BodySourceMap::default(),
     };
@@ -32,12 +41,14 @@ pub(crate) fn lower_body(declaration: &SyntaxNode) -> Option<(BodyIr, BodySource
     Some((lowering.ir, lowering.source_map))
 }
 
-struct Lowering {
+struct Lowering<'a> {
+    file: FileId,
+    map: &'a AstIdMap,
     ir: BodyIr,
     source_map: BodySourceMap,
 }
 
-impl Lowering {
+impl Lowering<'_> {
     fn allocate_expression(
         &mut self,
         expression: BodyExpression,
@@ -69,8 +80,204 @@ impl Lowering {
             .collect()
     }
 
+    /// A branch position (an `if` arm, a loop body): one statement in
+    /// the classic syntax, a list in the alternative syntax. A single
+    /// `Block` dissolves into its statements, so brace style is
+    /// formatting, not code.
+    fn lower_branch(&mut self, statements: Vec<ast::Statement>) -> Vec<StatementId> {
+        if statements.len() == 1
+            && let Some(ast::Statement::Block(block)) = statements.first()
+        {
+            return self.lower_statements(block.statements());
+        }
+        statements
+            .iter()
+            .filter_map(|statement| self.lower_statement(statement))
+            .collect()
+    }
+
+    /// The bare expressions of an argument list where the list is
+    /// grouping syntax rather than a call (`unset`, `isset`, ...).
+    fn lower_argument_expressions(&mut self, list: Option<ast::ArgumentList>) -> Vec<ExpressionId> {
+        let arguments: Vec<ast::Argument> = list
+            .into_iter()
+            .flat_map(|list| list.arguments().collect::<Vec<_>>())
+            .collect();
+        arguments
+            .iter()
+            .map(|argument| {
+                self.lower_expression_or_missing(argument.expression(), argument.syntax())
+            })
+            .collect()
+    }
+
+    fn lower_for_list(&mut self, list: Option<ast::ForExpressionList>) -> Vec<ExpressionId> {
+        let expressions: Vec<ast::Expression> = list
+            .into_iter()
+            .flat_map(|list| list.expressions().collect::<Vec<_>>())
+            .collect();
+        expressions
+            .iter()
+            .map(|expression| self.lower_expression(expression))
+            .collect()
+    }
+
+    fn lower_block_statements(&mut self, block: Option<ast::Block>) -> Vec<StatementId> {
+        match block {
+            Some(block) => self.lower_statements(block.statements()),
+            None => Vec::new(),
+        }
+    }
+
     fn lower_statement(&mut self, statement: &ast::Statement) -> Option<StatementId> {
         let lowered = match statement {
+            ast::Statement::Block(block) => BodyStatement::Block {
+                statements: self.lower_statements(block.statements()),
+            },
+            ast::Statement::EmptyStatement(_) => return None,
+            ast::Statement::EchoStatement(echo) => {
+                let expressions: Vec<ast::Expression> = echo.expressions().collect();
+                BodyStatement::Echo {
+                    values: expressions
+                        .iter()
+                        .map(|expression| self.lower_expression(expression))
+                        .collect(),
+                }
+            }
+            ast::Statement::BreakStatement(break_statement) => BodyStatement::Break {
+                level: break_statement
+                    .expression()
+                    .map(|expression| self.lower_expression(&expression)),
+            },
+            ast::Statement::ContinueStatement(continue_statement) => BodyStatement::Continue {
+                level: continue_statement
+                    .expression()
+                    .map(|expression| self.lower_expression(&expression)),
+            },
+            ast::Statement::GlobalStatement(global) => {
+                let expressions: Vec<ast::Expression> = global.expressions().collect();
+                BodyStatement::Global {
+                    targets: expressions
+                        .iter()
+                        .map(|expression| self.lower_expression(expression))
+                        .collect(),
+                }
+            }
+            ast::Statement::StaticStatement(static_statement) => {
+                let declarations: Vec<ast::StaticVariable> =
+                    static_statement.static_variables().collect();
+                let mut variables = Vec::new();
+                for declaration in &declarations {
+                    let Some(name) = declaration.name_token() else {
+                        continue;
+                    };
+                    variables.push(StaticVariableDeclaration {
+                        name: name.text().trim_start_matches('$').to_owned(),
+                        initializer: declaration
+                            .expression()
+                            .map(|expression| self.lower_expression(&expression)),
+                    });
+                }
+                BodyStatement::StaticVariables { variables }
+            }
+            ast::Statement::UnsetStatement(unset) => BodyStatement::Unset {
+                targets: self.lower_argument_expressions(unset.argument_list()),
+            },
+            ast::Statement::GotoStatement(goto) => BodyStatement::Goto {
+                label: goto.label_token().map(|token| token.text().to_owned()),
+            },
+            ast::Statement::LabelStatement(label) => BodyStatement::Label {
+                name: label.name_token().map(|token| token.text().to_owned()),
+            },
+            ast::Statement::IfStatement(if_statement) => self.lower_if(if_statement),
+            ast::Statement::WhileStatement(while_statement) => BodyStatement::While {
+                condition: self.lower_expression_or_missing(
+                    while_statement.condition(),
+                    while_statement.syntax(),
+                ),
+                body: self.lower_branch(while_statement.statements().collect()),
+            },
+            ast::Statement::DoWhileStatement(do_while) => BodyStatement::DoWhile {
+                body: self.lower_branch(do_while.body().into_iter().collect()),
+                condition: self
+                    .lower_expression_or_missing(do_while.condition(), do_while.syntax()),
+            },
+            ast::Statement::ForStatement(for_statement) => BodyStatement::For {
+                initializers: self.lower_for_list(for_statement.initializers()),
+                conditions: self.lower_for_list(for_statement.condition()),
+                updates: self.lower_for_list(for_statement.updates()),
+                body: self.lower_branch(for_statement.statements().collect()),
+            },
+            ast::Statement::ForeachStatement(foreach) => {
+                let by_reference = foreach
+                    .syntax()
+                    .children_with_tokens()
+                    .filter_map(|element| element.into_token())
+                    .any(|token| token.kind() == SyntaxKind::Ampersand);
+                BodyStatement::Foreach {
+                    subject: self.lower_expression_or_missing(foreach.subject(), foreach.syntax()),
+                    key: foreach.key().map(|key| self.lower_expression(&key)),
+                    value: self.lower_expression_or_missing(foreach.value(), foreach.syntax()),
+                    by_reference,
+                    body: self.lower_branch(foreach.statements().collect()),
+                }
+            }
+            ast::Statement::SwitchStatement(switch) => {
+                let switch_cases: Vec<ast::SwitchCase> = switch.switch_cases().collect();
+                let mut cases = Vec::new();
+                for case in &switch_cases {
+                    cases.push(SwitchArm {
+                        condition: case
+                            .condition()
+                            .map(|condition| self.lower_expression(&condition)),
+                        statements: self.lower_statements(case.statements()),
+                    });
+                }
+                BodyStatement::Switch {
+                    subject: self.lower_expression_or_missing(switch.condition(), switch.syntax()),
+                    cases,
+                }
+            }
+            ast::Statement::TryStatement(try_statement) => {
+                let clauses: Vec<ast::CatchClause> = try_statement.catch_clauses().collect();
+                let mut catches = Vec::new();
+                for clause in &clauses {
+                    catches.push(CatchArm {
+                        types: clause.names().map(|name| name.text()).collect(),
+                        variable: clause
+                            .variable_reference()
+                            .and_then(|variable| variable.name_token())
+                            .map(|token| token.text().trim_start_matches('$').to_owned()),
+                        statements: self.lower_block_statements(clause.block()),
+                    });
+                }
+                BodyStatement::Try {
+                    body: self.lower_block_statements(try_statement.block()),
+                    catches,
+                    finally: try_statement
+                        .finally_clause()
+                        .map(|clause| self.lower_block_statements(clause.block())),
+                }
+            }
+            ast::Statement::DeclareStatement(declare) => BodyStatement::Declare {
+                statements: self.lower_statements(declare.statements()),
+            },
+            ast::Statement::FunctionDeclaration(_)
+            | ast::Statement::ConstantDeclaration(_)
+            | ast::Statement::NamespaceDeclaration(_)
+            | ast::Statement::UseDeclaration(_)
+            | ast::Statement::ClassDeclaration(_)
+            | ast::Statement::InterfaceDeclaration(_)
+            | ast::Statement::TraitDeclaration(_)
+            | ast::Statement::EnumDeclaration(_) => match self.map.index_of(statement.syntax()) {
+                Some(index) => BodyStatement::Declaration {
+                    declaration: AstId {
+                        file: self.file,
+                        index,
+                    },
+                },
+                None => BodyStatement::Missing,
+            },
             ast::Statement::ExpressionStatement(expression_statement) => {
                 BodyStatement::Expression {
                     expression: self.lower_expression_or_missing(
@@ -84,9 +291,49 @@ impl Lowering {
                     .expression()
                     .map(|expression| self.lower_expression(&expression)),
             },
-            _ => BodyStatement::Missing,
         };
         Some(self.allocate_statement(lowered, statement.syntax()))
+    }
+
+    fn lower_if(&mut self, if_statement: &ast::IfStatement) -> BodyStatement {
+        let condition =
+            self.lower_expression_or_missing(if_statement.condition(), if_statement.syntax());
+        let then_branch = self.lower_branch(if_statement.statements().collect());
+        let else_ifs: Vec<ast::ElseIfClause> = if_statement.else_if_clauses().collect();
+        let else_branch = self.lower_else(&else_ifs, if_statement.else_clause().as_ref());
+        BodyStatement::If {
+            condition,
+            then_branch,
+            else_branch,
+        }
+    }
+
+    /// `elseif` is sugar for `else { if ... }`: each clause nests one
+    /// synthetic `If` (anchored on the clause node), the `else` clause
+    /// innermost.
+    fn lower_else(
+        &mut self,
+        else_ifs: &[ast::ElseIfClause],
+        else_clause: Option<&ast::ElseClause>,
+    ) -> Vec<StatementId> {
+        let Some((first, rest)) = else_ifs.split_first() else {
+            return match else_clause {
+                Some(clause) => self.lower_branch(clause.statements().collect()),
+                None => Vec::new(),
+            };
+        };
+        let condition = self.lower_expression_or_missing(first.condition(), first.syntax());
+        let then_branch = self.lower_branch(first.statements().collect());
+        let else_branch = self.lower_else(rest, else_clause);
+        let nested = self.allocate_statement(
+            BodyStatement::If {
+                condition,
+                then_branch,
+                else_branch,
+            },
+            first.syntax(),
+        );
+        vec![nested]
     }
 
     fn lower_expression(&mut self, expression: &ast::Expression) -> ExpressionId {
@@ -156,7 +403,8 @@ mod tests {
                 )
             })
             .unwrap();
-        super::lower_body(&declaration).unwrap()
+        let map = crate::ast_id::AstIdMap::from_root(&root);
+        super::lower_body(celerrate_source::FileId::new(0), &map, &declaration).unwrap()
     }
 
     fn body(source: &str) -> BodyIr {
@@ -226,7 +474,8 @@ mod tests {
             .descendants()
             .find(|node| node.kind() == SyntaxKind::MethodDeclaration)
             .unwrap();
-        assert!(super::lower_body(&method).is_none());
+        let map = crate::ast_id::AstIdMap::from_root(&parse.tree());
+        assert!(super::lower_body(celerrate_source::FileId::new(0), &map, &method).is_none());
     }
 
     #[test]
@@ -237,7 +486,8 @@ mod tests {
             .descendants()
             .find(|node| node.kind() == SyntaxKind::PropertyDeclaration)
             .unwrap();
-        assert!(super::lower_body(&property).is_none());
+        let map = crate::ast_id::AstIdMap::from_root(&parse.tree());
+        assert!(super::lower_body(celerrate_source::FileId::new(0), &map, &property).is_none());
     }
 
     #[test]
@@ -281,5 +531,198 @@ mod tests {
         let (ir, map) = lowered("<?php function f() { $x = ");
         assert_eq!(ir.statements.len(), map.statements.len());
         assert_eq!(ir.expressions.len(), map.expressions.len());
+    }
+
+    #[test]
+    fn the_three_if_syntaxes_produce_one_identical_body() {
+        // The dissolution rule: a single-Block branch dissolves into
+        // its statements, so brace style is formatting, not code.
+        let plain = body("<?php function f() { if ($c) return 1; }");
+        let braced = body("<?php function f() { if ($c) { return 1; } }");
+        let alternative = body("<?php function f() { if ($c): return 1; endif; }");
+        assert_eq!(plain, braced);
+        assert_eq!(braced, alternative);
+    }
+
+    #[test]
+    fn elseif_chains_nest_as_else_if() {
+        let ir = body(
+            "<?php function f() { if ($a) { return 1; } elseif ($b) { return 2; } else { return 3; } }",
+        );
+        let BodyStatement::If { else_branch, .. } = root_statement(&ir, 0) else {
+            panic!("expected an if");
+        };
+        assert_eq!(else_branch.len(), 1);
+        let BodyStatement::If {
+            then_branch,
+            else_branch: innermost,
+            ..
+        } = ir.statement(else_branch[0]).unwrap()
+        else {
+            panic!("expected the nested elseif as an if");
+        };
+        assert_eq!(then_branch.len(), 1);
+        assert_eq!(innermost.len(), 1);
+        assert!(matches!(
+            ir.statement(innermost[0]).unwrap(),
+            BodyStatement::Return { value: Some(_) },
+        ));
+    }
+
+    #[test]
+    fn loops_lower_with_their_shapes() {
+        let ir = body(
+            "<?php function f() { while ($a) { $x; } do { $y; } while ($b); for ($i = 0; $i < 3; $i++) { $z; } }",
+        );
+        assert!(
+            matches!(root_statement(&ir, 0), BodyStatement::While { body, .. } if body.len() == 1)
+        );
+        assert!(
+            matches!(root_statement(&ir, 1), BodyStatement::DoWhile { body, .. } if body.len() == 1)
+        );
+        let BodyStatement::For {
+            initializers,
+            conditions,
+            updates,
+            body: for_body,
+        } = root_statement(&ir, 2)
+        else {
+            panic!("expected a for");
+        };
+        assert_eq!(
+            (
+                initializers.len(),
+                conditions.len(),
+                updates.len(),
+                for_body.len()
+            ),
+            (1, 1, 1, 1),
+        );
+    }
+
+    #[test]
+    fn foreach_lowers_key_value_and_by_reference() {
+        let ir = body("<?php function f() { foreach ($items as $key => &$value) { $value; } }");
+        let BodyStatement::Foreach {
+            key,
+            by_reference,
+            body: foreach_body,
+            ..
+        } = root_statement(&ir, 0)
+        else {
+            panic!("expected a foreach");
+        };
+        assert!(key.is_some());
+        assert!(*by_reference);
+        assert_eq!(foreach_body.len(), 1);
+
+        let ir = body("<?php function f() { foreach ($items as $value) {} }");
+        let BodyStatement::Foreach {
+            key, by_reference, ..
+        } = root_statement(&ir, 0)
+        else {
+            panic!("expected a foreach");
+        };
+        assert!(key.is_none());
+        assert!(!*by_reference);
+    }
+
+    #[test]
+    fn switch_lowers_cases_and_default() {
+        let ir =
+            body("<?php function f() { switch ($x) { case 1: return 1; default: return 2; } }");
+        let BodyStatement::Switch { cases, .. } = root_statement(&ir, 0) else {
+            panic!("expected a switch");
+        };
+        assert_eq!(cases.len(), 2);
+        assert!(cases[0].condition.is_some());
+        assert!(cases[1].condition.is_none());
+        assert_eq!(cases[1].statements.len(), 1);
+    }
+
+    #[test]
+    fn try_catch_finally_lowers_types_and_variables() {
+        let ir = body(
+            "<?php function f() { try { $a; } catch (FooError | BarError $e) { $b; } catch (BazError) { $c; } finally { $d; } }",
+        );
+        let BodyStatement::Try {
+            body: try_body,
+            catches,
+            finally,
+        } = root_statement(&ir, 0)
+        else {
+            panic!("expected a try");
+        };
+        assert_eq!(try_body.len(), 1);
+        assert_eq!(catches.len(), 2);
+        assert_eq!(
+            catches[0].types,
+            vec!["FooError".to_owned(), "BarError".to_owned()]
+        );
+        assert_eq!(catches[0].variable.as_deref(), Some("e"));
+        assert_eq!(catches[1].variable, None);
+        assert_eq!(finally.as_ref().map(Vec::len), Some(1));
+    }
+
+    #[test]
+    fn the_simple_statement_forms_lower() {
+        let ir = body(
+            "<?php function f() { echo 1, 2; unset($a, $b); global $g; static $s = 1; break 2; continue; goto end; end: ; declare(ticks=1) { $t; } }",
+        );
+        assert!(
+            matches!(root_statement(&ir, 0), BodyStatement::Echo { values } if values.len() == 2)
+        );
+        assert!(
+            matches!(root_statement(&ir, 1), BodyStatement::Unset { targets } if targets.len() == 2)
+        );
+        assert!(
+            matches!(root_statement(&ir, 2), BodyStatement::Global { targets } if targets.len() == 1)
+        );
+        let BodyStatement::StaticVariables { variables } = root_statement(&ir, 3) else {
+            panic!("expected static variables");
+        };
+        assert_eq!(variables.len(), 1);
+        assert_eq!(variables[0].name, "s");
+        assert!(variables[0].initializer.is_some());
+        assert!(matches!(
+            root_statement(&ir, 4),
+            BodyStatement::Break { level: Some(_) }
+        ));
+        assert!(matches!(
+            root_statement(&ir, 5),
+            BodyStatement::Continue { level: None }
+        ));
+        assert!(
+            matches!(root_statement(&ir, 6), BodyStatement::Goto { label: Some(label) } if label == "end")
+        );
+        assert!(
+            matches!(root_statement(&ir, 7), BodyStatement::Label { name: Some(name) } if name == "end")
+        );
+        assert!(
+            matches!(root_statement(&ir, 8), BodyStatement::Declare { statements } if statements.len() == 1)
+        );
+    }
+
+    #[test]
+    fn empty_statements_vanish_and_a_standalone_block_stays() {
+        let ir = body("<?php function f() { ; $x; ; }");
+        assert_eq!(ir.root.len(), 1);
+
+        let ir = body("<?php function f() { { $x; } }");
+        assert!(
+            matches!(root_statement(&ir, 0), BodyStatement::Block { statements } if statements.len() == 1)
+        );
+    }
+
+    #[test]
+    fn a_nested_declaration_lowers_to_its_identity() {
+        // Numbering: outer function = 0, nested function = 1 (the
+        // traversal descends into bodies; the 1a contract).
+        let ir = body("<?php function f() { function nested() {} $x; }");
+        let BodyStatement::Declaration { declaration } = root_statement(&ir, 0) else {
+            panic!("expected a declaration statement");
+        };
+        assert_eq!(declaration.index, 1);
+        assert_eq!(ir.root.len(), 2);
     }
 }

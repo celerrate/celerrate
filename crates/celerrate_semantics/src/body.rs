@@ -77,8 +77,99 @@ pub enum BodyExpression {
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum BodyStatement {
     Missing,
-    Expression { expression: ExpressionId },
-    Return { value: Option<ExpressionId> },
+    Block {
+        statements: Vec<StatementId>,
+    },
+    Expression {
+        expression: ExpressionId,
+    },
+    Return {
+        value: Option<ExpressionId>,
+    },
+    Echo {
+        values: Vec<ExpressionId>,
+    },
+    Break {
+        level: Option<ExpressionId>,
+    },
+    Continue {
+        level: Option<ExpressionId>,
+    },
+    Global {
+        targets: Vec<ExpressionId>,
+    },
+    StaticVariables {
+        variables: Vec<StaticVariableDeclaration>,
+    },
+    Unset {
+        targets: Vec<ExpressionId>,
+    },
+    Goto {
+        label: Option<String>,
+    },
+    Label {
+        name: Option<String>,
+    },
+    If {
+        condition: ExpressionId,
+        then_branch: Vec<StatementId>,
+        else_branch: Vec<StatementId>,
+    },
+    While {
+        condition: ExpressionId,
+        body: Vec<StatementId>,
+    },
+    DoWhile {
+        body: Vec<StatementId>,
+        condition: ExpressionId,
+    },
+    For {
+        initializers: Vec<ExpressionId>,
+        conditions: Vec<ExpressionId>,
+        updates: Vec<ExpressionId>,
+        body: Vec<StatementId>,
+    },
+    Foreach {
+        subject: ExpressionId,
+        key: Option<ExpressionId>,
+        value: ExpressionId,
+        by_reference: bool,
+        body: Vec<StatementId>,
+    },
+    Switch {
+        subject: ExpressionId,
+        cases: Vec<SwitchArm>,
+    },
+    Try {
+        body: Vec<StatementId>,
+        catches: Vec<CatchArm>,
+        finally: Option<Vec<StatementId>>,
+    },
+    Declare {
+        statements: Vec<StatementId>,
+    },
+    Declaration {
+        declaration: AstId,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct StaticVariableDeclaration {
+    pub name: String,
+    pub initializer: Option<ExpressionId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct SwitchArm {
+    pub condition: Option<ExpressionId>,
+    pub statements: Vec<StatementId>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct CatchArm {
+    pub types: Vec<String>,
+    pub variable: Option<String>,
+    pub statements: Vec<StatementId>,
 }
 
 /// The lowered body of one function or method: dense arenas, the
@@ -169,7 +260,7 @@ fn lowered_body<'db>(
     let pointer = map.pointer(ast_id.index)?;
     let root = celerrate_db::parse(db, file).tree();
     let node = pointer.try_to_node(&root)?;
-    crate::body_lowering::lower_body(&node)
+    crate::body_lowering::lower_body(ast_id.file, map, &node)
 }
 
 #[cfg(test)]
