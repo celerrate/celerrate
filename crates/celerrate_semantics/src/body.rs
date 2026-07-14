@@ -25,7 +25,10 @@ impl ExpressionId {
     pub(crate) const OVERFLOW: Self = Self(u32::MAX);
 
     pub(crate) fn from_index(index: usize) -> Option<Self> {
-        u32::try_from(index).ok().map(Self)
+        u32::try_from(index)
+            .ok()
+            .filter(|&value| value != u32::MAX)
+            .map(Self)
     }
 
     pub fn index(self) -> u32 {
@@ -42,7 +45,10 @@ impl StatementId {
     pub(crate) const OVERFLOW: Self = Self(u32::MAX);
 
     pub(crate) fn from_index(index: usize) -> Option<Self> {
-        u32::try_from(index).ok().map(Self)
+        u32::try_from(index)
+            .ok()
+            .filter(|&value| value != u32::MAX)
+            .map(Self)
     }
 
     pub fn index(self) -> u32 {

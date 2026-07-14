@@ -2140,6 +2140,7 @@ mod tests {
             "<?php function f() { fn () => fn () => function () { yield; }; }",
             "<?php function f() { try { } catch () { } finally }",
             "<?php function f() { $$ ; ${ } ; ->x ; ::y ; }",
+            "<?php function f() { $a?->m(...); }",
         ];
         for source in sources {
             let parse = celerrate_syntax::parse(source);
