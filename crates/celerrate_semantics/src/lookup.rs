@@ -6,11 +6,13 @@
 //! consumers behind it are spared. Adding a symbol in one file never
 //! re-analyzes files that do not reference it.
 
-use celerrate_db::AnalyzedFileSet;
+use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
+use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndexInput, StubSymbolKind};
 
-use crate::index::{source_symbol_table, stub_symbol_table};
+use crate::ast_id::AstId;
+use crate::index::{SymbolOrigin, source_symbol_table, stub_symbol_table};
 use crate::items::DeclarationKind;
 use crate::symbols::SymbolSpace;
 
@@ -59,6 +61,41 @@ pub fn lookup_symbol<'db>(
             kind: entry.symbol.kind,
             availability: entry.symbol.availability,
         })
+}
+
+/// The analyzed files by identifier, sorted: the bridge from an
+/// `AstId` (which carries a `FileId`) back to the salsa handle whose
+/// trees can be asked for. Depends on the file *set*, not on any
+/// file's content, so content edits never re-run it.
+#[salsa::tracked(returns(ref))]
+pub fn analyzed_file_index(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+) -> Vec<(FileId, SourceFile)> {
+    let mut index: Vec<(FileId, SourceFile)> = files
+        .files(db)
+        .iter()
+        .map(|&file| (file.file_id(db), file))
+        .collect();
+    index.sort_by_key(|(id, _)| *id);
+    index
+}
+
+/// The declaring identity of one source class-like: the same firewall
+/// as `lookup_symbol`, answering the origin instead of the kind alone.
+/// `None` for stub symbols (no source declaration), for `define()`
+/// origins (not class-likes), and for unknown names.
+#[salsa::tracked]
+pub fn lookup_class_declaration<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    query: SymbolQuery<'db>,
+) -> Option<(DeclarationKind, AstId)> {
+    let entry = source_symbol_table(db, files).lookup(query.space(db), query.key(db))?;
+    match entry.origin {
+        SymbolOrigin::Item(ast_id) => Some((entry.kind, ast_id)),
+        SymbolOrigin::Define(_) => None,
+    }
 }
 
 #[cfg(test)]
@@ -174,5 +211,40 @@ mod tests {
         let fixture = fixture(&["<?php class Known {}"]);
         assert_eq!(resolve(&fixture, SymbolSpace::ClassLike, "Unknown"), None);
         assert_eq!(resolve(&fixture, SymbolSpace::Function, "unknown"), None);
+    }
+
+    use crate::lookup::{analyzed_file_index, lookup_class_declaration};
+
+    fn class_declaration(
+        fixture: &Fixture,
+        written: &str,
+    ) -> Option<(DeclarationKind, crate::AstId)> {
+        let space = SymbolSpace::ClassLike;
+        let query = SymbolQuery::new(&fixture.db, space, folded_symbol_key(space, written));
+        lookup_class_declaration(&fixture.db, fixture.files, query)
+    }
+
+    #[test]
+    fn a_source_class_answers_its_declaring_identity() {
+        let fixture = fixture(&["<?php namespace App; class Service {}"]);
+        let (kind, ast_id) = class_declaration(&fixture, "App\\Service").unwrap();
+        assert_eq!(kind, DeclarationKind::Class);
+        assert_eq!(ast_id.file, FileId::new(0));
+    }
+
+    #[test]
+    fn a_stub_only_class_answers_none_here() {
+        // The stub side has no member tree until plan 3; the walk
+        // treats it as a stub boundary, which Task 8 records.
+        let fixture = fixture(&["<?php"]);
+        assert_eq!(class_declaration(&fixture, "Exception"), None);
+    }
+
+    #[test]
+    fn the_file_index_maps_ids_to_handles_sorted() {
+        let fixture = fixture(&["<?php class A {}", "<?php class B {}"]);
+        let index = analyzed_file_index(&fixture.db, fixture.files);
+        let ids: Vec<u32> = index.iter().map(|(id, _)| id.as_u32()).collect();
+        assert_eq!(ids, vec![0, 1]);
     }
 }

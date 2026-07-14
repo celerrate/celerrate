@@ -1,10 +1,10 @@
-//! The boundary as salsa queries. Three per-file queries: the numbering
-//! carries ranges and re-runs whenever they shift; the item tree
-//! carries none, so a body edit backdates and everything downstream is
-//! spared; the semantic diagnostics query merges the reference checks
-//! and the syntax version gating built on top of the item tree. Query
-//! definitions live here, in their domain crate; the concrete database
-//! is assembled at the composition root.
+//! The boundary as salsa queries. Four per-file queries: the numbering
+//! carries ranges and re-runs whenever they shift; the item tree and
+//! the member tree carry none, so a body or member edit backdates and
+//! everything downstream is spared; the semantic diagnostics query
+//! merges the reference checks and the syntax version gating built on
+//! top of the item tree. Query definitions live here, in their domain
+//! crate; the concrete database is assembled at the composition root.
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
@@ -13,6 +13,7 @@ use celerrate_stubs::StubIndexInput;
 
 use crate::ast_id::AstIdMap;
 use crate::items::ItemTree;
+use crate::members::MemberTree;
 
 /// The declaration numbering of one file. The value changes whenever
 /// ranges shift: consume [`item_tree`] instead, and reconcile spans
@@ -39,6 +40,18 @@ pub fn item_tree(db: &dyn salsa::Database, file: SourceFile) -> ItemTree {
         return tree;
     }
     ItemTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
+}
+
+/// The member projection of one file: per class-like declaration, its
+/// direct members with flags, signatures as unresolved names, and
+/// docblock text. Range-free like the item tree, and a sibling of it
+/// on purpose: a member edit changes this value without touching
+/// `item_tree`, so top-level consumers — the global symbol table
+/// first — are structurally spared. No artifact-cache consultation
+/// yet: the typed-artifact classes are plan 9a.
+#[salsa::tracked(returns(ref))]
+pub fn member_tree(db: &dyn salsa::Database, file: SourceFile) -> MemberTree {
+    MemberTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 
 /// Every semantic diagnostic of one file: the reference families
@@ -170,5 +183,23 @@ mod tests {
         let mut sorted = diagnostics.clone();
         sorted.sort();
         assert_eq!(&sorted, diagnostics);
+    }
+
+    #[test]
+    fn the_member_tree_query_projects_a_file() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(
+            &db,
+            FileId::new(3),
+            b"<?php namespace App; class Service { public function run(): void {} }".to_vec(),
+        );
+        let tree = super::member_tree(&db, file);
+        let class = tree.classes.first().unwrap();
+        assert_eq!(class.name.as_deref(), Some("Service"));
+        assert_eq!(class.namespace, "App");
+        assert_eq!(
+            class.members.first().map(|member| member.name.as_str()),
+            Some("run"),
+        );
     }
 }

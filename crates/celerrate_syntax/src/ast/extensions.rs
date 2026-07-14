@@ -12,7 +12,7 @@ use super::generated::{
     Argument, ArrayElement, ClassDeclaration, ConstantDeclaration, ConstantElement, EnumCase,
     Expression, ForeachStatement, InterfaceDeclaration, MatchArm, MemberName, MethodDeclaration,
     Name, NamedType, Parameter, PropertyDeclaration, PropertyHook, Statement, TernaryExpression,
-    TraitAlias, TraitDeclaration, TraitPrecedence, UseClause, YieldExpression,
+    TraitAlias, TraitDeclaration, TraitPrecedence, Type, UseClause, YieldExpression,
 };
 use super::{AstChildren, AstNode, support};
 use crate::syntax_kind::SyntaxKind;
@@ -115,6 +115,52 @@ fn adaptation_member_token(
             .last();
     }
     tokens_of(node).find(|token| is_name_token(token.kind()) && token.text_range().end() <= limit)
+}
+
+/// The docblock attached to one declaration node: the nearest
+/// preceding sibling `DocComment` token with only whitespace between
+/// it and the node. Trivia flushes into the node open at that point
+/// (tree-builder policy), so a declaration's docblock is always a
+/// preceding sibling, never a child. Anything else in between — a line
+/// comment, another node — breaks attachment, the PHPDoc convention.
+pub fn docblock_token(node: &SyntaxNode) -> Option<SyntaxToken> {
+    let mut current = node.prev_sibling_or_token();
+    while let Some(element) = current {
+        let token = element.as_token()?;
+        match token.kind() {
+            SyntaxKind::Whitespace => current = element.prev_sibling_or_token(),
+            SyntaxKind::DocComment => return element.into_token(),
+            _ => return None,
+        }
+    }
+    None
+}
+
+/// The written text of a type, trivia stripped, tokens joined with no
+/// separator: `Foo\Bar|null`. Native type grammar never places two
+/// name tokens adjacently, so the joined form is unambiguous.
+pub fn type_text(ty: &Type) -> String {
+    written_tokens(ty.syntax()).collect()
+}
+
+/// The comparable written form of an expression: trivia stripped,
+/// tokens joined with one space. Token boundaries survive (so `new
+/// Foo` never collides with an identifier `newFoo`), formatting does
+/// not (so a formatting-only edit produces an equal value). This is
+/// the projection typed judgments read for default values — its
+/// *content* is the contract, not its prettiness.
+pub fn expression_text(expression: &Expression) -> String {
+    written_tokens(expression.syntax())
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Every non-trivia token text under `node`, in order.
+fn written_tokens(node: &SyntaxNode) -> impl Iterator<Item = String> + use<> {
+    node.descendants_with_tokens()
+        .filter_map(|element| element.into_token())
+        .filter(|token| !token.kind().is_trivia())
+        .map(|token| token.text().to_owned())
 }
 
 /// The two shapes of a named type, unified: `Foo\Bar` is a `Name`
@@ -436,5 +482,108 @@ impl Name {
         tokens_of(self.syntax())
             .map(|token| token.text().to_owned())
             .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::super::generated::{ClassDeclaration, MethodDeclaration};
+    use super::{docblock_token, expression_text, type_text};
+    use crate::ast::AstNode;
+    use crate::{SyntaxKind, SyntaxNode};
+
+    fn first_node(source: &str, kind: SyntaxKind) -> SyntaxNode {
+        celerrate_syntax_parse(source)
+            .descendants()
+            .find(|node| node.kind() == kind)
+            .unwrap()
+    }
+
+    fn celerrate_syntax_parse(source: &str) -> SyntaxNode {
+        crate::parse(source).tree()
+    }
+
+    #[test]
+    fn the_docblock_directly_above_a_declaration_attaches() {
+        let class = first_node(
+            "<?php\n/** @template T */\nclass Collection {}",
+            SyntaxKind::ClassDeclaration,
+        );
+        assert_eq!(
+            docblock_token(&class).map(|token| token.text().to_owned()),
+            Some("/** @template T */".to_owned()),
+        );
+    }
+
+    #[test]
+    fn a_member_docblock_attaches_inside_the_member_list() {
+        // Trivia flushes into the open node, so a member's docblock is
+        // its preceding sibling inside the `MemberList`.
+        let method = first_node(
+            "<?php class A {\n    /** @return int */\n    public function f() {}\n}",
+            SyntaxKind::MethodDeclaration,
+        );
+        assert_eq!(
+            docblock_token(&method).map(|token| token.text().to_owned()),
+            Some("/** @return int */".to_owned()),
+        );
+    }
+
+    #[test]
+    fn a_line_comment_or_a_sibling_between_breaks_attachment() {
+        // Only whitespace may sit between the docblock and the node:
+        // the PHPDoc convention, and what keeps attachment unambiguous.
+        let class = first_node(
+            "<?php\n/** doc */\n// not for the class\nclass A {}",
+            SyntaxKind::ClassDeclaration,
+        );
+        assert_eq!(docblock_token(&class), None);
+
+        let second = celerrate_syntax_parse("<?php /** doc */ class First {} class Second {}")
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::ClassDeclaration)
+            .nth(1)
+            .unwrap();
+        assert_eq!(docblock_token(&second), None);
+    }
+
+    #[test]
+    fn type_text_strips_trivia_and_joins_without_separator() {
+        let method = first_node(
+            "<?php class A { function f(): Foo\\Bar /* trailing */ | null {} }",
+            SyntaxKind::MethodDeclaration,
+        );
+        let method = MethodDeclaration::cast(method).unwrap();
+        assert_eq!(type_text(&method.return_type().unwrap()), "Foo\\Bar|null");
+    }
+
+    #[test]
+    fn expression_text_joins_tokens_with_one_space() {
+        // The comparable form: token boundaries preserved (so `new Foo`
+        // never collides with an identifier `newFoo`), trivia and
+        // formatting collapsed (so a formatting-only edit is equal).
+        let class = first_node(
+            "<?php class A { public $x = new  Foo( 1,   2 ); }",
+            SyntaxKind::ClassDeclaration,
+        );
+        let class = ClassDeclaration::cast(class).unwrap();
+        let element = class
+            .member_list()
+            .unwrap()
+            .member_declarations()
+            .find_map(|member| match member {
+                crate::ast::MemberDeclaration::PropertyDeclaration(property) => Some(property),
+                _ => None,
+            })
+            .unwrap()
+            .property_elements()
+            .next()
+            .unwrap();
+        assert_eq!(
+            expression_text(&element.expression().unwrap()),
+            "new Foo ( 1 , 2 )",
+        );
     }
 }

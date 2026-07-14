@@ -10,7 +10,10 @@ mod cache;
 mod index;
 mod item_nodes;
 mod items;
+mod linearize;
 mod lookup;
+mod member_lookup;
+mod members;
 mod queries;
 mod reference_checks;
 mod references;
@@ -26,8 +29,19 @@ pub use index::{
     stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
-pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
-pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
+pub use linearize::{
+    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember, MagicMarkers,
+    MemberOrigin, folded_member_key, linearized_class,
+};
+pub use lookup::{
+    SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
+};
+pub use member_lookup::{MemberQuery, MemberResolution, lookup_member};
+pub use members::{
+    ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
+    TraitAdaptation, TraitUse, Visibility,
+};
+pub use queries::{ast_id_map, item_tree, member_tree, semantic_diagnostics};
 pub use reference_checks::{
     ALLOCATED_IDENTIFIERS, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS,
     UNKNOWN_CONSTANT, UNKNOWN_FUNCTION, reference_diagnostics,

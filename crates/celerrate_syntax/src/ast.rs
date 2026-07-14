@@ -10,7 +10,7 @@ mod extensions;
 mod generated;
 pub(crate) mod support;
 
-pub use extensions::NamedTypeName;
+pub use extensions::{NamedTypeName, docblock_token, expression_text, type_text};
 pub use generated::*;
 
 use std::marker::PhantomData;

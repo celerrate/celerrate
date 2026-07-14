@@ -16,6 +16,16 @@ Amendment history:
   debt from Foundations toward the semantic-core sub-project (section 11):
   lexer and parser diagnostics stay in `celerrate_syntax` until the second
   diagnostic producer appears.
+- 2026-07-14 — recorded a second public preview milestone, added by the
+  type-engine sub-project's design
+  (`.claude/superpowers/specs/2026-07-14-type-engine-design.md`): a
+  `v0.0.x` preview ships at the end of sub-project 3 carrying the
+  unknown-members, nullability, and argument-types families, completing
+  the v0.1 criterion's diagnostic set before sub-projects 4 and 5, which
+  then owe only rendering and product surface. The sequencing of
+  section 11 named one preview (end of sub-project 2); this is an
+  addition, with the same anti-false-positive gate per family and a
+  minimum shippable set defined in the sub-project's design.
 
 ## 1. Vision
 

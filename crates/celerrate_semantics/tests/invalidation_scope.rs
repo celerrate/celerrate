@@ -16,13 +16,33 @@ use celerrate_db::SourceFile;
 use celerrate_db::testing::TestDatabase;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    SymbolQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map,
-    folded_symbol_key, item_tree, lookup_symbol, reference_diagnostics, resolve_name,
-    source_symbol_table, syntax_version_diagnostics,
+    MemberKind, MemberQuery, SymbolQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables,
+    ast_id_map, folded_symbol_key, item_tree, lookup_member, lookup_symbol, member_tree,
+    reference_diagnostics, resolve_name, source_symbol_table, syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 use salsa::Setter;
+
+/// The default stub index every scope test shares: empty, so a scope
+/// test never re-runs a query over stub-side changes it did not make —
+/// the corpus fixtures that need a stub symbol build their own index.
+fn test_stubs(db: &TestDatabase) -> StubIndexInput {
+    StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(db)
+}
+
+/// The default project configuration every scope test shares: PHP
+/// 8.1-8.5, matching the corpus fixtures' version-agnostic sources.
+fn test_configuration(db: &TestDatabase) -> ProjectConfiguration {
+    ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(db)
+}
 
 /// A stand-in for part 5's consumers: any query that reads the item
 /// tree and nothing else syntactic. If the tree backdates, this must
@@ -283,12 +303,7 @@ impl ResolutionFixture {
         let stubs = StubIndexInput::builder(stub_index)
             .durability(salsa::Durability::HIGH)
             .new(&db);
-        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-            PhpVersion::new(8, 1),
-            PhpVersion::new(8, 5),
-        ))
-        .durability(salsa::Durability::MEDIUM)
-        .new(&db);
+        let configuration = test_configuration(&db);
         Self {
             db,
             files,
@@ -511,15 +526,8 @@ fn an_unrelated_declaration_spares_other_files_reference_checks() {
         b"<?php namespace App; use Lib\\Helper; $x = new Helper();".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
-    let stubs = StubIndexInput::builder(StubIndex::default())
-        .durability(salsa::Durability::HIGH)
-        .new(&db);
-    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 5),
-    ))
-    .durability(salsa::Durability::MEDIUM)
-    .new(&db);
+    let stubs = test_stubs(&db);
+    let configuration = test_configuration(&db);
     let _ = reference_diagnostics(&db, library, files, stubs, configuration);
     let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
     db.take_executed();
@@ -546,12 +554,7 @@ fn a_version_range_change_re_runs_the_gating_queries() {
         FileId::new(0),
         b"<?php readonly class Point {}".to_vec(),
     );
-    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 5),
-    ))
-    .durability(salsa::Durability::MEDIUM)
-    .new(&db);
+    let configuration = test_configuration(&db);
     assert_eq!(
         syntax_version_diagnostics(&db, file, configuration).len(),
         1
@@ -589,15 +592,8 @@ fn a_comment_only_edit_elsewhere_spares_the_consumer() {
         b"<?php namespace App; use Lib\\Helper; $x = new Helper();".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
-    let stubs = StubIndexInput::builder(StubIndex::default())
-        .durability(salsa::Durability::HIGH)
-        .new(&db);
-    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 5),
-    ))
-    .durability(salsa::Durability::MEDIUM)
-    .new(&db);
+    let stubs = test_stubs(&db);
+    let configuration = test_configuration(&db);
     let _ = reference_diagnostics(&db, library, files, stubs, configuration);
     let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
     db.take_executed();
@@ -678,15 +674,8 @@ fn a_body_edit_adding_a_define_reaches_the_table_and_the_lookup() {
         b"<?php function boot() { return 1; }".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![file]);
-    let stubs = StubIndexInput::builder(StubIndex::default())
-        .durability(salsa::Durability::HIGH)
-        .new(&db);
-    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 5),
-    ))
-    .durability(salsa::Durability::MEDIUM)
-    .new(&db);
+    let stubs = test_stubs(&db);
+    let configuration = test_configuration(&db);
     fn query(db: &TestDatabase) -> SymbolQuery<'_> {
         SymbolQuery::new(
             db,
@@ -734,15 +723,8 @@ fn a_define_free_body_edit_in_a_define_carrying_file_backdates_the_table() {
         b"<?php function boot() { define('APP_ROOT', 1); return 1; }".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![file]);
-    let stubs = StubIndexInput::builder(StubIndex::default())
-        .durability(salsa::Durability::HIGH)
-        .new(&db);
-    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 5),
-    ))
-    .durability(salsa::Durability::MEDIUM)
-    .new(&db);
+    let stubs = test_stubs(&db);
+    let configuration = test_configuration(&db);
     fn query(db: &TestDatabase) -> SymbolQuery<'_> {
         SymbolQuery::new(
             db,
@@ -797,5 +779,151 @@ fn deleting_the_file_that_declares_the_symbol_reaches_the_consumer() {
         executions_of(&log, "unresolved_inheritance_names"),
         1,
         "a deleted declaration must reach the consumer: {log:?}",
+    );
+}
+
+/// A stand-in for the type-engine consumers of the member boundary:
+/// any query that reads the member tree and nothing else syntactic.
+#[salsa::tracked]
+fn member_names(db: &dyn salsa::Database, file: SourceFile) -> Vec<String> {
+    member_tree(db, file)
+        .classes
+        .iter()
+        .flat_map(|class| class.members.iter().map(|member| member.name.clone()))
+        .collect()
+}
+
+#[test]
+fn a_method_body_edit_reaches_the_member_tree_and_stops_there() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { public function f(): int { return 1; } }".to_vec(),
+    );
+    let _ = member_names(&db, file);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { public function f(): int { return 2; } }".to_vec());
+    let _ = member_names(&db, file);
+
+    let log = db.take_executed();
+    assert_eq!(executions_of(&log, "member_tree"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "member_names"),
+        0,
+        "an identical member tree must backdate, sparing member consumers: {log:?}",
+    );
+}
+
+#[test]
+fn a_member_signature_edit_never_reaches_item_tree_consumers() {
+    // The structural settlement of the source_symbol_table debt: the
+    // symbol table depends on item_tree only, and a member signature
+    // edit leaves the top-level projection equal, so the global table
+    // is never rebuilt — the audit's serial O(all symbols) loop no
+    // longer fires on the type engine's canonical hot edit class.
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { public function f(): int { return 1; } }".to_vec(),
+    );
+    let other = SourceFile::new(&db, FileId::new(1), b"<?php class B {}".to_vec());
+    let files = AnalyzedFileSet::new(&db, vec![file, other]);
+    let _ = member_names(&db, file);
+    let _ = source_symbol_table(&db, files);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { public function f(): string { return ''; } }".to_vec());
+    let _ = member_names(&db, file);
+    let _ = source_symbol_table(&db, files);
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "member_tree"),
+        1,
+        "the signature changed, the member projection re-runs: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "member_names"),
+        1,
+        "member consumers see the new signature: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "item_tree"),
+        1,
+        "the top-level projection re-runs over the new tree: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "source_symbol_table"),
+        0,
+        "the item tree is equal and backdates: the global table never rebuilds: {log:?}",
+    );
+}
+
+#[test]
+fn a_docblock_prose_edit_reaches_member_consumers_by_design() {
+    // The spec's accepted cost, observed at the query level: the raw
+    // docblock is a member-tree field. The second-stage cutoff (the
+    // parsed-annotation query) is plan 4's; until then the member tree
+    // is the only stage.
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { /** @return int */ public function f() {} }".to_vec(),
+    );
+    let _ = member_names(&db, file);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { /** @return int (documented) */ public function f() {} }".to_vec());
+    let _ = member_names(&db, file);
+
+    let log = db.take_executed();
+    assert_eq!(executions_of(&log, "member_tree"), 1, "{log:?}");
+    assert_eq!(executions_of(&log, "member_names"), 1, "{log:?}");
+}
+
+#[test]
+fn adding_a_member_to_an_unrelated_class_spares_the_asker() {
+    // The firewall: lookup_member re-runs when the linearized table
+    // changes, but its answer for an untouched (class, member) pair is
+    // equal, so consumers behind it backdate.
+    let mut db = TestDatabase::default();
+    let base = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class Base { public function hello() {} }".to_vec(),
+    );
+    let unrelated = SourceFile::new(&db, FileId::new(1), b"<?php class Unrelated {}".to_vec());
+    let files = AnalyzedFileSet::new(&db, vec![base, unrelated]);
+    let stubs = test_stubs(&db);
+    let configuration = test_configuration(&db);
+
+    fn query(db: &TestDatabase) -> MemberQuery<'_> {
+        MemberQuery::new(
+            db,
+            folded_symbol_key(SymbolSpace::ClassLike, "Base"),
+            MemberKind::Method,
+            "hello".to_owned(),
+        )
+    }
+    let _ = lookup_member(&db, files, stubs, configuration, query(&db));
+    db.take_executed();
+
+    unrelated
+        .set_bytes(&mut db)
+        .to(b"<?php class Unrelated { public function added() {} }".to_vec());
+    let _ = lookup_member(&db, files, stubs, configuration, query(&db));
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "linearized_class"),
+        0,
+        "Base's linearization read nothing from Unrelated's file: {log:?}",
     );
 }
