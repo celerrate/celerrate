@@ -4,8 +4,15 @@
 //! edits; the item tree (later modules) is the range-free,
 //! `Eq`-comparable projection of one file's declarations that gives
 //! salsa its early cutoff.
+//!
+//! One level down, the body IR (`body_ir`) lowers each function or
+//! method body into a range-free arena behind the same split: spans
+//! reconcile late through `body_source_map`, and only code plus
+//! recognized annotation content invalidates body consumers.
 
 mod ast_id;
+mod body;
+mod body_lowering;
 mod cache;
 mod index;
 mod item_nodes;
@@ -23,6 +30,12 @@ mod symbols;
 mod syntax_gating;
 
 pub use ast_id::{AstId, AstIdMap};
+pub use body::{
+    ArrayEntry, BodyAnnotation, BodyExpression, BodyIr, BodyQuery, BodySourceMap, BodyStatement,
+    CallArgument, CatchArm, ClassReference, ClosureUse, ExpressionId, MatchCase, MemberReference,
+    StatementId, StaticVariableDeclaration, StringPart, SwitchArm, body_ir, body_source_map,
+    is_recognized_annotation,
+};
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use index::{
     StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,

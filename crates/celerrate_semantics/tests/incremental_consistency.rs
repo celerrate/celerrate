@@ -11,8 +11,8 @@ use celerrate_db::testing::{
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map, item_tree, resolve_name,
-    semantic_diagnostics, source_symbol_table,
+    AstId, BodyQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map, body_ir,
+    item_tree, resolve_name, semantic_diagnostics, source_symbol_table,
 };
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 
@@ -260,5 +260,58 @@ fn semantic_diagnostics_match_from_scratch_analysis() {
                 );
             }
         },
+    );
+}
+
+/// Body IR consistency: every numbered declaration's lowering (bodied
+/// or not) must be byte-identical to a from-scratch database's.
+fn assert_body_consistency(initial: &[&[u8]], edits: &[(usize, &[u8])]) {
+    assert_incremental_consistency_with(
+        initial,
+        edits,
+        &|incremental, file, from_scratch, fresh_file, index| {
+            let count = ast_id_map(incremental, file).len();
+            assert_eq!(
+                count,
+                ast_id_map(from_scratch, fresh_file).len(),
+                "numbering diverged for file {index}",
+            );
+            for declaration in 0..u32::try_from(count).unwrap() {
+                let body = BodyQuery::new(
+                    incremental,
+                    AstId {
+                        file: file.file_id(incremental),
+                        index: declaration,
+                    },
+                );
+                let fresh_body = BodyQuery::new(
+                    from_scratch,
+                    AstId {
+                        file: fresh_file.file_id(from_scratch),
+                        index: declaration,
+                    },
+                );
+                assert_eq!(
+                    body_ir(incremental, file, body),
+                    body_ir(from_scratch, fresh_file, fresh_body),
+                    "body IR diverged for file {index} declaration {declaration}",
+                );
+            }
+        },
+    );
+}
+
+#[test]
+fn body_lowerings_replay_consistently() {
+    assert_body_consistency(
+        &[b"<?php class A { public function m() { return $this->x?->y(); } } function f() { $g = fn () => 1; }"],
+        &[
+            (0, b"<?php class A { public function m() { return $this->x?->y(); } } function f() { $g = fn () => 2; }"),
+            (0, b"<?php class A { public function m() { /** @var Y $y */ return ($this->x?->y)(); } } function f() { $g = fn () => 2; }"),
+            (0, b"<?php class B {} class A { public function m() { return new class { function n() { return 1; } }; } } function f() {}"),
+            (0, b"<?php function f() { if (true) { foreach ([1, ...$r] as $k => &$v) { yield $k => $v; } } }"),
+            (0, b"<?php function f() { match ($x) { 1, 2 => strlen(...), default => [, $b] = $p } ; }"),
+            (0, b"<?php function f() { $x = "),
+        ],
     );
 }

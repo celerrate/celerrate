@@ -410,28 +410,32 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
     }
 }
 
+/// The written signatures of a parameter list: shared between method
+/// signatures and the body IR's closures, so both stay byte-compatible.
+pub(crate) fn parameter_signatures(list: Option<ast::ParameterList>) -> Vec<ParameterSignature> {
+    list.into_iter()
+        .flat_map(|list| list.parameters())
+        .filter_map(|parameter| {
+            let name = parameter.name_token()?;
+            Some(ParameterSignature {
+                name: name.text().trim_start_matches('$').to_owned(),
+                type_text: parameter.ty().map(|ty| ast::type_text(&ty)),
+                default_text: parameter
+                    .default_value()
+                    .map(|expression| ast::expression_text(&expression)),
+                by_reference: parameter.by_reference_token().is_some(),
+                variadic: parameter.variadic_token().is_some(),
+                is_promoted: parameter.modifiers().next().is_some(),
+            })
+        })
+        .collect()
+}
+
 /// One method's signature, as written: every type an unresolved text,
 /// no type resolution.
 fn method_signature(method: &ast::MethodDeclaration) -> MemberSignature {
     MemberSignature {
-        parameters: method
-            .parameter_list()
-            .into_iter()
-            .flat_map(|list| list.parameters())
-            .filter_map(|parameter| {
-                let name = parameter.name_token()?;
-                Some(ParameterSignature {
-                    name: name.text().trim_start_matches('$').to_owned(),
-                    type_text: parameter.ty().map(|ty| ast::type_text(&ty)),
-                    default_text: parameter
-                        .default_value()
-                        .map(|expression| ast::expression_text(&expression)),
-                    by_reference: parameter.by_reference_token().is_some(),
-                    variadic: parameter.variadic_token().is_some(),
-                    is_promoted: parameter.modifiers().next().is_some(),
-                })
-            })
-            .collect(),
+        parameters: parameter_signatures(method.parameter_list()),
         type_text: method.return_type().map(|ty| ast::type_text(&ty)),
         default_text: None,
         by_reference: method.by_reference_token().is_some(),
