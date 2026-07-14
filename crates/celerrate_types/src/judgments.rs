@@ -317,8 +317,37 @@ fn is_single_valued<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool 
 
 /// `value-of<SomeBackedEnum>` evaluates through member facts (plan
 /// 2's recorded debt, settled here); every other `value-of` stays
-/// symbolic. Top-level only: nested occurrences keep their symbolic
-/// (conservative) verdicts.
+/// symbolic.
+///
+/// Called at the entry of every `judge` invocation, this expansion
+/// applies wherever `judge` recurses structurally, not just at the
+/// outermost operands: union constituents, intersectands, array key
+/// and value, shape fields, and callable parameters and returns each
+/// re-enter `judge` and are expanded in turn. A `value-of<BackedEnum>`
+/// buried inside, say, an array value (`array<int, value-of<Status>>`)
+/// therefore also evaluates against its literal union, not just a
+/// top-level occurrence.
+///
+/// This is sound: `enum_backing_union` is all-or-nothing ground truth
+/// for a fully known backed enum, so expanding it at any nesting depth
+/// can only replace a symbolic operand with the exact set of values it
+/// denotes, never with an approximation. It is also strictly more
+/// precise than restricting expansion to the top level, since it lets
+/// nested `value-of` operands participate in the same union and array
+/// reasoning as literals do. Termination is structural, not
+/// depth-limited: an expanded union or array value contains only
+/// literals (or the original operand when expansion did not apply),
+/// never another `ValueOf`, so recursion cannot re-trigger expansion on
+/// its own output.
+///
+/// This deliberately exceeds plan 3 task 13's "top-level only" wording.
+/// That restriction was the plan's original intent, but the shipped
+/// code expands at every `judge` entry point including the structural
+/// recursion; review adjudicated the broader, more precise shipped
+/// behavior as the keeper and directed that the documentation (and the
+/// task report) be corrected to match it instead of narrowing the
+/// code. See `a_nested_value_of_also_expands_through_structural_recursion`
+/// below, which pins this behavior.
 fn expand_value_of<'db>(
     db: &'db dyn salsa::Database,
     context: JudgmentContext,
@@ -1477,5 +1506,20 @@ mod tests {
             judge(&fixture, value_of_ghost, TypeId::string(db)),
             Proof::CannotProve,
         );
+    }
+
+    #[test]
+    fn a_nested_value_of_also_expands_through_structural_recursion() {
+        let fixture = fixture(&["<?php enum Status: string {\n\
+             case Active = 'active';\n\
+             case Retired = 'retired';\n\
+         }"]);
+        let db = &fixture.db;
+        let value_of_status = TypeId::value_of(db, TypeId::class(db, "Status", vec![]));
+        let candidate = TypeId::array(db, TypeId::int(db), value_of_status);
+        let target = TypeId::array(db, TypeId::int(db), TypeId::string(db));
+        // The nested value-of expands through the array-value recursion:
+        // a deliberate, recorded widening of the plan's top-level wording.
+        assert_eq!(judge(&fixture, candidate, target), Proof::Holds);
     }
 }
