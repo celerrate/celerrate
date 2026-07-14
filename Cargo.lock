@@ -232,6 +232,7 @@ name = "celerrate_types"
 version = "0.0.2"
 dependencies = [
  "celerrate_db",
+ "celerrate_semantics",
  "salsa",
 ]
 

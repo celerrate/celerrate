@@ -3,6 +3,7 @@
 
 use crate::ordering::structural_order;
 use crate::representation::{FloatBits, ShapeField, ShapeKey, StringConstraint, TypeData, TypeId};
+use celerrate_semantics::{SymbolSpace, folded_symbol_key};
 
 impl<'db> TypeId<'db> {
     fn intern(db: &'db dyn salsa::Database, data: TypeData<'db>) -> Self {
@@ -442,6 +443,94 @@ impl<'db> TypeId<'db> {
             _ => None,
         }
     }
+
+    /// A class-like type. The name folds internally so spelling
+    /// variants intern to one type; `display` therefore renders the
+    /// folded key (recorded debt: plan 8 recovers the original
+    /// spelling through the symbol table when rendering diagnostics).
+    pub fn class(db: &'db dyn salsa::Database, name: &str, arguments: Vec<TypeId<'db>>) -> Self {
+        let folded = folded_symbol_key(SymbolSpace::ClassLike, name);
+        Self::intern(
+            db,
+            TypeData::Class {
+                name: folded,
+                arguments,
+            },
+        )
+    }
+
+    pub fn enum_case(db: &'db dyn salsa::Database, enum_name: &str, case_name: &str) -> Self {
+        let folded = folded_symbol_key(SymbolSpace::ClassLike, enum_name);
+        Self::intern(
+            db,
+            TypeData::EnumCase {
+                enum_name: folded,
+                case_name: case_name.to_owned(),
+            },
+        )
+    }
+
+    pub fn class_string(db: &'db dyn salsa::Database, argument: Option<TypeId<'db>>) -> Self {
+        Self::intern(db, TypeData::ClassString { argument })
+    }
+
+    pub fn static_placeholder(db: &'db dyn salsa::Database) -> Self {
+        Self::intern(db, TypeData::StaticPlaceholder)
+    }
+
+    pub fn self_placeholder(db: &'db dyn salsa::Database) -> Self {
+        Self::intern(db, TypeData::SelfPlaceholder)
+    }
+
+    pub fn parent_placeholder(db: &'db dyn salsa::Database) -> Self {
+        Self::intern(db, TypeData::ParentPlaceholder)
+    }
+
+    pub fn class_name(self, db: &'db dyn salsa::Database) -> Option<String> {
+        match self.data(db) {
+            TypeData::Class { name, .. } => Some(name.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn class_arguments(self, db: &'db dyn salsa::Database) -> Vec<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Class { arguments, .. } => arguments.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    pub fn enum_case_parts(self, db: &'db dyn salsa::Database) -> Option<(String, String)> {
+        match self.data(db) {
+            TypeData::EnumCase {
+                enum_name,
+                case_name,
+            } => Some((enum_name.clone(), case_name.clone())),
+            _ => None,
+        }
+    }
+
+    pub fn class_string_argument(
+        self,
+        db: &'db dyn salsa::Database,
+    ) -> Option<Option<TypeId<'db>>> {
+        match self.data(db) {
+            TypeData::ClassString { argument } => Some(*argument),
+            _ => None,
+        }
+    }
+
+    /// `iterable<K, V>` desugared: `array<K, V>|Traversable<K, V>`
+    /// (spec section 3).
+    pub fn iterable(db: &'db dyn salsa::Database, key: TypeId<'db>, value: TypeId<'db>) -> Self {
+        Self::union(
+            db,
+            [
+                Self::array(db, key, value),
+                Self::class(db, "Traversable", vec![key, value]),
+            ],
+        )
+    }
 }
 
 #[cfg(test)]
@@ -777,5 +866,87 @@ mod tests {
         let empty = TypeId::shape(&db, vec![]);
         assert!(empty.is_list(&db));
         assert!(!empty.is_non_empty_array(&db));
+    }
+
+    #[test]
+    fn class_names_fold_at_construction() {
+        let db = TestDatabase::default();
+        let lower = TypeId::class(&db, "app\\entity\\user", vec![]);
+        let mixed_case = TypeId::class(&db, "App\\Entity\\User", vec![]);
+        assert_eq!(lower, mixed_case);
+        assert_eq!(lower.class_name(&db), Some("app\\entity\\user".to_owned()));
+        assert_eq!(lower.class_arguments(&db), Vec::<TypeId>::new());
+    }
+
+    #[test]
+    fn generic_arguments_participate_in_identity() {
+        let db = TestDatabase::default();
+        let of_user = TypeId::class(&db, "Collection", vec![TypeId::class(&db, "User", vec![])]);
+        let of_int = TypeId::class(&db, "Collection", vec![TypeId::int(&db)]);
+        let bare = TypeId::class(&db, "Collection", vec![]);
+        assert_ne!(of_user, of_int);
+        assert_ne!(of_user, bare);
+        assert_eq!(of_user.class_arguments(&db).len(), 1);
+    }
+
+    #[test]
+    fn enum_cases_fold_the_enum_and_keep_the_case_verbatim() {
+        let db = TestDatabase::default();
+        assert_eq!(
+            TypeId::enum_case(&db, "App\\Status", "Active"),
+            TypeId::enum_case(&db, "app\\status", "Active")
+        );
+        assert_ne!(
+            TypeId::enum_case(&db, "App\\Status", "Active"),
+            TypeId::enum_case(&db, "App\\Status", "ACTIVE")
+        );
+        assert_eq!(
+            TypeId::enum_case(&db, "App\\Status", "Active").enum_case_parts(&db),
+            Some(("app\\status".to_owned(), "Active".to_owned()))
+        );
+    }
+
+    #[test]
+    fn class_string_carries_an_optional_argument() {
+        let db = TestDatabase::default();
+        let bare = TypeId::class_string(&db, None);
+        let of_user = TypeId::class_string(&db, Some(TypeId::class(&db, "User", vec![])));
+        assert_ne!(bare, of_user);
+        assert_eq!(bare.class_string_argument(&db), Some(None));
+        assert_eq!(
+            of_user.class_string_argument(&db),
+            Some(Some(TypeId::class(&db, "User", vec![])))
+        );
+    }
+
+    #[test]
+    fn the_placeholders_are_three_distinct_atoms() {
+        let db = TestDatabase::default();
+        assert_ne!(
+            TypeId::static_placeholder(&db),
+            TypeId::self_placeholder(&db)
+        );
+        assert_ne!(
+            TypeId::self_placeholder(&db),
+            TypeId::parent_placeholder(&db)
+        );
+    }
+
+    #[test]
+    fn iterable_desugars_to_the_spec_union() {
+        let db = TestDatabase::default();
+        let iterable = TypeId::iterable(&db, TypeId::string(&db), TypeId::int(&db));
+        let expected = TypeId::union(
+            &db,
+            [
+                TypeId::array(&db, TypeId::string(&db), TypeId::int(&db)),
+                TypeId::class(
+                    &db,
+                    "Traversable",
+                    vec![TypeId::string(&db), TypeId::int(&db)],
+                ),
+            ],
+        );
+        assert_eq!(iterable, expected);
     }
 }

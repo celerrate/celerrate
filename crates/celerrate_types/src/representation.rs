@@ -96,6 +96,28 @@ pub enum TypeData<'db> {
     Shape {
         fields: Vec<ShapeField<'db>>,
     },
+    /// `class-string` / `class-string<T>`: the primary template binder,
+    /// never lowered to `string` (spec section 3). Rank 7.
+    ClassString {
+        argument: Option<TypeId<'db>>,
+    },
+    /// A class, interface, trait, or enum type, name pre-folded,
+    /// carrying its generic arguments. Rank 12.
+    Class {
+        name: String,
+        arguments: Vec<TypeId<'db>>,
+    },
+    /// One enum case: enum key folded, case name verbatim
+    /// (case-sensitive, matching the member boundary). Rank 13.
+    EnumCase {
+        enum_name: String,
+        case_name: String,
+    },
+    /// The late-static-binding placeholders, symbolic until call-site
+    /// substitution (plan 6). Ranks 19, 20, 21.
+    SelfPlaceholder,
+    ParentPlaceholder,
+    StaticPlaceholder,
 }
 
 /// The opaque interned handle of one canonical type: cheap `Eq`/`Hash`

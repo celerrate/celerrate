@@ -18,6 +18,7 @@ fn rank(data: &TypeData<'_>) -> u8 {
         TypeData::Int { .. } => 4,
         TypeData::Float { .. } => 5,
         TypeData::String { .. } => 6,
+        TypeData::ClassString { .. } => 7,
         TypeData::Intersection { .. } => 22,
         TypeData::Union { .. } => 23,
         TypeData::Mixed => 24,
@@ -25,6 +26,11 @@ fn rank(data: &TypeData<'_>) -> u8 {
         TypeData::Resource => 11,
         TypeData::Array { .. } => 8,
         TypeData::Shape { .. } => 9,
+        TypeData::Class { .. } => 12,
+        TypeData::EnumCase { .. } => 13,
+        TypeData::SelfPlaceholder => 19,
+        TypeData::ParentPlaceholder => 20,
+        TypeData::StaticPlaceholder => 21,
     }
 }
 
@@ -132,6 +138,38 @@ pub(crate) fn structural_order<'db>(
             (TypeData::Shape { fields: a }, TypeData::Shape { fields: b }) => {
                 order_shape_fields(db, a, b)
             }
+            (TypeData::ClassString { argument: a }, TypeData::ClassString { argument: b }) => {
+                match (a, b) {
+                    (None, None) => Ordering::Equal,
+                    (None, Some(_)) => Ordering::Less,
+                    (Some(_), None) => Ordering::Greater,
+                    (Some(left_argument), Some(right_argument)) => {
+                        structural_order(db, *left_argument, *right_argument)
+                    }
+                }
+            }
+            (
+                TypeData::Class {
+                    name: a_name,
+                    arguments: a_arguments,
+                },
+                TypeData::Class {
+                    name: b_name,
+                    arguments: b_arguments,
+                },
+            ) => a_name
+                .cmp(b_name)
+                .then_with(|| order_types(db, a_arguments, b_arguments)),
+            (
+                TypeData::EnumCase {
+                    enum_name: a_enum,
+                    case_name: a_case,
+                },
+                TypeData::EnumCase {
+                    enum_name: b_enum,
+                    case_name: b_case,
+                },
+            ) => a_enum.cmp(b_enum).then_with(|| a_case.cmp(b_case)),
             // Same rank with no fields is equal; interning made left == right
             // impossible here, so this arm is unreachable for atoms but kept
             // total for safety.

@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 salsa = { workspace = true }
+celerrate_semantics = { path = "../celerrate_semantics" }
 
 [dev-dependencies]
 celerrate_db = { path = "../celerrate_db" }
