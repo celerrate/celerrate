@@ -310,6 +310,11 @@ fn literal_type_of_default<'db>(db: &'db dyn salsa::Database, text: &str) -> Opt
         None => (false, trimmed),
     };
     if digits.bytes().all(|byte| byte.is_ascii_digit()) && !digits.is_empty() {
+        // Leading-zero forms (e.g., 017) are octal in PHP; refuse them rather
+        // than mis-value as base-10. A bare "0" stays a valid literal.
+        if digits.len() > 1 && digits.starts_with('0') {
+            return None;
+        }
         let value = digits.parse::<i64>().ok()?;
         return Some(TypeId::int_literal(
             db,
@@ -662,6 +667,23 @@ mod tests {
         assert_eq!(limit.value_type, TypeId::int(db));
         let case = member(&fixture, "Status", MemberKind::EnumCase, "Active").unwrap();
         assert_eq!(case.value_type, TypeId::enum_case(db, "Status", "Active"));
+    }
+
+    #[test]
+    fn leading_zero_integer_defaults_refuse_octal_misvaluing() {
+        let fixture = fixture(&["<?php\n\
+             class C {\n\
+                 const LEGACY = 017;\n\
+                 const ZERO = 0;\n\
+             }"]);
+        let db = &fixture.db;
+        // Leading-zero literals are octal in PHP and are refused rather than
+        // mis-valued as base-10.
+        let legacy = member(&fixture, "C", MemberKind::ClassConstant, "LEGACY").unwrap();
+        assert_eq!(legacy.value_type, TypeId::mixed(db));
+        // A bare 0 is still a valid int literal.
+        let zero = member(&fixture, "C", MemberKind::ClassConstant, "ZERO").unwrap();
+        assert_eq!(zero.value_type, TypeId::int_literal(db, 0));
     }
 
     #[test]
