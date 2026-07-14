@@ -10,9 +10,15 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxNodePtr};
 
 use crate::ast_id::{AstId, AstIdMap};
 use crate::body::{
-    BodyExpression, BodyIr, BodySourceMap, BodyStatement, CatchArm, ExpressionId, StatementId,
-    StaticVariableDeclaration, SwitchArm,
+    ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CatchArm, ExpressionId,
+    MatchCase, StatementId, StaticVariableDeclaration, StringPart, SwitchArm,
 };
+
+/// The kind of a wreckage-tolerant operator token: `Error` when error
+/// recovery produced none, keeping the lowering total and deterministic.
+fn token_kind_or_error(token: Option<celerrate_syntax::SyntaxToken>) -> SyntaxKind {
+    token.map_or(SyntaxKind::Error, |token| token.kind())
+}
 
 /// Lowers one function or method declaration's body. `None` when the
 /// node is not a function or method, or carries no body.
@@ -376,9 +382,232 @@ impl Lowering<'_> {
                     None => BodyExpression::Missing,
                 }
             }
+            ast::Expression::DynamicVariableExpression(dynamic) => {
+                BodyExpression::DynamicVariable {
+                    target: self
+                        .lower_expression_or_missing(dynamic.expression(), dynamic.syntax()),
+                }
+            }
+            ast::Expression::ParenthesizedExpression(parenthesized) => {
+                // Transparent: `($x)` and `$x` are one IR. The null-safe
+                // chain boundary this creates is handled in Task 4.
+                return self.lower_expression_or_missing(
+                    parenthesized.expression(),
+                    parenthesized.syntax(),
+                );
+            }
+            ast::Expression::PrefixExpression(prefix) => BodyExpression::Unary {
+                operator: token_kind_or_error(prefix.operator_token()),
+                operand: self.lower_expression_or_missing(prefix.operand(), prefix.syntax()),
+            },
+            ast::Expression::PostfixExpression(postfix) => BodyExpression::Postfix {
+                operator: token_kind_or_error(postfix.operator_token()),
+                operand: self.lower_expression_or_missing(postfix.operand(), postfix.syntax()),
+            },
+            ast::Expression::BinaryExpression(binary) => BodyExpression::Binary {
+                operator: token_kind_or_error(binary.operator_token()),
+                lhs: self.lower_expression_or_missing(binary.lhs(), binary.syntax()),
+                rhs: self.lower_expression_or_missing(binary.rhs(), binary.syntax()),
+            },
+            ast::Expression::AssignmentExpression(assignment) => BodyExpression::Assignment {
+                operator: token_kind_or_error(assignment.operator_token()),
+                by_reference: assignment.by_reference_token().is_some(),
+                target: self.lower_expression_or_missing(assignment.target(), assignment.syntax()),
+                value: self.lower_expression_or_missing(assignment.value(), assignment.syntax()),
+            },
+            ast::Expression::CastExpression(cast) => BodyExpression::Cast {
+                operator: token_kind_or_error(cast.operator_token()),
+                operand: self.lower_expression_or_missing(cast.operand(), cast.syntax()),
+            },
+            ast::Expression::TernaryExpression(ternary) => BodyExpression::Ternary {
+                condition: self.lower_expression_or_missing(ternary.condition(), ternary.syntax()),
+                middle: ternary
+                    .middle()
+                    .map(|middle| self.lower_expression(&middle)),
+                alternative: self.lower_expression_or_missing(ternary.third(), ternary.syntax()),
+            },
+            ast::Expression::ArrayExpression(array) => BodyExpression::Array {
+                entries: self.lower_array_entries(array.syntax()),
+            },
+            ast::Expression::ListExpression(list) => BodyExpression::Array {
+                entries: self.lower_array_entries(list.syntax()),
+            },
+            ast::Expression::InterpolatedString(string) => BodyExpression::InterpolatedString {
+                parts: self.lower_string_parts(string.syntax()),
+            },
+            ast::Expression::HeredocExpression(heredoc) => BodyExpression::InterpolatedString {
+                parts: self.lower_string_parts(heredoc.syntax()),
+            },
+            ast::Expression::ShellExecExpression(shell) => BodyExpression::ShellExec {
+                parts: self.lower_string_parts(shell.syntax()),
+            },
+            ast::Expression::IssetExpression(isset) => BodyExpression::Isset {
+                targets: self.lower_argument_expressions(isset.argument_list()),
+            },
+            ast::Expression::EmptyExpression(empty) => BodyExpression::Empty {
+                target: self.lower_first_argument_or_missing(empty.argument_list(), empty.syntax()),
+            },
+            ast::Expression::EvalExpression(eval) => BodyExpression::Eval {
+                argument: self.lower_first_argument_or_missing(eval.argument_list(), eval.syntax()),
+            },
+            ast::Expression::ExitExpression(exit) => BodyExpression::Exit {
+                argument: exit
+                    .argument_list()
+                    .and_then(|list| list.arguments().next())
+                    .and_then(|argument| argument.expression())
+                    .map(|expression| self.lower_expression(&expression)),
+            },
+            ast::Expression::PrintExpression(print) => BodyExpression::Print {
+                operand: self.lower_expression_or_missing(print.operand(), print.syntax()),
+            },
+            ast::Expression::CloneExpression(clone) => {
+                let operand = match clone.operand() {
+                    Some(operand) => self.lower_expression(&operand),
+                    None => {
+                        self.lower_first_argument_or_missing(clone.argument_list(), clone.syntax())
+                    }
+                };
+                BodyExpression::Clone { operand }
+            }
+            ast::Expression::ThrowExpression(throw) => BodyExpression::Throw {
+                operand: self.lower_expression_or_missing(throw.operand(), throw.syntax()),
+            },
+            ast::Expression::YieldExpression(yield_expression) => BodyExpression::Yield {
+                key: yield_expression
+                    .key()
+                    .map(|key| self.lower_expression(&key)),
+                value: yield_expression
+                    .value()
+                    .map(|value| self.lower_expression(&value)),
+                delegated: yield_expression.yield_from_token().is_some(),
+            },
+            ast::Expression::IncludeExpression(include) => BodyExpression::Include {
+                operator: token_kind_or_error(include.operator_token()),
+                operand: self.lower_expression_or_missing(include.operand(), include.syntax()),
+            },
+            ast::Expression::MatchExpression(match_expression) => {
+                let match_arms: Vec<ast::MatchArm> = match_expression.match_arms().collect();
+                let mut arms = Vec::new();
+                for arm in &match_arms {
+                    let conditions: Vec<ast::Expression> = arm.conditions().collect();
+                    arms.push(MatchCase {
+                        conditions: conditions
+                            .iter()
+                            .map(|condition| self.lower_expression(condition))
+                            .collect(),
+                        is_default: arm.is_default(),
+                        body: self.lower_expression_or_missing(arm.body(), arm.syntax()),
+                    });
+                }
+                BodyExpression::Match {
+                    subject: self.lower_expression_or_missing(
+                        match_expression.subject(),
+                        match_expression.syntax(),
+                    ),
+                    arms,
+                }
+            }
             _ => BodyExpression::Missing,
         };
         self.allocate_expression(lowered, node)
+    }
+
+    fn lower_first_argument_or_missing(
+        &mut self,
+        list: Option<ast::ArgumentList>,
+        parent: &SyntaxNode,
+    ) -> ExpressionId {
+        let expression = list
+            .and_then(|list| list.arguments().next())
+            .and_then(|argument| argument.expression());
+        self.lower_expression_or_missing(expression, parent)
+    }
+
+    /// Array and list entries in written order, empty destructuring
+    /// slots kept as holes: a comma with no element since the previous
+    /// separator marks one (`[, $second]`), a trailing comma does not.
+    fn lower_array_entries(&mut self, node: &SyntaxNode) -> Vec<ArrayEntry> {
+        let mut entries = Vec::new();
+        let mut element_since_separator = false;
+        for element in node.children_with_tokens() {
+            match element {
+                celerrate_syntax::SyntaxElement::Node(child) => {
+                    let Some(array_element) = ast::ArrayElement::cast(child) else {
+                        continue;
+                    };
+                    let by_reference = array_element
+                        .syntax()
+                        .children_with_tokens()
+                        .filter_map(|element| element.into_token())
+                        .any(|token| token.kind() == SyntaxKind::Ampersand);
+                    entries.push(ArrayEntry::Element {
+                        key: array_element.key().map(|key| self.lower_expression(&key)),
+                        value: self.lower_expression_or_missing(
+                            array_element.value(),
+                            array_element.syntax(),
+                        ),
+                        spread: array_element.spread_token().is_some(),
+                        by_reference,
+                    });
+                    element_since_separator = true;
+                }
+                celerrate_syntax::SyntaxElement::Token(token)
+                    if token.kind() == SyntaxKind::Comma =>
+                {
+                    if !element_since_separator {
+                        entries.push(ArrayEntry::Hole);
+                    }
+                    element_since_separator = false;
+                }
+                _ => {}
+            }
+        }
+        entries
+    }
+
+    fn lower_string_parts(&mut self, node: &SyntaxNode) -> Vec<StringPart> {
+        let mut parts = Vec::new();
+        for element in node.children_with_tokens() {
+            match element {
+                celerrate_syntax::SyntaxElement::Token(token)
+                    if token.kind() == SyntaxKind::StringFragment =>
+                {
+                    parts.push(StringPart::Fragment {
+                        text: token.text().to_owned(),
+                    });
+                }
+                celerrate_syntax::SyntaxElement::Node(child) => {
+                    let Some(interpolation) = ast::StringInterpolation::cast(child) else {
+                        continue;
+                    };
+                    parts.push(match &interpolation {
+                        ast::StringInterpolation::SimpleInterpolation(simple) => {
+                            StringPart::Simple {
+                                text: simple.syntax().text().to_string(),
+                            }
+                        }
+                        ast::StringInterpolation::BraceInterpolation(brace) => {
+                            StringPart::Interpolation {
+                                expression: self.lower_expression_or_missing(
+                                    brace.expression(),
+                                    brace.syntax(),
+                                ),
+                            }
+                        }
+                        ast::StringInterpolation::DollarBraceInterpolation(brace) => {
+                            StringPart::Interpolation {
+                                expression: self.lower_expression_or_missing(
+                                    brace.expression(),
+                                    brace.syntax(),
+                                ),
+                            }
+                        }
+                    });
+                }
+                _ => {}
+            }
+        }
+        parts
     }
 }
 
@@ -388,7 +617,9 @@ mod tests {
 
     use celerrate_syntax::SyntaxKind;
 
-    use crate::body::{BodyExpression, BodyIr, BodySourceMap, BodyStatement};
+    use crate::body::{
+        ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, StringPart,
+    };
 
     /// Lowers the first function or method of `source`.
     fn lowered(source: &str) -> (BodyIr, BodySourceMap) {
@@ -724,5 +955,300 @@ mod tests {
         };
         assert_eq!(declaration.index, 1);
         assert_eq!(ir.root.len(), 2);
+    }
+
+    #[test]
+    fn operators_are_distinguished_by_their_token_kind() {
+        let ir = body("<?php function f() { $a + $b; $a . $b; $a instanceof Foo; $a ?? $b; }");
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::Binary {
+                operator: SyntaxKind::Plus,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::Binary {
+                operator: SyntaxKind::Dot,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::Binary {
+                operator: SyntaxKind::InstanceOf,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 3),
+            BodyExpression::Binary {
+                operator: SyntaxKind::QuestionQuestion,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn prefix_postfix_cast_and_assignment_lower() {
+        let ir = body("<?php function f() { !$a; $a++; (int) $a; $a ??= $b; $a = &$b; }");
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::Unary {
+                operator: SyntaxKind::Bang,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::Postfix {
+                operator: SyntaxKind::PlusPlus,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::Cast {
+                operator: SyntaxKind::IntCast,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 3),
+            BodyExpression::Assignment {
+                operator: SyntaxKind::QuestionQuestionEquals,
+                by_reference: false,
+                ..
+            },
+        ));
+        assert!(matches!(
+            root_expression(&ir, 4),
+            BodyExpression::Assignment {
+                operator: SyntaxKind::Equals,
+                by_reference: true,
+                ..
+            },
+        ));
+    }
+
+    #[test]
+    fn the_short_ternary_has_no_middle() {
+        let ir = body("<?php function f() { $a ? $b : $c; $a ?: $c; }");
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::Ternary {
+                middle: Some(_),
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::Ternary { middle: None, .. }
+        ));
+    }
+
+    #[test]
+    fn parentheses_are_transparent() {
+        assert_eq!(
+            body("<?php function f() { ($x); }"),
+            body("<?php function f() { $x; }"),
+        );
+    }
+
+    #[test]
+    fn arrays_lower_keys_spreads_and_destructuring_holes() {
+        let ir = body("<?php function f() { [1 => $a, ...$rest, &$b]; }");
+        let BodyExpression::Array { entries } = root_expression(&ir, 0) else {
+            panic!("expected an array");
+        };
+        assert_eq!(entries.len(), 3);
+        assert!(matches!(
+            &entries[0],
+            ArrayEntry::Element {
+                key: Some(_),
+                spread: false,
+                ..
+            }
+        ));
+        assert!(matches!(
+            &entries[1],
+            ArrayEntry::Element { spread: true, .. }
+        ));
+        assert!(matches!(
+            &entries[2],
+            ArrayEntry::Element {
+                by_reference: true,
+                ..
+            }
+        ));
+
+        let ir = body("<?php function f() { [, $second] = $pair; }");
+        let BodyExpression::Assignment { target, .. } = root_expression(&ir, 0) else {
+            panic!("expected an assignment");
+        };
+        let BodyExpression::Array { entries } = ir.expression(*target).unwrap() else {
+            panic!("expected an array target");
+        };
+        assert!(matches!(&entries[0], ArrayEntry::Hole));
+        assert!(matches!(&entries[1], ArrayEntry::Element { .. }));
+
+        // A trailing comma is not a hole.
+        let ir = body("<?php function f() { [$a, $b,]; }");
+        let BodyExpression::Array { entries } = root_expression(&ir, 0) else {
+            panic!("expected an array");
+        };
+        assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn list_destructuring_lowers_exactly_like_the_bracket_form() {
+        assert_eq!(
+            body("<?php function f() { list($a, $b) = $pair; }"),
+            body("<?php function f() { [$a, $b] = $pair; }"),
+        );
+    }
+
+    #[test]
+    fn interpolated_strings_lower_fragments_and_interpolations() {
+        let ir = body("<?php function f() { \"a {$x} b\"; }");
+        let BodyExpression::InterpolatedString { parts } = root_expression(&ir, 0) else {
+            panic!("expected an interpolated string");
+        };
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(&parts[0], StringPart::Fragment { text } if text == "a "));
+        assert!(matches!(&parts[1], StringPart::Interpolation { .. }));
+        assert!(matches!(&parts[2], StringPart::Fragment { text } if text == " b"));
+    }
+
+    #[test]
+    fn simple_interpolations_carry_their_written_text() {
+        // The simple syntax reaches one property or index deep; the IR
+        // records it as written and defers the semantics.
+        let ir = body("<?php function f() { \"$user->name\"; }");
+        let BodyExpression::InterpolatedString { parts } = root_expression(&ir, 0) else {
+            panic!("expected an interpolated string");
+        };
+        assert!(matches!(&parts[0], StringPart::Simple { text } if text == "$user->name"));
+    }
+
+    #[test]
+    fn heredocs_lower_as_interpolated_strings_with_the_label_erased() {
+        let first = body("<?php function f() { <<<EOT\nhello $x\nEOT; }");
+        let second = body("<?php function f() { <<<OTHER\nhello $x\nOTHER; }");
+        // The label is formatting: two heredocs differing only in it
+        // produce one identical IR.
+        assert_eq!(first, second);
+        let BodyExpression::InterpolatedString { .. } = root_expression(&first, 0) else {
+            panic!("expected an interpolated string");
+        };
+    }
+
+    #[test]
+    fn the_grouping_forms_lower() {
+        let ir = body(
+            "<?php function f() { isset($a, $b); empty($c); print $d; clone $e; throw $f; require 'x.php'; `ls $dir`; }",
+        );
+        assert!(
+            matches!(root_expression(&ir, 0), BodyExpression::Isset { targets } if targets.len() == 2)
+        );
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::Empty { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::Print { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 3),
+            BodyExpression::Clone { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 4),
+            BodyExpression::Throw { .. }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 5),
+            BodyExpression::Include {
+                operator: SyntaxKind::Require,
+                ..
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 6),
+            BodyExpression::ShellExec { .. }
+        ));
+    }
+
+    #[test]
+    fn exit_and_yield_encode_valid_absence() {
+        let ir = body(
+            "<?php function f() { exit; exit(1); yield; yield $v; yield $k => $v; yield from $g; }",
+        );
+        assert!(matches!(
+            root_expression(&ir, 0),
+            BodyExpression::Exit { argument: None }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 1),
+            BodyExpression::Exit { argument: Some(_) }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 2),
+            BodyExpression::Yield {
+                key: None,
+                value: None,
+                delegated: false
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 3),
+            BodyExpression::Yield {
+                key: None,
+                value: Some(_),
+                delegated: false
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 4),
+            BodyExpression::Yield {
+                key: Some(_),
+                value: Some(_),
+                delegated: false
+            }
+        ));
+        assert!(matches!(
+            root_expression(&ir, 5),
+            BodyExpression::Yield {
+                delegated: true,
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn match_lowers_arms_and_default() {
+        let ir = body("<?php function f() { match ($x) { 1, 2 => 'low', default => 'other' }; }");
+        let BodyExpression::Match { arms, .. } = root_expression(&ir, 0) else {
+            panic!("expected a match");
+        };
+        assert_eq!(arms.len(), 2);
+        assert_eq!(arms[0].conditions.len(), 2);
+        assert!(!arms[0].is_default);
+        assert!(arms[1].is_default);
+        assert!(arms[1].conditions.is_empty());
+    }
+
+    #[test]
+    fn dynamic_variables_lower_their_target() {
+        let ir = body("<?php function f() { $$name; }");
+        let BodyExpression::DynamicVariable { target } = root_expression(&ir, 0) else {
+            panic!("expected a dynamic variable");
+        };
+        assert!(matches!(
+            ir.expression(*target).unwrap(),
+            BodyExpression::Variable { .. }
+        ));
     }
 }

@@ -11,7 +11,7 @@
 //! yet; they join when the corpus demands them.
 
 use celerrate_db::SourceFile;
-use celerrate_syntax::SyntaxNodePtr;
+use celerrate_syntax::{SyntaxKind, SyntaxNodePtr};
 
 use crate::ast_id::AstId;
 
@@ -70,6 +70,100 @@ pub enum BodyExpression {
     /// class reference), as written; also the bare `static` keyword.
     NamedReference {
         text: String,
+    },
+    /// `$$name`.
+    DynamicVariable {
+        target: ExpressionId,
+    },
+    /// Prefix operators: `-$a`, `!$a`, `~$a`, `&$a`, `@$a`, etc.
+    Unary {
+        operator: SyntaxKind,
+        operand: ExpressionId,
+    },
+    /// Postfix operators: `$a++`, `$a--`.
+    Postfix {
+        operator: SyntaxKind,
+        operand: ExpressionId,
+    },
+    /// Binary operators: `$a + $b`, `$a . $b`, `$a instanceof Foo`, `$a ?? $b`, etc.
+    Binary {
+        operator: SyntaxKind,
+        lhs: ExpressionId,
+        rhs: ExpressionId,
+    },
+    /// Assignment and compound assignment: `$a = $b`, `$a += $b`, `$a ??= $b`, etc.
+    Assignment {
+        operator: SyntaxKind,
+        by_reference: bool,
+        target: ExpressionId,
+        value: ExpressionId,
+    },
+    /// Type cast: `(int) $a`, `(string) $b`, etc.
+    Cast {
+        operator: SyntaxKind,
+        operand: ExpressionId,
+    },
+    /// Ternary: `$a ? $b : $c` or short ternary: `$a ?: $c`.
+    Ternary {
+        condition: ExpressionId,
+        middle: Option<ExpressionId>,
+        alternative: ExpressionId,
+    },
+    /// Array literal: `[$a, $b]` or `list($a, $b)`.
+    Array {
+        entries: Vec<ArrayEntry>,
+    },
+    /// Interpolated string: `"a {$x} b"` or heredoc `<<<EOT ... EOT`.
+    InterpolatedString {
+        parts: Vec<StringPart>,
+    },
+    /// Shell exec: `` `ls $dir` ``.
+    ShellExec {
+        parts: Vec<StringPart>,
+    },
+    /// `isset($a, $b)`.
+    Isset {
+        targets: Vec<ExpressionId>,
+    },
+    /// `empty($x)`.
+    Empty {
+        target: ExpressionId,
+    },
+    /// `eval($code)`.
+    Eval {
+        argument: ExpressionId,
+    },
+    /// `exit` or `die`.
+    Exit {
+        argument: Option<ExpressionId>,
+    },
+    /// `print $x`.
+    Print {
+        operand: ExpressionId,
+    },
+    /// `clone $x`.
+    Clone {
+        operand: ExpressionId,
+    },
+    /// `throw $x`.
+    Throw {
+        operand: ExpressionId,
+    },
+    /// `yield` or `yield $v` or `yield $k => $v` or `yield from $g`.
+    Yield {
+        key: Option<ExpressionId>,
+        value: Option<ExpressionId>,
+        delegated: bool,
+    },
+    /// `include`, `require`, `include_once`, `require_once`.
+    Include {
+        operator: SyntaxKind,
+        operand: ExpressionId,
+    },
+    /// `match ($x) { 1, 2 => 'low', default => 'other' }`.
+    Match {
+        subject: ExpressionId,
+        arms: Vec<MatchCase>,
     },
 }
 
@@ -170,6 +264,39 @@ pub struct CatchArm {
     pub types: Vec<String>,
     pub variable: Option<String>,
     pub statements: Vec<StatementId>,
+}
+
+/// One entry in an array literal or list destructuring.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum ArrayEntry {
+    /// A destructuring hole: `[, $second]`.
+    Hole,
+    /// An element with optional key, possible spread, and optional by-reference.
+    Element {
+        key: Option<ExpressionId>,
+        value: ExpressionId,
+        spread: bool,
+        by_reference: bool,
+    },
+}
+
+/// One part of an interpolated string (including heredocs) or shell-exec.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum StringPart {
+    /// A text fragment between interpolations.
+    Fragment { text: String },
+    /// A simple interpolation (`$var`, `$obj->prop`, `$arr[0]`) with its written form.
+    Simple { text: String },
+    /// A complex interpolation: `{$expr}`, `${expr}`, or `{$obj->method()}`.
+    Interpolation { expression: ExpressionId },
+}
+
+/// One arm of a match expression.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct MatchCase {
+    pub conditions: Vec<ExpressionId>,
+    pub is_default: bool,
+    pub body: ExpressionId,
 }
 
 /// The lowered body of one function or method: dense arenas, the
