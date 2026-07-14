@@ -79,6 +79,13 @@ pub struct CallArgument {
     pub value: ExpressionId,
 }
 
+/// One capture in a closure's `use (...)` clause.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ClosureUse {
+    pub name: String,
+    pub by_reference: bool,
+}
+
 /// One expression, lowered. `Option` fields encode valid absence (a
 /// short ternary's middle); [`BodyExpression::Missing`] encodes
 /// wreckage (a child error recovery could not produce).
@@ -194,7 +201,7 @@ pub enum BodyExpression {
         subject: ExpressionId,
         arms: Vec<MatchCase>,
     },
-    /// `$a->b`, `$a=>b`, or scoped/index dereference.
+    /// `subject->name` and `subject?->name`, the null_safe flag distinguishing them.
     MemberAccess {
         receiver: ExpressionId,
         member: MemberReference,
@@ -209,7 +216,7 @@ pub enum BodyExpression {
     NullSafeChain {
         chain: ExpressionId,
     },
-    /// `foo(1, 2)` or `$obj->m(...args)`.
+    /// `foo(1, 2)` or `$obj->m(...$args)`.
     Call {
         callee: ExpressionId,
         arguments: Vec<CallArgument>,
@@ -227,6 +234,23 @@ pub enum BodyExpression {
     Index {
         subject: ExpressionId,
         index: Option<ExpressionId>,
+    },
+    /// `function (int $a) use ($x) { ... }` or `static function() { ... }`.
+    Closure {
+        parameters: Vec<crate::members::ParameterSignature>,
+        uses: Vec<ClosureUse>,
+        return_type_text: Option<String>,
+        is_static: bool,
+        by_reference: bool,
+        body: Vec<StatementId>,
+    },
+    /// `fn (int $x): int => $x + 1` or `static fn() => 42`.
+    ArrowFunction {
+        parameters: Vec<crate::members::ParameterSignature>,
+        return_type_text: Option<String>,
+        is_static: bool,
+        by_reference: bool,
+        body: ExpressionId,
     },
 }
 

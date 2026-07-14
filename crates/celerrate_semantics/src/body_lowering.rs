@@ -11,7 +11,7 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxNodePtr};
 use crate::ast_id::{AstId, AstIdMap};
 use crate::body::{
     ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, CallArgument, CatchArm,
-    ClassReference, ExpressionId, MatchCase, MemberReference, StatementId,
+    ClassReference, ClosureUse, ExpressionId, MatchCase, MemberReference, StatementId,
     StaticVariableDeclaration, StringPart, SwitchArm,
 };
 
@@ -49,6 +49,39 @@ fn chain_contains_null_safe(expression: &ast::Expression) -> bool {
             None => return false,
         }
     }
+}
+
+/// The captures of a `use (...)` clause, in written order. The `&`
+/// sits between commas as a bare token, so a pending flag associates
+/// it with the following variable.
+fn closure_uses(clause: Option<ast::ClosureUseClause>) -> Vec<ClosureUse> {
+    let Some(clause) = clause else {
+        return Vec::new();
+    };
+    let mut uses = Vec::new();
+    let mut by_reference = false;
+    for element in clause.syntax().children_with_tokens() {
+        match element {
+            celerrate_syntax::SyntaxElement::Token(token)
+                if token.kind() == SyntaxKind::Ampersand =>
+            {
+                by_reference = true;
+            }
+            celerrate_syntax::SyntaxElement::Node(node) => {
+                if let Some(variable) = ast::VariableReference::cast(node)
+                    && let Some(name) = variable.name_token()
+                {
+                    uses.push(ClosureUse {
+                        name: name.text().trim_start_matches('$').to_owned(),
+                        by_reference,
+                    });
+                }
+                by_reference = false;
+            }
+            _ => {}
+        }
+    }
+    uses
 }
 
 /// Lowers one function or method declaration's body. `None` when the
@@ -689,7 +722,30 @@ impl Lowering<'_> {
                 };
                 BodyExpression::New { class, arguments }
             }
-            _ => BodyExpression::Missing,
+            ast::Expression::ClosureExpression(closure) => BodyExpression::Closure {
+                parameters: crate::members::parameter_signatures(closure.parameter_list()),
+                uses: closure_uses(closure.closure_use_clause()),
+                return_type_text: closure.return_type().map(|ty| ast::type_text(&ty)),
+                is_static: closure.static_keyword_token().is_some(),
+                by_reference: closure.by_reference_token().is_some(),
+                body: self.lower_block_statements(closure.block()),
+            },
+            ast::Expression::ArrowFunctionExpression(arrow) => BodyExpression::ArrowFunction {
+                parameters: crate::members::parameter_signatures(arrow.parameter_list()),
+                return_type_text: arrow.return_type().map(|ty| ast::type_text(&ty)),
+                is_static: arrow.static_keyword_token().is_some(),
+                by_reference: arrow.by_reference_token().is_some(),
+                body: self.lower_expression_or_missing(arrow.body(), arrow.syntax()),
+            },
+            ast::Expression::MemberAccessExpression(_)
+            | ast::Expression::ScopedAccessExpression(_)
+            | ast::Expression::CallExpression(_)
+            | ast::Expression::IndexExpression(_) => {
+                // Chain kinds are normally routed through
+                // lower_chain_link; delegating keeps this match total
+                // without a panic path.
+                return self.lower_chain_link(expression);
+            }
         };
         self.allocate_expression(lowered, node)
     }
@@ -801,7 +857,7 @@ mod tests {
 
     use crate::body::{
         ArrayEntry, BodyExpression, BodyIr, BodySourceMap, BodyStatement, ClassReference,
-        MemberReference, StringPart,
+        ClosureUse, MemberReference, StringPart,
     };
 
     /// Lowers the first function or method of `source`.
@@ -1678,5 +1734,78 @@ mod tests {
     fn independent_chains_wrap_independently() {
         let ir = body("<?php function f() { $a?->b[$c?->d]; }");
         assert_eq!(null_safe_chain_count(&ir), 2);
+    }
+
+    #[test]
+    fn a_closure_lowers_signature_uses_and_body_inline() {
+        let ir = body(
+            "<?php function f() { $g = static function (int $a, &$b) use ($captured, &$shared): void { return $a; }; }",
+        );
+        let BodyExpression::Assignment { value, .. } = root_expression(&ir, 0) else {
+            panic!("expected an assignment");
+        };
+        let BodyExpression::Closure {
+            parameters,
+            uses,
+            return_type_text,
+            is_static,
+            by_reference,
+            body: closure_body,
+        } = ir.expression(*value).unwrap()
+        else {
+            panic!("expected a closure");
+        };
+        assert!(*is_static);
+        assert!(!*by_reference);
+        assert_eq!(return_type_text.as_deref(), Some("void"));
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0].name, "a");
+        assert_eq!(parameters[0].type_text.as_deref(), Some("int"));
+        assert!(parameters[1].by_reference);
+        assert_eq!(
+            uses,
+            &vec![
+                ClosureUse {
+                    name: "captured".to_owned(),
+                    by_reference: false
+                },
+                ClosureUse {
+                    name: "shared".to_owned(),
+                    by_reference: true
+                },
+            ],
+        );
+        // The closure body's statements live in the same arena.
+        assert_eq!(closure_body.len(), 1);
+        assert!(matches!(
+            ir.statement(closure_body[0]).unwrap(),
+            BodyStatement::Return { value: Some(_) },
+        ));
+    }
+
+    #[test]
+    fn an_arrow_function_lowers_its_expression_body() {
+        let ir = body("<?php function f() { $g = fn (int $x): int => $x + 1; }");
+        let BodyExpression::Assignment { value, .. } = root_expression(&ir, 0) else {
+            panic!("expected an assignment");
+        };
+        let BodyExpression::ArrowFunction {
+            parameters,
+            return_type_text,
+            body: arrow_body,
+            ..
+        } = ir.expression(*value).unwrap()
+        else {
+            panic!("expected an arrow function");
+        };
+        assert_eq!(parameters.len(), 1);
+        assert_eq!(return_type_text.as_deref(), Some("int"));
+        assert!(matches!(
+            ir.expression(*arrow_body).unwrap(),
+            BodyExpression::Binary {
+                operator: SyntaxKind::Plus,
+                ..
+            },
+        ));
     }
 }
