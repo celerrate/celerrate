@@ -43,7 +43,7 @@ pub fn embedded_stub_index() -> Result<StubIndex, StubBlobError> {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::panic)]
+    #![allow(clippy::panic, clippy::unwrap_used, clippy::indexing_slicing)]
 
     use crate::{StubSymbolKind, embedded_stub_index};
 
@@ -78,6 +78,62 @@ mod tests {
         assert!(
             find("Random\\Randomizer", StubSymbolKind::Class),
             "namespaced extraction",
+        );
+    }
+
+    #[test]
+    fn the_embedded_blob_carries_the_signature_payload() {
+        let index = crate::blob::decode(crate::EMBEDDED_STUB_BLOB).unwrap();
+        assert!(!index.functions().is_empty(), "functions compiled");
+        assert!(!index.classes().is_empty(), "class surfaces compiled");
+    }
+
+    #[test]
+    fn corpus_spot_checks_hold_on_the_embedded_blob() {
+        use celerrate_project::PhpVersion;
+        let index = crate::blob::decode(crate::EMBEDDED_STUB_BLOB).unwrap();
+        let function = |name: &str| {
+            index
+                .functions()
+                .iter()
+                .find(|(function_name, _)| function_name == name)
+                .map(|(_, signature)| signature)
+        };
+        // strlen(string $string): int
+        let strlen = function("strlen").unwrap();
+        assert_eq!(
+            strlen.parameters[0].type_text.at(PhpVersion::new(8, 1)),
+            Some("string"),
+        );
+        assert_eq!(strlen.return_type.at(PhpVersion::new(8, 1)), Some("int"));
+        // preg_match's $matches is by reference.
+        let preg_match = function("preg_match").unwrap();
+        let matches = preg_match
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "matches")
+            .unwrap();
+        assert!(matches.by_reference);
+        // Exception::getMessage(): string, and the parent link to Throwable.
+        let (_, exception) = index
+            .classes()
+            .iter()
+            .find(|(name, _)| name == "Exception")
+            .unwrap();
+        assert!(exception.parents.iter().any(|parent| parent == "Throwable"));
+        let get_message = exception
+            .members
+            .iter()
+            .find(|member| member.name == "getMessage")
+            .unwrap();
+        assert_eq!(
+            get_message
+                .signature
+                .as_ref()
+                .unwrap()
+                .return_type
+                .at(PhpVersion::new(8, 1)),
+            Some("string"),
         );
     }
 }
