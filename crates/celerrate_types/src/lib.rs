@@ -8,5 +8,7 @@
 mod construction;
 mod ordering;
 mod representation;
+mod widening;
 
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
+pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};

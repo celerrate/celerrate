@@ -213,7 +213,20 @@ impl<'db> TypeId<'db> {
         }
         flat.sort_by(|left, right| structural_order(db, *left, *right));
         flat.dedup();
-        // cap point: Task 6 collapses beyond UNION_ARITY_CAP here.
+        // cap point: an oversized union collapses to its join, a common
+        // supertype, never a truncated subset (order independence).
+        if flat.len() > crate::widening::UNION_ARITY_CAP {
+            return flat
+                .iter()
+                .copied()
+                .fold(Self::never(db), |accumulated, part| {
+                    crate::widening::join(db, accumulated, part)
+                });
+        }
+        let mut flat: Vec<TypeId<'db>> = flat
+            .into_iter()
+            .map(|part| crate::widening::capped_child(db, part))
+            .collect();
         match flat.len() {
             0 => Self::never(db),
             1 => flat.swap_remove(0),
@@ -242,8 +255,13 @@ impl<'db> TypeId<'db> {
         }
         flat.sort_by(|left, right| structural_order(db, *left, *right));
         flat.dedup();
-        // cap point: Task 6 truncates beyond UNION_ARITY_CAP here (sorted,
-        // so deterministic; a sound over-approximation).
+        // cap point: an oversized intersection truncates (sorted, so
+        // deterministic; dropping intersectands over-approximates soundly).
+        flat.truncate(crate::widening::UNION_ARITY_CAP);
+        let mut flat: Vec<TypeId<'db>> = flat
+            .into_iter()
+            .map(|part| crate::widening::capped_child(db, part))
+            .collect();
         match flat.len() {
             0 => Self::mixed(db),
             1 => flat.swap_remove(0),
@@ -296,6 +314,8 @@ impl<'db> TypeId<'db> {
     }
 
     pub fn array(db: &'db dyn salsa::Database, key: TypeId<'db>, value: TypeId<'db>) -> Self {
+        let key = crate::widening::capped_child(db, key);
+        let value = crate::widening::capped_child(db, value);
         Self::intern(
             db,
             TypeData::Array {
@@ -312,6 +332,8 @@ impl<'db> TypeId<'db> {
         key: TypeId<'db>,
         value: TypeId<'db>,
     ) -> Self {
+        let key = crate::widening::capped_child(db, key);
+        let value = crate::widening::capped_child(db, value);
         Self::intern(
             db,
             TypeData::Array {
@@ -325,6 +347,7 @@ impl<'db> TypeId<'db> {
 
     pub fn list(db: &'db dyn salsa::Database, value: TypeId<'db>) -> Self {
         let key = Self::int(db);
+        let value = crate::widening::capped_child(db, value);
         Self::intern(
             db,
             TypeData::Array {
@@ -338,6 +361,7 @@ impl<'db> TypeId<'db> {
 
     pub fn non_empty_list(db: &'db dyn salsa::Database, value: TypeId<'db>) -> Self {
         let key = Self::int(db);
+        let value = crate::widening::capped_child(db, value);
         Self::intern(
             db,
             TypeData::Array {
@@ -353,7 +377,8 @@ impl<'db> TypeId<'db> {
     /// array-literal write semantics), fields sort by key.
     pub fn shape(db: &'db dyn salsa::Database, fields: Vec<ShapeField<'db>>) -> Self {
         let mut deduplicated: Vec<ShapeField<'db>> = Vec::with_capacity(fields.len());
-        for field in fields {
+        for mut field in fields {
+            field.value = crate::widening::capped_child(db, field.value);
             if let Some(existing) = deduplicated
                 .iter_mut()
                 .find(|candidate| candidate.key == field.key)
@@ -452,6 +477,10 @@ impl<'db> TypeId<'db> {
     /// spelling through the symbol table when rendering diagnostics).
     pub fn class(db: &'db dyn salsa::Database, name: &str, arguments: Vec<TypeId<'db>>) -> Self {
         let folded = folded_symbol_key(SymbolSpace::ClassLike, name);
+        let arguments = arguments
+            .into_iter()
+            .map(|argument| crate::widening::capped_child(db, argument))
+            .collect();
         Self::intern(
             db,
             TypeData::Class {
@@ -473,6 +502,7 @@ impl<'db> TypeId<'db> {
     }
 
     pub fn class_string(db: &'db dyn salsa::Database, argument: Option<TypeId<'db>>) -> Self {
+        let argument = argument.map(|argument| crate::widening::capped_child(db, argument));
         Self::intern(db, TypeData::ClassString { argument })
     }
 
@@ -539,6 +569,14 @@ impl<'db> TypeId<'db> {
         parameters: Vec<CallableParameter<'db>>,
         return_type: TypeId<'db>,
     ) -> Self {
+        let parameters = parameters
+            .into_iter()
+            .map(|parameter| CallableParameter {
+                parameter_type: crate::widening::capped_child(db, parameter.parameter_type),
+                ..parameter
+            })
+            .collect();
+        let return_type = crate::widening::capped_child(db, return_type);
         Self::intern(
             db,
             TypeData::Callable {
@@ -558,6 +596,7 @@ impl<'db> TypeId<'db> {
         name: &str,
         bound: TypeId<'db>,
     ) -> Self {
+        let bound = crate::widening::capped_child(db, bound);
         Self::intern(
             db,
             TypeData::Template {
@@ -574,7 +613,10 @@ impl<'db> TypeId<'db> {
         match subject.data(db) {
             TypeData::Shape { fields } => Self::shape_as_array(db, fields).0,
             TypeData::Array { key, .. } => *key,
-            _ => Self::intern(db, TypeData::KeyOf { subject }),
+            _ => {
+                let subject = crate::widening::capped_child(db, subject);
+                Self::intern(db, TypeData::KeyOf { subject })
+            }
         }
     }
 
@@ -585,7 +627,10 @@ impl<'db> TypeId<'db> {
         match subject.data(db) {
             TypeData::Shape { fields } => Self::shape_as_array(db, fields).1,
             TypeData::Array { value, .. } => *value,
-            _ => Self::intern(db, TypeData::ValueOf { subject }),
+            _ => {
+                let subject = crate::widening::capped_child(db, subject);
+                Self::intern(db, TypeData::ValueOf { subject })
+            }
         }
     }
 
@@ -597,6 +642,10 @@ impl<'db> TypeId<'db> {
         otherwise_branch: TypeId<'db>,
         negated: bool,
     ) -> Self {
+        let subject = crate::widening::capped_child(db, subject);
+        let matches = crate::widening::capped_child(db, matches);
+        let then_branch = crate::widening::capped_child(db, then_branch);
+        let otherwise_branch = crate::widening::capped_child(db, otherwise_branch);
         Self::intern(
             db,
             TypeData::Conditional {
