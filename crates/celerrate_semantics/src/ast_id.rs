@@ -117,30 +117,91 @@ mod tests {
     }
 
     #[test]
-    fn members_are_not_declaration_nodes() {
-        // Class constants, methods, and anything inside a member list
-        // are members, not items; the constant after the class is one.
+    fn members_are_numbered_declaration_nodes() {
+        // Numbering: class = 0, const B = 1, method = 2, const C = 3.
         let (_parse, map) =
             map_of("<?php class A { const B = 1; public function method() {} } const C = 1;");
         assert_eq!(
             kinds_of(&map),
             vec![
                 SyntaxKind::ClassDeclaration,
-                SyntaxKind::ConstantDeclaration
+                SyntaxKind::ConstantDeclaration,
+                SyntaxKind::MethodDeclaration,
+                SyntaxKind::ConstantDeclaration,
             ],
         );
     }
 
     #[test]
-    fn nameless_declarations_are_not_numbered() {
-        // Anonymous classes carry no top-level identity.
+    fn properties_and_enum_cases_are_numbered() {
+        let (_parse, map) = map_of(
+            "<?php class A { public int $count = 0; } enum Suit { case Hearts; case Spades; }",
+        );
+        assert_eq!(
+            kinds_of(&map),
+            vec![
+                SyntaxKind::ClassDeclaration,
+                SyntaxKind::PropertyDeclaration,
+                SyntaxKind::EnumDeclaration,
+                SyntaxKind::EnumCase,
+                SyntaxKind::EnumCase,
+            ],
+        );
+    }
+
+    #[test]
+    fn anonymous_classes_are_numbered_with_their_members() {
+        // The synthetic identity the spec gives anonymous classes is
+        // their numbered position; their members are owned like any
+        // other class's.
         let (_parse, map) =
-            map_of("<?php function wrapper() { return new class {}; } class Named {}");
+            map_of("<?php function wrapper() { return new class { public function f() {} }; }");
         assert_eq!(
             kinds_of(&map),
             vec![
                 SyntaxKind::FunctionDeclaration,
-                SyntaxKind::ClassDeclaration
+                SyntaxKind::ClassDeclaration,
+                SyntaxKind::MethodDeclaration,
+            ],
+        );
+    }
+
+    #[test]
+    fn a_function_declared_inside_a_method_body_is_numbered() {
+        // The old traversal skipped the whole member list, so a named
+        // function declared inside a method body was invisible — a
+        // false negative this task closes in passing.
+        let (_parse, map) = map_of("<?php class A { function m() { function nested() {} } }");
+        assert_eq!(
+            kinds_of(&map),
+            vec![
+                SyntaxKind::ClassDeclaration,
+                SyntaxKind::MethodDeclaration,
+                SyntaxKind::FunctionDeclaration,
+            ],
+        );
+    }
+
+    #[test]
+    fn statement_edits_renumber_nothing_and_member_insertion_renumbers_later_nodes() {
+        // The spec's recorded trade-off: numbering counts declaration
+        // nodes only, so statement edits still renumber nothing; adding
+        // a member (or an anonymous class) renumbers later declarations
+        // in the file. Accepted, and pinned here.
+        let (_parse, before) = map_of("<?php class A { function m() { $x = 1; } } class B {}");
+        let (_parse, statement_edit) =
+            map_of("<?php class A { function m() { $x = 2; $y = 3; } } class B {}");
+        assert_eq!(kinds_of(&before), kinds_of(&statement_edit));
+
+        let (_parse, member_added) =
+            map_of("<?php class A { function m() { $x = 1; } function n() {} } class B {}");
+        assert_eq!(
+            kinds_of(&member_added),
+            vec![
+                SyntaxKind::ClassDeclaration,
+                SyntaxKind::MethodDeclaration,
+                SyntaxKind::MethodDeclaration,
+                SyntaxKind::ClassDeclaration,
             ],
         );
     }

@@ -172,6 +172,11 @@ macro_rules! inheritance_of {
 }
 
 fn lower(item: &ItemNode, ast_id: AstId, tree: &mut ItemTree) {
+    // Members consume numbering but never project a top-level
+    // declaration; the member projection (`MemberTree`) owns them.
+    if item.owner.is_some() {
+        return;
+    }
     match item.node.kind() {
         SyntaxKind::ClassDeclaration => {
             if let Some(declaration) = ast::ClassDeclaration::cast(item.node.clone()) {
@@ -840,6 +845,23 @@ mod tests {
         assert_eq!(
             declared("<?php $instance = new class {}; class Named {}"),
             vec![(DeclarationKind::Class, "Named".to_owned(), String::new())],
+        );
+    }
+
+    #[test]
+    fn member_nodes_consume_numbering_but_project_nothing() {
+        // Numbering: class = 0, const member = 1, method = 2, so the
+        // constant after the class is item 3 — and the projection still
+        // carries exactly the class and the top-level constant.
+        let tree = tree_of("<?php class A { const B = 1; function m() {} } const C = 1;");
+        let kinds_and_ids: Vec<(DeclarationKind, u32)> = tree
+            .declarations
+            .iter()
+            .map(|declaration| (declaration.kind, declaration.ast_id.index))
+            .collect();
+        assert_eq!(
+            kinds_and_ids,
+            vec![(DeclarationKind::Class, 0), (DeclarationKind::Constant, 3)],
         );
     }
 
