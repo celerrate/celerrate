@@ -17,7 +17,7 @@ use celerrate_db::testing::TestDatabase;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
     SymbolQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map,
-    folded_symbol_key, item_tree, lookup_symbol, reference_diagnostics, resolve_name,
+    folded_symbol_key, item_tree, lookup_symbol, member_tree, reference_diagnostics, resolve_name,
     source_symbol_table, syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
@@ -798,4 +798,110 @@ fn deleting_the_file_that_declares_the_symbol_reaches_the_consumer() {
         1,
         "a deleted declaration must reach the consumer: {log:?}",
     );
+}
+
+/// A stand-in for the type-engine consumers of the member boundary:
+/// any query that reads the member tree and nothing else syntactic.
+#[salsa::tracked]
+fn member_names(db: &dyn salsa::Database, file: SourceFile) -> Vec<String> {
+    member_tree(db, file)
+        .classes
+        .iter()
+        .flat_map(|class| class.members.iter().map(|member| member.name.clone()))
+        .collect()
+}
+
+#[test]
+fn a_method_body_edit_reaches_the_member_tree_and_stops_there() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { public function f(): int { return 1; } }".to_vec(),
+    );
+    let _ = member_names(&db, file);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { public function f(): int { return 2; } }".to_vec());
+    let _ = member_names(&db, file);
+
+    let log = db.take_executed();
+    assert_eq!(executions_of(&log, "member_tree"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "member_names"),
+        0,
+        "an identical member tree must backdate, sparing member consumers: {log:?}",
+    );
+}
+
+#[test]
+fn a_member_signature_edit_never_reaches_item_tree_consumers() {
+    // The structural settlement of the source_symbol_table debt: the
+    // symbol table depends on item_tree only, and a member signature
+    // edit leaves the top-level projection equal, so the global table
+    // is never rebuilt — the audit's serial O(all symbols) loop no
+    // longer fires on the type engine's canonical hot edit class.
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { public function f(): int { return 1; } }".to_vec(),
+    );
+    let other = SourceFile::new(&db, FileId::new(1), b"<?php class B {}".to_vec());
+    let files = AnalyzedFileSet::new(&db, vec![file, other]);
+    let _ = member_names(&db, file);
+    let _ = source_symbol_table(&db, files);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { public function f(): string { return ''; } }".to_vec());
+    let _ = member_names(&db, file);
+    let _ = source_symbol_table(&db, files);
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "member_tree"),
+        1,
+        "the signature changed, the member projection re-runs: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "member_names"),
+        1,
+        "member consumers see the new signature: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "item_tree"),
+        1,
+        "the top-level projection re-runs over the new tree: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "source_symbol_table"),
+        0,
+        "the item tree is equal and backdates: the global table never rebuilds: {log:?}",
+    );
+}
+
+#[test]
+fn a_docblock_prose_edit_reaches_member_consumers_by_design() {
+    // The spec's accepted cost, observed at the query level: the raw
+    // docblock is a member-tree field. The second-stage cutoff (the
+    // parsed-annotation query) is plan 4's; until then the member tree
+    // is the only stage.
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { /** @return int */ public function f() {} }".to_vec(),
+    );
+    let _ = member_names(&db, file);
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php class A { /** @return int (documented) */ public function f() {} }".to_vec());
+    let _ = member_names(&db, file);
+
+    let log = db.take_executed();
+    assert_eq!(executions_of(&log, "member_tree"), 1, "{log:?}");
+    assert_eq!(executions_of(&log, "member_names"), 1, "{log:?}");
 }
