@@ -293,6 +293,10 @@ pub fn declared_member_signature<'db>(
                 &member,
             ));
         }
+        // A later task types virtual members through the type-syntax
+        // registry; for now a virtual resolution answers the same as an
+        // absent one (decision folded in from task 3's review).
+        MemberResolution::Virtual { .. } => return None,
     };
     let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
