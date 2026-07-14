@@ -8,8 +8,9 @@
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    Member, MemberKind, MemberQuery, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index,
-    item_tree, lookup_class_declaration, lookup_function_declaration, lookup_member, member_tree,
+    AstId, ClassQuery, LinearizedClass, Member, MemberKind, MemberQuery, SymbolQuery, SymbolSpace,
+    UseTables, analyzed_file_index, folded_member_key, item_tree, linearized_class,
+    lookup_class_declaration, lookup_function_declaration, lookup_member, member_tree,
     resolve_candidates,
 };
 use celerrate_stubs::StubIndexInput;
@@ -206,6 +207,70 @@ pub(crate) fn refine<'db>(
     }
 }
 
+/// The ancestor keys of one linearized class, nearest first (edge
+/// walk order), the root and duplicates removed. Stub ancestors take
+/// no part: annotations live in source docblocks.
+fn ancestors_in_walk_order(root_key: &str, linearized: &LinearizedClass) -> Vec<String> {
+    let mut seen: Vec<String> = Vec::new();
+    for edge in &linearized.ancestry {
+        let Some(resolved) = edge.resolved.as_deref() else {
+            continue;
+        };
+        if resolved == root_key || seen.iter().any(|key| key == resolved) {
+            continue;
+        }
+        seen.push(resolved.to_owned());
+    }
+    seen
+}
+
+/// Element-wise nearest-ancestor merge: own annotations first, then
+/// each declaring ancestor in walk order fills only what is still
+/// missing. `declares` gates on the ancestor's OWN member table (an
+/// ancestor that merely inherits the member is not its annotation
+/// site); `read` supplies the ancestor's parsed annotations.
+fn inherited_annotations<'db>(
+    own: MemberAnnotations<'db>,
+    parameter_names: &[String],
+    ancestors: &[String],
+    declares: impl Fn(&str) -> bool,
+    read: impl Fn(&str) -> MemberAnnotations<'db>,
+) -> MemberAnnotations<'db> {
+    let mut merged = own;
+    for ancestor in ancestors {
+        let value_missing = merged.value.is_none();
+        let missing_parameters: Vec<&String> = parameter_names
+            .iter()
+            .filter(|name| {
+                !merged
+                    .parameters
+                    .iter()
+                    .any(|(merged_name, _)| merged_name == *name)
+            })
+            .collect();
+        if !value_missing && missing_parameters.is_empty() {
+            return merged;
+        }
+        if !declares(ancestor) {
+            continue;
+        }
+        let ancestor_annotations = read(ancestor);
+        if value_missing {
+            merged.value = ancestor_annotations.value;
+        }
+        for name in missing_parameters {
+            if let Some((_, annotated)) = ancestor_annotations
+                .parameters
+                .iter()
+                .find(|(ancestor_name, _)| ancestor_name == name)
+            {
+                merged.parameters.push((name.clone(), *annotated));
+            }
+        }
+    }
+    merged
+}
+
 #[salsa::tracked]
 pub fn declared_member_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -221,7 +286,36 @@ pub fn declared_member_signature<'db>(
         namespace: &site_parts.namespace,
         tables: &tables,
     };
-    let annotations = member_annotations(db, files, stubs, configuration, query);
+    let own = member_annotations(db, files, stubs, configuration, query);
+    let root_key = query.class_key(db);
+    let class = ClassQuery::new(db, root_key.clone());
+    let linearized = linearized_class(db, files, stubs, configuration, class);
+    let parameter_names: Vec<String> = resolution
+        .member
+        .signature
+        .parameters
+        .iter()
+        .map(|parameter| parameter.name.clone())
+        .collect();
+    let annotations = match linearized.as_ref() {
+        Some(linearized) => {
+            let ancestors = ancestors_in_walk_order(root_key, linearized);
+            let kind = query.kind(db);
+            let member_key = query.member_key(db);
+            inherited_annotations(
+                own,
+                &parameter_names,
+                &ancestors,
+                |ancestor| declares_member(db, files, ancestor, kind, member_key),
+                |ancestor| {
+                    let ancestor_query =
+                        MemberQuery::new(db, ancestor.to_owned(), kind, member_key.clone());
+                    member_annotations(db, files, stubs, configuration, ancestor_query)
+                },
+            )
+        }
+        None => own,
+    };
     Some(resolve_member_signature(
         db,
         files,
@@ -234,11 +328,13 @@ pub fn declared_member_signature<'db>(
     ))
 }
 
-/// The declaring site of one source class-like: its file handle and
-/// namespace, found through the same firewalls linearization uses.
+/// The declaring site of one source class-like: its file handle,
+/// namespace, and declaration AST id, found through the same
+/// firewalls linearization uses.
 struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
+    ast_id: AstId,
 }
 
 fn declaring_site(
@@ -259,7 +355,35 @@ fn declaring_site(
         .find(|group| group.ast_id == ast_id)?
         .namespace
         .clone();
-    Some(DeclaringSite { file, namespace })
+    Some(DeclaringSite {
+        file,
+        namespace,
+        ast_id,
+    })
+}
+
+/// Whether `class_key`'s OWN member group declares a member of this
+/// kind and key (inherited entries do not count: the annotation site
+/// is the declaring docblock).
+fn declares_member(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    class_key: &str,
+    kind: MemberKind,
+    member_key: &str,
+) -> bool {
+    let Some(site) = declaring_site(db, files, class_key) else {
+        return false;
+    };
+    member_tree(db, site.file)
+        .classes
+        .iter()
+        .find(|group| group.ast_id == site.ast_id)
+        .is_some_and(|group| {
+            group.members.iter().any(|member| {
+                member.kind == kind && folded_member_key(kind, &member.name) == member_key
+            })
+        })
 }
 
 /// Resolves one member's written signature at its declaring site.
@@ -868,5 +992,112 @@ mod tests {
             query,
         );
         assert_eq!(annotations, super::MemberAnnotations::default());
+    }
+
+    #[test]
+    fn the_nearest_ancestor_annotation_wins_element_wise() {
+        let db = TestDatabase::default();
+        let int = TypeId::int(&db);
+        let string = TypeId::string(&db);
+        let bool_type = TypeId::bool(&db);
+        let annotations_of = |key: &str| -> super::MemberAnnotations<'_> {
+            match key {
+                // The near ancestor annotates only the parameter.
+                "near" => super::MemberAnnotations {
+                    value: None,
+                    parameters: vec![("x".to_owned(), string)],
+                },
+                // The far ancestor annotates both.
+                "far" => super::MemberAnnotations {
+                    value: Some(int),
+                    parameters: vec![("x".to_owned(), bool_type)],
+                },
+                _ => super::MemberAnnotations::default(),
+            }
+        };
+        let ancestors = vec!["near".to_owned(), "far".to_owned()];
+        let merged = super::inherited_annotations(
+            super::MemberAnnotations::default(),
+            &["x".to_owned()],
+            &ancestors,
+            |_| true,
+            annotations_of,
+        );
+        // Value: the near ancestor is silent, the far one supplies it.
+        assert_eq!(merged.value, Some(int));
+        // Parameter: the near ancestor wins over the far one.
+        assert_eq!(merged.parameters, vec![("x".to_owned(), string)]);
+    }
+
+    #[test]
+    fn own_annotations_shadow_every_ancestor_and_non_declaring_ancestors_are_skipped() {
+        let db = TestDatabase::default();
+        let int = TypeId::int(&db);
+        let string = TypeId::string(&db);
+        let own = super::MemberAnnotations {
+            value: Some(int),
+            parameters: vec![],
+        };
+        let merged = super::inherited_annotations(
+            own.clone(),
+            &[],
+            &["ancestor".to_owned()],
+            |_| true,
+            |_| super::MemberAnnotations {
+                value: Some(string),
+                parameters: vec![],
+            },
+        );
+        assert_eq!(merged.value, Some(int), "own annotation shadows");
+
+        // An ancestor that does not declare the member supplies nothing.
+        let merged = super::inherited_annotations(
+            super::MemberAnnotations::default(),
+            &[],
+            &["silent".to_owned()],
+            |_| false,
+            |_| super::MemberAnnotations {
+                value: Some(string),
+                parameters: vec![],
+            },
+        );
+        assert_eq!(merged.value, None);
+    }
+
+    #[test]
+    fn ancestors_walk_in_linearization_order_without_the_root_or_duplicates() {
+        let fixture = fixture(&["<?php\n\
+             interface I {}\n\
+             class A implements I {}\n\
+             class B extends A implements I {}\n\
+             class C extends B {}"]);
+        let key = folded_symbol_key(SymbolSpace::ClassLike, "C");
+        let class = celerrate_semantics::ClassQuery::new(&fixture.db, key.clone());
+        let linearized = celerrate_semantics::linearized_class(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            class,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(
+            super::ancestors_in_walk_order(&key, linearized),
+            vec!["b".to_owned(), "a".to_owned(), "i".to_owned()],
+        );
+    }
+
+    #[test]
+    fn inheritance_wiring_leaves_native_results_untouched_while_the_seam_is_empty() {
+        let fixture = fixture(&[
+            "<?php interface Normalizer { public function normalize($data): array {} }\n\
+             class UserNormalizer implements Normalizer {\n\
+                 public function normalize($data): array {}\n\
+             }",
+        ]);
+        let signature =
+            member(&fixture, "UserNormalizer", MemberKind::Method, "normalize").unwrap();
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
     }
 }
