@@ -154,7 +154,10 @@ impl Lowering<'_> {
     /// A branch position (an `if` arm, a loop body): one statement in
     /// the classic syntax, a list in the alternative syntax. A single
     /// `Block` dissolves into its statements, so brace style is
-    /// formatting, not code.
+    /// formatting, not code. Statement-list positions (the root body,
+    /// switch cases, declare bodies) deliberately keep a standalone
+    /// block faithful instead: braces there are structure the author
+    /// wrote, matching the root-body contract.
     fn lower_branch(&mut self, statements: Vec<ast::Statement>) -> Vec<StatementId> {
         if statements.len() == 1
             && let Some(ast::Statement::Block(block)) = statements.first()
@@ -573,7 +576,8 @@ impl Lowering<'_> {
             }
             ast::Expression::ParenthesizedExpression(parenthesized) => {
                 // Transparent: `($x)` and `$x` are one IR. The null-safe
-                // chain boundary this creates is handled in Task 4.
+                // chain boundary this creates is handled by the chain
+                // wrapper in lower_expression.
                 return self.lower_expression_or_missing(
                     parenthesized.expression(),
                     parenthesized.syntax(),
@@ -1051,8 +1055,8 @@ mod tests {
     fn truncated_input_lowers_without_failure() {
         // The never-fail contract: error recovery's wreckage lowers
         // (to Missing forms) rather than failing the walk, and the
-        // arenas stay parallel to their source map. Task 7's
-        // adversarial batch pins arena integrity broadly.
+        // arenas stay parallel to their source map. The adversarial
+        // batch below pins arena integrity broadly.
         let (ir, map) = lowered("<?php function f() { $x = ");
         assert_eq!(ir.statements.len(), map.statements.len());
         assert_eq!(ir.expressions.len(), map.expressions.len());

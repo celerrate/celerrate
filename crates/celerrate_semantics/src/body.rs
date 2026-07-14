@@ -113,7 +113,7 @@ pub enum BodyExpression {
     NamedReference {
         text: String,
     },
-    /// `$$name`.
+    /// `$$name` and `${expression}`.
     DynamicVariable {
         target: ExpressionId,
     },
@@ -207,7 +207,7 @@ pub enum BodyExpression {
         subject: ExpressionId,
         arms: Vec<MatchCase>,
     },
-    /// `subject->name` and `subject?->name`, the null_safe flag distinguishing them.
+    /// `subject->name` and `subject?->name`; the `null_safe` flag distinguishes them.
     MemberAccess {
         receiver: ExpressionId,
         member: MemberReference,
@@ -401,6 +401,9 @@ pub struct BodyAnnotation {
     pub text: String,
     /// The first lowered statement starting after the comment ends;
     /// `None` when the comment trails every statement of the body.
+    /// A trailing same-line directive (`@phpstan-ignore-line`) therefore
+    /// anchors past its own line or to `None`; consumers matching that
+    /// form reconcile through the source map instead.
     pub anchor: Option<StatementId>,
 }
 
