@@ -465,11 +465,13 @@ impl<'db> TypeId<'db> {
         }
     }
 
-    /// A class-like type. The name folds internally so spelling
-    /// variants intern to one type; `display` therefore renders the
-    /// folded key (recorded debt: plan 8 recovers the original
-    /// spelling through the symbol table when rendering diagnostics).
+    /// A class-like type. The name strips a leading backslash, then
+    /// folds, so spelling variants (fully qualified or not, any casing)
+    /// intern to one type; `display` therefore renders the folded key
+    /// (recorded debt: plan 8 recovers the original spelling through the
+    /// symbol table when rendering diagnostics).
     pub fn class(db: &'db dyn salsa::Database, name: &str, arguments: Vec<TypeId<'db>>) -> Self {
+        let name = name.strip_prefix('\\').unwrap_or(name);
         let folded = folded_symbol_key(SymbolSpace::ClassLike, name);
         let arguments = arguments
             .into_iter()
@@ -484,7 +486,12 @@ impl<'db> TypeId<'db> {
         )
     }
 
+    /// An enum case. The enum name strips a leading backslash, then
+    /// folds, the same as [`TypeId::class`]; the case name stays
+    /// verbatim (PHP case names are case-sensitive identifiers, not a
+    /// namespaced symbol).
     pub fn enum_case(db: &'db dyn salsa::Database, enum_name: &str, case_name: &str) -> Self {
+        let enum_name = enum_name.strip_prefix('\\').unwrap_or(enum_name);
         let folded = folded_symbol_key(SymbolSpace::ClassLike, enum_name);
         Self::intern(
             db,
@@ -1015,6 +1022,19 @@ mod tests {
         let empty = TypeId::shape(&db, vec![]);
         assert!(empty.is_list(&db));
         assert!(!empty.is_non_empty_array(&db));
+    }
+
+    #[test]
+    fn a_leading_backslash_is_stripped_before_folding() {
+        let db = TestDatabase::default();
+        assert_eq!(
+            TypeId::class(&db, "\\App\\Entity\\User", vec![]),
+            TypeId::class(&db, "App\\Entity\\User", vec![])
+        );
+        assert_eq!(
+            TypeId::enum_case(&db, "\\App\\Status", "Active"),
+            TypeId::enum_case(&db, "App\\Status", "Active")
+        );
     }
 
     #[test]
