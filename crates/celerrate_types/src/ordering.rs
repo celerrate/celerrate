@@ -5,7 +5,7 @@
 
 use std::cmp::Ordering;
 
-use crate::representation::{StringConstraint, TypeData, TypeId};
+use crate::representation::{CallableParameter, StringConstraint, TypeData, TypeId};
 
 /// The fixed rank of each variant. Extending tasks append new variants
 /// at their documented rank; existing ranks never change.
@@ -28,6 +28,11 @@ fn rank(data: &TypeData<'_>) -> u8 {
         TypeData::Shape { .. } => 9,
         TypeData::Class { .. } => 12,
         TypeData::EnumCase { .. } => 13,
+        TypeData::Callable { .. } => 14,
+        TypeData::Template { .. } => 15,
+        TypeData::KeyOf { .. } => 16,
+        TypeData::ValueOf { .. } => 17,
+        TypeData::Conditional { .. } => 18,
         TypeData::SelfPlaceholder => 19,
         TypeData::ParentPlaceholder => 20,
         TypeData::StaticPlaceholder => 21,
@@ -77,6 +82,22 @@ fn order_shape_fields<'db>(
             .cmp(&right_field.key)
             .then(left_field.optional.cmp(&right_field.optional))
             .then_with(|| structural_order(db, left_field.value, right_field.value));
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn order_callable_parameters<'db>(
+    db: &'db dyn salsa::Database,
+    left: &[CallableParameter<'db>],
+    right: &[CallableParameter<'db>],
+) -> Ordering {
+    for (a, b) in left.iter().zip(right.iter()) {
+        let ordering = (a.variadic, a.optional, a.by_reference)
+            .cmp(&(b.variadic, b.optional, b.by_reference))
+            .then_with(|| structural_order(db, a.parameter_type, b.parameter_type));
         if ordering != Ordering::Equal {
             return ordering;
         }
@@ -170,6 +191,56 @@ pub(crate) fn structural_order<'db>(
                     case_name: b_case,
                 },
             ) => a_enum.cmp(b_enum).then_with(|| a_case.cmp(b_case)),
+            (
+                TypeData::Callable {
+                    parameters: a_parameters,
+                    return_type: a_return,
+                },
+                TypeData::Callable {
+                    parameters: b_parameters,
+                    return_type: b_return,
+                },
+            ) => order_callable_parameters(db, a_parameters, b_parameters)
+                .then_with(|| structural_order(db, *a_return, *b_return)),
+            (
+                TypeData::Template {
+                    scope: a_scope,
+                    name: a_name,
+                    bound: a_bound,
+                },
+                TypeData::Template {
+                    scope: b_scope,
+                    name: b_name,
+                    bound: b_bound,
+                },
+            ) => a_scope
+                .cmp(b_scope)
+                .then_with(|| a_name.cmp(b_name))
+                .then_with(|| structural_order(db, *a_bound, *b_bound)),
+            (TypeData::KeyOf { subject: a }, TypeData::KeyOf { subject: b })
+            | (TypeData::ValueOf { subject: a }, TypeData::ValueOf { subject: b }) => {
+                structural_order(db, *a, *b)
+            }
+            (
+                TypeData::Conditional {
+                    subject: a_subject,
+                    matches: a_matches,
+                    then_branch: a_then,
+                    otherwise_branch: a_otherwise,
+                    negated: a_negated,
+                },
+                TypeData::Conditional {
+                    subject: b_subject,
+                    matches: b_matches,
+                    then_branch: b_then,
+                    otherwise_branch: b_otherwise,
+                    negated: b_negated,
+                },
+            ) => structural_order(db, *a_subject, *b_subject)
+                .then_with(|| structural_order(db, *a_matches, *b_matches))
+                .then_with(|| structural_order(db, *a_then, *b_then))
+                .then_with(|| structural_order(db, *a_otherwise, *b_otherwise))
+                .then_with(|| a_negated.cmp(b_negated)),
             // Same rank with no fields is equal; interning made left == right
             // impossible here, so this arm is unreachable for atoms but kept
             // total for safety.

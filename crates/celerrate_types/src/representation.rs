@@ -2,6 +2,15 @@
 //! module: the public surface is the interned [`TypeId`] handle plus
 //! constructors and query methods, never a matchable enum.
 
+/// One parameter of a callable signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct CallableParameter<'db> {
+    pub parameter_type: TypeId<'db>,
+    pub optional: bool,
+    pub variadic: bool,
+    pub by_reference: bool,
+}
+
 /// One array-shape key. `Integer` sorts before `String`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub enum ShapeKey {
@@ -112,6 +121,37 @@ pub enum TypeData<'db> {
     EnumCase {
         enum_name: String,
         case_name: String,
+    },
+    /// A callable signature. Rank 14.
+    Callable {
+        parameters: Vec<CallableParameter<'db>>,
+        return_type: TypeId<'db>,
+    },
+    /// A template variable: a lattice citizen before any call-site
+    /// substitution. The scope string discriminates same-named
+    /// templates of different declarations. Rank 15.
+    Template {
+        scope: String,
+        name: String,
+        bound: TypeId<'db>,
+    },
+    /// Symbolic `key-of<T>` (decidable subjects evaluated at
+    /// construction). Rank 16.
+    KeyOf {
+        subject: TypeId<'db>,
+    },
+    /// Symbolic `value-of<T>`. Rank 17.
+    ValueOf {
+        subject: TypeId<'db>,
+    },
+    /// A conditional return type, evaluated at the call site (plan 6);
+    /// judgments fall back to the branch union. Rank 18.
+    Conditional {
+        subject: TypeId<'db>,
+        matches: TypeId<'db>,
+        then_branch: TypeId<'db>,
+        otherwise_branch: TypeId<'db>,
+        negated: bool,
     },
     /// The late-static-binding placeholders, symbolic until call-site
     /// substitution (plan 6). Ranks 19, 20, 21.

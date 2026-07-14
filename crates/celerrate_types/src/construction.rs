@@ -2,7 +2,9 @@
 //! the lattice. Every constructor canonicalizes before interning.
 
 use crate::ordering::structural_order;
-use crate::representation::{FloatBits, ShapeField, ShapeKey, StringConstraint, TypeData, TypeId};
+use crate::representation::{
+    CallableParameter, FloatBits, ShapeField, ShapeKey, StringConstraint, TypeData, TypeId,
+};
 use celerrate_semantics::{SymbolSpace, folded_symbol_key};
 
 impl<'db> TypeId<'db> {
@@ -531,6 +533,105 @@ impl<'db> TypeId<'db> {
             ],
         )
     }
+
+    pub fn callable(
+        db: &'db dyn salsa::Database,
+        parameters: Vec<CallableParameter<'db>>,
+        return_type: TypeId<'db>,
+    ) -> Self {
+        Self::intern(
+            db,
+            TypeData::Callable {
+                parameters,
+                return_type,
+            },
+        )
+    }
+
+    /// A template variable. The scope is the declaring symbol's folded
+    /// key by convention (`<class key>::<member key>` or a function
+    /// key); plans 3 and 4 produce it. Callers fold; this constructor
+    /// stores the scope verbatim.
+    pub fn template(
+        db: &'db dyn salsa::Database,
+        scope: &str,
+        name: &str,
+        bound: TypeId<'db>,
+    ) -> Self {
+        Self::intern(
+            db,
+            TypeData::Template {
+                scope: scope.to_owned(),
+                name: name.to_owned(),
+                bound,
+            },
+        )
+    }
+
+    /// `key-of<subject>`: evaluates shapes (union of key literals) and
+    /// arrays (the key type); anything else stays symbolic.
+    pub fn key_of(db: &'db dyn salsa::Database, subject: TypeId<'db>) -> Self {
+        match subject.data(db) {
+            TypeData::Shape { fields } => Self::shape_as_array(db, fields).0,
+            TypeData::Array { key, .. } => *key,
+            _ => Self::intern(db, TypeData::KeyOf { subject }),
+        }
+    }
+
+    /// `value-of<subject>`: evaluates shapes (union of field values)
+    /// and arrays (the value type); enums need member facts and stay
+    /// symbolic until plan 3.
+    pub fn value_of(db: &'db dyn salsa::Database, subject: TypeId<'db>) -> Self {
+        match subject.data(db) {
+            TypeData::Shape { fields } => Self::shape_as_array(db, fields).1,
+            TypeData::Array { value, .. } => *value,
+            _ => Self::intern(db, TypeData::ValueOf { subject }),
+        }
+    }
+
+    pub fn conditional(
+        db: &'db dyn salsa::Database,
+        subject: TypeId<'db>,
+        matches: TypeId<'db>,
+        then_branch: TypeId<'db>,
+        otherwise_branch: TypeId<'db>,
+        negated: bool,
+    ) -> Self {
+        Self::intern(
+            db,
+            TypeData::Conditional {
+                subject,
+                matches,
+                then_branch,
+                otherwise_branch,
+                negated,
+            },
+        )
+    }
+
+    pub fn callable_return(self, db: &'db dyn salsa::Database) -> Option<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Callable { return_type, .. } => Some(*return_type),
+            _ => None,
+        }
+    }
+
+    pub fn callable_parameters(
+        self,
+        db: &'db dyn salsa::Database,
+    ) -> Option<Vec<CallableParameter<'db>>> {
+        match self.data(db) {
+            TypeData::Callable { parameters, .. } => Some(parameters.clone()),
+            _ => None,
+        }
+    }
+
+    pub fn template_bound(self, db: &'db dyn salsa::Database) -> Option<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Template { bound, .. } => Some(*bound),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -539,7 +640,7 @@ mod tests {
 
     use celerrate_db::testing::TestDatabase;
 
-    use crate::{ShapeField, ShapeKey, TypeId};
+    use crate::{CallableParameter, ShapeField, ShapeKey, TypeId};
 
     #[test]
     fn atoms_intern_to_stable_identities() {
@@ -948,5 +1049,122 @@ mod tests {
             ],
         );
         assert_eq!(iterable, expected);
+    }
+
+    #[test]
+    fn callables_carry_parameters_and_return() {
+        let db = TestDatabase::default();
+        let callable = TypeId::callable(
+            &db,
+            vec![
+                CallableParameter {
+                    parameter_type: TypeId::int(&db),
+                    optional: false,
+                    variadic: false,
+                    by_reference: false,
+                },
+                CallableParameter {
+                    parameter_type: TypeId::string(&db),
+                    optional: true,
+                    variadic: false,
+                    by_reference: false,
+                },
+            ],
+            TypeId::bool(&db),
+        );
+        assert_eq!(callable.callable_return(&db), Some(TypeId::bool(&db)));
+        assert_eq!(callable.callable_parameters(&db).unwrap().len(), 2);
+        assert_eq!(TypeId::int(&db).callable_return(&db), None);
+    }
+
+    #[test]
+    fn templates_are_scoped_lattice_citizens() {
+        let db = TestDatabase::default();
+        let bound = TypeId::class(&db, "FormTypeInterface", vec![]);
+        let one = TypeId::template(&db, "app\\form::configure", "T", bound);
+        let same = TypeId::template(&db, "app\\form::configure", "T", bound);
+        let other_scope = TypeId::template(&db, "app\\other::configure", "T", bound);
+        assert_eq!(one, same);
+        assert_ne!(one, other_scope);
+        assert_eq!(one.template_bound(&db), Some(bound));
+        assert_eq!(TypeId::int(&db).template_bound(&db), None);
+    }
+
+    #[test]
+    fn key_of_and_value_of_evaluate_decidable_subjects() {
+        let db = TestDatabase::default();
+        let shape = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("name".to_owned()),
+                    optional: true,
+                    value: TypeId::string(&db),
+                },
+            ],
+        );
+        assert_eq!(
+            TypeId::key_of(&db, shape),
+            TypeId::union(
+                &db,
+                [
+                    TypeId::string_literal(&db, "id"),
+                    TypeId::string_literal(&db, "name")
+                ]
+            )
+        );
+        assert_eq!(
+            TypeId::value_of(&db, shape),
+            TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)])
+        );
+        let array = TypeId::array(&db, TypeId::string(&db), TypeId::int(&db));
+        assert_eq!(TypeId::key_of(&db, array), TypeId::string(&db));
+        assert_eq!(TypeId::value_of(&db, array), TypeId::int(&db));
+        // Undecidable subjects stay symbolic (and distinct).
+        let template = TypeId::template(&db, "scope", "T", TypeId::mixed(&db));
+        assert_ne!(
+            TypeId::key_of(&db, template),
+            TypeId::value_of(&db, template)
+        );
+        assert_ne!(TypeId::key_of(&db, template), template);
+    }
+
+    #[test]
+    fn conditionals_stay_symbolic_and_structural() {
+        let db = TestDatabase::default();
+        let subject = TypeId::template(&db, "scope", "T", TypeId::mixed(&db));
+        let positive = TypeId::conditional(
+            &db,
+            subject,
+            TypeId::int(&db),
+            TypeId::string(&db),
+            TypeId::bool(&db),
+            false,
+        );
+        let negated = TypeId::conditional(
+            &db,
+            subject,
+            TypeId::int(&db),
+            TypeId::string(&db),
+            TypeId::bool(&db),
+            true,
+        );
+        assert_ne!(positive, negated);
+        assert_eq!(
+            positive,
+            TypeId::conditional(
+                &db,
+                subject,
+                TypeId::int(&db),
+                TypeId::string(&db),
+                TypeId::bool(&db),
+                false,
+            )
+        );
     }
 }
