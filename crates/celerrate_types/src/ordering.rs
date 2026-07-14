@@ -23,6 +23,8 @@ fn rank(data: &TypeData<'_>) -> u8 {
         TypeData::Mixed => 24,
         TypeData::Object => 10,
         TypeData::Resource => 11,
+        TypeData::Array { .. } => 8,
+        TypeData::Shape { .. } => 9,
     }
 }
 
@@ -51,6 +53,24 @@ pub(crate) fn order_types<'db>(
 ) -> Ordering {
     for (a, b) in left.iter().zip(right.iter()) {
         let ordering = structural_order(db, *a, *b);
+        if ordering != Ordering::Equal {
+            return ordering;
+        }
+    }
+    left.len().cmp(&right.len())
+}
+
+fn order_shape_fields<'db>(
+    db: &'db dyn salsa::Database,
+    left: &[crate::representation::ShapeField<'db>],
+    right: &[crate::representation::ShapeField<'db>],
+) -> Ordering {
+    for (left_field, right_field) in left.iter().zip(right.iter()) {
+        let ordering = left_field
+            .key
+            .cmp(&right_field.key)
+            .then(left_field.optional.cmp(&right_field.optional))
+            .then_with(|| structural_order(db, left_field.value, right_field.value));
         if ordering != Ordering::Equal {
             return ordering;
         }
@@ -92,6 +112,26 @@ pub(crate) fn structural_order<'db>(
                 TypeData::Intersection { intersectands: a },
                 TypeData::Intersection { intersectands: b },
             ) => order_types(db, a, b),
+            (
+                TypeData::Array {
+                    key: a_key,
+                    value: a_value,
+                    is_list: a_list,
+                    non_empty: a_non_empty,
+                },
+                TypeData::Array {
+                    key: b_key,
+                    value: b_value,
+                    is_list: b_list,
+                    non_empty: b_non_empty,
+                },
+            ) => (a_list, a_non_empty)
+                .cmp(&(b_list, b_non_empty))
+                .then_with(|| structural_order(db, *a_key, *b_key))
+                .then_with(|| structural_order(db, *a_value, *b_value)),
+            (TypeData::Shape { fields: a }, TypeData::Shape { fields: b }) => {
+                order_shape_fields(db, a, b)
+            }
             // Same rank with no fields is equal; interning made left == right
             // impossible here, so this arm is unreachable for atoms but kept
             // total for safety.

@@ -2,7 +2,7 @@
 //! the lattice. Every constructor canonicalizes before interning.
 
 use crate::ordering::structural_order;
-use crate::representation::{FloatBits, StringConstraint, TypeData, TypeId};
+use crate::representation::{FloatBits, ShapeField, ShapeKey, StringConstraint, TypeData, TypeId};
 
 impl<'db> TypeId<'db> {
     fn intern(db: &'db dyn salsa::Database, data: TypeData<'db>) -> Self {
@@ -291,6 +291,158 @@ impl<'db> TypeId<'db> {
             _ => vec![self],
         }
     }
+
+    pub fn array(db: &'db dyn salsa::Database, key: TypeId<'db>, value: TypeId<'db>) -> Self {
+        Self::intern(
+            db,
+            TypeData::Array {
+                key,
+                value,
+                is_list: false,
+                non_empty: false,
+            },
+        )
+    }
+
+    pub fn non_empty_array(
+        db: &'db dyn salsa::Database,
+        key: TypeId<'db>,
+        value: TypeId<'db>,
+    ) -> Self {
+        Self::intern(
+            db,
+            TypeData::Array {
+                key,
+                value,
+                is_list: false,
+                non_empty: true,
+            },
+        )
+    }
+
+    pub fn list(db: &'db dyn salsa::Database, value: TypeId<'db>) -> Self {
+        let key = Self::int(db);
+        Self::intern(
+            db,
+            TypeData::Array {
+                key,
+                value,
+                is_list: true,
+                non_empty: false,
+            },
+        )
+    }
+
+    pub fn non_empty_list(db: &'db dyn salsa::Database, value: TypeId<'db>) -> Self {
+        let key = Self::int(db);
+        Self::intern(
+            db,
+            TypeData::Array {
+                key,
+                value,
+                is_list: true,
+                non_empty: true,
+            },
+        )
+    }
+
+    /// A sealed shape: duplicate keys keep the last occurrence (PHP
+    /// array-literal write semantics), fields sort by key.
+    pub fn shape(db: &'db dyn salsa::Database, fields: Vec<ShapeField<'db>>) -> Self {
+        let mut deduplicated: Vec<ShapeField<'db>> = Vec::with_capacity(fields.len());
+        for field in fields {
+            if let Some(existing) = deduplicated
+                .iter_mut()
+                .find(|candidate| candidate.key == field.key)
+            {
+                *existing = field;
+            } else {
+                deduplicated.push(field);
+            }
+        }
+        deduplicated.sort_by(|left, right| left.key.cmp(&right.key));
+        Self::intern(
+            db,
+            TypeData::Shape {
+                fields: deduplicated,
+            },
+        )
+    }
+
+    /// The general array form of a shape: the judgment's and the
+    /// interrogation's shared widening.
+    pub(crate) fn shape_as_array(
+        db: &'db dyn salsa::Database,
+        fields: &[ShapeField<'db>],
+    ) -> (TypeId<'db>, TypeId<'db>, bool, bool) {
+        let key = Self::union(
+            db,
+            fields.iter().map(|field| match &field.key {
+                ShapeKey::Integer(value) => Self::int_literal(db, *value),
+                ShapeKey::String(value) => Self::string_literal(db, value),
+            }),
+        );
+        let value = Self::union(db, fields.iter().map(|field| field.value));
+        let non_empty = fields.iter().any(|field| !field.optional);
+        let integer_keys: Vec<i64> = fields
+            .iter()
+            .map(|field| match &field.key {
+                ShapeKey::Integer(value) => Some(*value),
+                ShapeKey::String(_) => None,
+            })
+            .collect::<Option<Vec<i64>>>()
+            .unwrap_or_default();
+        let consecutive = !integer_keys.is_empty()
+            && integer_keys
+                .iter()
+                .enumerate()
+                .all(|(index, key)| *key == index as i64);
+        let optional_is_suffix = fields
+            .iter()
+            .position(|field| field.optional)
+            .is_none_or(|first| fields.iter().skip(first).all(|field| field.optional));
+        let is_list = consecutive && optional_is_suffix;
+        (key, value, is_list, non_empty)
+    }
+
+    pub fn array_key(self, db: &'db dyn salsa::Database) -> Option<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Array { key, .. } => Some(*key),
+            TypeData::Shape { fields } => Some(Self::shape_as_array(db, fields).0),
+            _ => None,
+        }
+    }
+
+    pub fn array_value(self, db: &'db dyn salsa::Database) -> Option<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Array { value, .. } => Some(*value),
+            TypeData::Shape { fields } => Some(Self::shape_as_array(db, fields).1),
+            _ => None,
+        }
+    }
+
+    pub fn is_list(self, db: &'db dyn salsa::Database) -> bool {
+        match self.data(db) {
+            TypeData::Array { is_list, .. } => *is_list,
+            TypeData::Shape { fields } => Self::shape_as_array(db, fields).2,
+            _ => false,
+        }
+    }
+
+    pub fn is_non_empty_array(self, db: &'db dyn salsa::Database) -> bool {
+        match self.data(db) {
+            TypeData::Array { non_empty, .. } => *non_empty,
+            TypeData::Shape { fields } => Self::shape_as_array(db, fields).3,
+            _ => false,
+        }
+    }
+
+    pub fn shape_fields(self, db: &'db dyn salsa::Database) -> Option<Vec<ShapeField<'db>>> {
+        match self.data(db) {
+            TypeData::Shape { fields } => Some(fields.clone()),
+            _ => None,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -299,7 +451,7 @@ mod tests {
 
     use celerrate_db::testing::TestDatabase;
 
-    use crate::TypeId;
+    use crate::{ShapeField, ShapeKey, TypeId};
 
     #[test]
     fn atoms_intern_to_stable_identities() {
@@ -486,5 +638,137 @@ mod tests {
         assert_eq!(TypeId::int(&db).without_null(&db), TypeId::int(&db));
         assert_eq!(nullable.constituents(&db).len(), 2);
         assert_eq!(TypeId::int(&db).constituents(&db), vec![TypeId::int(&db)]);
+    }
+
+    #[test]
+    fn arrays_carry_their_flags() {
+        let db = TestDatabase::default();
+        let general = TypeId::array(&db, TypeId::string(&db), TypeId::int(&db));
+        let non_empty = TypeId::non_empty_array(&db, TypeId::string(&db), TypeId::int(&db));
+        let list = TypeId::list(&db, TypeId::int(&db));
+        assert_ne!(general, non_empty);
+        assert_ne!(general, list);
+        assert_eq!(general.array_key(&db), Some(TypeId::string(&db)));
+        assert_eq!(general.array_value(&db), Some(TypeId::int(&db)));
+        assert!(!general.is_list(&db));
+        assert!(list.is_list(&db));
+        assert_eq!(list.array_key(&db), Some(TypeId::int(&db)));
+        assert!(non_empty.is_non_empty_array(&db));
+        assert!(!general.is_non_empty_array(&db));
+        assert!(TypeId::non_empty_list(&db, TypeId::int(&db)).is_list(&db));
+    }
+
+    #[test]
+    fn shapes_sort_their_fields_and_keep_the_last_duplicate() {
+        let db = TestDatabase::default();
+        let forward = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("name".to_owned()),
+                    optional: true,
+                    value: TypeId::string(&db),
+                },
+            ],
+        );
+        let backward = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("name".to_owned()),
+                    optional: true,
+                    value: TypeId::string(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+            ],
+        );
+        assert_eq!(forward, backward);
+        let duplicated = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::string(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+            ],
+        );
+        let fields = duplicated.shape_fields(&db).unwrap();
+        assert_eq!(fields.len(), 1);
+        assert_eq!(fields.first().unwrap().value, TypeId::int(&db));
+    }
+
+    #[test]
+    fn shapes_answer_the_array_interrogation_through_their_array_form() {
+        let db = TestDatabase::default();
+        let shape = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::Integer(0),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::Integer(1),
+                    optional: true,
+                    value: TypeId::string(&db),
+                },
+            ],
+        );
+        assert_eq!(
+            shape.array_value(&db),
+            Some(TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]))
+        );
+        assert!(shape.is_list(&db));
+        assert!(shape.is_non_empty_array(&db));
+        // A gap breaks the list property.
+        let gapped = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::Integer(0),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::Integer(2),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+            ],
+        );
+        assert!(!gapped.is_list(&db));
+        // An optional field before a required one breaks it too.
+        let interleaved = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::Integer(0),
+                    optional: true,
+                    value: TypeId::int(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::Integer(1),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+            ],
+        );
+        assert!(!interleaved.is_list(&db));
     }
 }

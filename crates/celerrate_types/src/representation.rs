@@ -2,6 +2,21 @@
 //! module: the public surface is the interned [`TypeId`] handle plus
 //! constructors and query methods, never a matchable enum.
 
+/// One array-shape key. `Integer` sorts before `String`.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum ShapeKey {
+    Integer(i64),
+    String(String),
+}
+
+/// One field of an array shape.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub struct ShapeField<'db> {
+    pub key: ShapeKey,
+    pub optional: bool,
+    pub value: TypeId<'db>,
+}
+
 /// A float literal by bit pattern, so literals are `Eq`/`Hash`-safe.
 /// Every NaN canonicalizes to one pattern; `0.0` and `-0.0` stay
 /// distinct interned literals (their join is `float`).
@@ -68,6 +83,18 @@ pub enum TypeData<'db> {
     /// Flattened, deduplicated, structurally sorted, length >= 2.
     Intersection {
         intersectands: Vec<TypeId<'db>>,
+    },
+    /// `array<K, V>` and its list and non-empty refinements. A list
+    /// always stores the general `int` key.
+    Array {
+        key: TypeId<'db>,
+        value: TypeId<'db>,
+        is_list: bool,
+        non_empty: bool,
+    },
+    /// A sealed array shape, fields sorted by key.
+    Shape {
+        fields: Vec<ShapeField<'db>>,
     },
 }
 

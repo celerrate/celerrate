@@ -9,4 +9,4 @@ mod construction;
 mod ordering;
 mod representation;
 
-pub use representation::{FloatBits, TypeId};
+pub use representation::{FloatBits, ShapeField, ShapeKey, TypeId};
