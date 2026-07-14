@@ -27,7 +27,9 @@ pub use index::{
     stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
-pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
+pub use lookup::{
+    SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
+};
 pub use members::{
     ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
     TraitAdaptation, TraitUse, Visibility,
