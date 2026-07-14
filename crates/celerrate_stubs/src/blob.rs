@@ -141,6 +141,9 @@ fn write_versioned_text(bytes: &mut Vec<u8>, text: &VersionedTypeText) {
         }
         None => bytes.push(0),
     }
+    // `as u16`: overrides are keyed one per PHP minor version, and the
+    // supported window (`SUPPORTED_VERSIONS`) spans five versions, so
+    // this count cannot truncate in practice.
     bytes.extend_from_slice(&(text.overrides.len() as u16).to_le_bytes());
     for (version, override_text) in &text.overrides {
         bytes.extend_from_slice(&[version.major, version.minor]);
@@ -175,6 +178,11 @@ fn write_signature(bytes: &mut Vec<u8>, signature: &StubSignature) {
 /// even for an empty index — the section is always written.
 fn encode_signatures(index: &StubIndex) -> Vec<u8> {
     let mut bytes = Vec::new();
+    // Bound once, outside both loops: a temporary
+    // `&StubSignature::default()` at the call site would not live long
+    // enough, and every method-less member shares the same empty
+    // signature.
+    let default_signature = StubSignature::default();
     bytes.extend_from_slice(&(index.functions().len() as u32).to_le_bytes());
     for (name, signature) in index.functions() {
         write_string(&mut bytes, name);
@@ -207,9 +215,6 @@ fn encode_signatures(index: &StubIndex) -> Vec<u8> {
                 None => bytes.push(0),
             }
             if member.kind == StubMemberKind::Method {
-                // Bind the default outside the call: a temporary
-                // `&StubSignature::default()` would not live long enough.
-                let default_signature = StubSignature::default();
                 let signature = member.signature.as_ref().unwrap_or(&default_signature);
                 write_signature(&mut bytes, signature);
             }
@@ -737,16 +742,32 @@ mod tests {
 
     #[test]
     fn a_blob_without_the_signature_section_decodes_with_empty_payloads() {
-        // The pre-plan-3 encoding: hand-build a one-section blob exactly
-        // as the old `encode` did, and check it still decodes.
+        // The pre-plan-3 encoding: hand-build a genuinely one-section,
+        // version-1 blob (magic + version + checksum patch + a single
+        // symbol-table entry), mirroring
+        // `unknown_sections_are_skipped_for_forward_compatibility`'s
+        // construction. `encode` always writes the signatures section
+        // now, so this is the only way left to exercise a blob that
+        // never had one.
         let old_index = sample_index();
-        let with_signatures = sample_index_with_signatures();
-        let blob = encode(&with_signatures);
-        // Sanity: the new blob decodes to the full index (covered above);
-        // the OLD layout is simulated by re-encoding only symbols.
-        let symbols_only = encode(&old_index);
-        assert_eq!(decode(&symbols_only), Ok(old_index));
-        assert_ne!(blob, symbols_only);
+        let symbol_table = encode_symbol_table(&old_index);
+        let table_entries = 1u32;
+        let symbol_offset = 24u64 + u64::from(table_entries) * 20;
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&BLOB_MAGIC);
+        blob.extend_from_slice(&BLOB_FORMAT_VERSION.to_le_bytes());
+        blob.extend_from_slice(&[0; 8]);
+        blob.extend_from_slice(&table_entries.to_le_bytes());
+        blob.extend_from_slice(&SECTION_SYMBOL_TABLE.to_le_bytes());
+        blob.extend_from_slice(&symbol_offset.to_le_bytes());
+        blob.extend_from_slice(&(symbol_table.len() as u64).to_le_bytes());
+        blob.extend_from_slice(&symbol_table);
+        let checksum = fnv1a64(&blob[20..]);
+        blob[12..20].copy_from_slice(&checksum.to_le_bytes());
+        let decoded = decode(&blob).unwrap();
+        assert_eq!(decoded.symbols(), old_index.symbols());
+        assert!(decoded.functions().is_empty());
+        assert!(decoded.classes().is_empty());
     }
 
     #[test]

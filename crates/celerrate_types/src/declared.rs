@@ -457,7 +457,6 @@ fn resolve_member_signature<'db>(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
 fn declared_parameter<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -701,8 +700,9 @@ fn declared_stub_parameter<'db>(
 }
 
 /// The union of a backed enum's case backing literals, or `None` when
-/// the key is not a fully known backed enum (unresolvable class, a
-/// case with a non-literal backing, a pure enum, an opaque hierarchy).
+/// the key is not a fully known backed enum: an unresolvable class, no
+/// cases at all (a pure enum, or none), or any case with a missing or
+/// non-literal backing.
 pub(crate) fn enum_backing_union<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -951,6 +951,9 @@ mod tests {
             lower(&db, "Foo\\int"),
             Some(TypeId::class(&db, "Foo\\int", vec![])),
         );
+        // A leading-backslash name is never a keyword either, even
+        // when the trimmed name matches one exactly.
+        assert_eq!(lower(&db, "\\int"), Some(TypeId::class(&db, "int", vec![])),);
     }
 
     #[test]
@@ -1644,6 +1647,116 @@ mod tests {
         // stub class too (no source class in between).
         let direct = member(&fixture, "Exception", MemberKind::Method, "getmessage").unwrap();
         assert_eq!(direct.value_type, TypeId::string(db));
+    }
+
+    /// A `$code` property surface member whose type narrows across the
+    /// range: `int` at 8.1-8.2, `string` from 8.3.
+    fn code_property_member() -> StubMember {
+        StubMember {
+            kind: StubMemberKind::Property,
+            name: "code".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: None,
+            type_text: VersionedTypeText {
+                default: Some("int".to_owned()),
+                overrides: vec![(PhpVersion::new(8, 3), "string".to_owned())],
+            },
+            value_text: None,
+        }
+    }
+
+    /// A `NAME` class constant surface member with no written type: an
+    /// untyped constant with a literal default carries the literal.
+    fn name_constant_member() -> StubMember {
+        StubMember {
+            kind: StubMemberKind::ClassConstant,
+            name: "NAME".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: true,
+            availability: StubAvailability::ALWAYS,
+            signature: None,
+            type_text: VersionedTypeText::default(),
+            value_text: Some("'active'".to_owned()),
+        }
+    }
+
+    /// An `Active` enum-case surface member: its type is its identity.
+    fn active_case_member() -> StubMember {
+        StubMember {
+            kind: StubMemberKind::EnumCase,
+            name: "Active".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: None,
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        }
+    }
+
+    #[test]
+    fn a_stub_property_resolves_its_type_across_the_range() {
+        let fixture = fixture_with_stub_payload(
+            &["<?php"],
+            vec![],
+            vec![(
+                "Status".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![code_property_member()],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let signature = member(&fixture, "Status", MemberKind::Property, "code").unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::union(db, [TypeId::int(db), TypeId::string(db)]),
+        );
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn a_stub_class_constant_with_no_type_text_carries_its_literal_value() {
+        let fixture = fixture_with_stub_payload(
+            &["<?php"],
+            vec![],
+            vec![(
+                "Status".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![name_constant_member()],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let signature = member(&fixture, "Status", MemberKind::ClassConstant, "NAME").unwrap();
+        assert_eq!(signature.value_type, TypeId::string_literal(db, "active"));
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn a_stub_enum_case_answers_its_own_identity() {
+        let fixture = fixture_with_stub_payload(
+            &["<?php"],
+            vec![],
+            vec![(
+                "Status".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![active_case_member()],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let signature = member(&fixture, "Status", MemberKind::EnumCase, "Active").unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::enum_case(db, "Status", "Active"),
+        );
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
     }
 
     #[test]

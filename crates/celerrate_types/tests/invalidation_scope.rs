@@ -1,6 +1,13 @@
-//! The typed judgments must ride the member boundary's early cutoff: a
-//! method-body edit backdates the member tree, so a memoized subtype
-//! verdict that consulted the hierarchy does not recompute.
+//! Invalidation-scope pins for the typed layer: the typed judgments
+//! must ride the member boundary's early cutoff, so a method-body edit
+//! backdates the member tree and a memoized subtype verdict that
+//! consulted the hierarchy does not recompute (the original pin). The
+//! remaining five pins cover the declared layer's own edit classes —
+//! a method-body edit, a docblock prose edit, a return-type edit, a
+//! default-value edit, and an edit to an unrelated member's signature
+//! — confirming each either reaches `declared_member_signature` or
+//! spares it, and that a changed declared type reruns dependent
+//! verdicts while an unchanged one spares them.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
