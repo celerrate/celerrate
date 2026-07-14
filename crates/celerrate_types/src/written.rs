@@ -5,7 +5,6 @@
 //! `None`, never a panic.
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum WrittenType {
     /// A (possibly qualified) name or keyword, exactly as written.
     Name(String),

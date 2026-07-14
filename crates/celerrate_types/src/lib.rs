@@ -55,6 +55,7 @@
 //! plan 8, which renders diagnostics.
 
 mod construction;
+mod declared;
 mod display;
 mod judgments;
 mod ordering;
