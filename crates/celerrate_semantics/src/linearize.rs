@@ -339,7 +339,9 @@ fn is_excluded(
 /// Pushes one class member into the table, applying trait adaptations
 /// when the member came from a directly-used trait. Plain own or
 /// inherited members (and trait members with no adaptations) push once,
-/// verbatim.
+/// verbatim. PHP's `insteadof`/`as` adapt METHODS only: a property,
+/// class constant, or enum case never consults the adaptation context,
+/// even when its name coincides with an adapted method's.
 fn push_member(
     member: &Member,
     owner: &str,
@@ -349,7 +351,7 @@ fn push_member(
 ) {
     let member_key = folded_member_key(member.kind, &member.name);
     let context = match (origin, adaptations) {
-        (MemberOrigin::Trait, Some(context)) => context,
+        (MemberOrigin::Trait, Some(context)) if member.kind == MemberKind::Method => context,
         _ => {
             members.push(LinearizedMember {
                 key: member_key,
@@ -935,6 +937,44 @@ mod tests {
         assert_eq!(
             aliased.member.flags.visibility,
             crate::members::Visibility::Protected,
+        );
+    }
+
+    #[test]
+    fn adaptations_apply_to_methods_only_never_properties() {
+        // `insteadof`/`as` adapt METHODS only. Trait C also declares a
+        // property sharing the adapted name; it must survive verbatim,
+        // untouched by the method-only `insteadof` and `as`, while the
+        // method adaptation still applies.
+        let fixture = fixture(&[
+            "<?php trait B { public function hello() { return 'b'; } }",
+            "<?php trait C { public $hello; public function hello() { return 'c'; } }",
+            "<?php class A { use B, C { B::hello insteadof C; C::hello as hi; } }",
+        ]);
+        let a = linearize(&fixture, "A").unwrap();
+        // The property is not excluded: it survives under its own
+        // verbatim key, owned by C.
+        assert_eq!(
+            member_owner(&a, MemberKind::Property, "hello"),
+            Some(("c".to_owned(), MemberOrigin::Trait)),
+        );
+        // The method exclusion still applies: B wins.
+        assert_eq!(
+            member_owner(&a, MemberKind::Method, "hello"),
+            Some(("b".to_owned(), MemberOrigin::Trait)),
+        );
+        // The method alias still applies.
+        assert!(
+            a.members
+                .iter()
+                .any(|entry| entry.key == "hi" && entry.member.kind == MemberKind::Method)
+        );
+        // No phantom aliased property entry exists: `as` never applies to
+        // a property.
+        assert!(
+            !a.members
+                .iter()
+                .any(|entry| entry.key == "hi" && entry.member.kind == MemberKind::Property)
         );
     }
 
