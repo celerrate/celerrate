@@ -675,6 +675,11 @@ impl<'db> TypeId<'db> {
             _ => None,
         }
     }
+
+    /// The deterministic, PHPStan-flavored rendering.
+    pub fn display(self, db: &'db dyn salsa::Database) -> String {
+        crate::display::display_type(db, self)
+    }
 }
 
 #[cfg(test)]

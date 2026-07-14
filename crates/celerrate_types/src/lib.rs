@@ -6,6 +6,7 @@
 //! its query methods (the plugin API commitment of the parent spec).
 
 mod construction;
+mod display;
 mod ordering;
 mod representation;
 mod widening;
