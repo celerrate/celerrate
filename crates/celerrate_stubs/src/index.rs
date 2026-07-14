@@ -1,6 +1,7 @@
 //! The compiled stub index: every top-level symbol, deterministically
 //! sorted, duplicates merged.
 
+use crate::signature::{StubClassSurface, StubSignature};
 use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol};
 
 /// The compiled stub index, sorted by `(name, kind)`. `Eq`-comparable
@@ -8,13 +9,26 @@ use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol};
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct StubIndex {
     symbols: Vec<StubSymbol>,
+    functions: Vec<(String, StubSignature)>,
+    classes: Vec<(String, StubClassSurface)>,
 }
 
 impl StubIndex {
-    /// Builds the index: sorts by `(name, kind)` and merges duplicate
-    /// declarations (phpstorm-stubs declares some symbols several
-    /// times, with different availability guards) into their union.
-    pub fn from_symbols(mut symbols: Vec<StubSymbol>) -> Self {
+    /// Builds the index: sorts all collections by name and deduplicates.
+    ///
+    /// **Symbols**: sorted by `(name, kind)` with duplicates merged into
+    /// their availability union (phpstorm-stubs declares some symbols
+    /// several times, with different availability guards).
+    ///
+    /// **Functions and classes**: sorted by name (stable); the first
+    /// duplicate wins and later ones are silently dropped. This is a
+    /// recorded simplification — phpstorm-stubs duplicate declarations
+    /// carry the same shapes, so revisit if corpus spot checks disagree.
+    pub fn new(
+        mut symbols: Vec<StubSymbol>,
+        mut functions: Vec<(String, StubSignature)>,
+        mut classes: Vec<(String, StubClassSurface)>,
+    ) -> Self {
         symbols.sort_by(|left, right| left.name.cmp(&right.name).then(left.kind.cmp(&right.kind)));
         let mut merged: Vec<StubSymbol> = Vec::with_capacity(symbols.len());
         for symbol in symbols {
@@ -25,7 +39,22 @@ impl StubIndex {
                 _ => merged.push(symbol),
             }
         }
-        Self { symbols: merged }
+
+        functions.sort_by(|left, right| left.0.cmp(&right.0));
+        functions.dedup_by(|second, first| first.0 == second.0);
+        classes.sort_by(|left, right| left.0.cmp(&right.0));
+        classes.dedup_by(|second, first| first.0 == second.0);
+
+        Self {
+            symbols: merged,
+            functions,
+            classes,
+        }
+    }
+
+    /// Builds the index from symbols only; delegates to `new` with empty payloads.
+    pub fn from_symbols(symbols: Vec<StubSymbol>) -> Self {
+        Self::new(symbols, Vec::new(), Vec::new())
     }
 
     pub fn symbols(&self) -> &[StubSymbol] {
@@ -38,6 +67,14 @@ impl StubIndex {
 
     pub fn is_empty(&self) -> bool {
         self.symbols.is_empty()
+    }
+
+    pub fn functions(&self) -> &[(String, StubSignature)] {
+        &self.functions
+    }
+
+    pub fn classes(&self) -> &[(String, StubClassSurface)] {
+        &self.classes
     }
 }
 
@@ -188,5 +225,36 @@ mod tests {
             ),
         ]);
         assert_eq!(index.len(), 2);
+    }
+
+    #[test]
+    #[allow(clippy::indexing_slicing)]
+    fn signature_payloads_sort_by_name_and_keep_the_first_duplicate() {
+        use crate::signature::{StubClassSurface, StubSignature, VersionedTypeText};
+        let first = StubSignature {
+            return_type: VersionedTypeText::from_text(Some("int".to_owned())),
+            ..StubSignature::default()
+        };
+        let second = StubSignature {
+            return_type: VersionedTypeText::from_text(Some("string".to_owned())),
+            ..StubSignature::default()
+        };
+        let index = StubIndex::new(
+            vec![],
+            vec![
+                ("zebra".to_owned(), second.clone()),
+                ("apple".to_owned(), first.clone()),
+                ("apple".to_owned(), second),
+            ],
+            vec![("Exception".to_owned(), StubClassSurface::default())],
+        );
+        let names: Vec<&str> = index
+            .functions()
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(names, vec!["apple", "zebra"]);
+        assert_eq!(index.functions()[0].1, first, "first duplicate wins");
+        assert_eq!(index.classes().len(), 1);
     }
 }

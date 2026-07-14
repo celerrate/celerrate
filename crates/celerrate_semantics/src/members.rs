@@ -109,6 +109,18 @@ pub struct TraitUse {
     pub adaptations: Vec<TraitAdaptation>,
 }
 
+/// One free function of the file: signature-granular, exactly like a
+/// class member, so a body edit backdates and a signature edit
+/// invalidates precisely the signature's dependents.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FreeFunction {
+    pub name: String,
+    pub namespace: String,
+    pub signature: MemberSignature,
+    pub docblock: Option<String>,
+    pub ast_id: AstId,
+}
+
 /// One class-like declaration and its direct members, in tree order.
 /// `name` is `None` for anonymous class-likes; their `ast_id` is the
 /// synthetic identity the spec gives them.
@@ -132,6 +144,7 @@ pub struct ClassMembers {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct MemberTree {
     pub classes: Vec<ClassMembers>,
+    pub functions: Vec<FreeFunction>,
 }
 
 impl MemberTree {
@@ -141,6 +154,7 @@ impl MemberTree {
     pub fn from_root(file: FileId, root: &SyntaxNode) -> Self {
         let nodes = item_nodes(root);
         let mut classes: Vec<(u32, ClassMembers)> = Vec::new();
+        let mut functions = Vec::new();
         for (position, item) in nodes.iter().enumerate() {
             let Ok(index) = u32::try_from(position) else {
                 break;
@@ -157,6 +171,12 @@ impl MemberTree {
                 classes.push((index, group));
                 continue;
             }
+            if item.owner.is_none() && item.node.kind() == SyntaxKind::FunctionDeclaration {
+                if let Some(function) = free_function(item, ast_id) {
+                    functions.push(function);
+                }
+                continue;
+            }
             let Some(owner) = item.owner else { continue };
             let Some((_, group)) = classes
                 .iter_mut()
@@ -169,8 +189,29 @@ impl MemberTree {
         }
         Self {
             classes: classes.into_iter().map(|(_, group)| group).collect(),
+            functions,
         }
     }
+}
+
+/// The free function of a top-level `FunctionDeclaration` item node;
+/// `None` when the node fails to cast or carries no name (defensive
+/// only: the item walk admits named function declarations exclusively).
+fn free_function(item: &ItemNode, ast_id: AstId) -> Option<FreeFunction> {
+    let function = ast::FunctionDeclaration::cast(item.node.clone())?;
+    let name = function.name_token()?;
+    Some(FreeFunction {
+        name: name.text().to_owned(),
+        namespace: item.namespace.clone(),
+        signature: MemberSignature {
+            parameters: parameter_signatures(function.parameter_list()),
+            type_text: function.return_type().map(|ty| ast::type_text(&ty)),
+            default_text: None,
+            by_reference: function.by_reference_token().is_some(),
+        },
+        docblock: ast::docblock_token(&item.node).map(|token| token.text().to_owned()),
+        ast_id,
+    })
 }
 
 /// The group of a class-like item node; `None` for anything else.
@@ -336,6 +377,40 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                 docblock: ast::docblock_token(node).map(|token| token.text().to_owned()),
                 ast_id,
             });
+            // Promotion is a constructor-only PHP feature: guard on the
+            // method name so an unrelated method's modifier-bearing
+            // parameter (invalid PHP, error recovery) never surfaces as
+            // a property.
+            if name.text().eq_ignore_ascii_case("__construct") {
+                for parameter in method
+                    .parameter_list()
+                    .into_iter()
+                    .flat_map(|list| list.parameters())
+                {
+                    if !parameter_is_promoted(&parameter) {
+                        continue;
+                    }
+                    let mut flags = flags_of(parameter.modifiers());
+                    flags.is_static = false;
+                    let Some(parameter_name) = parameter.name_token() else {
+                        continue;
+                    };
+                    group.members.push(Member {
+                        kind: MemberKind::Property,
+                        name: parameter_name.text().trim_start_matches('$').to_owned(),
+                        flags,
+                        signature: MemberSignature {
+                            type_text: parameter.ty().map(|ty| ast::type_text(&ty)),
+                            default_text: parameter
+                                .default_value()
+                                .map(|expression| ast::expression_text(&expression)),
+                            ..MemberSignature::default()
+                        },
+                        docblock: None,
+                        ast_id,
+                    });
+                }
+            }
         }
         SyntaxKind::PropertyDeclaration => {
             let Some(property) = ast::PropertyDeclaration::cast(node.clone()) else {
@@ -431,6 +506,13 @@ pub(crate) fn parameter_signatures(list: Option<ast::ParameterList>) -> Vec<Para
         .collect()
 }
 
+/// Whether a parameter carries constructor-promotion modifiers, e.g.
+/// `private readonly`. Mirrors the `is_promoted` rule of
+/// `parameter_signatures`.
+fn parameter_is_promoted(parameter: &ast::Parameter) -> bool {
+    parameter.modifiers().next().is_some()
+}
+
 /// One method's signature, as written: every type an unresolved text,
 /// no type resolution.
 fn method_signature(method: &ast::MethodDeclaration) -> MemberSignature {
@@ -471,7 +553,7 @@ mod tests {
 
     use celerrate_source::FileId;
 
-    use super::{MemberKind, MemberTree, Visibility};
+    use super::{Member, MemberKind, MemberTree, Visibility};
     use crate::items::DeclarationKind;
 
     fn tree_of(source: &str) -> MemberTree {
@@ -817,5 +899,59 @@ mod tests {
                 alias: None,
             }),
         );
+    }
+
+    #[test]
+    fn free_functions_project_their_signatures() {
+        let tree = tree_of(
+            "<?php namespace App;\n\
+             /** doc */\n\
+             function build(int $count, string ...$names): ?Widget { return null; }",
+        );
+        assert_eq!(tree.functions.len(), 1);
+        let function = &tree.functions[0];
+        assert_eq!(function.name, "build");
+        assert_eq!(function.namespace, "App");
+        assert_eq!(function.docblock.as_deref(), Some("/** doc */"));
+        assert_eq!(function.signature.type_text.as_deref(), Some("?Widget"));
+        assert_eq!(function.signature.parameters.len(), 2);
+        assert_eq!(function.signature.parameters[0].name, "count");
+        assert_eq!(
+            function.signature.parameters[0].type_text.as_deref(),
+            Some("int"),
+        );
+        assert!(function.signature.parameters[1].variadic);
+    }
+
+    #[test]
+    fn a_function_body_edit_leaves_the_member_tree_identical() {
+        let before = tree_of("<?php function f(int $x): int { return $x; }");
+        let after = tree_of("<?php function f(int $x): int { return $x + 1; }");
+        assert_eq!(before, after);
+    }
+
+    #[test]
+    fn promoted_constructor_parameters_surface_as_properties() {
+        let tree = tree_of(
+            "<?php class Service {\n\
+                 public function __construct(\n\
+                     private readonly ?Logger $logger = null,\n\
+                     int $plain = 0,\n\
+                 ) {}\n\
+             }",
+        );
+        let class = &tree.classes[0];
+        let properties: Vec<&Member> = class
+            .members
+            .iter()
+            .filter(|member| member.kind == MemberKind::Property)
+            .collect();
+        assert_eq!(properties.len(), 1, "only the promoted parameter");
+        let promoted = properties[0];
+        assert_eq!(promoted.name, "logger");
+        assert_eq!(promoted.signature.type_text.as_deref(), Some("?Logger"));
+        assert_eq!(promoted.signature.default_text.as_deref(), Some("null"));
+        assert_eq!(promoted.flags.visibility, Visibility::Private);
+        assert!(promoted.flags.is_readonly);
     }
 }

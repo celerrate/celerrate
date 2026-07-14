@@ -5,7 +5,9 @@
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
-use celerrate_semantics::{ClassQuery, linearized_class};
+use celerrate_semantics::{
+    ClassQuery, SymbolSpace, folded_symbol_key, linearized_class, stub_signature_table,
+};
 use celerrate_stubs::StubIndexInput;
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
@@ -226,8 +228,8 @@ fn judge_class_hierarchy(
         context.configuration,
         class,
     ) else {
-        // A stub or unknown class: the stub blob carries no hierarchy.
-        return Proof::CannotProve;
+        // Not a source class-like: judge through the stub graph.
+        return judge_stub_hierarchy(db, context, candidate_name, target_name);
     };
     let found = linearized
         .ancestry
@@ -240,12 +242,50 @@ fn judge_class_hierarchy(
     if found {
         return Proof::Holds;
     }
-    let opaque_boundary = linearized.cyclic
-        || linearized
-            .ancestry
-            .iter()
-            .any(|edge| edge.resolved.is_none());
-    if opaque_boundary {
+    if linearized.cyclic || linearized.has_opaque_edge {
+        Proof::CannotProve
+    } else {
+        Proof::Fails
+    }
+}
+
+/// The stub-graph verdict for a candidate with no source declaration:
+/// breadth-first over the compiled parent links. An unknown start key,
+/// or a key whose surface is missing mid-walk, keeps the answer
+/// undecidable; a fully walked graph without the target refutes. The
+/// visited set only guards revisits, so the queue's recorded order fixes
+/// the result.
+fn judge_stub_hierarchy(
+    db: &dyn salsa::Database,
+    context: JudgmentContext,
+    candidate_name: &str,
+    target_name: &str,
+) -> Proof {
+    let table = stub_signature_table(db, context.stubs);
+    if table.class(candidate_name).is_none() {
+        // Unknown class: undecidable, as before.
+        return Proof::CannotProve;
+    }
+    let mut queue: std::collections::VecDeque<String> = std::collections::VecDeque::new();
+    let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+    let mut opaque = false;
+    queue.push_back(candidate_name.to_owned());
+    while let Some(key) = queue.pop_front() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        if key == target_name {
+            return Proof::Holds;
+        }
+        let Some(surface) = table.class(&key) else {
+            opaque = true;
+            continue;
+        };
+        for parent in &surface.parents {
+            queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
+        }
+    }
+    if opaque {
         Proof::CannotProve
     } else {
         Proof::Fails
@@ -275,12 +315,68 @@ fn is_single_valued<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool 
     }
 }
 
+/// `value-of<SomeBackedEnum>` evaluates through member facts (plan
+/// 2's recorded debt, settled here); every other `value-of` stays
+/// symbolic.
+///
+/// Called at the entry of every `judge` invocation, this expansion
+/// applies wherever `judge` recurses structurally, not just at the
+/// outermost operands: union constituents, intersectands, array key
+/// and value, shape fields, and callable parameters and returns each
+/// re-enter `judge` and are expanded in turn. A `value-of<BackedEnum>`
+/// buried inside, say, an array value (`array<int, value-of<Status>>`)
+/// therefore also evaluates against its literal union, not just a
+/// top-level occurrence.
+///
+/// This is sound: `enum_backing_union` is all-or-nothing ground truth
+/// for a fully known backed enum, so expanding it at any nesting depth
+/// can only replace a symbolic operand with the exact set of values it
+/// denotes, never with an approximation. It is also strictly more
+/// precise than restricting expansion to the top level, since it lets
+/// nested `value-of` operands participate in the same union and array
+/// reasoning as literals do. Termination is structural, not
+/// depth-limited: an expanded union or array value contains only
+/// literals (or the original operand when expansion did not apply),
+/// never another `ValueOf`, so recursion cannot re-trigger expansion on
+/// its own output.
+///
+/// This deliberately exceeds plan 3 task 13's "top-level only" wording.
+/// That restriction was the plan's original intent, but the shipped
+/// code expands at every `judge` entry point including the structural
+/// recursion; review adjudicated the broader, more precise shipped
+/// behavior as the keeper and directed that the documentation (and the
+/// task report) be corrected to match it instead of narrowing the
+/// code. See `a_nested_value_of_also_expands_through_structural_recursion`
+/// below, which pins this behavior.
+fn expand_value_of<'db>(
+    db: &'db dyn salsa::Database,
+    context: JudgmentContext,
+    of: TypeId<'db>,
+) -> TypeId<'db> {
+    let TypeData::ValueOf { subject } = of.data(db) else {
+        return of;
+    };
+    let TypeData::Class { name, .. } = subject.data(db) else {
+        return of;
+    };
+    crate::declared::enum_backing_union(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        name,
+    )
+    .unwrap_or(of)
+}
+
 fn judge<'db>(
     db: &'db dyn salsa::Database,
     context: JudgmentContext,
     candidate: TypeId<'db>,
     target: TypeId<'db>,
 ) -> Proof {
+    let candidate = expand_value_of(db, context, candidate);
+    let target = expand_value_of(db, context, target);
     // Rules 1 to 5: the extremes.
     if candidate == target {
         return Proof::Holds;
@@ -701,7 +797,9 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::{
+        StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
+    };
 
     use super::{Nullability, Proof, assignable_to, nullability, subtype_of};
     use crate::TypeId;
@@ -738,6 +836,79 @@ mod tests {
             stubs,
             configuration,
         }
+    }
+
+    /// A fixture whose stub payload carries real class surfaces. Every
+    /// surface key and every parent it names becomes a `StubSymbol`, plus
+    /// a default `Exception` symbol without a surface, so a source class
+    /// extending `\Exception` records an opaque stub boundary.
+    fn fixture_with_stub_classes(
+        sources: &[&str],
+        classes: Vec<(String, StubClassSurface)>,
+    ) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let mut names: Vec<String> = vec!["Exception".to_owned()];
+        for (name, surface) in &classes {
+            names.push(name.clone());
+            for parent in &surface.parents {
+                names.push(parent.clone());
+            }
+        }
+        names.sort();
+        names.dedup();
+        let symbols: Vec<StubSymbol> = names
+            .into_iter()
+            .map(|name| StubSymbol {
+                name,
+                kind: StubSymbolKind::Class,
+                availability: StubAvailability::ALWAYS,
+            })
+            .collect();
+        let stubs = StubIndexInput::builder(StubIndex::new(symbols, vec![], classes))
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    /// The `RuntimeException -> Exception -> Throwable` stub surface
+    /// chain shared by the transitive-hierarchy tests.
+    fn exception_chain() -> Vec<(String, StubClassSurface)> {
+        vec![
+            (
+                "RuntimeException".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Exception".to_owned()],
+                    members: vec![],
+                },
+            ),
+            (
+                "Exception".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Throwable".to_owned()],
+                    members: vec![],
+                },
+            ),
+            ("Throwable".to_owned(), StubClassSurface::default()),
+        ]
     }
 
     fn judge<'db>(fixture: &'db Fixture, candidate: TypeId<'db>, target: TypeId<'db>) -> Proof {
@@ -1183,6 +1354,51 @@ mod tests {
     }
 
     #[test]
+    fn a_transitive_stub_hierarchy_proves_and_a_fully_walked_one_refutes() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php class MyError extends RuntimeException {}"],
+            exception_chain(),
+        );
+        let db = &fixture.db;
+        let my_error = TypeId::class(db, "MyError", vec![]);
+        let exception = TypeId::class(db, "Exception", vec![]);
+        let countable = TypeId::class(db, "Countable", vec![]);
+        assert_eq!(judge(&fixture, my_error, exception), Proof::Holds);
+        // Fully walked and absent: refuted, no longer CannotProve.
+        assert_eq!(judge(&fixture, my_error, countable), Proof::Fails);
+    }
+
+    #[test]
+    fn a_stub_only_candidate_judges_through_the_blob_graph() {
+        let fixture = fixture_with_stub_classes(&["<?php"], exception_chain());
+        let db = &fixture.db;
+        let runtime = TypeId::class(db, "RuntimeException", vec![]);
+        let throwable = TypeId::class(db, "Throwable", vec![]);
+        let countable = TypeId::class(db, "Countable", vec![]);
+        assert_eq!(judge(&fixture, runtime, throwable), Proof::Holds);
+        // Fully walked without the target: refuted.
+        assert_eq!(judge(&fixture, runtime, countable), Proof::Fails);
+    }
+
+    #[test]
+    fn a_missing_stub_surface_stays_undecidable() {
+        // The `Exception` symbol carries no compiled surface: the stub
+        // boundary is opaque, so the answer stays CannotProve.
+        let fixture =
+            fixture_with_stub_classes(&["<?php class AppException extends \\Exception {}"], vec![]);
+        let db = &fixture.db;
+        let app_exception = TypeId::class(db, "AppException", vec![]);
+        let throwable = TypeId::class(db, "Throwable", vec![]);
+        assert_eq!(
+            judge(&fixture, app_exception, throwable),
+            Proof::CannotProve,
+        );
+        // A stub-only candidate whose surface is missing is undecidable too.
+        let unknown = TypeId::class(db, "Exception", vec![]);
+        assert_eq!(judge(&fixture, unknown, throwable), Proof::CannotProve);
+    }
+
+    #[test]
     fn enum_cases_inherit_through_their_enum_hierarchy() {
         let f = fixture(&[
             "<?php interface HasLabel {} enum Status implements HasLabel { case Active; }",
@@ -1239,5 +1455,71 @@ mod tests {
                 "expected '{value}' to be non-numeric"
             );
         }
+    }
+
+    #[test]
+    fn value_of_a_backed_enum_expands_to_its_literal_union() {
+        let fixture = fixture(&["<?php enum Status: string {\n\
+             case Active = 'active';\n\
+             case Retired = 'retired';\n\
+         }"]);
+        let db = &fixture.db;
+        let value_of_status = TypeId::value_of(db, TypeId::class(db, "Status", vec![]));
+        let literals = TypeId::union(
+            db,
+            [
+                TypeId::string_literal(db, "active"),
+                TypeId::string_literal(db, "retired"),
+            ],
+        );
+        assert_eq!(judge(&fixture, value_of_status, literals), Proof::Holds);
+        assert_eq!(
+            judge(
+                &fixture,
+                TypeId::string_literal(db, "active"),
+                value_of_status
+            ),
+            Proof::Holds,
+        );
+        assert_eq!(
+            judge(
+                &fixture,
+                TypeId::string_literal(db, "ghost"),
+                value_of_status
+            ),
+            Proof::Fails,
+        );
+    }
+
+    #[test]
+    fn value_of_a_pure_or_unknown_enum_stays_symbolic() {
+        let fixture = fixture(&["<?php enum Suit { case Hearts; }"]);
+        let db = &fixture.db;
+        let value_of_suit = TypeId::value_of(db, TypeId::class(db, "Suit", vec![]));
+        // No backing values: undecidable, exactly as before this task.
+        assert_eq!(
+            judge(&fixture, value_of_suit, TypeId::string(db)),
+            Proof::CannotProve,
+        );
+        let value_of_ghost = TypeId::value_of(db, TypeId::class(db, "Ghost", vec![]));
+        assert_eq!(
+            judge(&fixture, value_of_ghost, TypeId::string(db)),
+            Proof::CannotProve,
+        );
+    }
+
+    #[test]
+    fn a_nested_value_of_also_expands_through_structural_recursion() {
+        let fixture = fixture(&["<?php enum Status: string {\n\
+             case Active = 'active';\n\
+             case Retired = 'retired';\n\
+         }"]);
+        let db = &fixture.db;
+        let value_of_status = TypeId::value_of(db, TypeId::class(db, "Status", vec![]));
+        let candidate = TypeId::array(db, TypeId::int(db), value_of_status);
+        let target = TypeId::array(db, TypeId::int(db), TypeId::string(db));
+        // The nested value-of expands through the array-value recursion:
+        // a deliberate, recorded widening of the plan's top-level wording.
+        assert_eq!(judge(&fixture, candidate, target), Proof::Holds);
     }
 }

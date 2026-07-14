@@ -25,7 +25,9 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// schema 1 has no such field and must be discarded wholesale, exactly
 /// like any other header mismatch: there is no migration, only a cold
 /// rebuild.
-pub const CACHE_SCHEMA_VERSION: u32 = 2;
+///
+/// 3: the stub blob gains SECTION_SIGNATURES (plan 3).
+pub const CACHE_SCHEMA_VERSION: u32 = 3;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, and the PHP version range. Any mismatch

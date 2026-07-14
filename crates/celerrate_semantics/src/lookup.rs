@@ -98,6 +98,26 @@ pub fn lookup_class_declaration<'db>(
     }
 }
 
+/// The declaring identity of one source function: the same firewall as
+/// `lookup_class_declaration`, restricted to `DeclarationKind::Function`.
+/// `None` for stubs, non-functions, `define()` origins, and unknown
+/// names.
+#[salsa::tracked]
+pub fn lookup_function_declaration<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    query: SymbolQuery<'db>,
+) -> Option<AstId> {
+    let entry = source_symbol_table(db, files).lookup(query.space(db), query.key(db))?;
+    if entry.kind != DeclarationKind::Function {
+        return None;
+    }
+    match entry.origin {
+        SymbolOrigin::Item(ast_id) => Some(ast_id),
+        SymbolOrigin::Define(_) => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
@@ -234,8 +254,10 @@ mod tests {
 
     #[test]
     fn a_stub_only_class_answers_none_here() {
-        // The stub side has no member tree until plan 3; the walk
-        // treats it as a stub boundary, which Task 8 records.
+        // `lookup_class_declaration` is source-only: a stub class-like
+        // answers `None` here. The stub graph is consulted through
+        // `stub_signature_table` (linearization and member lookup), not
+        // through this source-declaration firewall.
         let fixture = fixture(&["<?php"]);
         assert_eq!(class_declaration(&fixture, "Exception"), None);
     }
@@ -246,5 +268,19 @@ mod tests {
         let index = analyzed_file_index(&fixture.db, fixture.files);
         let ids: Vec<u32> = index.iter().map(|(id, _)| id.as_u32()).collect();
         assert_eq!(ids, vec![0, 1]);
+    }
+
+    use crate::lookup::lookup_function_declaration;
+
+    #[test]
+    fn a_source_function_answers_its_declaring_identity() {
+        let fixture = fixture(&["<?php namespace App; function build(): int {}"]);
+        let space = SymbolSpace::Function;
+        let query = SymbolQuery::new(&fixture.db, space, folded_symbol_key(space, "App\\build"));
+        let ast_id = lookup_function_declaration(&fixture.db, fixture.files, query);
+        assert!(ast_id.is_some());
+        // A stub function has no source declaration.
+        let stub_query = SymbolQuery::new(&fixture.db, space, folded_symbol_key(space, "strlen"));
+        assert!(lookup_function_declaration(&fixture.db, fixture.files, stub_query).is_none());
     }
 }

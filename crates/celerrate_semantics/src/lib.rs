@@ -38,8 +38,8 @@ pub use body::{
 };
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use index::{
-    StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable, source_symbol_table,
-    stub_symbol_table,
+    StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable,
+    source_symbol_table, stub_signature_table, stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
@@ -47,12 +47,13 @@ pub use linearize::{
     MemberOrigin, folded_member_key, linearized_class,
 };
 pub use lookup::{
-    SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
+    SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration,
+    lookup_function_declaration, lookup_symbol,
 };
 pub use member_lookup::{MemberQuery, MemberResolution, lookup_member};
 pub use members::{
-    ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
-    TraitAdaptation, TraitUse, Visibility,
+    ClassMembers, FreeFunction, Member, MemberFlags, MemberKind, MemberSignature, MemberTree,
+    ParameterSignature, TraitAdaptation, TraitUse, Visibility,
 };
 pub use queries::{ast_id_map, item_tree, member_tree, semantic_diagnostics};
 pub use reference_checks::{

@@ -8,7 +8,9 @@
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
-use celerrate_stubs::{StubIndexInput, StubSymbol, stubs_in_range};
+use celerrate_stubs::{
+    StubClassSurface, StubIndexInput, StubSignature, StubSymbol, stubs_in_range,
+};
 
 use crate::ast_id::AstId;
 use crate::items::{DeclarationKind, DefineId};
@@ -197,6 +199,69 @@ pub fn stub_symbol_table(
             })
             .collect(),
     )
+}
+
+/// The folded consultation surface over the compiled blob payloads: the
+/// stub function signatures and class surfaces under their folded keys.
+/// Sorted, so accessors binary-search. Rebuilt only when the stub input
+/// changes, never on a source edit or a configuration change: the
+/// payloads are version-agnostic (per-member availability is filtered at
+/// consultation time, not here).
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StubSignatureTable {
+    functions: Vec<(String, StubSignature)>,
+    classes: Vec<(String, StubClassSurface)>,
+}
+
+impl StubSignatureTable {
+    /// The signature filed under one folded Function-space key.
+    pub fn function(&self, key: &str) -> Option<&StubSignature> {
+        self.functions
+            .binary_search_by(|(existing, _)| existing.as_str().cmp(key))
+            .ok()
+            .and_then(|position| self.functions.get(position))
+            .map(|(_, signature)| signature)
+    }
+
+    /// The class surface filed under one folded ClassLike-space key.
+    pub fn class(&self, key: &str) -> Option<&StubClassSurface> {
+        self.classes
+            .binary_search_by(|(existing, _)| existing.as_str().cmp(key))
+            .ok()
+            .and_then(|position| self.classes.get(position))
+            .map(|(_, surface)| surface)
+    }
+}
+
+/// The folded signature table over the compiled blob payloads. Keyed by
+/// the same folding rule as the symbol tables, so a resolved edge's
+/// folded key consults it directly.
+#[salsa::tracked(returns(ref))]
+pub fn stub_signature_table(db: &dyn salsa::Database, stubs: StubIndexInput) -> StubSignatureTable {
+    let index = stubs.index(db);
+    let mut functions: Vec<(String, StubSignature)> = index
+        .functions()
+        .iter()
+        .map(|(name, signature)| {
+            (
+                folded_symbol_key(SymbolSpace::Function, name),
+                signature.clone(),
+            )
+        })
+        .collect();
+    functions.sort_by(|left, right| left.0.cmp(&right.0));
+    let mut classes: Vec<(String, StubClassSurface)> = index
+        .classes()
+        .iter()
+        .map(|(name, surface)| {
+            (
+                folded_symbol_key(SymbolSpace::ClassLike, name),
+                surface.clone(),
+            )
+        })
+        .collect();
+    classes.sort_by(|left, right| left.0.cmp(&right.0));
+    StubSignatureTable { functions, classes }
 }
 
 #[cfg(test)]
@@ -461,6 +526,30 @@ mod tests {
         assert!(
             table.lookup(SymbolSpace::Constant, "e_all").is_none(),
             "constants stay case-sensitive",
+        );
+    }
+
+    #[test]
+    fn the_signature_table_folds_and_answers_by_key() {
+        use celerrate_stubs::{StubClassSurface, StubIndex, StubIndexInput, StubSignature};
+
+        use super::stub_signature_table;
+
+        let index = StubIndex::new(
+            vec![],
+            vec![("Str\\Len".to_owned(), StubSignature::default())],
+            vec![("RuntimeException".to_owned(), StubClassSurface::default())],
+        );
+        let db = TestDatabase::default();
+        let input = StubIndexInput::builder(index)
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let table = stub_signature_table(&db, input);
+        assert!(table.function("str\\len").is_some(), "function keys fold");
+        assert!(table.class("runtimeexception").is_some(), "class keys fold");
+        assert!(
+            table.class("RuntimeException").is_none(),
+            "pre-folded keys only",
         );
     }
 

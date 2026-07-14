@@ -6,6 +6,10 @@ use celerrate_project::PhpVersion;
 use celerrate_syntax::ast::{self, AstNode};
 use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxToken};
 
+use crate::signature::{
+    StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
+    VersionedTypeText,
+};
 use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
 
 /// The result of extracting one stub file. `had_parse_errors` lets the
@@ -13,27 +17,36 @@ use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKin
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Extraction {
     pub symbols: Vec<StubSymbol>,
+    pub functions: Vec<(String, StubSignature)>,
+    pub classes: Vec<(String, StubClassSurface)>,
     pub had_parse_errors: bool,
+}
+
+/// The three collections one file's declarations feed, threaded
+/// through `collect` in place of a single `&mut Vec<StubSymbol>`.
+#[derive(Default)]
+struct Sink {
+    symbols: Vec<StubSymbol>,
+    functions: Vec<(String, StubSignature)>,
+    classes: Vec<(String, StubClassSurface)>,
 }
 
 /// Extracts every top-level symbol of one stub file.
 pub fn extract(text: &str) -> Extraction {
     let parse = celerrate_syntax::parse(text);
-    let mut symbols = Vec::new();
+    let mut sink = Sink::default();
     if let Some(file) = ast::SourceFile::cast(parse.tree()) {
-        collect(file.statements(), "", &mut symbols);
+        collect(file.statements(), "", &mut sink);
     }
     Extraction {
-        symbols,
+        symbols: sink.symbols,
+        functions: sink.functions,
+        classes: sink.classes,
         had_parse_errors: !parse.diagnostics().is_empty(),
     }
 }
 
-fn collect(
-    statements: ast::AstChildren<ast::Statement>,
-    initial_namespace: &str,
-    symbols: &mut Vec<StubSymbol>,
-) {
+fn collect(statements: ast::AstChildren<ast::Statement>, initial_namespace: &str, sink: &mut Sink) {
     // Statement-form `namespace Foo;` switches the prefix for the
     // statements that follow it, so the namespace is walk state.
     let mut namespace = initial_namespace.to_owned();
@@ -45,50 +58,123 @@ fn collect(
                     .map(|name| name.text())
                     .unwrap_or_default();
                 match declaration.block() {
-                    Some(block) => collect(block.statements(), &name, symbols),
+                    Some(block) => collect(block.statements(), &name, sink),
                     None => namespace = name,
                 }
             }
-            ast::Statement::ClassDeclaration(declaration) => push_named(
-                symbols,
-                &namespace,
-                StubSymbolKind::Class,
-                declaration.name_token(),
-                declaration.syntax(),
-            ),
-            ast::Statement::InterfaceDeclaration(declaration) => push_named(
-                symbols,
-                &namespace,
-                StubSymbolKind::Interface,
-                declaration.name_token(),
-                declaration.syntax(),
-            ),
-            ast::Statement::TraitDeclaration(declaration) => push_named(
-                symbols,
-                &namespace,
-                StubSymbolKind::Trait,
-                declaration.name_token(),
-                declaration.syntax(),
-            ),
-            ast::Statement::EnumDeclaration(declaration) => push_named(
-                symbols,
-                &namespace,
-                StubSymbolKind::Enum,
-                declaration.name_token(),
-                declaration.syntax(),
-            ),
-            ast::Statement::FunctionDeclaration(declaration) => push_named(
-                symbols,
-                &namespace,
-                StubSymbolKind::Function,
-                declaration.name_token(),
-                declaration.syntax(),
-            ),
+            ast::Statement::ClassDeclaration(declaration) => {
+                push_named(
+                    &mut sink.symbols,
+                    &namespace,
+                    StubSymbolKind::Class,
+                    declaration.name_token(),
+                    declaration.syntax(),
+                );
+                if let Some(name_token) = declaration.name_token() {
+                    sink.classes.push((
+                        qualify(&namespace, name_token.text()),
+                        class_surface(
+                            &namespace,
+                            declaration.extends_clause(),
+                            declaration.implements_clause(),
+                            declaration.member_list(),
+                        ),
+                    ));
+                }
+            }
+            ast::Statement::InterfaceDeclaration(declaration) => {
+                push_named(
+                    &mut sink.symbols,
+                    &namespace,
+                    StubSymbolKind::Interface,
+                    declaration.name_token(),
+                    declaration.syntax(),
+                );
+                if let Some(name_token) = declaration.name_token() {
+                    sink.classes.push((
+                        qualify(&namespace, name_token.text()),
+                        class_surface(
+                            &namespace,
+                            declaration.extends_clause(),
+                            declaration.implements_clause(),
+                            declaration.member_list(),
+                        ),
+                    ));
+                }
+            }
+            ast::Statement::TraitDeclaration(declaration) => {
+                push_named(
+                    &mut sink.symbols,
+                    &namespace,
+                    StubSymbolKind::Trait,
+                    declaration.name_token(),
+                    declaration.syntax(),
+                );
+                if let Some(name_token) = declaration.name_token() {
+                    // The grammar parses heritage clauses on traits
+                    // permissively (legality is semantic); phpstorm-
+                    // stubs traits never carry them in practice, so
+                    // this resolves to empty parents, matching the
+                    // brief's "traits have no heritage" rule.
+                    sink.classes.push((
+                        qualify(&namespace, name_token.text()),
+                        class_surface(
+                            &namespace,
+                            declaration.extends_clause(),
+                            declaration.implements_clause(),
+                            declaration.member_list(),
+                        ),
+                    ));
+                }
+            }
+            ast::Statement::EnumDeclaration(declaration) => {
+                push_named(
+                    &mut sink.symbols,
+                    &namespace,
+                    StubSymbolKind::Enum,
+                    declaration.name_token(),
+                    declaration.syntax(),
+                );
+                if let Some(name_token) = declaration.name_token() {
+                    // Implicit `UnitEnum`/`BackedEnum` parents are not
+                    // synthesized here (recorded debt: plan 8's checks
+                    // need them, revisit there).
+                    sink.classes.push((
+                        qualify(&namespace, name_token.text()),
+                        class_surface(
+                            &namespace,
+                            declaration.extends_clause(),
+                            declaration.implements_clause(),
+                            declaration.member_list(),
+                        ),
+                    ));
+                }
+            }
+            ast::Statement::FunctionDeclaration(declaration) => {
+                push_named(
+                    &mut sink.symbols,
+                    &namespace,
+                    StubSymbolKind::Function,
+                    declaration.name_token(),
+                    declaration.syntax(),
+                );
+                if let Some(name_token) = declaration.name_token() {
+                    sink.functions.push((
+                        qualify(&namespace, name_token.text()),
+                        stub_signature(
+                            declaration.parameter_list(),
+                            declaration.return_type(),
+                            declaration.by_reference_token().is_some(),
+                            declaration.syntax(),
+                        ),
+                    ));
+                }
+            }
             ast::Statement::ConstantDeclaration(declaration) => {
                 let availability = availability_of(declaration.syntax());
                 for element in declaration.constant_elements() {
                     if let Some(name_token) = element.name_token() {
-                        symbols.push(StubSymbol {
+                        sink.symbols.push(StubSymbol {
                             name: qualify(&namespace, name_token.text()),
                             kind: StubSymbolKind::Constant,
                             availability,
@@ -98,7 +184,7 @@ fn collect(
             }
             ast::Statement::ExpressionStatement(statement) => {
                 if let Some(symbol) = define_constant(&statement) {
-                    symbols.push(symbol);
+                    sink.symbols.push(symbol);
                 }
             }
             _ => {}
@@ -202,6 +288,261 @@ fn qualify(namespace: &str, name: &str) -> String {
     } else {
         format!("{namespace}\\{name}")
     }
+}
+
+/// Decision 7: absolute names (leading `\`) trim the backslash;
+/// everything else qualifies into the declaring namespace. Stub-file
+/// `use` imports are deliberately not consulted (recorded debt:
+/// phpstorm-stubs heritage references are almost always global or
+/// absolute, so this is a low-risk simplification).
+fn qualify_parent(namespace: &str, written: &str) -> String {
+    match written.strip_prefix('\\') {
+        Some(absolute) => absolute.to_owned(),
+        None => qualify(namespace, written),
+    }
+}
+
+/// One class-like declaration's parents and members: shared by the
+/// `ClassDeclaration`, `InterfaceDeclaration`, `TraitDeclaration`, and
+/// `EnumDeclaration` arms of `collect`, which all expose the same
+/// `extends_clause` / `implements_clause` / `member_list` shape.
+fn class_surface(
+    namespace: &str,
+    extends: Option<ast::ExtendsClause>,
+    implements: Option<ast::ImplementsClause>,
+    member_list: Option<ast::MemberList>,
+) -> StubClassSurface {
+    let mut parents = Vec::new();
+    for name in extends.into_iter().flat_map(|clause| clause.names()) {
+        parents.push(qualify_parent(namespace, &name.text()));
+    }
+    for name in implements.into_iter().flat_map(|clause| clause.names()) {
+        parents.push(qualify_parent(namespace, &name.text()));
+    }
+    let mut members = Vec::new();
+    if let Some(member_list) = member_list {
+        for declaration in member_list.member_declarations() {
+            extract_member(declaration, &mut members);
+        }
+    }
+    StubClassSurface { parents, members }
+}
+
+/// One member declaration, lowered into zero or more `StubMember`s
+/// (property and constant declarations may group several elements
+/// under one type). Mirrors the shape of
+/// `celerrate_semantics::members::lower_member`, duplicated here
+/// deliberately: the crate DAG forbids `celerrate_stubs` from
+/// depending on `celerrate_semantics`.
+fn extract_member(declaration: ast::MemberDeclaration, members: &mut Vec<StubMember>) {
+    match declaration {
+        ast::MemberDeclaration::MethodDeclaration(method) => {
+            let Some(name_token) = method.name_token() else {
+                return;
+            };
+            let (visibility, is_static) = stub_flags(method.modifiers());
+            members.push(StubMember {
+                kind: StubMemberKind::Method,
+                name: name_token.text().to_owned(),
+                visibility,
+                is_static,
+                availability: availability_of(method.syntax()),
+                signature: Some(stub_signature(
+                    method.parameter_list(),
+                    method.return_type(),
+                    method.by_reference_token().is_some(),
+                    method.syntax(),
+                )),
+                type_text: VersionedTypeText::default(),
+                value_text: None,
+            });
+        }
+        ast::MemberDeclaration::PropertyDeclaration(property) => {
+            let (visibility, is_static) = stub_flags(property.modifiers());
+            let written = property.ty().map(|ty| ast::type_text(&ty));
+            let availability = availability_of(property.syntax());
+            for element in property.property_elements() {
+                let Some(name_token) = element.name_token() else {
+                    continue;
+                };
+                members.push(StubMember {
+                    kind: StubMemberKind::Property,
+                    name: name_token.text().trim_start_matches('$').to_owned(),
+                    visibility,
+                    is_static,
+                    availability,
+                    signature: None,
+                    type_text: versioned_type_text(property.syntax(), written.clone()),
+                    value_text: None,
+                });
+            }
+        }
+        ast::MemberDeclaration::ConstantDeclaration(constant) => {
+            let (visibility, is_static) = stub_flags(constant.modifiers());
+            let written = constant.ty().map(|ty| ast::type_text(&ty));
+            let availability = availability_of(constant.syntax());
+            for element in constant.constant_elements() {
+                let Some(name_token) = element.name_token() else {
+                    continue;
+                };
+                members.push(StubMember {
+                    kind: StubMemberKind::ClassConstant,
+                    name: name_token.text().to_owned(),
+                    visibility,
+                    is_static,
+                    availability,
+                    signature: None,
+                    type_text: versioned_type_text(constant.syntax(), written.clone()),
+                    value_text: element.value().map(|value| ast::expression_text(&value)),
+                });
+            }
+        }
+        ast::MemberDeclaration::EnumCase(case) => {
+            let Some(name_token) = case.name_token() else {
+                return;
+            };
+            members.push(StubMember {
+                kind: StubMemberKind::EnumCase,
+                name: name_token.text().to_owned(),
+                visibility: StubVisibility::Public,
+                is_static: false,
+                availability: availability_of(case.syntax()),
+                signature: None,
+                type_text: VersionedTypeText::default(),
+                value_text: case.value().map(|value| ast::expression_text(&value)),
+            });
+        }
+        // `use TraitA, TraitB;` inside a class body: not a member in
+        // its own right, out of scope for this task.
+        ast::MemberDeclaration::TraitUseClause(_) => {}
+    }
+}
+
+/// Visibility and staticness from a member's modifier tokens. Default
+/// visibility (no explicit modifier) is public.
+fn stub_flags(modifiers: impl Iterator<Item = SyntaxToken>) -> (StubVisibility, bool) {
+    let mut visibility = StubVisibility::Public;
+    let mut is_static = false;
+    for token in modifiers {
+        match token.kind() {
+            SyntaxKind::Protected => visibility = StubVisibility::Protected,
+            SyntaxKind::Private => visibility = StubVisibility::Private,
+            SyntaxKind::Static => is_static = true,
+            _ => {}
+        }
+    }
+    (visibility, is_static)
+}
+
+/// A function or method signature: parameters mirror
+/// `celerrate_semantics::members::parameter_signatures` (name without
+/// `$`, written type text, optional/by-reference/variadic flags) —
+/// duplicated here deliberately, the same layering reason as
+/// `extract_member`.
+fn stub_signature(
+    parameters: Option<ast::ParameterList>,
+    return_type: Option<ast::Type>,
+    by_reference: bool,
+    declaration_node: &SyntaxNode,
+) -> StubSignature {
+    StubSignature {
+        parameters: parameters
+            .into_iter()
+            .flat_map(|list| list.parameters())
+            .filter_map(|parameter| {
+                let name = parameter.name_token()?;
+                Some(StubParameter {
+                    name: name.text().trim_start_matches('$').to_owned(),
+                    type_text: versioned_type_text(
+                        parameter.syntax(),
+                        parameter.ty().map(|ty| ast::type_text(&ty)),
+                    ),
+                    optional: parameter.default_value().is_some(),
+                    by_reference: parameter.by_reference_token().is_some(),
+                    variadic: parameter.variadic_token().is_some(),
+                    // Attributes only: a parameter's leading doc
+                    // comment (if any) belongs to the declaring
+                    // function, not to the parameter, so parameters
+                    // never consult `doc_availability`.
+                    availability: attribute_availability(parameter.syntax()),
+                })
+            })
+            .collect(),
+        return_type: versioned_type_text(
+            declaration_node,
+            return_type.map(|ty| ast::type_text(&ty)),
+        ),
+        by_reference,
+    }
+}
+
+/// Availability from attributes only, no doc-comment tags. Used for
+/// parameters, where `availability_of`'s doc-comment half would read
+/// the declaring function's own docblock instead.
+fn attribute_availability(node: &SyntaxNode) -> StubAvailability {
+    let mut availability = StubAvailability::ALWAYS;
+    apply_attributes(node, &mut availability);
+    availability
+}
+
+/// `#[LanguageLevelTypeAware(['8.0' => '…', …], default: '…')]` on the
+/// node, folded into ascending-sorted overrides plus a default (or the
+/// written type text when the attribute has no `default:`); absent the
+/// attribute, the written text is the unversioned default.
+fn versioned_type_text(node: &SyntaxNode, written: Option<String>) -> VersionedTypeText {
+    for group in node.children().filter_map(ast::AttributeGroup::cast) {
+        for attribute in group.attributes() {
+            let Some(name) = attribute.name() else {
+                continue;
+            };
+            let name = name.text();
+            let simple = name
+                .trim_start_matches('\\')
+                .rsplit('\\')
+                .next()
+                .unwrap_or_default()
+                .to_owned();
+            if !simple.eq_ignore_ascii_case("LanguageLevelTypeAware") {
+                continue;
+            }
+            let Some(argument_list) = attribute.argument_list() else {
+                continue;
+            };
+            let mut overrides: Vec<(PhpVersion, String)> = Vec::new();
+            let mut default = None;
+            for argument in argument_list.arguments() {
+                match argument.label_token().map(|token| token.text().to_owned()) {
+                    Some(label) if label == "default" => {
+                        default = argument.expression().as_ref().and_then(string_literal);
+                    }
+                    None => {
+                        if let Some(ast::Expression::ArrayExpression(array)) = argument.expression()
+                        {
+                            for element in array.array_elements() {
+                                let version = element
+                                    .key()
+                                    .as_ref()
+                                    .and_then(string_literal)
+                                    .as_deref()
+                                    .and_then(parse_version);
+                                let text = element.value().as_ref().and_then(string_literal);
+                                if let (Some(version), Some(text)) = (version, text) {
+                                    overrides.push((version, text));
+                                }
+                            }
+                        }
+                    }
+                    Some(_) => {}
+                }
+            }
+            overrides.sort_by_key(|(version, _)| *version);
+            return VersionedTypeText {
+                default: default.or(written),
+                overrides,
+            };
+        }
+    }
+    VersionedTypeText::from_text(written)
 }
 
 /// Availability from the declaration's own metadata: leading doc tags,
@@ -377,6 +718,7 @@ fn successor(version: PhpVersion) -> PhpVersion {
 }
 
 #[cfg(test)]
+#[allow(clippy::indexing_slicing)]
 mod tests {
     use super::{Extraction, extract};
     use crate::symbol::StubSymbolKind;
@@ -688,5 +1030,143 @@ mod tests {
              function commented() {}\n",
         );
         assert_eq!(availability.introduced, Some(PhpVersion::new(8, 1)));
+    }
+
+    use crate::signature::{StubMemberKind, StubVisibility};
+
+    #[test]
+    fn a_function_signature_is_extracted_with_its_parameters() {
+        let extraction = extract(
+            "<?php\n\
+             function strlen(string $string): int {}\n",
+        );
+        let (name, signature) = &extraction.functions[0];
+        assert_eq!(name, "strlen");
+        assert_eq!(signature.parameters.len(), 1);
+        assert_eq!(signature.parameters[0].name, "string");
+        assert_eq!(
+            signature.parameters[0].type_text.at(PhpVersion::new(8, 1)),
+            Some("string"),
+        );
+        assert!(!signature.parameters[0].optional);
+        assert_eq!(signature.return_type.at(PhpVersion::new(8, 1)), Some("int"));
+    }
+
+    #[test]
+    fn language_level_type_aware_becomes_a_versioned_text() {
+        let extraction = extract(
+            "<?php\n\
+             #[LanguageLevelTypeAware(['8.0' => 'int|false', '8.3' => 'int|float|false'], default: 'int')]\n\
+             function tricky(): int {}\n",
+        );
+        let (_, signature) = &extraction.functions[0];
+        assert_eq!(signature.return_type.default.as_deref(), Some("int"));
+        assert_eq!(
+            signature.return_type.overrides,
+            vec![
+                (PhpVersion::new(8, 0), "int|false".to_owned()),
+                (PhpVersion::new(8, 3), "int|float|false".to_owned()),
+            ],
+        );
+        assert_eq!(
+            signature.return_type.at(PhpVersion::new(8, 4)),
+            Some("int|float|false"),
+        );
+    }
+
+    #[test]
+    fn a_parameter_gains_its_own_availability_window() {
+        let extraction = extract(
+            "<?php\n\
+             function windowed(\n\
+                 string $always,\n\
+                 #[PhpStormStubsElementAvailable(from: '8.2')] int $added = 0,\n\
+             ): void {}\n",
+        );
+        let (_, signature) = &extraction.functions[0];
+        assert_eq!(
+            signature.parameters[0].availability,
+            StubAvailability::ALWAYS,
+        );
+        assert_eq!(
+            signature.parameters[1].availability.introduced,
+            Some(PhpVersion::new(8, 2)),
+        );
+        assert!(signature.parameters[1].optional);
+    }
+
+    #[test]
+    fn a_class_surface_carries_parents_and_members() {
+        let extraction = extract(
+            "<?php\n\
+             class RuntimeException extends Exception implements Stringable {\n\
+                 protected string $message;\n\
+                 const int CODE_LIMIT = 10;\n\
+                 public static function create(string $text): static {}\n\
+                 public function getMessage(): string {}\n\
+             }\n",
+        );
+        let (name, surface) = &extraction.classes[0];
+        assert_eq!(name, "RuntimeException");
+        assert_eq!(
+            surface.parents,
+            vec!["Exception".to_owned(), "Stringable".to_owned()],
+        );
+        let member_names: Vec<(&str, StubMemberKind)> = surface
+            .members
+            .iter()
+            .map(|member| (member.name.as_str(), member.kind))
+            .collect();
+        assert_eq!(
+            member_names,
+            vec![
+                ("message", StubMemberKind::Property),
+                ("CODE_LIMIT", StubMemberKind::ClassConstant),
+                ("create", StubMemberKind::Method),
+                ("getMessage", StubMemberKind::Method),
+            ],
+        );
+        let message = &surface.members[0];
+        assert_eq!(message.visibility, StubVisibility::Protected);
+        assert_eq!(message.type_text.at(PhpVersion::new(8, 1)), Some("string"));
+        let constant = &surface.members[1];
+        assert_eq!(constant.value_text.as_deref(), Some("10"));
+        let create = &surface.members[2];
+        assert!(create.is_static);
+    }
+
+    #[test]
+    fn namespaced_parents_qualify_and_absolute_parents_do_not() {
+        let extraction = extract(
+            "<?php\n\
+             namespace Random;\n\
+             class BrokenRandomEngineError extends \\RuntimeException {}\n\
+             class Local extends Engine {}\n",
+        );
+        assert_eq!(
+            extraction.classes[0].1.parents,
+            vec!["RuntimeException".to_owned()]
+        );
+        assert_eq!(
+            extraction.classes[1].1.parents,
+            vec!["Random\\Engine".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_enum_surface_carries_its_cases() {
+        let extraction = extract(
+            "<?php\n\
+             enum IntervalBoundary: string {\n\
+                 case ClosedOpen = 'CO';\n\
+                 case OpenClosed = 'OC';\n\
+             }\n",
+        );
+        let (name, surface) = &extraction.classes[0];
+        assert_eq!(name, "IntervalBoundary");
+        assert_eq!(surface.members.len(), 2);
+        assert_eq!(surface.members[0].kind, StubMemberKind::EnumCase);
+        assert_eq!(surface.members[0].name, "ClosedOpen");
+        assert_eq!(surface.members[0].value_text.as_deref(), Some("'CO'"));
     }
 }

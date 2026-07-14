@@ -53,14 +53,51 @@
 //! symbol-table key), not their originally written spelling. Recovering
 //! the original spelling requires the symbol table and is deferred to
 //! plan 8, which renders diagnostics.
+//!
+//! **Declared types.** [`declared_member_signature`] and
+//! [`declared_function_signature`] are the per-member and per-function
+//! queries that resolve one written signature into the lattice at its
+//! declaring site (methods, properties, class constants, enum cases;
+//! free functions the symmetric source-side case). Every value and
+//! parameter carries a [`Trust`] verdict tracing how it was obtained:
+//! `NativeOnly` when no annotation exists, `Refined` when an annotation
+//! is a proven subtype of the native declaration, `RefinedUnproven`
+//! when the judgment is `CannotProve` (trusted and traced — template
+//! types, principally), `RejectedAnnotation` when the annotation
+//! contradicts the native declaration and the native declaration wins;
+//! never a crash, never a silent widening, never a silently dropped
+//! annotation. The annotation layer itself is a seam:
+//! [`member_annotations`] answers `MemberAnnotations::default()` until
+//! plan 4a's bridge fills it through the type-syntax registry — at
+//! which point source precedence, the trust rule, and the
+//! nearest-ancestor inheritance walk (already wired and unit-tested
+//! against injected readers) change nothing else. Stub signatures
+//! resolve under the `[min, max]` configured-version range rule: a
+//! return or value type is the union of its per-version forms (the
+//! least restrictive reading of a call's result); a parameter type
+//! takes the most restrictive per-version form that is a proven subtype
+//! of every other, or falls silent (`parameter_type: None`) when no
+//! such form exists — the design's degenerate empty-intersection guard,
+//! silencing the check rather than fabricating an uninhabited
+//! intersection. Bare `callable` lowers to `mixed`: no top-of-callables
+//! form exists in the lattice, so `mixed` is a documented sound
+//! widening (silence, never a false positive); a first-class
+//! bare-callable form is recorded debt, revisited when plan 8 measures
+//! the silence.
 
 mod construction;
+mod declared;
 mod display;
 mod judgments;
 mod ordering;
 mod representation;
 mod widening;
+mod written;
 
+pub use declared::{
+    DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
+    declared_function_signature, declared_member_signature, member_annotations,
+};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};

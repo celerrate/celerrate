@@ -51,6 +51,8 @@ fn run() -> Result<()> {
     }
 
     let mut symbols = Vec::new();
+    let mut functions = Vec::new();
+    let mut classes = Vec::new();
     let mut warnings = 0usize;
     for path in &files {
         let text = match std::fs::read_to_string(path) {
@@ -67,9 +69,11 @@ fn run() -> Result<()> {
             warnings += 1;
         }
         symbols.extend(extraction.symbols);
+        functions.extend(extraction.functions);
+        classes.extend(extraction.classes);
     }
 
-    let index = StubIndex::from_symbols(symbols);
+    let index = StubIndex::new(symbols, functions, classes);
     let blob = encode(&index);
     println!(
         "{} stub files, {} symbols, {} warnings, {} bytes",
