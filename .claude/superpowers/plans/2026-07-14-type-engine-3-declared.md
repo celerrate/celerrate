@@ -4730,7 +4730,8 @@ git commit -m "📝 docs(types): the declared-type layer, its seam, and the clos
   stub enums (Task 9); plan 8 revisits with the interface checks.
 - Stub member flags beyond visibility and staticness
   (abstract/final/readonly) are not compiled.
-- **PLAN-TEXT DEVIATION** (adjudicated at review, human can veto):
+- **PLAN-TEXT DEVIATION** (adjudicated at review, human can veto —
+  **validated by the human on 2026-07-15, deviation accepted**):
   Task 13's text called `value-of` expansion "top-level only"; the
   shipped judge instead expands it through its full structural
   recursion (arrays, unions, and so on) — sound, strictly more
