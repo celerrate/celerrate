@@ -14,9 +14,16 @@ pub struct StubIndex {
 }
 
 impl StubIndex {
-    /// Builds the index: sorts by `(name, kind)` and merges duplicate
-    /// declarations (phpstorm-stubs declares some symbols several
-    /// times, with different availability guards) into their union.
+    /// Builds the index: sorts all collections by name and deduplicates.
+    ///
+    /// **Symbols**: sorted by `(name, kind)` with duplicates merged into
+    /// their availability union (phpstorm-stubs declares some symbols
+    /// several times, with different availability guards).
+    ///
+    /// **Functions and classes**: sorted by name (stable); the first
+    /// duplicate wins and later ones are silently dropped. This is a
+    /// recorded simplification — phpstorm-stubs duplicate declarations
+    /// carry the same shapes, so revisit if corpus spot checks disagree.
     pub fn new(
         mut symbols: Vec<StubSymbol>,
         mut functions: Vec<(String, StubSignature)>,
