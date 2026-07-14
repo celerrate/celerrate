@@ -3066,15 +3066,20 @@ fn literal_is_numeric(value: &str) -> bool {
         Some((integer_part, fraction_part)) => (integer_part, Some(fraction_part)),
         None => (mantissa, None),
     };
+    // PHP 8 DNUM: either side of the dot may be empty, never both.
     let integer_is_digits = !integer_part.is_empty()
         && integer_part.bytes().all(|byte| byte.is_ascii_digit());
     let fraction_is_digits = fraction_part
-        .is_none_or(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
-    let mantissa_valid = if fraction_part.is_some() {
-        (integer_part.is_empty() || integer_is_digits) && fraction_is_digits
-            && !(integer_part.is_empty() && fraction_part.is_some_and(str::is_empty))
-    } else {
-        integer_is_digits
+        .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let mantissa_valid = match fraction_part {
+        None => integer_is_digits,
+        Some(fraction) => {
+            if integer_part.is_empty() {
+                fraction_is_digits
+            } else {
+                integer_is_digits && (fraction.is_empty() || fraction_is_digits)
+            }
+        }
     };
     let exponent_valid = exponent.is_none_or(|part| {
         let unsigned_exponent = part.strip_prefix(['+', '-']).unwrap_or(part);
@@ -3342,9 +3347,18 @@ fn judge_ground<'db>(
             TypeData::Callable { parameters: a_parameters, return_type: a_return },
             TypeData::Callable { parameters: b_parameters, return_type: b_return },
         ) => judge_callable(db, context, a_parameters, *a_return, b_parameters, *b_return),
-        // The CannotProve islands: invokable objects and callable
-        // strings and arrays keep these pairs undecidable.
+        // The CannotProve islands, both directions: invokable objects
+        // and callable strings and arrays keep these pairs undecidable
+        // (which values inhabit a callable signature is program-dependent).
         (TypeData::Callable { .. }, TypeData::Object)
+        | (
+            TypeData::Callable { .. },
+            TypeData::String { .. }
+            | TypeData::ClassString { .. }
+            | TypeData::Array { .. }
+            | TypeData::Shape { .. }
+            | TypeData::Class { .. },
+        )
         | (TypeData::Object | TypeData::Class { .. }, TypeData::Callable { .. })
         | (TypeData::String { .. } | TypeData::ClassString { .. }, TypeData::Callable { .. })
         | (TypeData::Array { .. } | TypeData::Shape { .. }, TypeData::Callable { .. }) => {
