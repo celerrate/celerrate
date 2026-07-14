@@ -12,6 +12,7 @@ mod item_nodes;
 mod items;
 mod linearize;
 mod lookup;
+mod member_lookup;
 mod members;
 mod queries;
 mod reference_checks;
@@ -35,6 +36,7 @@ pub use linearize::{
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
 };
+pub use member_lookup::{MemberQuery, MemberResolution, lookup_member};
 pub use members::{
     ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
     TraitAdaptation, TraitUse, Visibility,

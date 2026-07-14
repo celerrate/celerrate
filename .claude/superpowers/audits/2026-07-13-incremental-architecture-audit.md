@@ -302,6 +302,16 @@ corrected key (hash over ItemTree hashes *including* defines), or an
 incrementally mergeable table; neither is warranted before re-measuring
 after (a).
 
+- 2026-07-14 (type-engine plan 1a) — settled structurally for the
+  type engine's hot edit class: members live in a sibling projection
+  (`member_tree`), so member and signature edits inside a class body
+  never change `item_tree` values and the global table never rebuilds
+  on them (pinned by
+  `invalidation_scope.rs::a_member_signature_edit_never_reaches_item_tree_consumers`).
+  The rebuild still fires on genuine top-level changes (new class,
+  renamed function); that residue is unchanged from the audit and
+  remains accepted, scale-bounded by top-level churn only.
+
 **`stub_symbol_table` + `stubs_in_range`**
 (`crates/celerrate_semantics/src/index.rs:183-203`,
 `crates/celerrate_stubs/src/query.rs:22`). Every process filters the full
