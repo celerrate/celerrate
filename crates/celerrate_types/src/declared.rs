@@ -760,8 +760,19 @@ pub fn declared_function_signature<'db>(
     let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
     let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
         // No source declaration: consult the stub signature table
-        // under the range rule.
+        // under the range rule. Layering rule: existence is the
+        // symbol table's answer (it is availability-filtered against
+        // the configured range); the signature table is version-
+        // agnostic by design and must never be asked "does this exist
+        // here" on its own — a stub function absent from the whole
+        // configured range must answer `None`, not a signature.
         let range = configuration.php_version_range(db);
+        let in_range = celerrate_semantics::stub_symbol_table(db, stubs, configuration)
+            .lookup(SymbolSpace::Function, query.key(db))
+            .is_some();
+        if !in_range {
+            return None;
+        }
         return stub_signature_table(db, stubs)
             .function(query.key(db))
             .map(|signature| {
@@ -1476,6 +1487,26 @@ mod tests {
     }
 
     #[test]
+    fn a_version_gap_in_the_return_text_widens_the_union_to_mixed() {
+        // No default text and an override only from 8.3: 8.1 and 8.2
+        // have no declared text, so `lowered_at_version` answers
+        // `mixed` for them, and the union absorbs to `mixed`.
+        let gapped = StubSignature {
+            parameters: vec![],
+            return_type: VersionedTypeText {
+                default: None,
+                overrides: vec![(PhpVersion::new(8, 3), "int".to_owned())],
+            },
+            by_reference: false,
+        };
+        let fixture =
+            fixture_with_stub_payload(&["<?php"], vec![("gapped".to_owned(), gapped)], vec![]);
+        let db = &fixture.db;
+        let signature = function(&fixture, "gapped").unwrap();
+        assert_eq!(signature.value_type, TypeId::mixed(db));
+    }
+
+    #[test]
     fn a_parameter_narrowing_across_the_range_takes_the_most_restrictive_form() {
         // `int` at 8.1 versus `int|string` at 8.2+: `int` is a proven
         // subtype of every per-version form, so `int` is the check type.
@@ -1579,5 +1610,55 @@ mod tests {
             declared.parameters[0].parameter_type,
             Some(TypeId::string(db))
         );
+    }
+
+    #[test]
+    fn a_stub_function_outside_the_configured_range_answers_no_signature() {
+        // The signature table carries a payload for `futureOnly`, but
+        // its `StubSymbol` availability starts at 8.6 — entirely
+        // outside the fixture's 8.1-8.5 configured range. Existence is
+        // the availability-filtered symbol table's answer, not the
+        // (version-agnostic) signature table's: the fallback must
+        // answer `None`, never a signature for a function that does
+        // not exist anywhere in range.
+        let db = TestDatabase::default();
+        let files = AnalyzedFileSet::new(
+            &db,
+            vec![SourceFile::new(&db, FileId::new(0), b"<?php".to_vec())],
+        );
+        let signature = StubSignature {
+            parameters: vec![],
+            return_type: VersionedTypeText::from_text(Some("string".to_owned())),
+            by_reference: false,
+        };
+        let symbols = vec![StubSymbol {
+            name: "futureOnly".to_owned(),
+            kind: StubSymbolKind::Function,
+            availability: StubAvailability {
+                introduced: Some(PhpVersion::new(8, 6)),
+                removed: None,
+                deprecated: None,
+            },
+        }];
+        let stubs = StubIndexInput::builder(StubIndex::new(
+            symbols,
+            vec![("futureOnly".to_owned(), signature)],
+            vec![],
+        ))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        let fixture = Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        };
+        assert!(function(&fixture, "futureOnly").is_none());
     }
 }
