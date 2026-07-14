@@ -14,7 +14,6 @@ pub(crate) enum WrittenType {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 enum Token {
     Name(String),
     Question,
@@ -27,7 +26,6 @@ enum Token {
 /// Lexes the joined text. `None` on any byte that cannot start or
 /// continue a token (whitespace included: the joined form never
 /// contains any).
-#[allow(dead_code)]
 fn lex(text: &str) -> Option<Vec<Token>> {
     let mut tokens = Vec::new();
     let mut characters = text.chars().peekable();
@@ -62,7 +60,6 @@ fn lex(text: &str) -> Option<Vec<Token>> {
 /// One (possibly qualified, possibly `\`-prefixed) name. PHP labels
 /// start with a letter, underscore, or a byte ≥ 0x80; digits may only
 /// continue a label. A trailing `\` or an empty segment is malformed.
-#[allow(dead_code)]
 fn lex_name(characters: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Option<String> {
     let mut name = String::new();
     if characters.peek() == Some(&'\\') {
@@ -96,7 +93,6 @@ fn lex_name(characters: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Opti
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn parse_written(text: &str) -> Option<WrittenType> {
     let tokens = lex(text)?;
     let mut cursor = 0usize;
@@ -105,7 +101,6 @@ pub(crate) fn parse_written(text: &str) -> Option<WrittenType> {
 }
 
 /// union := intersection (`|` intersection)*
-#[allow(dead_code)]
 fn parse_union(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
     let mut parts = vec![parse_intersection(tokens, cursor)?];
     while tokens.get(*cursor) == Some(&Token::Pipe) {
@@ -120,7 +115,6 @@ fn parse_union(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
 }
 
 /// intersection := atom (`&` atom)*
-#[allow(dead_code)]
 fn parse_intersection(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
     let mut parts = vec![parse_atom(tokens, cursor)?];
     while tokens.get(*cursor) == Some(&Token::Ampersand) {
@@ -135,7 +129,6 @@ fn parse_intersection(tokens: &[Token], cursor: &mut usize) -> Option<WrittenTyp
 }
 
 /// atom := `?` atom | `(` union `)` | name
-#[allow(dead_code)]
 fn parse_atom(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
     match tokens.get(*cursor)? {
         Token::Question => {
