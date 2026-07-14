@@ -23,11 +23,7 @@ pub struct AnnotationSite<'db, 'site> {
 }
 
 impl<'db, 'site> AnnotationSite<'db, 'site> {
-    // Constructed only by this module's dispatch functions today;
-    // those are themselves not yet called outside tests until tasks
-    // 6, 8, and 9 wire the annotation seam through them. Remove the
-    // allow once that wiring lands.
-    #[allow(dead_code)]
+    // Constructed only by this module's dispatch functions.
     pub(crate) fn new(db: &'db dyn salsa::Database, site: &'site NameSite<'site>) -> Self {
         Self { db, site }
     }
@@ -119,11 +115,9 @@ pub struct TypeSyntaxRegistry {
     pub registrations: Vec<TypeSyntaxRegistration>,
 }
 
-/// Registered order, can-parse first win. Not yet called outside
-/// tests: tasks 6, 8, and 9 wire this into the annotation seam
-/// (`declared::member_annotations`) and the virtual-member payload
-/// path. Remove the allow once that wiring lands.
-#[allow(dead_code)]
+/// Registered order, can-parse first win. Wired into the annotation
+/// seam (`declared::member_annotations`); the virtual-member payload
+/// path is a later task.
 pub(crate) fn annotations_for_docblock<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
@@ -144,7 +138,7 @@ pub(crate) fn annotations_for_docblock<'db>(
 }
 
 /// Registered order, first `Some` wins. Not yet called outside tests:
-/// see `annotations_for_docblock` above.
+/// the virtual-member payload path (a later task) wires this in.
 #[allow(dead_code)]
 pub(crate) fn type_of_expression<'db>(
     db: &'db dyn salsa::Database,
