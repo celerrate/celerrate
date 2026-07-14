@@ -10,7 +10,15 @@ use celerrate_stubs::StubIndexInput;
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
 
-/// The three-valued verdict of a typed judgment.
+/// The three-valued verdict of a typed judgment: `Holds` and `Fails` are
+/// both decisions (`Fails` means value-set inclusion is refuted, not
+/// merely unproven), while `CannotProve` means the judgment is
+/// undecidable with the information available. Consumer contract:
+/// `CannotProve` is never a silent discard, whether that means folding
+/// it into `Fails`, folding it into `Holds`, or dropping it before it
+/// reaches a diagnostic. Each diagnostic family states its own posture
+/// toward `CannotProve` (report, suppress, or downgrade) explicitly at
+/// its own boundary; plan 8 is where those postures are declared.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Proof {
     Holds,
