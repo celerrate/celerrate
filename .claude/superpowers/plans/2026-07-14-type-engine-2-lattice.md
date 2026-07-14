@@ -132,7 +132,7 @@ pub fn list(db, value: TypeId<'db>) -> Self;              // key forced to int
 pub fn non_empty_list(db, value: TypeId<'db>) -> Self;
 pub fn shape(db, fields: Vec<ShapeField<'db>>) -> Self;   // last duplicate wins, then sort
 pub fn iterable(db, key: TypeId<'db>, value: TypeId<'db>) -> Self;  // desugars to a union
-pub fn class(db, name: &str, arguments: Vec<TypeId<'db>>) -> Self;  // folds the name
+pub fn class(db, name: &str, arguments: Vec<TypeId<'db>>) -> Self;  // strips a leading backslash, folds the name
 pub fn enum_case(db, enum_name: &str, case_name: &str) -> Self;     // folds the enum name
 pub fn callable(db, parameters: Vec<CallableParameter<'db>>, return_type: TypeId<'db>) -> Self;
 pub fn class_string(db, argument: Option<TypeId<'db>>) -> Self;
@@ -2606,7 +2606,7 @@ git commit -m "✨ feat(types): deterministic type rendering"
 2. Target `mixed` → Holds. 3. Candidate `never` → Holds.
 4. Target `never` → Fails. 5. Candidate `mixed` → Fails.
 6. Candidate union → every constituent against the target, `Proof::all`.
-7. Target union → candidate against each constituent, `Proof::any` (one holds → Holds; all fail → Fails; otherwise CannotProve).
+7. Target union → candidate against each constituent, `Proof::any` refined: one holds → Holds; all fail → Fails only when the candidate cannot span constituents (it is single-valued: null, a bool/int/float/string literal, an enum case) or when no two target constituents share the candidate's kind — a splittable candidate crossing a partitioned union (`int <: int<min, -1>|int<0, max>`) is undecidable and answers CannotProve; otherwise CannotProve.
 8. Candidate intersection → one intersectand holds → Holds; otherwise CannotProve (never Fails: refutation would need disjointness, and an intersection can be empty).
 9. Target intersection → candidate against every intersectand, `Proof::all`.
 10. Candidate template → its bound against the target: Holds → Holds (`T of Foo <: Foo` holds definitionally through the bound); otherwise CannotProve, never Fails.
@@ -2614,7 +2614,7 @@ git commit -m "✨ feat(types): deterministic type rendering"
 12. Candidate conditional → its branch union against the target: Holds → Holds; otherwise CannotProve. Target conditional → candidate against both branches: both Holds → Holds; otherwise CannotProve.
 13. Candidate `key-of` → `int|string` against the target: Holds → Holds; otherwise CannotProve. Candidate `value-of` → CannotProve. Target `key-of`/`value-of` → CannotProve.
 14. Any placeholder on either side → CannotProve (symbolic until plan 6's substitution).
-15. The ground matrix: scalar inclusion (bool literals, integer range inclusion, the string-constraint table, float literals), `class-string` rules, array flag-and-covariance rules, sealed shape rules, class/enum-case rules through `judge_class_hierarchy`, callable contravariance/covariance (target `void` return accepts any return; a `by_reference` mismatch is CannotProve), `object` as supertype of class-likes, and the CannotProve islands (string/array/object/class versus callable in both directions; string literal versus `class-string`; class versus same-named enum case). Everything else, including every remaining cross-kind pair, → Fails.
+15. The ground matrix: scalar inclusion (bool literals, integer range inclusion, the string-constraint table, float literals), `class-string` rules, array flag-and-covariance rules, sealed shape rules, class/enum-case rules through `judge_class_hierarchy`, callable contravariance/covariance (target `void` return accepts any return; a `by_reference` mismatch is CannotProve), `object` as supertype of class-likes, and the CannotProve islands (string/array/shape/object/class/enum-case versus callable in both directions — enums may declare `__invoke`; string literal versus `class-string`; class versus same-named enum case). Everything else, including every remaining cross-kind pair, → Fails.
 
 - [ ] **Step 1: Move `celerrate_db` and add the input crates**
 
@@ -3798,3 +3798,30 @@ git commit -m "📝 docs(types): pin the lattice invariants and the judgment con
 
 
 
+
+## Accepted debt at closure (final whole-branch review, 2026-07-14)
+
+Recorded deliberately for plans 3, 5, and 8 to inherit:
+
+- `depth_of` is recomputed unmemoized by `capped_child` (quadratic on deep
+  construction chains): memoize (tracked query or stored depth) before
+  plan 5's fixpoint makes construction hot.
+- Shape optional-versus-required answers CannotProve, not Fails
+  (conservative precision gap). `class-string <: class-string<object>`
+  answers Fails (canonicalize `class_string(Some(mixed))` to bare form
+  when touched next). Candidate `mixed` refutes before the symbolic-target
+  rules (rules 1-5 precede 10-13; plan 6 substitutes before judging on the
+  call-site path). `array<never, never>` versus the empty shape answers
+  Fails (pathological input).
+- Test gaps carried: two-sided non-singleton `int_range` bounds
+  round-trip; `order_types` sibling-composite and length tie-break;
+  dedicated ordering tests for ranks 14 to 18.
+- Polish carried: `TypeId::intern` pass-through; `.then` versus
+  `.then_with` in `order_shape_fields`; NaN/inf rendering casing and the
+  defensive `'e'`/`'E'` guard; double ancestry iteration in
+  `judge_class_hierarchy`; `CallableParameter` derive rationale pointer;
+  the norm draft's template row conflating tag declaration with type
+  occurrence.
+- One unreproduced single flake of a pure display test during Task 8
+  iteration (passed 11 immediate reruns and every suite since): no action,
+  trail recorded here.
