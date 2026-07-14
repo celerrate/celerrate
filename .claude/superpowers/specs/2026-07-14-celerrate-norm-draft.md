@@ -39,8 +39,8 @@ The table covers every `pub fn` constructor on `TypeId` in
 `Self`). Query and interrogation methods (`is_mixed`, `int_bounds`,
 `class_name`, `without_null`, and so on) do not spell new syntax and are
 out of scope; `display` is the renderer the "PHPStan equivalent" column
-is checked against, not a constructor. Section 3's step-2 cross-check
-below lists the full 37-constructor accounting.
+is checked against, not a constructor. All 37 public constructors are
+covered by the table below.
 
 | Lattice constructor | Norm | PHPStan equivalent | Divergence |
 | --- | --- | --- | --- |
