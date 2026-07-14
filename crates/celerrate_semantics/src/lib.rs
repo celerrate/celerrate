@@ -10,6 +10,7 @@ mod cache;
 mod index;
 mod item_nodes;
 mod items;
+mod linearize;
 mod lookup;
 mod members;
 mod queries;
@@ -27,6 +28,10 @@ pub use index::{
     stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
+pub use linearize::{
+    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember, MemberOrigin,
+    linearized_class,
+};
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
 };
