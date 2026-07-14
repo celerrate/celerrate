@@ -5,6 +5,7 @@
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
+use celerrate_semantics::{ClassQuery, linearized_class};
 use celerrate_stubs::StubIndexInput;
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
@@ -54,14 +55,7 @@ pub enum Nullability {
 }
 
 /// The salsa inputs the class rule needs, carried through the recursion.
-/// `judge_class_hierarchy` does not yet read these fields (this task's
-/// stub answers from the two folded names alone); Task 9 replaces its
-/// body with the linearization walk that consults them.
 #[derive(Clone, Copy)]
-#[allow(
-    dead_code,
-    reason = "consumed once Task 9 wires the linearization walk"
-)]
 struct JudgmentContext {
     files: AnalyzedFileSet,
     stubs: StubIndexInput,
@@ -203,9 +197,10 @@ fn literal_is_numeric(value: &str) -> bool {
     mantissa_valid && exponent_valid
 }
 
-/// The class-versus-class hierarchy verdict for differing folded names.
-/// This task answers `CannotProve` (no hierarchy consulted yet); Task 9
-/// replaces this body with the `linearized_class` walk.
+/// The class-versus-class hierarchy verdict for differing folded names:
+/// found in the walked ancestry proves; a stub boundary, an unresolved
+/// edge, or a broken cycle leaves the answer undecidable; a fully
+/// resolved hierarchy without the target refutes.
 fn judge_class_hierarchy(
     db: &dyn salsa::Database,
     context: JudgmentContext,
@@ -215,8 +210,38 @@ fn judge_class_hierarchy(
     if candidate_name == target_name {
         return Proof::Holds;
     }
-    let _ = (db, context);
-    Proof::CannotProve
+    let class = ClassQuery::new(db, candidate_name.to_owned());
+    let Some(linearized) = linearized_class(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        class,
+    ) else {
+        // A stub or unknown class: the stub blob carries no hierarchy.
+        return Proof::CannotProve;
+    };
+    let found = linearized
+        .ancestry
+        .iter()
+        .any(|edge| edge.resolved.as_deref() == Some(target_name))
+        || linearized
+            .stub_ancestors
+            .iter()
+            .any(|key| key == target_name);
+    if found {
+        return Proof::Holds;
+    }
+    let opaque_boundary = linearized.cyclic
+        || linearized
+            .ancestry
+            .iter()
+            .any(|edge| edge.resolved.is_none());
+    if opaque_boundary {
+        Proof::CannotProve
+    } else {
+        Proof::Fails
+    }
 }
 
 fn judge<'db>(
@@ -1020,6 +1045,93 @@ mod tests {
             assert_eq!(judge(&f, callable, other), Proof::CannotProve);
             assert_eq!(judge(&f, other, callable), Proof::CannotProve);
         }
+    }
+
+    #[test]
+    fn a_resolved_hierarchy_proves_and_refutes() {
+        let f = fixture(&[
+            "<?php class Entity {} interface Timestamped {}",
+            "<?php class User extends Entity implements Timestamped {}",
+            "<?php class Order {}",
+        ]);
+        let db = &f.db;
+        let user = TypeId::class(db, "User", vec![]);
+        assert_eq!(
+            judge(&f, user, TypeId::class(db, "Entity", vec![])),
+            Proof::Holds
+        );
+        assert_eq!(
+            judge(&f, user, TypeId::class(db, "Timestamped", vec![])),
+            Proof::Holds
+        );
+        assert_eq!(
+            judge(&f, TypeId::class(db, "Entity", vec![]), user),
+            Proof::Fails
+        );
+        assert_eq!(
+            judge(&f, user, TypeId::class(db, "Order", vec![])),
+            Proof::Fails
+        );
+    }
+
+    #[test]
+    fn grandparents_count_and_generic_targets_stay_invariant() {
+        let f = fixture(&["<?php class A {} class B extends A {} class C extends B {}"]);
+        let db = &f.db;
+        let c = TypeId::class(db, "C", vec![]);
+        assert_eq!(judge(&f, c, TypeId::class(db, "A", vec![])), Proof::Holds);
+        // A parameterized target cannot be proven through erasure.
+        assert_eq!(
+            judge(&f, c, TypeId::class(db, "A", vec![TypeId::int(db)])),
+            Proof::CannotProve
+        );
+    }
+
+    #[test]
+    fn boundaries_answer_cannot_prove() {
+        let f = fixture(&[
+            // Extends a class that exists nowhere in the file set.
+            "<?php class Repository extends ServiceEntityRepository {}",
+            // A genuine cycle, broken by linearization.
+            "<?php class Ouro extends Boros {} class Boros extends Ouro {}",
+        ]);
+        let db = &f.db;
+        let repository = TypeId::class(db, "Repository", vec![]);
+        assert_eq!(
+            judge(
+                &f,
+                repository,
+                TypeId::class(db, "ObjectRepository", vec![])
+            ),
+            Proof::CannotProve
+        );
+        let ouro = TypeId::class(db, "Ouro", vec![]);
+        assert_eq!(
+            judge(&f, ouro, TypeId::class(db, "Unrelated", vec![])),
+            Proof::CannotProve
+        );
+        // An unknown candidate class is undecidable too.
+        assert_eq!(
+            judge(
+                &f,
+                TypeId::class(db, "Ghost", vec![]),
+                TypeId::class(db, "Entity", vec![])
+            ),
+            Proof::CannotProve
+        );
+    }
+
+    #[test]
+    fn enum_cases_inherit_through_their_enum_hierarchy() {
+        let f = fixture(&[
+            "<?php interface HasLabel {} enum Status implements HasLabel { case Active; }",
+        ]);
+        let db = &f.db;
+        let case = TypeId::enum_case(db, "Status", "Active");
+        assert_eq!(
+            judge(&f, case, TypeId::class(db, "HasLabel", vec![])),
+            Proof::Holds
+        );
     }
 
     #[test]
