@@ -690,6 +690,48 @@ fn declared_stub_parameter<'db>(
     }
 }
 
+/// The union of a backed enum's case backing literals, or `None` when
+/// the key is not a fully known backed enum (unresolvable class, a
+/// case with a non-literal backing, a pure enum, an opaque hierarchy).
+pub(crate) fn enum_backing_union<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    enum_key: &str,
+) -> Option<TypeId<'db>> {
+    let class = ClassQuery::new(db, enum_key.to_owned());
+    let mut literals: Vec<TypeId<'db>> = Vec::new();
+    match linearized_class(db, files, stubs, configuration, class).as_ref() {
+        Some(linearized) => {
+            let cases = linearized
+                .members
+                .iter()
+                .filter(|entry| entry.member.kind == MemberKind::EnumCase);
+            for entry in cases {
+                let backing = entry.member.signature.default_text.as_deref()?;
+                literals.push(literal_type_of_default(db, backing)?);
+            }
+        }
+        None => {
+            let table = stub_signature_table(db, stubs);
+            let surface = table.class(enum_key)?;
+            let cases = surface
+                .members
+                .iter()
+                .filter(|member| member.kind == StubMemberKind::EnumCase);
+            for member in cases {
+                let backing = member.value_text.as_deref()?;
+                literals.push(literal_type_of_default(db, backing)?);
+            }
+        }
+    }
+    if literals.is_empty() {
+        return None; // a pure enum, or no cases at all
+    }
+    Some(TypeId::union(db, literals))
+}
+
 /// The literal type of a comparable default text (`expression_text`
 /// form: tokens joined with one space): integers (optionally `- `
 /// prefixed), floats, single-quoted strings, `true`/`false`/`null`.

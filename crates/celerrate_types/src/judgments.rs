@@ -315,12 +315,39 @@ fn is_single_valued<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool 
     }
 }
 
+/// `value-of<SomeBackedEnum>` evaluates through member facts (plan
+/// 2's recorded debt, settled here); every other `value-of` stays
+/// symbolic. Top-level only: nested occurrences keep their symbolic
+/// (conservative) verdicts.
+fn expand_value_of<'db>(
+    db: &'db dyn salsa::Database,
+    context: JudgmentContext,
+    of: TypeId<'db>,
+) -> TypeId<'db> {
+    let TypeData::ValueOf { subject } = of.data(db) else {
+        return of;
+    };
+    let TypeData::Class { name, .. } = subject.data(db) else {
+        return of;
+    };
+    crate::declared::enum_backing_union(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        name,
+    )
+    .unwrap_or(of)
+}
+
 fn judge<'db>(
     db: &'db dyn salsa::Database,
     context: JudgmentContext,
     candidate: TypeId<'db>,
     target: TypeId<'db>,
 ) -> Proof {
+    let candidate = expand_value_of(db, context, candidate);
+    let target = expand_value_of(db, context, target);
     // Rules 1 to 5: the extremes.
     if candidate == target {
         return Proof::Holds;
@@ -1399,5 +1426,56 @@ mod tests {
                 "expected '{value}' to be non-numeric"
             );
         }
+    }
+
+    #[test]
+    fn value_of_a_backed_enum_expands_to_its_literal_union() {
+        let fixture = fixture(&["<?php enum Status: string {\n\
+             case Active = 'active';\n\
+             case Retired = 'retired';\n\
+         }"]);
+        let db = &fixture.db;
+        let value_of_status = TypeId::value_of(db, TypeId::class(db, "Status", vec![]));
+        let literals = TypeId::union(
+            db,
+            [
+                TypeId::string_literal(db, "active"),
+                TypeId::string_literal(db, "retired"),
+            ],
+        );
+        assert_eq!(judge(&fixture, value_of_status, literals), Proof::Holds);
+        assert_eq!(
+            judge(
+                &fixture,
+                TypeId::string_literal(db, "active"),
+                value_of_status
+            ),
+            Proof::Holds,
+        );
+        assert_eq!(
+            judge(
+                &fixture,
+                TypeId::string_literal(db, "ghost"),
+                value_of_status
+            ),
+            Proof::Fails,
+        );
+    }
+
+    #[test]
+    fn value_of_a_pure_or_unknown_enum_stays_symbolic() {
+        let fixture = fixture(&["<?php enum Suit { case Hearts; }"]);
+        let db = &fixture.db;
+        let value_of_suit = TypeId::value_of(db, TypeId::class(db, "Suit", vec![]));
+        // No backing values: undecidable, exactly as before this task.
+        assert_eq!(
+            judge(&fixture, value_of_suit, TypeId::string(db)),
+            Proof::CannotProve,
+        );
+        let value_of_ghost = TypeId::value_of(db, TypeId::class(db, "Ghost", vec![]));
+        assert_eq!(
+            judge(&fixture, value_of_ghost, TypeId::string(db)),
+            Proof::CannotProve,
+        );
     }
 }
