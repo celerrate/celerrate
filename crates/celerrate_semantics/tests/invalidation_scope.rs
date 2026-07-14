@@ -16,9 +16,10 @@ use celerrate_db::SourceFile;
 use celerrate_db::testing::TestDatabase;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    MemberKind, MemberQuery, SymbolQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables,
-    ast_id_map, folded_symbol_key, item_tree, lookup_member, lookup_symbol, member_tree,
-    reference_diagnostics, resolve_name, source_symbol_table, syntax_version_diagnostics,
+    AstId, BodyQuery, MemberKind, MemberQuery, SymbolQuery, SymbolResolution, SymbolSources,
+    SymbolSpace, UseTables, ast_id_map, body_ir, folded_symbol_key, item_tree, lookup_member,
+    lookup_symbol, member_tree, reference_diagnostics, resolve_name, source_symbol_table,
+    syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
@@ -925,5 +926,157 @@ fn adding_a_member_to_an_unrelated_class_spares_the_asker() {
         executions_of(&log, "linearized_class"),
         0,
         "Base's linearization read nothing from Unrelated's file: {log:?}",
+    );
+}
+
+/// A stand-in for plan 5's inference: any query that reads one body's
+/// IR and nothing else syntactic. If the IR backdates, this must never
+/// re-run.
+#[salsa::tracked]
+fn body_statement_count<'db>(
+    db: &'db dyn salsa::Database,
+    file: SourceFile,
+    body: BodyQuery<'db>,
+) -> usize {
+    body_ir(db, file, body)
+        .as_ref()
+        .map_or(0, |ir| ir.statements.len())
+}
+
+/// `BodyQuery<'db>` is interned against a borrow of `db`; recreating it
+/// through a helper (rather than holding one value across a `set_bytes`
+/// mutation) is the same accommodation the file's other interned
+/// queries (`SymbolQuery`, `MemberQuery`) already make. Interning is
+/// content-addressed by `AstId`, so a fresh call after an edit still
+/// names the same logical body and adds no entry to the execution log.
+fn body_at(db: &TestDatabase, index: u32) -> BodyQuery<'_> {
+    BodyQuery::new(
+        db,
+        AstId {
+            file: FileId::new(0),
+            index,
+        },
+    )
+}
+
+#[test]
+fn a_body_edit_reruns_only_that_bodys_consumers() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php function f() { return 1; } function g() { return 2; }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php function f() { return 9; } function g() { return 2; }".to_vec());
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    let log = db.take_executed();
+
+    // Both lowerings re-run (they read the parse), g's IR backdates:
+    // only f's consumer re-executes.
+    assert_eq!(executions_of(&log, "body_ir"), 2);
+    assert_eq!(executions_of(&log, "body_statement_count"), 1);
+}
+
+#[test]
+fn a_prose_comment_edit_inside_a_body_spares_body_consumers() {
+    // The redefined comment-only edit class, observed end to end.
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php function f() { // draft\n return 1; }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    db.take_executed();
+
+    file.set_bytes(&mut db)
+        .to(b"<?php function f() { // final\n return 1; }".to_vec());
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    let log = db.take_executed();
+
+    assert_eq!(executions_of(&log, "body_ir"), 1);
+    assert_eq!(executions_of(&log, "body_statement_count"), 0);
+}
+
+#[test]
+fn an_annotation_edit_inside_a_body_reruns_body_consumers() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php function f() { /** @var User $u */ $u; // @phpstan-ignore-next-line\n $x; }"
+            .to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    db.take_executed();
+
+    // An inline @var edit is a code edit for the type engine.
+    file.set_bytes(&mut db).to(
+        b"<?php function f() { /** @var Admin $u */ $u; // @phpstan-ignore-next-line\n $x; }"
+            .to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    assert_eq!(
+        executions_of(&db.take_executed(), "body_statement_count"),
+        1
+    );
+
+    // So is a suppression-directive edit.
+    file.set_bytes(&mut db).to(
+        b"<?php function f() { /** @var Admin $u */ $u; // @phpstan-ignore-line\n $x; }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 0));
+    assert_eq!(
+        executions_of(&db.take_executed(), "body_statement_count"),
+        1
+    );
+}
+
+#[test]
+fn signature_formatting_and_member_docblock_edits_spare_body_consumers() {
+    let mut db = TestDatabase::default();
+    let file = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php class A { /** doc */ public function m(int $a) { if ($a) return 1; } }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    db.take_executed();
+
+    // A signature edit: parameters live in the member tree, not here.
+    file.set_bytes(&mut db).to(
+        b"<?php class A { /** doc */ public function m(int $a, int $b = 0) { if ($a) return 1; } }"
+            .to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    assert_eq!(
+        executions_of(&db.take_executed(), "body_statement_count"),
+        0
+    );
+
+    // A member-docblock edit: the docblock belongs to the member tree.
+    file.set_bytes(&mut db).to(
+        b"<?php class A { /** other doc */ public function m(int $a, int $b = 0) { if ($a) return 1; } }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    assert_eq!(
+        executions_of(&db.take_executed(), "body_statement_count"),
+        0
+    );
+
+    // A brace-style edit: the dissolution rule makes it formatting.
+    file.set_bytes(&mut db).to(
+        b"<?php class A { /** other doc */ public function m(int $a, int $b = 0) { if ($a) { return 1; } } }".to_vec(),
+    );
+    let _ = body_statement_count(&db, file, body_at(&db, 1));
+    assert_eq!(
+        executions_of(&db.take_executed(), "body_statement_count"),
+        0
     );
 }

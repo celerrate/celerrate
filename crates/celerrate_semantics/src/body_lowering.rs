@@ -1919,4 +1919,239 @@ mod tests {
             body("<?php function f() { $g = function () { /** @var A $a */ $a; }; }");
         assert_eq!(with_closure.annotations.len(), 1);
     }
+
+    /// Every id stored anywhere in the IR must land inside its arena:
+    /// the dense-arena integrity invariant, checked exhaustively.
+    fn assert_well_formed(ir: &BodyIr) {
+        let expression = |id: &crate::body::ExpressionId| {
+            assert!(ir.expression(*id).is_some(), "dangling expression id");
+        };
+        let optional = |id: &Option<crate::body::ExpressionId>| {
+            if let Some(id) = id {
+                expression(id);
+            }
+        };
+        let statements = |ids: &[crate::body::StatementId]| {
+            for id in ids {
+                assert!(ir.statement(*id).is_some(), "dangling statement id");
+            }
+        };
+        statements(&ir.root);
+        for annotation in &ir.annotations {
+            if let Some(anchor) = annotation.anchor {
+                assert!(ir.statement(anchor).is_some(), "dangling annotation anchor");
+            }
+        }
+        for statement in &ir.statements {
+            match statement {
+                BodyStatement::Missing
+                | BodyStatement::Goto { .. }
+                | BodyStatement::Label { .. }
+                | BodyStatement::Declaration { .. } => {}
+                BodyStatement::Expression { expression: id } => expression(id),
+                BodyStatement::Block { statements: ids }
+                | BodyStatement::Declare { statements: ids } => statements(ids),
+                BodyStatement::Return { value } => optional(value),
+                BodyStatement::If {
+                    condition,
+                    then_branch,
+                    else_branch,
+                } => {
+                    expression(condition);
+                    statements(then_branch);
+                    statements(else_branch);
+                }
+                BodyStatement::While { condition, body } => {
+                    expression(condition);
+                    statements(body);
+                }
+                BodyStatement::DoWhile { body, condition } => {
+                    statements(body);
+                    expression(condition);
+                }
+                BodyStatement::For {
+                    initializers,
+                    conditions,
+                    updates,
+                    body,
+                } => {
+                    initializers.iter().for_each(&expression);
+                    conditions.iter().for_each(&expression);
+                    updates.iter().for_each(&expression);
+                    statements(body);
+                }
+                BodyStatement::Foreach {
+                    subject,
+                    key,
+                    value,
+                    body,
+                    ..
+                } => {
+                    expression(subject);
+                    optional(key);
+                    expression(value);
+                    statements(body);
+                }
+                BodyStatement::Switch { subject, cases } => {
+                    expression(subject);
+                    for case in cases {
+                        optional(&case.condition);
+                        statements(&case.statements);
+                    }
+                }
+                BodyStatement::Try {
+                    body: try_body,
+                    catches,
+                    finally,
+                } => {
+                    statements(try_body);
+                    for catch in catches {
+                        statements(&catch.statements);
+                    }
+                    if let Some(finally) = finally {
+                        statements(finally);
+                    }
+                }
+                BodyStatement::Echo { values: ids }
+                | BodyStatement::Unset { targets: ids }
+                | BodyStatement::Global { targets: ids } => ids.iter().for_each(&expression),
+                BodyStatement::StaticVariables { variables } => {
+                    for variable in variables {
+                        optional(&variable.initializer);
+                    }
+                }
+                BodyStatement::Break { level } | BodyStatement::Continue { level } => {
+                    optional(level);
+                }
+            }
+        }
+        for lowered in &ir.expressions {
+            match lowered {
+                BodyExpression::Missing
+                | BodyExpression::Literal { .. }
+                | BodyExpression::Variable { .. }
+                | BodyExpression::NamedReference { .. } => {}
+                BodyExpression::DynamicVariable { target: id }
+                | BodyExpression::Unary { operand: id, .. }
+                | BodyExpression::Postfix { operand: id, .. }
+                | BodyExpression::Cast { operand: id, .. }
+                | BodyExpression::NullSafeChain { chain: id }
+                | BodyExpression::CallableReference { callee: id }
+                | BodyExpression::Empty { target: id }
+                | BodyExpression::Eval { argument: id }
+                | BodyExpression::Print { operand: id }
+                | BodyExpression::Clone { operand: id }
+                | BodyExpression::Throw { operand: id }
+                | BodyExpression::Include { operand: id, .. }
+                | BodyExpression::ArrowFunction { body: id, .. } => expression(id),
+                BodyExpression::Binary { lhs, rhs, .. } => {
+                    expression(lhs);
+                    expression(rhs);
+                }
+                BodyExpression::Assignment { target, value, .. } => {
+                    expression(target);
+                    expression(value);
+                }
+                BodyExpression::Ternary {
+                    condition,
+                    middle,
+                    alternative,
+                } => {
+                    expression(condition);
+                    optional(middle);
+                    expression(alternative);
+                }
+                BodyExpression::MemberAccess {
+                    receiver, member, ..
+                } => {
+                    expression(receiver);
+                    if let crate::body::MemberReference::Computed { expression: id } = member {
+                        expression(id);
+                    }
+                }
+                BodyExpression::ScopedAccess { subject, member } => {
+                    expression(subject);
+                    if let crate::body::MemberReference::Computed { expression: id } = member {
+                        expression(id);
+                    }
+                }
+                BodyExpression::Call { callee, arguments } => {
+                    expression(callee);
+                    for argument in arguments {
+                        expression(&argument.value);
+                    }
+                }
+                BodyExpression::New { class, arguments } => {
+                    if let crate::body::ClassReference::Dynamic { expression: id } = class {
+                        expression(id);
+                    }
+                    for argument in arguments {
+                        expression(&argument.value);
+                    }
+                }
+                BodyExpression::Index { subject, index } => {
+                    expression(subject);
+                    optional(index);
+                }
+                BodyExpression::Array { entries } => {
+                    for entry in entries {
+                        if let ArrayEntry::Element { key, value, .. } = entry {
+                            optional(key);
+                            expression(value);
+                        }
+                    }
+                }
+                BodyExpression::InterpolatedString { parts }
+                | BodyExpression::ShellExec { parts } => {
+                    for part in parts {
+                        if let StringPart::Interpolation { expression: id } = part {
+                            expression(id);
+                        }
+                    }
+                }
+                BodyExpression::Isset { targets } => targets.iter().for_each(&expression),
+                BodyExpression::Exit { argument } => optional(argument),
+                BodyExpression::Yield { key, value, .. } => {
+                    optional(key);
+                    optional(value);
+                }
+                BodyExpression::Match { subject, arms } => {
+                    expression(subject);
+                    for arm in arms {
+                        arm.conditions.iter().for_each(&expression);
+                        expression(&arm.body);
+                    }
+                }
+                BodyExpression::Closure { body, .. } => statements(body),
+            }
+        }
+    }
+
+    #[test]
+    fn adversarial_inputs_lower_without_failure_and_stay_well_formed() {
+        let sources = [
+            "<?php function f() { if ( } ",
+            "<?php function f() { $a?-> ",
+            "<?php function f() { foo(, 1, label:, ...$x ",
+            "<?php function f() { match ($x) { 1 => , => 2 } }",
+            "<?php function f() { \"unterminated $x ",
+            "<?php function f() { [, , &, ...] = $p; }",
+            "<?php function f() { new class { function } ; }",
+            "<?php function f() { fn () => fn () => function () { yield; }; }",
+            "<?php function f() { try { } catch () { } finally }",
+            "<?php function f() { $$ ; ${ } ; ->x ; ::y ; }",
+        ];
+        for source in sources {
+            let parse = celerrate_syntax::parse(source);
+            let root = parse.tree();
+            let map = crate::ast_id::AstIdMap::from_root(&root);
+            for node in root.descendants() {
+                if let Some((ir, _)) =
+                    super::lower_body(celerrate_source::FileId::new(0), &map, &node)
+                {
+                    assert_well_formed(&ir);
+                }
+            }
+        }
+    }
 }

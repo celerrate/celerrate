@@ -4,6 +4,11 @@
 //! edits; the item tree (later modules) is the range-free,
 //! `Eq`-comparable projection of one file's declarations that gives
 //! salsa its early cutoff.
+//!
+//! One level down, the body IR (`body_ir`) lowers each function or
+//! method body into a range-free arena behind the same split: spans
+//! reconcile late through `body_source_map`, and only code plus
+//! recognized annotation content invalidates body consumers.
 
 mod ast_id;
 mod body;
