@@ -232,7 +232,10 @@ name = "celerrate_types"
 version = "0.0.2"
 dependencies = [
  "celerrate_db",
+ "celerrate_project",
  "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_stubs",
  "salsa",
 ]
 
