@@ -5,23 +5,32 @@
 //! lowers to `mixed`: a documented sound widening (no top-of-callables
 //! form exists in the lattice; recorded debt, revisited by plan 8).
 
-use celerrate_semantics::{SymbolSpace, UseTables, resolve_candidates};
+use celerrate_db::AnalyzedFileSet;
+use celerrate_project::ProjectConfiguration;
+use celerrate_semantics::{
+    Member, MemberKind, MemberQuery, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index,
+    item_tree, lookup_class_declaration, lookup_function_declaration, lookup_member, member_tree,
+    resolve_candidates,
+};
+use celerrate_stubs::StubIndexInput;
 
 use crate::representation::TypeId;
 use crate::written::{WrittenType, parse_written};
 
 /// Where a written name qualifies: a source declaring site (namespace
 /// plus `use` tables) or the global context (stub type texts).
-#[allow(dead_code)]
 pub(crate) enum NameSite<'a> {
     Source {
         namespace: &'a str,
         tables: &'a UseTables,
     },
+    // Not constructed yet: the stub arms of tasks 10-11 build sites over
+    // global (stub) type texts. Kept in the grammar so `lower_name`
+    // already matches exhaustively over both sites.
+    #[allow(dead_code)]
     Global,
 }
 
-#[allow(dead_code)]
 pub(crate) fn lower_written_text<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
@@ -30,7 +39,6 @@ pub(crate) fn lower_written_text<'db>(
     Some(lower_written(db, site, &parse_written(text)?))
 }
 
-#[allow(dead_code)]
 pub(crate) fn lower_written<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
@@ -107,9 +115,271 @@ fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String {
     }
 }
 
+/// How a declared element's final type was obtained — the trace the
+/// design requires for annotation refinement (tasks 5-6 set the
+/// non-native variants; the ground-truth harness of plan 6 reads it).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum Trust {
+    /// No annotation: the native declaration (or `mixed`) stands.
+    NativeOnly,
+    /// The annotation refines the native declaration (subtype: Holds).
+    Refined,
+    /// The annotation refines through an unproven judgment
+    /// (CannotProve — template types, principally): trusted, traced.
+    RefinedUnproven,
+    /// The annotation contradicts the native declaration (Fails):
+    /// ignored, the native declaration wins.
+    RejectedAnnotation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct DeclaredParameter<'db> {
+    pub name: String,
+    /// `None` silences every check on this parameter (the stub range
+    /// rule's degenerate case, decision 6). An untyped parameter is
+    /// `Some(mixed)`, never `None`.
+    pub parameter_type: Option<TypeId<'db>>,
+    pub trust: Trust,
+    pub optional: bool,
+    pub variadic: bool,
+    pub by_reference: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct DeclaredSignature<'db> {
+    /// Methods and functions; empty for properties, constants, cases.
+    pub parameters: Vec<DeclaredParameter<'db>>,
+    /// The return type (methods, functions), the property type, the
+    /// constant type, or the enum-case type.
+    pub value_type: TypeId<'db>,
+    pub value_trust: Trust,
+    pub by_reference: bool,
+}
+
+#[salsa::tracked]
+pub fn declared_member_signature<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    query: MemberQuery<'db>,
+) -> Option<DeclaredSignature<'db>> {
+    let resolution = lookup_member(db, files, stubs, configuration, query)?;
+    let site_parts = declaring_site(db, files, &resolution.owner)?;
+    let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
+    let site = NameSite::Source {
+        namespace: &site_parts.namespace,
+        tables: &tables,
+    };
+    Some(resolve_member_signature(
+        db,
+        &site,
+        &resolution.owner,
+        &resolution.member,
+    ))
+}
+
+/// The declaring site of one source class-like: its file handle and
+/// namespace, found through the same firewalls linearization uses.
+struct DeclaringSite {
+    file: celerrate_db::SourceFile,
+    namespace: String,
+}
+
+fn declaring_site(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    owner_key: &str,
+) -> Option<DeclaringSite> {
+    let query = SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned());
+    let (_, ast_id) = lookup_class_declaration(db, files, query)?;
+    let index = analyzed_file_index(db, files);
+    let position = index
+        .binary_search_by_key(&ast_id.file, |(id, _)| *id)
+        .ok()?;
+    let (_, file) = *index.get(position)?;
+    let namespace = member_tree(db, file)
+        .classes
+        .iter()
+        .find(|group| group.ast_id == ast_id)?
+        .namespace
+        .clone();
+    Some(DeclaringSite { file, namespace })
+}
+
+/// Resolves one member's written signature at its declaring site.
+/// Annotations join in tasks 5-6; every element is `NativeOnly` here.
+fn resolve_member_signature<'db>(
+    db: &'db dyn salsa::Database,
+    site: &NameSite<'_>,
+    owner_key: &str,
+    member: &Member,
+) -> DeclaredSignature<'db> {
+    let value_type = match member.kind {
+        MemberKind::EnumCase => TypeId::enum_case(db, owner_key, &member.name),
+        // Task 10 reshapes `MemberResolution` into an enum; until then
+        // this stays the current struct, destructured as such.
+        MemberKind::ClassConstant => match member.signature.type_text.as_deref() {
+            Some(text) => lowered_or_mixed(db, site, Some(text)),
+            None => member
+                .signature
+                .default_text
+                .as_deref()
+                .and_then(|text| literal_type_of_default(db, text))
+                .unwrap_or_else(|| TypeId::mixed(db)),
+        },
+        MemberKind::Method | MemberKind::Property => {
+            lowered_or_mixed(db, site, member.signature.type_text.as_deref())
+        }
+    };
+    DeclaredSignature {
+        parameters: member
+            .signature
+            .parameters
+            .iter()
+            .map(|parameter| declared_parameter(db, site, parameter))
+            .collect(),
+        value_type,
+        value_trust: Trust::NativeOnly,
+        by_reference: member.signature.by_reference,
+    }
+}
+
+fn declared_parameter<'db>(
+    db: &'db dyn salsa::Database,
+    site: &NameSite<'_>,
+    parameter: &celerrate_semantics::ParameterSignature,
+) -> DeclaredParameter<'db> {
+    let mut parameter_type = lowered_or_mixed(db, site, parameter.type_text.as_deref());
+    // Implicit nullability (design section 2): `Type $x = null`.
+    if parameter
+        .default_text
+        .as_deref()
+        .is_some_and(|text| text.eq_ignore_ascii_case("null"))
+    {
+        parameter_type = TypeId::union(db, [parameter_type, TypeId::null(db)]);
+    }
+    DeclaredParameter {
+        name: parameter.name.clone(),
+        parameter_type: Some(parameter_type),
+        trust: Trust::NativeOnly,
+        optional: parameter.default_text.is_some() || parameter.variadic,
+        variadic: parameter.variadic,
+        by_reference: parameter.by_reference,
+    }
+}
+
+/// Written text to lattice type: absent or malformed text is `mixed`
+/// (resilience: a signature the parser mangled must never error).
+fn lowered_or_mixed<'db>(
+    db: &'db dyn salsa::Database,
+    site: &NameSite<'_>,
+    text: Option<&str>,
+) -> TypeId<'db> {
+    text.and_then(|text| lower_written_text(db, site, text))
+        .unwrap_or_else(|| TypeId::mixed(db))
+}
+
+/// The literal type of a comparable default text (`expression_text`
+/// form: tokens joined with one space): integers (optionally `- `
+/// prefixed), floats, single-quoted strings, `true`/`false`/`null`.
+/// Anything else — expressions, constants, arrays — is `None`.
+fn literal_type_of_default<'db>(db: &'db dyn salsa::Database, text: &str) -> Option<TypeId<'db>> {
+    let trimmed = text.trim();
+    if trimmed.eq_ignore_ascii_case("true") {
+        return Some(TypeId::bool_literal(db, true));
+    }
+    if trimmed.eq_ignore_ascii_case("false") {
+        return Some(TypeId::bool_literal(db, false));
+    }
+    if trimmed.eq_ignore_ascii_case("null") {
+        return Some(TypeId::null(db));
+    }
+    if let Some(unquoted) = trimmed
+        .strip_prefix('\'')
+        .and_then(|rest| rest.strip_suffix('\''))
+    {
+        // Single-quoted with no escapes: the raw content is the value.
+        if !unquoted.contains('\\') && !unquoted.contains('\'') {
+            return Some(TypeId::string_literal(db, unquoted));
+        }
+        return None;
+    }
+    let (negative, digits) = match trimmed.strip_prefix("- ") {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+    if digits.bytes().all(|byte| byte.is_ascii_digit()) && !digits.is_empty() {
+        let value = digits.parse::<i64>().ok()?;
+        return Some(TypeId::int_literal(
+            db,
+            if negative { -value } else { value },
+        ));
+    }
+    if let Ok(value) = digits.parse::<f64>()
+        && digits.contains('.')
+    {
+        return Some(TypeId::float_literal(
+            db,
+            if negative { -value } else { value },
+        ));
+    }
+    None
+}
+
+#[salsa::interned(debug)]
+pub struct FunctionQuery<'db> {
+    /// Pre-folded Function-space key.
+    #[returns(ref)]
+    pub key: String,
+}
+
+// `stubs` and `configuration` are unread on this source-only arm: they
+// are part of the salsa memoization key on purpose (task 10/11 add the
+// stub arm behind this same signature; the persistent-cache plugin-set
+// key of plan 9a needs them recorded).
+#[allow(unused_variables)]
+#[salsa::tracked]
+pub fn declared_function_signature<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    query: FunctionQuery<'db>,
+) -> Option<DeclaredSignature<'db>> {
+    let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
+    let ast_id = lookup_function_declaration(db, files, symbol_query)?;
+    let index = analyzed_file_index(db, files);
+    let position = index
+        .binary_search_by_key(&ast_id.file, |(id, _)| *id)
+        .ok()?;
+    let (_, file) = *index.get(position)?;
+    let function = member_tree(db, file)
+        .functions
+        .iter()
+        .find(|function| function.ast_id == ast_id)?
+        .clone();
+    let tables = UseTables::for_namespace(item_tree(db, file), &function.namespace);
+    let site = NameSite::Source {
+        namespace: &function.namespace,
+        tables: &tables,
+    };
+    Some(DeclaredSignature {
+        parameters: function
+            .signature
+            .parameters
+            .iter()
+            .map(|parameter| declared_parameter(db, &site, parameter))
+            .collect(),
+        value_type: lowered_or_mixed(db, &site, function.signature.type_text.as_deref()),
+        value_trust: Trust::NativeOnly,
+        by_reference: function.signature.by_reference,
+    })
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use celerrate_db::testing::TestDatabase;
 
@@ -240,5 +510,207 @@ mod tests {
         let db = TestDatabase::default();
         assert_eq!(lower(&db, ""), None);
         assert_eq!(lower(&db, "A|"), None);
+    }
+
+    use celerrate_db::{AnalyzedFileSet, SourceFile};
+    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
+    use celerrate_semantics::{
+        MemberKind, MemberQuery, SymbolSpace, folded_member_key, folded_symbol_key,
+    };
+    use celerrate_source::FileId;
+    use celerrate_stubs::{StubIndex, StubIndexInput};
+
+    use super::{
+        DeclaredSignature, FunctionQuery, Trust, declared_function_signature,
+        declared_member_signature,
+    };
+
+    struct Fixture {
+        db: TestDatabase,
+        files: AnalyzedFileSet,
+        stubs: StubIndexInput,
+        configuration: ProjectConfiguration,
+    }
+
+    fn fixture(sources: &[&str]) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    fn member<'db>(
+        fixture: &'db Fixture,
+        class_written: &str,
+        kind: MemberKind,
+        member_written: &str,
+    ) -> Option<DeclaredSignature<'db>> {
+        let query = MemberQuery::new(
+            &fixture.db,
+            folded_symbol_key(SymbolSpace::ClassLike, class_written),
+            kind,
+            folded_member_key(kind, member_written),
+        );
+        declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+    }
+
+    #[test]
+    fn a_method_signature_resolves_at_its_declaring_site() {
+        let fixture = fixture(&["<?php namespace App;\n\
+             use Psr\\Log\\LoggerInterface as Logger;\n\
+             class Service {\n\
+                 public function handle(Logger $logger, int $count = 3): ?string {}\n\
+             }"]);
+        let signature = member(&fixture, "App\\Service", MemberKind::Method, "handle").unwrap();
+        let db = &fixture.db;
+        assert_eq!(signature.parameters.len(), 2);
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::class(db, "Psr\\Log\\LoggerInterface", vec![])),
+        );
+        assert!(!signature.parameters[0].optional);
+        assert_eq!(
+            signature.parameters[1].parameter_type,
+            Some(TypeId::int(db))
+        );
+        assert!(signature.parameters[1].optional);
+        assert_eq!(
+            signature.value_type,
+            TypeId::union(db, [TypeId::string(db), TypeId::null(db)]),
+        );
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn an_untyped_parameter_is_mixed_and_a_null_default_makes_it_nullable() {
+        let fixture = fixture(&[
+            "<?php class C { public function f($anything, ?Logger $log = null, Widget $w = null) {} }",
+        ]);
+        let signature = member(&fixture, "C", MemberKind::Method, "f").unwrap();
+        let db = &fixture.db;
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::mixed(db))
+        );
+        // `= null` on an already-nullable type changes nothing.
+        let nullable_logger =
+            TypeId::union(db, [TypeId::class(db, "Logger", vec![]), TypeId::null(db)]);
+        assert_eq!(
+            signature.parameters[1].parameter_type,
+            Some(nullable_logger)
+        );
+        // Implicit nullability: `Widget $w = null` admits null.
+        let nullable_widget =
+            TypeId::union(db, [TypeId::class(db, "Widget", vec![]), TypeId::null(db)]);
+        assert_eq!(
+            signature.parameters[2].parameter_type,
+            Some(nullable_widget)
+        );
+        // No declared return: mixed.
+        assert_eq!(signature.value_type, TypeId::mixed(db));
+    }
+
+    #[test]
+    fn properties_constants_and_enum_cases_declare_their_value_types() {
+        let fixture = fixture(&["<?php\n\
+             class C {\n\
+                 public ?int $count;\n\
+                 public $untyped;\n\
+                 const ACTIVE = 'active';\n\
+                 const int LIMIT = 10;\n\
+             }\n\
+             enum Status: string { case Active = 'active'; }"]);
+        let db = &fixture.db;
+        let count = member(&fixture, "C", MemberKind::Property, "count").unwrap();
+        assert_eq!(
+            count.value_type,
+            TypeId::union(db, [TypeId::int(db), TypeId::null(db)]),
+        );
+        let untyped = member(&fixture, "C", MemberKind::Property, "untyped").unwrap();
+        assert_eq!(untyped.value_type, TypeId::mixed(db));
+        // An untyped constant with a literal default carries the literal.
+        let active = member(&fixture, "C", MemberKind::ClassConstant, "ACTIVE").unwrap();
+        assert_eq!(active.value_type, TypeId::string_literal(db, "active"));
+        // A typed constant (8.3) uses its written type.
+        let limit = member(&fixture, "C", MemberKind::ClassConstant, "LIMIT").unwrap();
+        assert_eq!(limit.value_type, TypeId::int(db));
+        let case = member(&fixture, "Status", MemberKind::EnumCase, "Active").unwrap();
+        assert_eq!(case.value_type, TypeId::enum_case(db, "Status", "Active"));
+    }
+
+    #[test]
+    fn an_inherited_member_resolves_in_the_declaring_class_namespace() {
+        let fixture = fixture(&[
+            "<?php namespace Lib; class Base { public function make(): Widget {} }",
+            "<?php namespace App; class Child extends \\Lib\\Base {}",
+        ]);
+        let signature = member(&fixture, "App\\Child", MemberKind::Method, "make").unwrap();
+        // `Widget` qualifies in Lib (the declaring site), never in App.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "Lib\\Widget", vec![]),
+        );
+    }
+
+    #[test]
+    fn a_free_function_signature_resolves_like_a_method() {
+        let fixture = fixture(&["<?php namespace App; function build(int $count): ?Widget {}"]);
+        let query = FunctionQuery::new(
+            &fixture.db,
+            folded_symbol_key(SymbolSpace::Function, "App\\build"),
+        );
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        let db = &fixture.db;
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::int(db))
+        );
+        assert_eq!(
+            signature.value_type,
+            TypeId::union(
+                db,
+                [TypeId::class(db, "App\\Widget", vec![]), TypeId::null(db)]
+            ),
+        );
+    }
+
+    #[test]
+    fn unknown_members_and_malformed_types_degrade_cleanly() {
+        let fixture = fixture(&["<?php class C { public function f(): int {} }"]);
+        assert!(member(&fixture, "C", MemberKind::Method, "ghost").is_none());
+        assert!(member(&fixture, "Ghost", MemberKind::Method, "f").is_none());
     }
 }

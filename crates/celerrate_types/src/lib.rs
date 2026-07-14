@@ -63,6 +63,10 @@ mod representation;
 mod widening;
 mod written;
 
+pub use declared::{
+    DeclaredParameter, DeclaredSignature, FunctionQuery, Trust, declared_function_signature,
+    declared_member_signature,
+};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};
