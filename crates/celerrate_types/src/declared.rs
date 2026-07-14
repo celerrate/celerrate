@@ -529,15 +529,25 @@ fn lowered_at_version<'db>(
 
 /// The union across the range: the least restrictive reading of a
 /// call's result (the parent spec's section 2). A version with no
-/// declared text contributes `mixed`.
+/// declared text contributes `mixed`. An empty `versions_in_range`
+/// (the configured range misses every supported version; unreachable
+/// from the composition root today, ranges are clamped to supported
+/// versions) answers `mixed`, mirroring the parameter side's
+/// degenerate guard: `TypeId::union(db, [])` would otherwise
+/// canonicalize to `never`, weaponizing the empty range into a bottom
+/// type instead of silencing it.
 fn value_type_across_range<'db>(
     db: &'db dyn salsa::Database,
     range: PhpVersionRange,
     text: &VersionedTypeText,
 ) -> TypeId<'db> {
+    let versions = versions_in_range(range);
+    if versions.is_empty() {
+        return TypeId::mixed(db);
+    }
     TypeId::union(
         db,
-        versions_in_range(range)
+        versions
             .into_iter()
             .map(|version| lowered_at_version(db, text, version)),
     )
@@ -1652,6 +1662,33 @@ mod tests {
             declared.parameters[0].parameter_type,
             Some(TypeId::string(db))
         );
+    }
+
+    #[test]
+    fn an_empty_supported_version_window_widens_the_stub_return_type_to_mixed() {
+        // The configured range (a point at 9.0) misses every supported
+        // version (8.1-8.5): `versions_in_range` is empty. The parameter
+        // side already has a degenerate guard for this (empty -> mixed);
+        // the value side must match it rather than folding an empty
+        // union to `never` (the exact "weaponized never" the guard
+        // exists to prevent). Unreachable from the composition root
+        // today (ranges are clamped to supported versions during
+        // discovery), so this fixture constructs it directly through
+        // the stub-signature path.
+        let strlen = StubSignature {
+            parameters: vec![],
+            return_type: VersionedTypeText::from_text(Some("int".to_owned())),
+            by_reference: false,
+        };
+        let fixture = fixture_with_stub_payload_in_range(
+            &["<?php"],
+            vec![("strlen".to_owned(), strlen)],
+            vec![],
+            PhpVersionRange::point(PhpVersion::new(9, 0)),
+        );
+        let db = &fixture.db;
+        let signature = function(&fixture, "strlen").unwrap();
+        assert_eq!(signature.value_type, TypeId::mixed(db));
     }
 
     #[test]
