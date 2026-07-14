@@ -6,14 +6,16 @@
 //! form exists in the lattice; recorded debt, revisited by plan 8).
 
 use celerrate_db::AnalyzedFileSet;
-use celerrate_project::ProjectConfiguration;
+use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration, SUPPORTED_VERSIONS};
 use celerrate_semantics::{
     AstId, ClassQuery, LinearizedClass, Member, MemberKind, MemberQuery, MemberResolution,
     SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, folded_member_key, item_tree,
     linearized_class, lookup_class_declaration, lookup_function_declaration, lookup_member,
-    member_tree, resolve_candidates,
+    member_tree, resolve_candidates, stub_signature_table,
 };
-use celerrate_stubs::StubIndexInput;
+use celerrate_stubs::{
+    StubIndexInput, StubMember, StubMemberKind, StubParameter, StubSignature, VersionedTypeText,
+};
 
 use crate::representation::TypeId;
 use crate::written::{WrittenType, parse_written};
@@ -25,10 +27,8 @@ pub(crate) enum NameSite<'a> {
         namespace: &'a str,
         tables: &'a UseTables,
     },
-    // Not constructed yet: the stub arms of tasks 10-11 build sites over
-    // global (stub) type texts. Kept in the grammar so `lower_name`
-    // already matches exhaustively over both sites.
-    #[allow(dead_code)]
+    /// The global context: stub type texts qualify without namespaces
+    /// or `use` tables.
     Global,
 }
 
@@ -281,8 +281,18 @@ pub fn declared_member_signature<'db>(
 ) -> Option<DeclaredSignature<'db>> {
     let (member, owner) = match lookup_member(db, files, stubs, configuration, query)? {
         MemberResolution::Source { member, owner, .. } => (member, owner),
-        // Task 11 fills the stub arm.
-        MemberResolution::Stub { .. } => return None,
+        MemberResolution::Stub { member, owner } => {
+            let range = configuration.php_version_range(db);
+            return Some(resolve_stub_member_signature(
+                db,
+                files,
+                stubs,
+                configuration,
+                range,
+                &owner,
+                &member,
+            ));
+        }
     };
     let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
@@ -495,6 +505,191 @@ fn lowered_or_mixed<'db>(
         .unwrap_or_else(|| TypeId::mixed(db))
 }
 
+/// The supported versions inside the configured range, ascending.
+fn versions_in_range(range: PhpVersionRange) -> Vec<PhpVersion> {
+    SUPPORTED_VERSIONS
+        .iter()
+        .copied()
+        .filter(|version| *version >= range.minimum && *version <= range.maximum)
+        .collect()
+}
+
+/// One versioned text lowered at one version, in the global context.
+/// Missing or malformed text is `mixed` (an undeclared type at that
+/// version constrains nothing).
+fn lowered_at_version<'db>(
+    db: &'db dyn salsa::Database,
+    text: &VersionedTypeText,
+    version: PhpVersion,
+) -> TypeId<'db> {
+    text.at(version)
+        .and_then(|written| lower_written_text(db, &NameSite::Global, written))
+        .unwrap_or_else(|| TypeId::mixed(db))
+}
+
+/// The union across the range: the least restrictive reading of a
+/// call's result (the parent spec's section 2). A version with no
+/// declared text contributes `mixed`.
+fn value_type_across_range<'db>(
+    db: &'db dyn salsa::Database,
+    range: PhpVersionRange,
+    text: &VersionedTypeText,
+) -> TypeId<'db> {
+    TypeId::union(
+        db,
+        versions_in_range(range)
+            .into_iter()
+            .map(|version| lowered_at_version(db, text, version)),
+    )
+}
+
+/// The most restrictive form across the range, or silence (decision
+/// 6): all per-version types equal answers that type; one of them a
+/// proven subtype of every other answers that one; otherwise `None` —
+/// the empty intersection silences the check instead of weaponizing
+/// `never`. Candidates sort by their deterministic rendering before
+/// the search, so the winner is independent of override order (two
+/// candidates that are each subtypes of all others are equal types,
+/// so "first found after the sort" is stable).
+fn parameter_type_across_range<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    range: PhpVersionRange,
+    text: &VersionedTypeText,
+) -> Option<TypeId<'db>> {
+    let mut distinct: Vec<TypeId<'db>> = versions_in_range(range)
+        .into_iter()
+        .map(|version| lowered_at_version(db, text, version))
+        .collect();
+    distinct.sort_by_key(|type_id| type_id.display(db));
+    distinct.dedup();
+    match distinct.as_slice() {
+        [] => Some(TypeId::mixed(db)),
+        [single] => Some(*single),
+        several => several.iter().copied().find(|candidate| {
+            several.iter().all(|other| {
+                *other == *candidate
+                    || crate::judgments::subtype_of(
+                        db,
+                        files,
+                        stubs,
+                        configuration,
+                        *candidate,
+                        *other,
+                    ) == crate::judgments::Proof::Holds
+            })
+        }),
+    }
+}
+
+/// One stub member's declared signature under the range rule: the
+/// value type is the union across the range, parameters check against
+/// their most restrictive form or fall silent, and everything is
+/// `Trust::NativeOnly` (stubs carry no annotations to refine with).
+fn resolve_stub_member_signature<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    range: PhpVersionRange,
+    owner_key: &str,
+    member: &StubMember,
+) -> DeclaredSignature<'db> {
+    let value_only = |value_type: TypeId<'db>| DeclaredSignature {
+        parameters: Vec::new(),
+        value_type,
+        value_trust: Trust::NativeOnly,
+        by_reference: false,
+    };
+    match member.kind {
+        StubMemberKind::Method => match member.signature.as_ref() {
+            Some(signature) => {
+                resolve_stub_signature(db, files, stubs, configuration, range, signature)
+            }
+            None => value_only(TypeId::mixed(db)),
+        },
+        StubMemberKind::EnumCase => value_only(TypeId::enum_case(db, owner_key, &member.name)),
+        StubMemberKind::ClassConstant => {
+            if member.type_text == VersionedTypeText::default() {
+                value_only(
+                    member
+                        .value_text
+                        .as_deref()
+                        .and_then(|text| literal_type_of_default(db, text))
+                        .unwrap_or_else(|| TypeId::mixed(db)),
+                )
+            } else {
+                value_only(value_type_across_range(db, range, &member.type_text))
+            }
+        }
+        StubMemberKind::Property => {
+            value_only(value_type_across_range(db, range, &member.type_text))
+        }
+    }
+}
+
+/// One stub callable signature (a function or a method) under the
+/// range rule; shared by the member arm and the function query.
+fn resolve_stub_signature<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    range: PhpVersionRange,
+    signature: &StubSignature,
+) -> DeclaredSignature<'db> {
+    DeclaredSignature {
+        parameters: signature
+            .parameters
+            .iter()
+            .map(|parameter| {
+                declared_stub_parameter(db, files, stubs, configuration, range, parameter)
+            })
+            .collect(),
+        value_type: value_type_across_range(db, range, &signature.return_type),
+        value_trust: Trust::NativeOnly,
+        by_reference: signature.by_reference,
+    }
+}
+
+fn declared_stub_parameter<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    range: PhpVersionRange,
+    parameter: &StubParameter,
+) -> DeclaredParameter<'db> {
+    // A parameter that does not span the whole range is optional: a
+    // call omitting it must be legal somewhere in the range, so arity
+    // never over-reports (a parameter added in 8.2, minimum 8.1).
+    let spans_the_whole_range = parameter
+        .availability
+        .introduced
+        .is_none_or(|version| version <= range.minimum)
+        && parameter
+            .availability
+            .removed
+            .is_none_or(|version| version > range.maximum);
+    DeclaredParameter {
+        name: parameter.name.clone(),
+        parameter_type: parameter_type_across_range(
+            db,
+            files,
+            stubs,
+            configuration,
+            range,
+            &parameter.type_text,
+        ),
+        trust: Trust::NativeOnly,
+        optional: parameter.optional || !spans_the_whole_range,
+        variadic: parameter.variadic,
+        by_reference: parameter.by_reference,
+    }
+}
+
 /// The literal type of a comparable default text (`expression_text`
 /// form: tokens joined with one space): integers (optionally `- `
 /// prefixed), floats, single-quoted strings, `true`/`false`/`null`.
@@ -563,7 +758,16 @@ pub fn declared_function_signature<'db>(
     query: FunctionQuery<'db>,
 ) -> Option<DeclaredSignature<'db>> {
     let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
-    let ast_id = lookup_function_declaration(db, files, symbol_query)?;
+    let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
+        // No source declaration: consult the stub signature table
+        // under the range rule.
+        let range = configuration.php_version_range(db);
+        return stub_signature_table(db, stubs)
+            .function(query.key(db))
+            .map(|signature| {
+                resolve_stub_signature(db, files, stubs, configuration, range, signature)
+            });
+    };
     let index = analyzed_file_index(db, files);
     let position = index
         .binary_search_by_key(&ast_id.file, |(id, _)| *id)
@@ -735,7 +939,11 @@ mod tests {
         MemberKind, MemberQuery, SymbolSpace, folded_member_key, folded_symbol_key,
     };
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::{
+        StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
+        StubParameter, StubSignature, StubSymbol, StubSymbolKind, StubVisibility,
+        VersionedTypeText,
+    };
 
     use super::{
         DeclaredSignature, FunctionQuery, Trust, declared_function_signature,
@@ -1100,5 +1308,276 @@ mod tests {
         let signature =
             member(&fixture, "UserNormalizer", MemberKind::Method, "normalize").unwrap();
         assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    /// A fixture whose stub payload carries function signatures and
+    /// class surfaces. Every named function, class, and parent becomes
+    /// a `StubSymbol`, so lookups resolve.
+    fn fixture_with_stub_payload(
+        sources: &[&str],
+        functions: Vec<(String, StubSignature)>,
+        classes: Vec<(String, StubClassSurface)>,
+    ) -> Fixture {
+        fixture_with_stub_payload_in_range(
+            sources,
+            functions,
+            classes,
+            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
+        )
+    }
+
+    fn fixture_with_stub_payload_in_range(
+        sources: &[&str],
+        functions: Vec<(String, StubSignature)>,
+        classes: Vec<(String, StubClassSurface)>,
+        range: PhpVersionRange,
+    ) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let mut symbols: Vec<StubSymbol> = functions
+            .iter()
+            .map(|(name, _)| StubSymbol {
+                name: name.clone(),
+                kind: StubSymbolKind::Function,
+                availability: StubAvailability::ALWAYS,
+            })
+            .collect();
+        let mut class_names: Vec<String> = Vec::new();
+        for (name, surface) in &classes {
+            class_names.push(name.clone());
+            for parent in &surface.parents {
+                class_names.push(parent.clone());
+            }
+        }
+        class_names.sort();
+        class_names.dedup();
+        symbols.extend(class_names.into_iter().map(|name| StubSymbol {
+            name,
+            kind: StubSymbolKind::Class,
+            availability: StubAvailability::ALWAYS,
+        }));
+        let stubs = StubIndexInput::builder(StubIndex::new(symbols, functions, classes))
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(range)
+            .durability(salsa::Durability::MEDIUM)
+            .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    fn function<'db>(fixture: &'db Fixture, written: &str) -> Option<DeclaredSignature<'db>> {
+        let query = FunctionQuery::new(
+            &fixture.db,
+            folded_symbol_key(SymbolSpace::Function, written),
+        );
+        declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+    }
+
+    fn stub_parameter(name: &str, type_text: Option<&str>) -> StubParameter {
+        StubParameter {
+            name: name.to_owned(),
+            type_text: VersionedTypeText::from_text(type_text.map(str::to_owned)),
+            optional: false,
+            by_reference: false,
+            variadic: false,
+            availability: StubAvailability::ALWAYS,
+        }
+    }
+
+    /// A `getMessage(): string` public instance method surface member.
+    fn get_message_member() -> StubMember {
+        StubMember {
+            kind: StubMemberKind::Method,
+            name: "getMessage".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: Some(StubSignature {
+                parameters: vec![],
+                return_type: VersionedTypeText::from_text(Some("string".to_owned())),
+                by_reference: false,
+            }),
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        }
+    }
+
+    /// A one-parameter signature whose forms across the range have no
+    /// most-restrictive member: `int` at 8.1, `string` from 8.2.
+    fn disjoint_signature() -> StubSignature {
+        StubSignature {
+            parameters: vec![StubParameter {
+                name: "value".to_owned(),
+                type_text: VersionedTypeText {
+                    default: Some("int".to_owned()),
+                    overrides: vec![(PhpVersion::new(8, 2), "string".to_owned())],
+                },
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }],
+            return_type: VersionedTypeText::from_text(Some("void".to_owned())),
+            by_reference: false,
+        }
+    }
+
+    #[test]
+    fn a_stub_function_resolves_with_union_returns_across_the_range() {
+        let strlen = StubSignature {
+            parameters: vec![
+                stub_parameter("string", Some("string")),
+                // Untyped at every version: `mixed`, never silenced.
+                stub_parameter("anything", None),
+            ],
+            return_type: VersionedTypeText {
+                default: Some("int".to_owned()),
+                overrides: vec![(PhpVersion::new(8, 3), "int|false".to_owned())],
+            },
+            by_reference: false,
+        };
+        let fixture =
+            fixture_with_stub_payload(&["<?php"], vec![("strlen".to_owned(), strlen)], vec![]);
+        let db = &fixture.db;
+        let signature = function(&fixture, "strlen").unwrap();
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::string(db))
+        );
+        // An untyped stub parameter is `Some(mixed)`, never `None`.
+        assert_eq!(
+            signature.parameters[1].parameter_type,
+            Some(TypeId::mixed(db))
+        );
+        // Union across 8.1..8.5: int at 8.1-8.2, int|false at 8.3+.
+        assert_eq!(
+            signature.value_type,
+            TypeId::union(db, [TypeId::int(db), TypeId::bool_literal(db, false)]),
+        );
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn a_parameter_narrowing_across_the_range_takes_the_most_restrictive_form() {
+        // `int` at 8.1 versus `int|string` at 8.2+: `int` is a proven
+        // subtype of every per-version form, so `int` is the check type.
+        let signature = StubSignature {
+            parameters: vec![StubParameter {
+                name: "value".to_owned(),
+                type_text: VersionedTypeText {
+                    default: Some("int".to_owned()),
+                    overrides: vec![(PhpVersion::new(8, 2), "int|string".to_owned())],
+                },
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }],
+            return_type: VersionedTypeText::from_text(Some("void".to_owned())),
+            by_reference: false,
+        };
+        let fixture = fixture_with_stub_payload(
+            &["<?php"],
+            vec![("narrowing".to_owned(), signature)],
+            vec![],
+        );
+        let db = &fixture.db;
+        let declared = function(&fixture, "narrowing").unwrap();
+        assert_eq!(declared.parameters[0].parameter_type, Some(TypeId::int(db)));
+    }
+
+    #[test]
+    fn a_disjoint_parameter_across_the_range_is_silenced() {
+        // `int` at 8.1, `string` from 8.2: no most-restrictive form
+        // exists — the design's degenerate guard silences the parameter.
+        let fixture = fixture_with_stub_payload(
+            &["<?php"],
+            vec![("disjoint".to_owned(), disjoint_signature())],
+            vec![],
+        );
+        let declared = function(&fixture, "disjoint").unwrap();
+        assert_eq!(declared.parameters[0].parameter_type, None);
+        assert!(!declared.parameters[0].optional, "silencing is type-only");
+    }
+
+    #[test]
+    fn a_parameter_added_inside_the_range_is_optional() {
+        let signature = StubSignature {
+            parameters: vec![StubParameter {
+                availability: StubAvailability {
+                    introduced: Some(PhpVersion::new(8, 3)),
+                    removed: None,
+                    deprecated: None,
+                },
+                ..stub_parameter("added", Some("string"))
+            }],
+            return_type: VersionedTypeText::from_text(Some("void".to_owned())),
+            by_reference: false,
+        };
+        let fixture =
+            fixture_with_stub_payload(&["<?php"], vec![("grown".to_owned(), signature)], vec![]);
+        let declared = function(&fixture, "grown").unwrap();
+        // The parameter does not span the whole range: a call omitting
+        // it must be legal at 8.1-8.2, so arity never over-reports.
+        assert!(declared.parameters[0].optional);
+    }
+
+    #[test]
+    fn stub_member_signatures_resolve_through_the_same_rule() {
+        let fixture = fixture_with_stub_payload(
+            &["<?php class MyError extends Exception {}"],
+            vec![],
+            vec![(
+                "Exception".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![get_message_member()],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let signature = member(&fixture, "MyError", MemberKind::Method, "getMessage").unwrap();
+        assert_eq!(signature.value_type, TypeId::string(db));
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+        // Stub types resolve in the global context, straight off the
+        // stub class too (no source class in between).
+        let direct = member(&fixture, "Exception", MemberKind::Method, "getmessage").unwrap();
+        assert_eq!(direct.value_type, TypeId::string(db));
+    }
+
+    #[test]
+    fn a_point_range_never_silences() {
+        // With min == max the "range" is one version: every parameter
+        // has exactly one form, so the degenerate guard never fires.
+        let fixture = fixture_with_stub_payload_in_range(
+            &["<?php"],
+            vec![("disjoint".to_owned(), disjoint_signature())],
+            vec![],
+            PhpVersionRange::point(PhpVersion::new(8, 4)),
+        );
+        let db = &fixture.db;
+        let declared = function(&fixture, "disjoint").unwrap();
+        assert_eq!(
+            declared.parameters[0].parameter_type,
+            Some(TypeId::string(db))
+        );
     }
 }
