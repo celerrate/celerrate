@@ -161,6 +161,19 @@ fn a_body_edit_never_recomputes_a_declared_signature() {
 /// dependents live on: re-running the signature is cheap; re-running
 /// every verdict that consulted it is not, and the identical output
 /// keeps those verdicts memoized.
+///
+/// The probed verdict is routed through the class hierarchy on purpose:
+/// `subtype_of` short-circuits to `Holds` on structural equality
+/// (`candidate == target`) before it ever reads a salsa input, so a
+/// scalar probe like `int <: int|string` would report "spared" even if
+/// the declared layer's early cutoff were broken: it has no dependency
+/// edge into file-tracked state to begin with. `User <: Entity` (two
+/// distinct class names) instead reaches `judge_class_hierarchy`, which
+/// reads `linearized_class` (see `a_body_edit_does_not_recompute_a_hierarchy_verdict`
+/// above, which pins that same read directly). The verdict genuinely
+/// depends on the file; "absent from `take_executed` after the edit" is
+/// therefore load-bearing evidence of the early cutoff, not an artifact
+/// of a closed-form check.
 #[test]
 fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
     let Harness {
@@ -170,14 +183,15 @@ fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
         stubs,
         configuration,
     } = single_file_harness(
-        b"<?php class C { /** initial */ public function f(): int { return 1; } }",
+        b"<?php class Entity {} class User extends Entity {} \
+          class Repo { /** initial */ public function find(): User {} }",
     );
 
     {
-        let query = method_query(&db, "C", "f");
+        let entity = TypeId::class(&db, "Entity", vec![]);
+        let query = method_query(&db, "Repo", "find");
         let signature = declared_member_signature(&db, files, stubs, configuration, query).unwrap();
-        assert_eq!(signature.value_type, TypeId::int(&db));
-        let target = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
+        assert_eq!(signature.value_type, TypeId::class(&db, "User", vec![]));
         assert_eq!(
             subtype_of(
                 &db,
@@ -185,7 +199,7 @@ fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
                 stubs,
                 configuration,
                 signature.value_type,
-                target
+                entity
             ),
             Proof::Holds
         );
@@ -203,16 +217,18 @@ fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
     );
 
     // Only the docblock prose changes; the signature text is untouched.
-    file.set_bytes(&mut db).to(
-        b"<?php class C { /** changed prose */ public function f(): int { return 1; } }".to_vec(),
-    );
+    file.set_bytes(&mut db)
+        .to(b"<?php class Entity {} class User extends Entity {} \
+          class Repo { /** changed prose */ public function find(): User {} }"
+            .to_vec());
 
     {
-        let query = method_query(&db, "C", "f");
+        let entity = TypeId::class(&db, "Entity", vec![]);
+        let query = method_query(&db, "Repo", "find");
         let signature = declared_member_signature(&db, files, stubs, configuration, query).unwrap();
-        // The declared return is byte-identical across the prose edit.
-        assert_eq!(signature.value_type, TypeId::int(&db));
-        let target = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
+        // The declared return is byte-identical (and interned-equal)
+        // across the prose edit.
+        assert_eq!(signature.value_type, TypeId::class(&db, "User", vec![]));
         assert_eq!(
             subtype_of(
                 &db,
@@ -220,7 +236,7 @@ fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
                 stubs,
                 configuration,
                 signature.value_type,
-                target
+                entity
             ),
             Proof::Holds
         );
@@ -401,6 +417,12 @@ fn a_default_value_edit_changes_parameter_nullability_and_reruns_the_verdict() {
 /// it stays memoized. The strongest true fact here is the SPARED verdict:
 /// `take_executed` reports `declared_member_signature` re-running (the
 /// linearization changed) but never `subtype_of`.
+///
+/// As in pin 2, `f`'s probed verdict is routed through the class
+/// hierarchy (`User <: Entity`) rather than a structurally-equal scalar
+/// check, so it carries a real dependency edge into `linearized_class`
+/// and "absent from `take_executed`" is load-bearing rather than
+/// vacuously true.
 #[test]
 fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
     let Harness {
@@ -410,14 +432,15 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
         stubs,
         configuration,
     } = single_file_harness(
-        b"<?php class C { public function f(): int {} public function g(): int {} }",
+        b"<?php class Entity {} class User extends Entity {} \
+          class C { public function f(): User {} public function g(): int {} }",
     );
 
     {
+        let entity = TypeId::class(&db, "Entity", vec![]);
         let query = method_query(&db, "C", "f");
         let signature = declared_member_signature(&db, files, stubs, configuration, query).unwrap();
-        assert_eq!(signature.value_type, TypeId::int(&db));
-        let target = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
+        assert_eq!(signature.value_type, TypeId::class(&db, "User", vec![]));
         assert_eq!(
             subtype_of(
                 &db,
@@ -425,7 +448,7 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
                 stubs,
                 configuration,
                 signature.value_type,
-                target
+                entity
             ),
             Proof::Holds
         );
@@ -443,16 +466,17 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
     );
 
     // Only `g`'s return type changes; `f` is untouched.
-    file.set_bytes(&mut db).to(
-        b"<?php class C { public function f(): int {} public function g(): string {} }".to_vec(),
-    );
+    file.set_bytes(&mut db)
+        .to(b"<?php class Entity {} class User extends Entity {} \
+          class C { public function f(): User {} public function g(): string {} }"
+            .to_vec());
 
     {
+        let entity = TypeId::class(&db, "Entity", vec![]);
         let query = method_query(&db, "C", "f");
         let signature = declared_member_signature(&db, files, stubs, configuration, query).unwrap();
         // `f`'s declared return is unchanged by an edit to `g`.
-        assert_eq!(signature.value_type, TypeId::int(&db));
-        let target = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
+        assert_eq!(signature.value_type, TypeId::class(&db, "User", vec![]));
         assert_eq!(
             subtype_of(
                 &db,
@@ -460,12 +484,19 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
                 stubs,
                 configuration,
                 signature.value_type,
-                target
+                entity
             ),
             Proof::Holds
         );
     }
     let executed = db.take_executed();
+    assert!(
+        executed
+            .iter()
+            .any(|query| query.contains("declared_member_signature")),
+        "editing g must re-run f's declared signature: the linearization it \
+         reads for the ancestor walk changed, by design: {executed:?}"
+    );
     assert!(
         !executed.iter().any(|query| query.contains("subtype_of")),
         "an unrelated member edit must spare the other member's verdict: {executed:?}"
