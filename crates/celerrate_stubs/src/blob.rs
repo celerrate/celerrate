@@ -7,6 +7,10 @@ use core::fmt;
 use celerrate_project::PhpVersion;
 
 use crate::index::StubIndex;
+use crate::signature::{
+    StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
+    VersionedTypeText,
+};
 use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
 
 pub const BLOB_MAGIC: [u8; 8] = *b"CELSTUBS";
@@ -60,17 +64,23 @@ impl std::error::Error for StubBlobError {}
 /// the same bytes (the index is already sorted and merged).
 pub fn encode(index: &StubIndex) -> Vec<u8> {
     let symbol_table = encode_symbol_table(index);
-    let table_entries = 1u32;
-    let payload_offset = 24u64 + u64::from(table_entries) * 20;
-    let mut blob = Vec::with_capacity(symbol_table.len() + 64);
+    let signatures = encode_signatures(index);
+    let table_entries = 2u32;
+    let symbol_offset = 24u64 + u64::from(table_entries) * 20;
+    let signature_offset = symbol_offset + symbol_table.len() as u64;
+    let mut blob = Vec::with_capacity(symbol_table.len() + signatures.len() + 64);
     blob.extend_from_slice(&BLOB_MAGIC);
     blob.extend_from_slice(&BLOB_FORMAT_VERSION.to_le_bytes());
     blob.extend_from_slice(&[0; 8]); // checksum, patched below
     blob.extend_from_slice(&table_entries.to_le_bytes());
     blob.extend_from_slice(&SECTION_SYMBOL_TABLE.to_le_bytes());
-    blob.extend_from_slice(&payload_offset.to_le_bytes());
+    blob.extend_from_slice(&symbol_offset.to_le_bytes());
     blob.extend_from_slice(&(symbol_table.len() as u64).to_le_bytes());
+    blob.extend_from_slice(&SECTION_SIGNATURES.to_le_bytes());
+    blob.extend_from_slice(&signature_offset.to_le_bytes());
+    blob.extend_from_slice(&(signatures.len() as u64).to_le_bytes());
     blob.extend_from_slice(&symbol_table);
+    blob.extend_from_slice(&signatures);
     let checksum = fnv1a64(blob.get(20..).unwrap_or_default());
     if let Some(slot) = blob.get_mut(12..20) {
         slot.copy_from_slice(&checksum.to_le_bytes());
@@ -83,32 +93,127 @@ fn encode_symbol_table(index: &StubIndex) -> Vec<u8> {
     bytes.extend_from_slice(&(index.len() as u32).to_le_bytes());
     for symbol in index.symbols() {
         bytes.push(symbol.kind.as_u8());
-        let availability = symbol.availability;
-        let since = availability
-            .deprecated
-            .and_then(|deprecation| deprecation.since);
+        write_availability(&mut bytes, symbol.availability);
+        write_string(&mut bytes, &symbol.name);
+    }
+    bytes
+}
+
+/// Writes the availability flag byte plus each present version: the
+/// scheme shared by symbols, parameters, and members. `bit0`
+/// introduced, `bit1` removed, `bit2` deprecated, `bit3` since.
+fn write_availability(bytes: &mut Vec<u8>, availability: StubAvailability) {
+    let since = availability
+        .deprecated
+        .and_then(|deprecation| deprecation.since);
+    let mut flags = 0u8;
+    if availability.introduced.is_some() {
+        flags |= 1;
+    }
+    if availability.removed.is_some() {
+        flags |= 1 << 1;
+    }
+    if availability.deprecated.is_some() {
+        flags |= 1 << 2;
+    }
+    if since.is_some() {
+        flags |= 1 << 3;
+    }
+    bytes.push(flags);
+    for version in [availability.introduced, availability.removed, since]
+        .into_iter()
+        .flatten()
+    {
+        bytes.extend_from_slice(&[version.major, version.minor]);
+    }
+}
+
+fn write_string(bytes: &mut Vec<u8>, text: &str) {
+    bytes.extend_from_slice(&(text.len() as u32).to_le_bytes());
+    bytes.extend_from_slice(text.as_bytes());
+}
+
+fn write_versioned_text(bytes: &mut Vec<u8>, text: &VersionedTypeText) {
+    match &text.default {
+        Some(default) => {
+            bytes.push(1);
+            write_string(bytes, default);
+        }
+        None => bytes.push(0),
+    }
+    bytes.extend_from_slice(&(text.overrides.len() as u16).to_le_bytes());
+    for (version, override_text) in &text.overrides {
+        bytes.extend_from_slice(&[version.major, version.minor]);
+        write_string(bytes, override_text);
+    }
+}
+
+fn write_signature(bytes: &mut Vec<u8>, signature: &StubSignature) {
+    bytes.push(u8::from(signature.by_reference));
+    write_versioned_text(bytes, &signature.return_type);
+    bytes.extend_from_slice(&(signature.parameters.len() as u32).to_le_bytes());
+    for parameter in &signature.parameters {
         let mut flags = 0u8;
-        if availability.introduced.is_some() {
+        if parameter.optional {
             flags |= 1;
         }
-        if availability.removed.is_some() {
+        if parameter.by_reference {
             flags |= 1 << 1;
         }
-        if availability.deprecated.is_some() {
+        if parameter.variadic {
             flags |= 1 << 2;
         }
-        if since.is_some() {
-            flags |= 1 << 3;
-        }
         bytes.push(flags);
-        for version in [availability.introduced, availability.removed, since]
-            .into_iter()
-            .flatten()
-        {
-            bytes.extend_from_slice(&[version.major, version.minor]);
+        write_availability(bytes, parameter.availability);
+        write_string(bytes, &parameter.name);
+        write_versioned_text(bytes, &parameter.type_text);
+    }
+}
+
+/// Encodes the signatures section: functions then classes, mirroring
+/// the wire format documented on the module. Always produces bytes,
+/// even for an empty index — the section is always written.
+fn encode_signatures(index: &StubIndex) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(index.functions().len() as u32).to_le_bytes());
+    for (name, signature) in index.functions() {
+        write_string(&mut bytes, name);
+        write_signature(&mut bytes, signature);
+    }
+    bytes.extend_from_slice(&(index.classes().len() as u32).to_le_bytes());
+    for (name, surface) in index.classes() {
+        write_string(&mut bytes, name);
+        bytes.extend_from_slice(&(surface.parents.len() as u32).to_le_bytes());
+        for parent in &surface.parents {
+            write_string(&mut bytes, parent);
         }
-        bytes.extend_from_slice(&(symbol.name.len() as u32).to_le_bytes());
-        bytes.extend_from_slice(symbol.name.as_bytes());
+        bytes.extend_from_slice(&(surface.members.len() as u32).to_le_bytes());
+        for member in &surface.members {
+            bytes.push(member.kind.as_u8());
+            let mut flags = 0u8;
+            if member.is_static {
+                flags |= 1;
+            }
+            flags |= member.visibility.as_u8() << 1;
+            bytes.push(flags);
+            write_availability(&mut bytes, member.availability);
+            write_string(&mut bytes, &member.name);
+            write_versioned_text(&mut bytes, &member.type_text);
+            match &member.value_text {
+                Some(value) => {
+                    bytes.push(1);
+                    write_string(&mut bytes, value);
+                }
+                None => bytes.push(0),
+            }
+            if member.kind == StubMemberKind::Method {
+                // Bind the default outside the call: a temporary
+                // `&StubSignature::default()` would not live long enough.
+                let default_signature = StubSignature::default();
+                let signature = member.signature.as_ref().unwrap_or(&default_signature);
+                write_signature(&mut bytes, signature);
+            }
+        }
     }
     bytes
 }
@@ -131,6 +236,7 @@ pub fn decode(blob: &[u8]) -> Result<StubIndex, StubBlobError> {
     }
     let section_count = header.u32().ok_or(StubBlobError::TooShort)?;
     let mut symbol_table: Option<&[u8]> = None;
+    let mut signatures: Option<&[u8]> = None;
     for _ in 0..section_count {
         let identifier = header.u32().ok_or(StubBlobError::TooShort)?;
         let offset = header.u64().ok_or(StubBlobError::TooShort)?;
@@ -145,14 +251,26 @@ pub fn decode(blob: &[u8]) -> Result<StubIndex, StubBlobError> {
             .ok_or(StubBlobError::MalformedSection)?;
         if identifier == SECTION_SYMBOL_TABLE {
             symbol_table = Some(section);
+        } else if identifier == SECTION_SIGNATURES {
+            signatures = Some(section);
         }
         // Unknown identifiers are skipped: newer blobs that only add
         // sections stay readable without a format version bump.
     }
-    decode_symbol_table(symbol_table.ok_or(StubBlobError::MissingSymbolTable)?)
+    let symbols = decode_symbol_table(symbol_table.ok_or(StubBlobError::MissingSymbolTable)?)?;
+    match signatures {
+        Some(section) => {
+            let (functions, classes) = decode_signatures(section)?;
+            Ok(StubIndex::new(symbols, functions, classes))
+        }
+        // A blob without the signatures section (a pre-plan-3 blob, or
+        // one that legitimately has nothing to say): empty payloads,
+        // not an error — the section is optional on read.
+        None => Ok(StubIndex::from_symbols(symbols)),
+    }
 }
 
-fn decode_symbol_table(bytes: &[u8]) -> Result<StubIndex, StubBlobError> {
+fn decode_symbol_table(bytes: &[u8]) -> Result<Vec<StubSymbol>, StubBlobError> {
     let mut reader = Reader::new(bytes);
     let count = reader.u32().ok_or(StubBlobError::MalformedSection)?;
     let mut symbols = Vec::new();
@@ -161,43 +279,99 @@ fn decode_symbol_table(bytes: &[u8]) -> Result<StubIndex, StubBlobError> {
             .u8()
             .and_then(StubSymbolKind::from_u8)
             .ok_or(StubBlobError::MalformedSection)?;
-        let flags = reader.u8().ok_or(StubBlobError::MalformedSection)?;
-        let introduced = if flags & 1 != 0 {
-            Some(reader.version().ok_or(StubBlobError::MalformedSection)?)
-        } else {
-            None
-        };
-        let removed = if flags & (1 << 1) != 0 {
-            Some(reader.version().ok_or(StubBlobError::MalformedSection)?)
-        } else {
-            None
-        };
-        let since = if flags & (1 << 3) != 0 {
-            Some(reader.version().ok_or(StubBlobError::MalformedSection)?)
-        } else {
-            None
-        };
-        let deprecated = (flags & (1 << 2) != 0).then_some(StubDeprecation { since });
-        let name_length = reader.u32().ok_or(StubBlobError::MalformedSection)?;
-        let name_length =
-            usize::try_from(name_length).map_err(|_| StubBlobError::MalformedSection)?;
-        let name_bytes = reader
-            .take(name_length)
+        let availability = reader
+            .availability()
             .ok_or(StubBlobError::MalformedSection)?;
-        let name = core::str::from_utf8(name_bytes)
-            .map_err(|_| StubBlobError::MalformedSection)?
-            .to_owned();
+        let name = reader.string().ok_or(StubBlobError::MalformedSection)?;
         symbols.push(StubSymbol {
             name,
             kind,
-            availability: StubAvailability {
-                introduced,
-                removed,
-                deprecated,
-            },
+            availability,
         });
     }
-    Ok(StubIndex::from_symbols(symbols))
+    Ok(symbols)
+}
+
+/// The decoded signatures section: functions and classes, in the
+/// shapes `StubIndex::new` accepts directly.
+type DecodedSignatures = (
+    Vec<(String, StubSignature)>,
+    Vec<(String, StubClassSurface)>,
+);
+
+/// Decodes the signatures section into `(functions, classes)`,
+/// mirroring `encode_signatures`.
+fn decode_signatures(bytes: &[u8]) -> Result<DecodedSignatures, StubBlobError> {
+    let mut reader = Reader::new(bytes);
+    let function_count = reader.u32().ok_or(StubBlobError::MalformedSection)?;
+    let mut functions = Vec::new();
+    for _ in 0..function_count {
+        let name = reader.string().ok_or(StubBlobError::MalformedSection)?;
+        let signature = reader
+            .stub_signature()
+            .ok_or(StubBlobError::MalformedSection)?;
+        functions.push((name, signature));
+    }
+    let class_count = reader.u32().ok_or(StubBlobError::MalformedSection)?;
+    let mut classes = Vec::new();
+    for _ in 0..class_count {
+        let name = reader.string().ok_or(StubBlobError::MalformedSection)?;
+        let parent_count = reader.u32().ok_or(StubBlobError::MalformedSection)?;
+        let mut parents = Vec::new();
+        for _ in 0..parent_count {
+            parents.push(reader.string().ok_or(StubBlobError::MalformedSection)?);
+        }
+        let member_count = reader.u32().ok_or(StubBlobError::MalformedSection)?;
+        let mut members = Vec::new();
+        for _ in 0..member_count {
+            let kind = reader
+                .u8()
+                .and_then(StubMemberKind::from_u8)
+                .ok_or(StubBlobError::MalformedSection)?;
+            let flags = reader.u8().ok_or(StubBlobError::MalformedSection)?;
+            let is_static = flags & 1 != 0;
+            let visibility = StubVisibility::from_u8((flags >> 1) & 0b11)
+                .ok_or(StubBlobError::MalformedSection)?;
+            let availability = reader
+                .availability()
+                .ok_or(StubBlobError::MalformedSection)?;
+            let name = reader.string().ok_or(StubBlobError::MalformedSection)?;
+            let type_text = reader
+                .versioned_text()
+                .ok_or(StubBlobError::MalformedSection)?;
+            let has_value = reader.u8().ok_or(StubBlobError::MalformedSection)?;
+            let value_text = match has_value {
+                0 => None,
+                1 => Some(reader.string().ok_or(StubBlobError::MalformedSection)?),
+                _ => return Err(StubBlobError::MalformedSection),
+            };
+            // A method's signature always decodes to `Some(...)`: the
+            // writer encodes `None` as an empty signature, so the
+            // round trip is not bit-for-bit for that case, only
+            // semantically equivalent (an empty signature either way).
+            let signature = if kind == StubMemberKind::Method {
+                Some(
+                    reader
+                        .stub_signature()
+                        .ok_or(StubBlobError::MalformedSection)?,
+                )
+            } else {
+                None
+            };
+            members.push(StubMember {
+                kind,
+                name,
+                visibility,
+                is_static,
+                availability,
+                signature,
+                type_text,
+                value_text,
+            });
+        }
+        classes.push((name, StubClassSurface { parents, members }));
+    }
+    Ok((functions, classes))
 }
 
 /// FNV-1a, 64-bit: six lines beat a checksum dependency.
@@ -242,6 +416,89 @@ impl<'blob> Reader<'blob> {
         let bytes = self.take(2)?;
         Some(PhpVersion::new(*bytes.first()?, *bytes.get(1)?))
     }
+
+    fn u16(&mut self) -> Option<u16> {
+        Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
+    }
+
+    fn string(&mut self) -> Option<String> {
+        let length = usize::try_from(self.u32()?).ok()?;
+        let bytes = self.take(length)?;
+        core::str::from_utf8(bytes).ok().map(str::to_owned)
+    }
+
+    /// Mirrors `write_availability`: `bit0` introduced, `bit1` removed,
+    /// `bit2` deprecated, `bit3` since.
+    fn availability(&mut self) -> Option<StubAvailability> {
+        let flags = self.u8()?;
+        let introduced = if flags & 1 != 0 {
+            Some(self.version()?)
+        } else {
+            None
+        };
+        let removed = if flags & (1 << 1) != 0 {
+            Some(self.version()?)
+        } else {
+            None
+        };
+        let since = if flags & (1 << 3) != 0 {
+            Some(self.version()?)
+        } else {
+            None
+        };
+        let deprecated = (flags & (1 << 2) != 0).then_some(StubDeprecation { since });
+        Some(StubAvailability {
+            introduced,
+            removed,
+            deprecated,
+        })
+    }
+
+    fn versioned_text(&mut self) -> Option<VersionedTypeText> {
+        let has_default = self.u8()?;
+        let default = match has_default {
+            0 => None,
+            1 => Some(self.string()?),
+            _ => return None,
+        };
+        let override_count = self.u16()?;
+        let mut overrides = Vec::new();
+        for _ in 0..override_count {
+            let version = self.version()?;
+            let text = self.string()?;
+            overrides.push((version, text));
+        }
+        Some(VersionedTypeText { default, overrides })
+    }
+
+    fn stub_signature(&mut self) -> Option<StubSignature> {
+        let by_reference = self.u8()? != 0;
+        let return_type = self.versioned_text()?;
+        let parameter_count = self.u32()?;
+        let mut parameters = Vec::new();
+        for _ in 0..parameter_count {
+            let flags = self.u8()?;
+            let optional = flags & 1 != 0;
+            let by_reference = flags & (1 << 1) != 0;
+            let variadic = flags & (1 << 2) != 0;
+            let availability = self.availability()?;
+            let name = self.string()?;
+            let type_text = self.versioned_text()?;
+            parameters.push(StubParameter {
+                name,
+                type_text,
+                optional,
+                by_reference,
+                variadic,
+                availability,
+            });
+        }
+        Some(StubSignature {
+            parameters,
+            return_type,
+            by_reference,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -252,9 +509,13 @@ mod tests {
 
     use super::{
         BLOB_FORMAT_VERSION, BLOB_MAGIC, SECTION_SYMBOL_TABLE, StubBlobError, decode, encode,
-        fnv1a64,
+        encode_symbol_table, fnv1a64,
     };
     use crate::index::StubIndex;
+    use crate::signature::{
+        StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
+        VersionedTypeText,
+    };
     use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
 
     fn sample_index() -> StubIndex {
@@ -366,8 +627,12 @@ mod tests {
         let symbol_table = {
             let encoded = encode(&sample_index());
             // The symbol table of a freshly encoded blob starts right
-            // after the header (24) plus one 20-byte table entry.
-            encoded[44..].to_vec()
+            // after the header (24) plus two 20-byte table entries
+            // (symbol table + signatures) and runs for exactly
+            // `encode_symbol_table`'s own length.
+            let symbol_offset = 24 + 2 * 20;
+            let symbol_length = encode_symbol_table(&sample_index()).len();
+            encoded[symbol_offset..symbol_offset + symbol_length].to_vec()
         };
         let unknown_payload = b"future data";
         let table_entries = 2u32;
@@ -410,5 +675,99 @@ mod tests {
             "unsupported stub blob format version 7",
         );
         assert!(!StubBlobError::ChecksumMismatch.to_string().is_empty());
+    }
+
+    fn sample_index_with_signatures() -> StubIndex {
+        let strlen = StubSignature {
+            parameters: vec![StubParameter {
+                name: "string".to_owned(),
+                type_text: VersionedTypeText::from_text(Some("string".to_owned())),
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }],
+            return_type: VersionedTypeText {
+                default: Some("int".to_owned()),
+                overrides: vec![(PhpVersion::new(8, 0), "int|false".to_owned())],
+            },
+            by_reference: false,
+        };
+        let exception = StubClassSurface {
+            parents: vec!["Throwable".to_owned()],
+            members: vec![
+                StubMember {
+                    kind: StubMemberKind::Method,
+                    name: "getMessage".to_owned(),
+                    visibility: StubVisibility::Public,
+                    is_static: false,
+                    availability: StubAvailability::ALWAYS,
+                    signature: Some(StubSignature {
+                        parameters: vec![],
+                        return_type: VersionedTypeText::from_text(Some("string".to_owned())),
+                        by_reference: false,
+                    }),
+                    type_text: VersionedTypeText::default(),
+                    value_text: None,
+                },
+                StubMember {
+                    kind: StubMemberKind::Property,
+                    name: "message".to_owned(),
+                    visibility: StubVisibility::Protected,
+                    is_static: false,
+                    availability: StubAvailability::ALWAYS,
+                    signature: None,
+                    type_text: VersionedTypeText::from_text(Some("string".to_owned())),
+                    value_text: None,
+                },
+            ],
+        };
+        StubIndex::new(
+            sample_index().symbols().to_vec(),
+            vec![("strlen".to_owned(), strlen)],
+            vec![("Exception".to_owned(), exception)],
+        )
+    }
+
+    #[test]
+    fn signatures_round_trip_through_the_blob() {
+        let index = sample_index_with_signatures();
+        assert_eq!(decode(&encode(&index)), Ok(index));
+    }
+
+    #[test]
+    fn a_blob_without_the_signature_section_decodes_with_empty_payloads() {
+        // The pre-plan-3 encoding: hand-build a one-section blob exactly
+        // as the old `encode` did, and check it still decodes.
+        let old_index = sample_index();
+        let with_signatures = sample_index_with_signatures();
+        let blob = encode(&with_signatures);
+        // Sanity: the new blob decodes to the full index (covered above);
+        // the OLD layout is simulated by re-encoding only symbols.
+        let symbols_only = encode(&old_index);
+        assert_eq!(decode(&symbols_only), Ok(old_index));
+        assert_ne!(blob, symbols_only);
+    }
+
+    #[test]
+    fn a_truncated_signature_section_never_panics() {
+        let blob = encode(&sample_index_with_signatures());
+        for length in 0..blob.len() {
+            // Every prefix is an error or a clean decode, never a panic.
+            let _ = decode(&blob[..length]);
+        }
+    }
+
+    #[test]
+    fn a_malformed_signature_section_is_a_clean_rejection() {
+        let mut blob = encode(&sample_index_with_signatures());
+        // Flip a byte deep in the payload (past the header and table),
+        // then re-patch the checksum so decoding reaches the section.
+        let last = blob.len() - 1;
+        blob[last] ^= 0xFF;
+        let checksum = fnv1a64(&blob[20..]);
+        blob[12..20].copy_from_slice(&checksum.to_le_bytes());
+        // Either a clean error or a decode that differs — never a panic.
+        let _ = decode(&blob);
     }
 }

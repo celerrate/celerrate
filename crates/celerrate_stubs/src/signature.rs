@@ -114,7 +114,11 @@ pub struct StubMember {
     pub visibility: StubVisibility,
     pub is_static: bool,
     pub availability: StubAvailability,
-    /// Methods only.
+    /// Methods only. The blob encoding (`blob.rs`) has no `None`
+    /// variant on the wire: a `None` signature is written as an empty
+    /// `StubSignature`, and every method decodes back to
+    /// `Some(signature)` — `None` only ever appears here between
+    /// construction and encoding, never after a round trip.
     pub signature: Option<StubSignature>,
     /// Properties and class constants: the declared/versioned type.
     pub type_text: VersionedTypeText,
