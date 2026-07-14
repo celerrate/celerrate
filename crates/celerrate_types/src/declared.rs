@@ -156,6 +156,56 @@ pub struct DeclaredSignature<'db> {
     pub by_reference: bool,
 }
 
+/// The parsed annotation layer of one member. Plan 4a's bridge fills
+/// this through the type-syntax registry; until then every member
+/// answers the default (no annotations). The seam is a tracked query
+/// so the bridge swap changes ONE body and no signatures.
+#[derive(Debug, Clone, Default, PartialEq, Eq, salsa::Update)]
+pub struct MemberAnnotations<'db> {
+    /// `@return` / `@var`: the annotated value type.
+    pub value: Option<TypeId<'db>>,
+    /// `@param`: annotated parameter types by parameter name.
+    pub parameters: Vec<(String, TypeId<'db>)>,
+}
+
+#[salsa::tracked]
+pub fn member_annotations<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    query: MemberQuery<'db>,
+) -> MemberAnnotations<'db> {
+    // The seam: plan 4a's bridge replaces this body with the
+    // docblock parse through the type-syntax registry. Everything
+    // downstream (precedence, trust, inheritance) is already wired.
+    let _ = (db, files, stubs, configuration, query);
+    MemberAnnotations::default()
+}
+
+/// The source-precedence rule of the design's section 3: an
+/// annotation refines the native declaration under the three-valued
+/// judgment. Holds refines; Fails is ignored (native wins);
+/// CannotProve refines and is traced. Never a crash, never a silent
+/// widening, never a silently dropped annotation.
+pub(crate) fn refine<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    native: TypeId<'db>,
+    annotation: Option<TypeId<'db>>,
+) -> (TypeId<'db>, Trust) {
+    let Some(annotated) = annotation else {
+        return (native, Trust::NativeOnly);
+    };
+    match crate::judgments::subtype_of(db, files, stubs, configuration, annotated, native) {
+        crate::judgments::Proof::Holds => (annotated, Trust::Refined),
+        crate::judgments::Proof::CannotProve => (annotated, Trust::RefinedUnproven),
+        crate::judgments::Proof::Fails => (native, Trust::RejectedAnnotation),
+    }
+}
+
 #[salsa::tracked]
 pub fn declared_member_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -171,11 +221,16 @@ pub fn declared_member_signature<'db>(
         namespace: &site_parts.namespace,
         tables: &tables,
     };
+    let annotations = member_annotations(db, files, stubs, configuration, query);
     Some(resolve_member_signature(
         db,
+        files,
+        stubs,
+        configuration,
         &site,
         &resolution.owner,
         &resolution.member,
+        &annotations,
     ))
 }
 
@@ -208,28 +263,43 @@ fn declaring_site(
 }
 
 /// Resolves one member's written signature at its declaring site.
-/// Annotations join in tasks 5-6; every element is `NativeOnly` here.
+/// Own annotations refine the native declaration through [`refine`]
+/// (task 5); the inheritance walk that folds in ancestor annotations
+/// lands in task 6. Enum cases skip refinement: their type is their
+/// identity, never annotated.
+#[allow(clippy::too_many_arguments)]
 fn resolve_member_signature<'db>(
     db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
     site: &NameSite<'_>,
     owner_key: &str,
     member: &Member,
+    annotations: &MemberAnnotations<'db>,
 ) -> DeclaredSignature<'db> {
-    let value_type = match member.kind {
-        MemberKind::EnumCase => TypeId::enum_case(db, owner_key, &member.name),
+    let (value_type, value_trust) = match member.kind {
+        MemberKind::EnumCase => (
+            TypeId::enum_case(db, owner_key, &member.name),
+            Trust::NativeOnly,
+        ),
         // Task 10 reshapes `MemberResolution` into an enum; until then
         // this stays the current struct, destructured as such.
-        MemberKind::ClassConstant => match member.signature.type_text.as_deref() {
-            Some(text) => lowered_or_mixed(db, site, Some(text)),
-            None => member
-                .signature
-                .default_text
-                .as_deref()
-                .and_then(|text| literal_type_of_default(db, text))
-                .unwrap_or_else(|| TypeId::mixed(db)),
-        },
+        MemberKind::ClassConstant => {
+            let native = match member.signature.type_text.as_deref() {
+                Some(text) => lowered_or_mixed(db, site, Some(text)),
+                None => member
+                    .signature
+                    .default_text
+                    .as_deref()
+                    .and_then(|text| literal_type_of_default(db, text))
+                    .unwrap_or_else(|| TypeId::mixed(db)),
+            };
+            refine(db, files, stubs, configuration, native, annotations.value)
+        }
         MemberKind::Method | MemberKind::Property => {
-            lowered_or_mixed(db, site, member.signature.type_text.as_deref())
+            let native = lowered_or_mixed(db, site, member.signature.type_text.as_deref());
+            refine(db, files, stubs, configuration, native, annotations.value)
         }
     };
     DeclaredSignature {
@@ -237,32 +307,52 @@ fn resolve_member_signature<'db>(
             .signature
             .parameters
             .iter()
-            .map(|parameter| declared_parameter(db, site, parameter))
+            .map(|parameter| {
+                let annotation = annotations
+                    .parameters
+                    .iter()
+                    .find(|(name, _)| *name == parameter.name)
+                    .map(|(_, annotated)| *annotated);
+                declared_parameter(db, files, stubs, configuration, site, parameter, annotation)
+            })
             .collect(),
         value_type,
-        value_trust: Trust::NativeOnly,
+        value_trust,
         by_reference: member.signature.by_reference,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn declared_parameter<'db>(
     db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
     site: &NameSite<'_>,
     parameter: &celerrate_semantics::ParameterSignature,
+    annotation: Option<TypeId<'db>>,
 ) -> DeclaredParameter<'db> {
-    let mut parameter_type = lowered_or_mixed(db, site, parameter.type_text.as_deref());
+    let mut native_parameter_type = lowered_or_mixed(db, site, parameter.type_text.as_deref());
     // Implicit nullability (design section 2): `Type $x = null`.
     if parameter
         .default_text
         .as_deref()
         .is_some_and(|text| text.eq_ignore_ascii_case("null"))
     {
-        parameter_type = TypeId::union(db, [parameter_type, TypeId::null(db)]);
+        native_parameter_type = TypeId::union(db, [native_parameter_type, TypeId::null(db)]);
     }
+    let (parameter_type, trust) = refine(
+        db,
+        files,
+        stubs,
+        configuration,
+        native_parameter_type,
+        annotation,
+    );
     DeclaredParameter {
         name: parameter.name.clone(),
         parameter_type: Some(parameter_type),
-        trust: Trust::NativeOnly,
+        trust,
         optional: parameter.default_text.is_some() || parameter.variadic,
         variadic: parameter.variadic,
         by_reference: parameter.by_reference,
@@ -339,11 +429,6 @@ pub struct FunctionQuery<'db> {
     pub key: String,
 }
 
-// `stubs` and `configuration` are unread on this source-only arm: they
-// are part of the salsa memoization key on purpose (task 10/11 add the
-// stub arm behind this same signature; the persistent-cache plugin-set
-// key of plan 9a needs them recorded).
-#[allow(unused_variables)]
 #[salsa::tracked]
 pub fn declared_function_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -374,7 +459,9 @@ pub fn declared_function_signature<'db>(
             .signature
             .parameters
             .iter()
-            .map(|parameter| declared_parameter(db, &site, parameter))
+            .map(|parameter| {
+                declared_parameter(db, files, stubs, configuration, &site, parameter, None)
+            })
             .collect(),
         value_type: lowered_or_mixed(db, &site, function.signature.type_text.as_deref()),
         value_trust: Trust::NativeOnly,
@@ -734,5 +821,52 @@ mod tests {
         let fixture = fixture(&["<?php class C { public function f(): int {} }"]);
         assert!(member(&fixture, "C", MemberKind::Method, "ghost").is_none());
         assert!(member(&fixture, "Ghost", MemberKind::Method, "f").is_none());
+    }
+
+    #[test]
+    fn the_trust_rule_is_three_valued() {
+        let fixture = fixture(&["<?php interface Animal {} class Dog implements Animal {}"]);
+        let db = &fixture.db;
+        let animal = TypeId::class(db, "Animal", vec![]);
+        let dog = TypeId::class(db, "Dog", vec![]);
+        let int = TypeId::int(db);
+        let refine = |native, annotation| {
+            super::refine(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                native,
+                annotation,
+            )
+        };
+        // No annotation: native stands.
+        assert_eq!(refine(animal, None), (animal, Trust::NativeOnly));
+        // Holds: the annotation refines.
+        assert_eq!(refine(animal, Some(dog)), (dog, Trust::Refined));
+        // Fails: the annotation is ignored, the native declaration wins.
+        assert_eq!(refine(int, Some(animal)), (int, Trust::RejectedAnnotation));
+        // CannotProve (an unresolvable class): refines, traced.
+        let ghost = TypeId::class(db, "Ghost", vec![]);
+        assert_eq!(refine(animal, Some(ghost)), (ghost, Trust::RefinedUnproven),);
+    }
+
+    #[test]
+    fn the_annotation_seam_answers_the_default_until_the_bridge_lands() {
+        let fixture = fixture(&["<?php class C { /** @return int */ public function f() {} }"]);
+        let query = MemberQuery::new(
+            &fixture.db,
+            folded_symbol_key(SymbolSpace::ClassLike, "C"),
+            MemberKind::Method,
+            folded_member_key(MemberKind::Method, "f"),
+        );
+        let annotations = super::member_annotations(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        );
+        assert_eq!(annotations, super::MemberAnnotations::default());
     }
 }
