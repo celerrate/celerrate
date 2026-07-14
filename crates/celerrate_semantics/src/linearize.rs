@@ -17,14 +17,17 @@
 //! exact C3-ish order matters in practice (YAGNI: PHPStan does the same
 //! simplification).
 //!
-//! The `cyclic` flag marks a genuine inheritance cycle: an edge whose
-//! target already sits on the current class's ancestor path (a class
-//! reachable from itself). A diamond — one ancestor reached by two
-//! distinct paths — is deduplicated by the visited set without setting
-//! the flag, so a legal diamond is never mistaken for a cycle. The path
-//! set carried per queue entry is what buys that distinction cheaply.
+//! The `cyclic` flag is true exactly when the resolved inheritance
+//! graph the walk recorded — every ancestry edge whose target resolved
+//! to a source class-like, as a directed graph from owner to target —
+//! contains a directed cycle: some walked class-like is reachable from
+//! itself. The check runs after the walk, over the edges already
+//! recorded, by iteratively peeling zero-in-degree nodes (Kahn's
+//! algorithm — iterative, no recursion). A diamond — one ancestor
+//! reached by two distinct paths — is a DAG and stays unflagged, so a
+//! legal diamond is never mistaken for a cycle.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
@@ -138,26 +141,23 @@ pub fn linearized_class<'db>(
     let mut members: Vec<LinearizedMember> = Vec::new();
     let mut ancestry: Vec<AncestorEdge> = Vec::new();
     let mut stub_ancestors: Vec<String> = Vec::new();
-    let mut cyclic = false;
-    let mut root_resolved = false;
+    // Whether the queried key itself fetched a source class-like: the
+    // root is dequeued first, so the first fetch is the root's.
+    let mut root_fetched = false;
 
-    // Each entry carries the ancestor path that reached it (the chain of
-    // folded keys from the root, this class included). An edge whose
-    // target lies on that path closes a real cycle; a target merely
-    // already visited is a diamond and is deduplicated silently.
-    let mut queue: VecDeque<(String, MemberOrigin, HashSet<String>)> = VecDeque::new();
-    let mut root_path = HashSet::new();
-    root_path.insert(root_key.clone());
-    queue.push_back((root_key, MemberOrigin::Own, root_path));
+    let mut queue: VecDeque<(String, MemberOrigin)> = VecDeque::new();
+    queue.push_back((root_key, MemberOrigin::Own));
 
-    while let Some((key, origin, path)) = queue.pop_front() {
+    while let Some((key, origin)) = queue.pop_front() {
         if !visited.insert(key.clone()) {
+            // Already linearized: a diamond re-visit or a cycle's
+            // closing edge. The post-walk graph check tells them apart.
             continue;
         }
         let Some(found) = fetch(db, files, &key) else {
             continue;
         };
-        root_resolved = true;
+        root_fetched = true;
 
         for member in &found.group.members {
             members.push(LinearizedMember {
@@ -189,17 +189,11 @@ pub fn linearized_class<'db>(
             });
             match answer {
                 AncestorAnswer::Source { folded_key } => {
-                    if path.contains(&folded_key) {
-                        cyclic = true;
-                    } else {
-                        let next_origin = match (origin, relation) {
-                            (MemberOrigin::Own, AncestorRelation::UsesTrait) => MemberOrigin::Trait,
-                            _ => MemberOrigin::Inherited,
-                        };
-                        let mut next_path = path.clone();
-                        next_path.insert(folded_key.clone());
-                        queue.push_back((folded_key, next_origin, next_path));
-                    }
+                    let next_origin = match (origin, relation) {
+                        (MemberOrigin::Own, AncestorRelation::UsesTrait) => MemberOrigin::Trait,
+                        _ => MemberOrigin::Inherited,
+                    };
+                    queue.push_back((folded_key, next_origin));
                 }
                 AncestorAnswer::Stub { folded_key } => stub_ancestors.push(folded_key),
                 AncestorAnswer::Unresolved => {}
@@ -207,9 +201,11 @@ pub fn linearized_class<'db>(
         }
     }
 
-    if !root_resolved {
+    if !root_fetched {
         return None;
     }
+
+    let cyclic = contains_cycle(&ancestry);
 
     members.sort_by(|a, b| {
         (a.member.kind as u8, a.key.as_str()).cmp(&(b.member.kind as u8, b.key.as_str()))
@@ -223,6 +219,48 @@ pub fn linearized_class<'db>(
         stub_ancestors,
         cyclic,
     })
+}
+
+/// Whether the resolved inheritance graph the walk recorded contains a
+/// directed cycle. The nodes are the folded keys the edges mention; an
+/// edge runs from its owner to its resolved target (stub and unresolved
+/// edges resolve to `None` and take no part). Kahn's algorithm,
+/// iteratively: peel every zero-in-degree node; whatever cannot be
+/// peeled sits on or behind a cycle. Only existence is asked, so map
+/// iteration order cannot change the answer.
+fn contains_cycle(ancestry: &[AncestorEdge]) -> bool {
+    let mut outgoing: HashMap<&str, Vec<&str>> = HashMap::new();
+    let mut in_degree: HashMap<&str, usize> = HashMap::new();
+    for edge in ancestry {
+        let Some(target) = edge.resolved.as_deref() else {
+            continue;
+        };
+        outgoing
+            .entry(edge.owner.as_str())
+            .or_default()
+            .push(target);
+        in_degree.entry(edge.owner.as_str()).or_insert(0);
+        let degree = in_degree.entry(target).or_insert(0);
+        *degree = degree.saturating_add(1);
+    }
+    let mut ready: Vec<&str> = in_degree
+        .iter()
+        .filter(|(_, degree)| **degree == 0)
+        .map(|(node, _)| *node)
+        .collect();
+    let mut peeled = 0_usize;
+    while let Some(node) = ready.pop() {
+        peeled = peeled.saturating_add(1);
+        for &target in outgoing.get(node).into_iter().flatten() {
+            if let Some(degree) = in_degree.get_mut(target) {
+                *degree = degree.saturating_sub(1);
+                if *degree == 0 {
+                    ready.push(target);
+                }
+            }
+        }
+    }
+    peeled < in_degree.len()
 }
 
 /// One source class-like loaded by its folded key: its member group,
@@ -534,6 +572,22 @@ mod tests {
         let self_cycle_fixture = fixture_one("<?php class Selfish extends Selfish {}");
         let selfish = linearize(&self_cycle_fixture, "Selfish").unwrap();
         assert!(selfish.cyclic);
+    }
+
+    #[test]
+    fn a_cycle_closing_off_the_first_traversed_path_is_still_flagged() {
+        // R reaches C first through A, so C's edge to B closes a
+        // genuine cycle (B -> C -> B) that no single traversal path
+        // from R contains when C's edges are examined. A per-path
+        // check misses it; the post-walk graph check must not.
+        let fixture = fixture(&[
+            "<?php interface R extends A, B {}",
+            "<?php interface A extends C {}",
+            "<?php interface B extends C {}",
+            "<?php interface C extends B {}",
+        ]);
+        let root = linearize(&fixture, "R").unwrap();
+        assert!(root.cyclic);
     }
 
     #[test]
