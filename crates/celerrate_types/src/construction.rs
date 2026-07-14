@@ -196,6 +196,7 @@ impl<'db> TypeId<'db> {
     ) -> Self {
         let mut flat: Vec<TypeId<'db>> = Vec::new();
         for constituent in constituents {
+            let constituent = crate::widening::capped_child(db, constituent);
             match constituent.data(db) {
                 TypeData::Mixed => return Self::mixed(db),
                 TypeData::Never => {}
@@ -223,10 +224,6 @@ impl<'db> TypeId<'db> {
                     crate::widening::join(db, accumulated, part)
                 });
         }
-        let mut flat: Vec<TypeId<'db>> = flat
-            .into_iter()
-            .map(|part| crate::widening::capped_child(db, part))
-            .collect();
         match flat.len() {
             0 => Self::never(db),
             1 => flat.swap_remove(0),
@@ -242,6 +239,7 @@ impl<'db> TypeId<'db> {
     ) -> Self {
         let mut flat: Vec<TypeId<'db>> = Vec::new();
         for intersectand in intersectands {
+            let intersectand = crate::widening::capped_child(db, intersectand);
             match intersectand.data(db) {
                 TypeData::Never => return Self::never(db),
                 TypeData::Mixed => {}
@@ -258,10 +256,6 @@ impl<'db> TypeId<'db> {
         // cap point: an oversized intersection truncates (sorted, so
         // deterministic; dropping intersectands over-approximates soundly).
         flat.truncate(crate::widening::UNION_ARITY_CAP);
-        let mut flat: Vec<TypeId<'db>> = flat
-            .into_iter()
-            .map(|part| crate::widening::capped_child(db, part))
-            .collect();
         match flat.len() {
             0 => Self::mixed(db),
             1 => flat.swap_remove(0),

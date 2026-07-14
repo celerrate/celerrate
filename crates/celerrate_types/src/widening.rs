@@ -317,6 +317,40 @@ mod tests {
     }
 
     #[test]
+    fn a_capped_union_constituent_triggers_mixed_absorption() {
+        let db = TestDatabase::default();
+        // `STRUCTURAL_DEPTH_CAP` iterations would cap the child mid-loop and
+        // reset the depth (capped_child fires once depth >= the cap); one
+        // fewer iteration is the true reachable boundary: depth exactly at
+        // `STRUCTURAL_DEPTH_CAP`, uncapped, and constructible.
+        let mut deep = TypeId::int(&db);
+        for _ in 0..(STRUCTURAL_DEPTH_CAP - 1) {
+            deep = TypeId::array(&db, TypeId::string(&db), deep);
+        }
+        assert_eq!(depth_of(&db, deep), STRUCTURAL_DEPTH_CAP);
+        assert_eq!(
+            TypeId::union(&db, [deep, TypeId::string(&db)]),
+            TypeId::mixed(&db)
+        );
+    }
+
+    #[test]
+    fn a_capped_intersection_constituent_disappears() {
+        let db = TestDatabase::default();
+        // See the comment above: one fewer than `STRUCTURAL_DEPTH_CAP`
+        // iterations is the reachable boundary for a depth exactly at the cap.
+        let mut deep = TypeId::int(&db);
+        for _ in 0..(STRUCTURAL_DEPTH_CAP - 1) {
+            deep = TypeId::array(&db, TypeId::string(&db), deep);
+        }
+        assert_eq!(depth_of(&db, deep), STRUCTURAL_DEPTH_CAP);
+        assert_eq!(
+            TypeId::intersection(&db, [deep, TypeId::string(&db)]),
+            TypeId::string(&db)
+        );
+    }
+
+    #[test]
     fn the_cap_applies_to_every_growing_constructor() {
         let db = TestDatabase::default();
         let mut current = TypeId::int(&db);
