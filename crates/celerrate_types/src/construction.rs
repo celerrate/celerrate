@@ -1,10 +1,11 @@
 //! Constructors and interrogation methods: the only way in and out of
 //! the lattice. Every constructor canonicalizes before interning.
 
+use crate::ordering::structural_order;
 use crate::representation::{FloatBits, StringConstraint, TypeData, TypeId};
 
 impl<'db> TypeId<'db> {
-    fn intern(db: &'db dyn salsa::Database, data: TypeData) -> Self {
+    fn intern(db: &'db dyn salsa::Database, data: TypeData<'db>) -> Self {
         Self::new(db, data)
     }
 
@@ -181,6 +182,115 @@ impl<'db> TypeId<'db> {
             _ => None,
         }
     }
+
+    /// The canonical union: flatten, drop `never`, absorb into `mixed`,
+    /// deduplicate, collapse the `true`/`false` pair, sort structurally,
+    /// unwrap singletons. No subsumption elimination (recorded scope
+    /// decision): `int|int<1,3>` keeps both constituents.
+    pub fn union(
+        db: &'db dyn salsa::Database,
+        constituents: impl IntoIterator<Item = TypeId<'db>>,
+    ) -> Self {
+        let mut flat: Vec<TypeId<'db>> = Vec::new();
+        for constituent in constituents {
+            match constituent.data(db) {
+                TypeData::Mixed => return Self::mixed(db),
+                TypeData::Never => {}
+                TypeData::Union {
+                    constituents: nested,
+                } => flat.extend(nested.iter().copied()),
+                _ => flat.push(constituent),
+            }
+        }
+        let true_type = Self::bool_literal(db, true);
+        let false_type = Self::bool_literal(db, false);
+        if flat.contains(&true_type) && flat.contains(&false_type) {
+            flat.retain(|part| *part != true_type && *part != false_type);
+            flat.push(Self::bool(db));
+        }
+        flat.sort_by(|left, right| structural_order(db, *left, *right));
+        flat.dedup();
+        // cap point: Task 6 collapses beyond UNION_ARITY_CAP here.
+        match flat.len() {
+            0 => Self::never(db),
+            1 => flat.swap_remove(0),
+            _ => Self::intern(db, TypeData::Union { constituents: flat }),
+        }
+    }
+
+    /// The canonical intersection: the dual rules (`mixed` disappears,
+    /// `never` absorbs).
+    pub fn intersection(
+        db: &'db dyn salsa::Database,
+        intersectands: impl IntoIterator<Item = TypeId<'db>>,
+    ) -> Self {
+        let mut flat: Vec<TypeId<'db>> = Vec::new();
+        for intersectand in intersectands {
+            match intersectand.data(db) {
+                TypeData::Never => return Self::never(db),
+                TypeData::Mixed => {}
+                TypeData::Intersection {
+                    intersectands: nested,
+                } => {
+                    flat.extend(nested.iter().copied());
+                }
+                _ => flat.push(intersectand),
+            }
+        }
+        flat.sort_by(|left, right| structural_order(db, *left, *right));
+        flat.dedup();
+        // cap point: Task 6 truncates beyond UNION_ARITY_CAP here (sorted,
+        // so deterministic; a sound over-approximation).
+        match flat.len() {
+            0 => Self::mixed(db),
+            1 => flat.swap_remove(0),
+            _ => Self::intern(
+                db,
+                TypeData::Intersection {
+                    intersectands: flat,
+                },
+            ),
+        }
+    }
+
+    pub fn contains_null(self, db: &'db dyn salsa::Database) -> bool {
+        match self.data(db) {
+            TypeData::Null => true,
+            TypeData::Union { constituents } => constituents.iter().any(|part| part.is_null(db)),
+            _ => false,
+        }
+    }
+
+    /// The type with `null` removed; `null` alone becomes `never`.
+    pub fn without_null(self, db: &'db dyn salsa::Database) -> TypeId<'db> {
+        match self.data(db) {
+            TypeData::Null => Self::never(db),
+            TypeData::Union { constituents } => Self::union(
+                db,
+                constituents
+                    .iter()
+                    .copied()
+                    .filter(|part| !part.is_null(db)),
+            ),
+            _ => self,
+        }
+    }
+
+    /// Union constituents; any other type answers itself as a singleton.
+    pub fn constituents(self, db: &'db dyn salsa::Database) -> Vec<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Union { constituents } => constituents.clone(),
+            _ => vec![self],
+        }
+    }
+
+    /// Intersection parts; any other type answers itself as a singleton.
+    pub fn intersectands(self, db: &'db dyn salsa::Database) -> Vec<TypeId<'db>> {
+        match self.data(db) {
+            TypeData::Intersection { intersectands } => intersectands.clone(),
+            _ => vec![self],
+        }
+    }
 }
 
 #[cfg(test)]
@@ -283,5 +393,98 @@ mod tests {
             Some("active".to_owned())
         );
         assert_eq!(TypeId::string(&db).string_literal_value(&db), None);
+    }
+
+    #[test]
+    fn unions_canonicalize_independently_of_construction_order() {
+        let db = TestDatabase::default();
+        let forward = TypeId::union(
+            &db,
+            [TypeId::int(&db), TypeId::string(&db), TypeId::null(&db)],
+        );
+        let backward = TypeId::union(
+            &db,
+            [TypeId::null(&db), TypeId::string(&db), TypeId::int(&db)],
+        );
+        assert_eq!(forward, backward);
+    }
+
+    #[test]
+    fn unions_flatten_deduplicate_and_unwrap() {
+        let db = TestDatabase::default();
+        let nested = TypeId::union(
+            &db,
+            [
+                TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]),
+                TypeId::int(&db),
+            ],
+        );
+        let flat = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
+        assert_eq!(nested, flat);
+        // A singleton unwraps to its only constituent.
+        assert_eq!(TypeId::union(&db, [TypeId::int(&db)]), TypeId::int(&db));
+        // An empty union is never.
+        assert_eq!(TypeId::union(&db, std::iter::empty()), TypeId::never(&db));
+    }
+
+    #[test]
+    fn union_absorption_rules_hold() {
+        let db = TestDatabase::default();
+        // never disappears; mixed absorbs everything.
+        assert_eq!(
+            TypeId::union(&db, [TypeId::int(&db), TypeId::never(&db)]),
+            TypeId::int(&db)
+        );
+        assert_eq!(
+            TypeId::union(&db, [TypeId::int(&db), TypeId::mixed(&db)]),
+            TypeId::mixed(&db)
+        );
+        // true|false collapses to bool.
+        assert_eq!(
+            TypeId::union(
+                &db,
+                [
+                    TypeId::bool_literal(&db, true),
+                    TypeId::bool_literal(&db, false)
+                ]
+            ),
+            TypeId::bool(&db)
+        );
+    }
+
+    #[test]
+    fn intersections_are_the_dual() {
+        let db = TestDatabase::default();
+        let forward =
+            TypeId::intersection(&db, [TypeId::string(&db), TypeId::non_empty_string(&db)]);
+        let backward =
+            TypeId::intersection(&db, [TypeId::non_empty_string(&db), TypeId::string(&db)]);
+        assert_eq!(forward, backward);
+        assert_eq!(
+            TypeId::intersection(&db, [TypeId::int(&db), TypeId::mixed(&db)]),
+            TypeId::int(&db)
+        );
+        assert_eq!(
+            TypeId::intersection(&db, [TypeId::int(&db), TypeId::never(&db)]),
+            TypeId::never(&db)
+        );
+        assert_eq!(
+            TypeId::intersection(&db, std::iter::empty()),
+            TypeId::mixed(&db)
+        );
+    }
+
+    #[test]
+    fn null_interrogation_walks_unions() {
+        let db = TestDatabase::default();
+        let nullable = TypeId::union(&db, [TypeId::int(&db), TypeId::null(&db)]);
+        assert!(nullable.contains_null(&db));
+        assert!(TypeId::null(&db).contains_null(&db));
+        assert!(!TypeId::int(&db).contains_null(&db));
+        assert_eq!(nullable.without_null(&db), TypeId::int(&db));
+        assert_eq!(TypeId::null(&db).without_null(&db), TypeId::never(&db));
+        assert_eq!(TypeId::int(&db).without_null(&db), TypeId::int(&db));
+        assert_eq!(nullable.constituents(&db).len(), 2);
+        assert_eq!(TypeId::int(&db).constituents(&db), vec![TypeId::int(&db)]);
     }
 }

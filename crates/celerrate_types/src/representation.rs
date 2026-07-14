@@ -34,8 +34,14 @@ pub enum StringConstraint {
 /// The lattice. NEVER derive `Ord`/`PartialOrd` here: child handles
 /// would compare by interner id, which is timing-dependent under
 /// parallel fan-out; `ordering::structural_order` owns comparison.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-pub enum TypeData {
+///
+/// `salsa::Update` is derived (rather than hand-implemented) solely
+/// because the `Union`/`Intersection` variants are self-referential
+/// (`TypeId<'db>` inside `TypeData<'db>`, interned by the same struct);
+/// salsa's interned-struct macro requires it to well-form the `'db`
+/// lifetime in that recursive case.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, salsa::Update)]
+pub enum TypeData<'db> {
     Mixed,
     Never,
     Void,
@@ -55,6 +61,14 @@ pub enum TypeData {
     String {
         constraint: StringConstraint,
     },
+    /// Flattened, deduplicated, structurally sorted, length >= 2.
+    Union {
+        constituents: Vec<TypeId<'db>>,
+    },
+    /// Flattened, deduplicated, structurally sorted, length >= 2.
+    Intersection {
+        intersectands: Vec<TypeId<'db>>,
+    },
 }
 
 /// The opaque interned handle of one canonical type: cheap `Eq`/`Hash`
@@ -64,5 +78,5 @@ pub enum TypeData {
 #[salsa::interned(debug)]
 pub struct TypeId<'db> {
     #[returns(ref)]
-    pub data: TypeData,
+    pub data: TypeData<'db>,
 }
