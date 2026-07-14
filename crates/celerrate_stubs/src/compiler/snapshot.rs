@@ -150,12 +150,17 @@ mod tests {
             Err(error) => panic!("cannot walk the snapshot: {error}"),
         };
         let mut symbols = Vec::new();
+        let mut functions = Vec::new();
+        let mut classes = Vec::new();
         for path in &files {
             if let Ok(text) = std::fs::read_to_string(path) {
-                symbols.extend(extract(&text).symbols);
+                let extraction = extract(&text);
+                symbols.extend(extraction.symbols);
+                functions.extend(extraction.functions);
+                classes.extend(extraction.classes);
             }
         }
-        let recompiled = encode(&StubIndex::from_symbols(symbols));
+        let recompiled = encode(&StubIndex::new(symbols, functions, classes));
         let committed = crate::EMBEDDED_STUB_BLOB;
         // Compare via length + hash: a byte-for-byte assert_eq would
         // dump megabytes on failure.
