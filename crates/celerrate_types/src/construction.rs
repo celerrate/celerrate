@@ -384,19 +384,18 @@ impl<'db> TypeId<'db> {
         );
         let value = Self::union(db, fields.iter().map(|field| field.value));
         let non_empty = fields.iter().any(|field| !field.optional);
-        let integer_keys: Vec<i64> = fields
+        let integer_keys: Option<Vec<i64>> = fields
             .iter()
             .map(|field| match &field.key {
                 ShapeKey::Integer(value) => Some(*value),
                 ShapeKey::String(_) => None,
             })
-            .collect::<Option<Vec<i64>>>()
-            .unwrap_or_default();
-        let consecutive = !integer_keys.is_empty()
-            && integer_keys
-                .iter()
+            .collect();
+        let consecutive = integer_keys.is_some_and(|keys| {
+            keys.iter()
                 .enumerate()
-                .all(|(index, key)| *key == index as i64);
+                .all(|(index, key)| *key == index as i64)
+        });
         let optional_is_suffix = fields
             .iter()
             .position(|field| field.optional)
@@ -770,5 +769,13 @@ mod tests {
             ],
         );
         assert!(!interleaved.is_list(&db));
+    }
+
+    #[test]
+    fn an_empty_shape_is_a_possibly_empty_list() {
+        let db = TestDatabase::default();
+        let empty = TypeId::shape(&db, vec![]);
+        assert!(empty.is_list(&db));
+        assert!(!empty.is_non_empty_array(&db));
     }
 }
