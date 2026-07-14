@@ -181,16 +181,20 @@ fn literal_is_numeric(value: &str) -> bool {
         Some((integer_part, fraction_part)) => (integer_part, Some(fraction_part)),
         None => (mantissa, None),
     };
+    // PHP 8 DNUM: either side of the dot may be empty, never both.
     let integer_is_digits =
         !integer_part.is_empty() && integer_part.bytes().all(|byte| byte.is_ascii_digit());
     let fraction_is_digits = fraction_part
-        .is_none_or(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
-    let mantissa_valid = if fraction_part.is_some() {
-        (integer_part.is_empty() || integer_is_digits)
-            && fraction_is_digits
-            && !(integer_part.is_empty() && fraction_part.is_some_and(str::is_empty))
-    } else {
-        integer_is_digits
+        .is_some_and(|part| !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit()));
+    let mantissa_valid = match fraction_part {
+        None => integer_is_digits,
+        Some(fraction) => {
+            if integer_part.is_empty() {
+                fraction_is_digits
+            } else {
+                integer_is_digits && (fraction.is_empty() || fraction_is_digits)
+            }
+        }
     };
     let exponent_valid = exponent.is_none_or(|part| {
         let unsigned_exponent = part.strip_prefix(['+', '-']).unwrap_or(part);
@@ -528,14 +532,24 @@ fn judge_ground<'db>(
             b_parameters,
             *b_return,
         ),
-        // The CannotProve islands: invokable objects and callable
-        // strings and arrays keep these pairs undecidable.
+        // The CannotProve islands, both directions: which values inhabit a
+        // callable signature is program-dependent (a matching function-name
+        // string, class-string, array callable, shape, or class may or may
+        // not exist at runtime), so invokable objects and callable strings,
+        // class-strings, arrays, shapes, and classes stay undecidable
+        // whichever side is the candidate.
         (TypeData::Callable { .. }, TypeData::Object)
         | (TypeData::Object | TypeData::Class { .. }, TypeData::Callable { .. })
         | (TypeData::String { .. } | TypeData::ClassString { .. }, TypeData::Callable { .. })
-        | (TypeData::Array { .. } | TypeData::Shape { .. }, TypeData::Callable { .. }) => {
-            Proof::CannotProve
-        }
+        | (TypeData::Array { .. } | TypeData::Shape { .. }, TypeData::Callable { .. })
+        | (
+            TypeData::Callable { .. },
+            TypeData::String { .. }
+            | TypeData::ClassString { .. }
+            | TypeData::Array { .. }
+            | TypeData::Shape { .. }
+            | TypeData::Class { .. },
+        ) => Proof::CannotProve,
         // Everything else is a refuted cross-kind pair.
         _ => Proof::Fails,
     }
@@ -989,5 +1003,43 @@ mod tests {
             nullability(&f.db, nullable_bound),
             Nullability::PossiblyNull
         );
+    }
+
+    #[test]
+    fn callable_cross_kind_pairs_are_undecidable_in_both_directions() {
+        let f = fixture(&[]);
+        let db = &f.db;
+        let callable = TypeId::callable(db, vec![], TypeId::void(db));
+        for other in [
+            TypeId::string(db),
+            TypeId::class_string(db, None),
+            TypeId::array(db, TypeId::int(db), TypeId::int(db)),
+            TypeId::class(db, "Closure", vec![]),
+            TypeId::object(db),
+        ] {
+            assert_eq!(judge(&f, callable, other), Proof::CannotProve);
+            assert_eq!(judge(&f, other, callable), Proof::CannotProve);
+        }
+    }
+
+    #[test]
+    fn numeric_string_literals_follow_php_8_semantics() {
+        let f = fixture(&[]);
+        let db = &f.db;
+        let numeric = TypeId::numeric_string(db);
+        for value in ["5.", ".5", "5.e3", "+1.5", " 42 ", "1e10", "007"] {
+            assert_eq!(
+                judge(&f, TypeId::string_literal(db, value), numeric),
+                Proof::Holds,
+                "expected '{value}' to be numeric"
+            );
+        }
+        for value in ["", ".", "e5", "5..", "1.2.3", "abc", "0x1A"] {
+            assert_eq!(
+                judge(&f, TypeId::string_literal(db, value), numeric),
+                Proof::Fails,
+                "expected '{value}' to be non-numeric"
+            );
+        }
     }
 }
