@@ -36,7 +36,17 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
         TypeData::Float { literal: None } => "float".to_owned(),
         TypeData::Float {
             literal: Some(bits),
-        } => format!("{}", bits.value()),
+        } => {
+            let rendered = format!("{}", bits.value());
+            if rendered.contains(['.', 'e', 'E'])
+                || rendered.contains("inf")
+                || rendered.contains("NaN")
+            {
+                rendered
+            } else {
+                format!("{rendered}.0")
+            }
+        }
         TypeData::String {
             constraint: StringConstraint::General,
         } => "string".to_owned(),
@@ -342,5 +352,13 @@ mod tests {
         let intersection =
             TypeId::intersection(&db, [union, TypeId::class(&db, "Countable", vec![])]);
         assert_eq!(intersection.display(&db), "countable&(int|string)");
+    }
+
+    #[test]
+    fn whole_number_float_literals_keep_their_decimal_point() {
+        let db = TestDatabase::default();
+        assert_eq!(TypeId::float_literal(&db, 2.0).display(&db), "2.0");
+        assert_eq!(TypeId::float_literal(&db, -2.0).display(&db), "-2.0");
+        assert_eq!(TypeId::float_literal(&db, 1.5).display(&db), "1.5");
     }
 }
