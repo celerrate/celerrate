@@ -86,6 +86,29 @@ pub struct Member {
     pub ast_id: AstId,
 }
 
+/// One `insteadof` or `as` adaptation, as written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub enum TraitAdaptation {
+    Precedence {
+        trait_name: Option<String>,
+        member: String,
+        excluded: Vec<String>,
+    },
+    Alias {
+        trait_name: Option<String>,
+        member: String,
+        visibility: Option<Visibility>,
+        alias: Option<String>,
+    },
+}
+
+/// One `use Trait, …;` clause of a class body, adaptations included.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct TraitUse {
+    pub names: Vec<String>,
+    pub adaptations: Vec<TraitAdaptation>,
+}
+
 /// One class-like declaration and its direct members, in tree order.
 /// `name` is `None` for anonymous class-likes; their `ast_id` is the
 /// synthetic identity the spec gives them.
@@ -97,6 +120,7 @@ pub struct ClassMembers {
     pub ast_id: AstId,
     pub docblock: Option<String>,
     pub members: Vec<Member>,
+    pub trait_uses: Vec<TraitUse>,
 }
 
 /// The member projection of one file, in tree order.
@@ -139,22 +163,30 @@ impl MemberTree {
 
 /// The group of a class-like item node; `None` for anything else.
 fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
-    let (kind, name_token) = match item.node.kind() {
+    let (kind, name_token, trait_uses) = match item.node.kind() {
         SyntaxKind::ClassDeclaration => {
             let declaration = ast::ClassDeclaration::cast(item.node.clone())?;
-            (DeclarationKind::Class, declaration.name_token())
+            let trait_uses = trait_uses_of(declaration.member_list());
+            (DeclarationKind::Class, declaration.name_token(), trait_uses)
         }
         SyntaxKind::InterfaceDeclaration => {
             let declaration = ast::InterfaceDeclaration::cast(item.node.clone())?;
-            (DeclarationKind::Interface, declaration.name_token())
+            let trait_uses = trait_uses_of(declaration.member_list());
+            (
+                DeclarationKind::Interface,
+                declaration.name_token(),
+                trait_uses,
+            )
         }
         SyntaxKind::TraitDeclaration => {
             let declaration = ast::TraitDeclaration::cast(item.node.clone())?;
-            (DeclarationKind::Trait, declaration.name_token())
+            let trait_uses = trait_uses_of(declaration.member_list());
+            (DeclarationKind::Trait, declaration.name_token(), trait_uses)
         }
         SyntaxKind::EnumDeclaration => {
             let declaration = ast::EnumDeclaration::cast(item.node.clone())?;
-            (DeclarationKind::Enum, declaration.name_token())
+            let trait_uses = trait_uses_of(declaration.member_list());
+            (DeclarationKind::Enum, declaration.name_token(), trait_uses)
         }
         _ => return None,
     };
@@ -165,7 +197,84 @@ fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
         ast_id,
         docblock: ast::docblock_token(&item.node).map(|token| token.text().to_owned()),
         members: Vec::new(),
+        trait_uses,
     })
+}
+
+/// The trait-use clauses of a class-like body, adaptations resolved.
+/// Trait-use clauses are not numbered items, so this reads the class
+/// node's member list directly at group creation.
+fn trait_uses_of(member_list: Option<ast::MemberList>) -> Vec<TraitUse> {
+    member_list
+        .into_iter()
+        .flat_map(|list| list.member_declarations())
+        .filter_map(|member| match member {
+            ast::MemberDeclaration::TraitUseClause(clause) => Some(clause),
+            _ => None,
+        })
+        .map(|clause| TraitUse {
+            names: clause.names().map(|name| name.text()).collect(),
+            adaptations: clause
+                .trait_adaptation_list()
+                .into_iter()
+                .flat_map(|list| list.trait_adaptations())
+                .filter_map(|adaptation| lower_adaptation(&adaptation))
+                .collect(),
+        })
+        .collect()
+}
+
+/// Whether the adaptation node contains a `::` separator: the
+/// discriminator between a qualified reference (`A::m`) and the
+/// unqualified form, where `reference_name` returns the member itself.
+fn has_colon_colon(node: &SyntaxNode) -> bool {
+    node.children_with_tokens()
+        .filter_map(|element| element.into_token())
+        .any(|token| token.kind() == SyntaxKind::ColonColon)
+}
+
+fn lower_adaptation(adaptation: &ast::TraitAdaptation) -> Option<TraitAdaptation> {
+    match adaptation {
+        ast::TraitAdaptation::TraitPrecedence(precedence) => {
+            let member = precedence.member_token()?.text().to_owned();
+            let trait_name = precedence
+                .reference_name()
+                .map(|name| name.text())
+                .filter(|_| has_colon_colon(precedence.syntax()));
+            let excluded = precedence
+                .excluded_names()
+                .map(|name| name.text())
+                .collect();
+            Some(TraitAdaptation::Precedence {
+                trait_name,
+                member,
+                excluded,
+            })
+        }
+        ast::TraitAdaptation::TraitAlias(alias) => {
+            let member_token = alias.member_token()?;
+            let member = member_token.text().to_owned();
+            let trait_name = alias
+                .reference_name()
+                .map(|name| name.text())
+                .filter(|_| has_colon_colon(alias.syntax()));
+            let visibility = alias.visibility_token().map(|token| match token.kind() {
+                SyntaxKind::Protected => Visibility::Protected,
+                SyntaxKind::Private => Visibility::Private,
+                _ => Visibility::Public,
+            });
+            let alias_name = alias
+                .alias_token()
+                .filter(|token| token.text_range() != member_token.text_range())
+                .map(|token| token.text().to_owned());
+            Some(TraitAdaptation::Alias {
+                trait_name,
+                member,
+                visibility,
+                alias: alias_name,
+            })
+        }
+    }
 }
 
 fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
@@ -588,5 +697,79 @@ mod tests {
         let formatting_edit = tree_of("<?php class A { public $x = new  Foo( 1,   2 ); }");
         assert_ne!(before, content_edit);
         assert_eq!(before, formatting_edit);
+    }
+
+    use super::{TraitAdaptation, TraitUse};
+
+    #[test]
+    fn trait_uses_carry_their_names() {
+        let class = only_class("<?php class A { use First, Concerns\\Second; use \\Third; }");
+        assert_eq!(
+            class.trait_uses,
+            vec![
+                TraitUse {
+                    names: vec!["First".to_owned(), "Concerns\\Second".to_owned()],
+                    adaptations: Vec::new(),
+                },
+                TraitUse {
+                    names: vec!["\\Third".to_owned()],
+                    adaptations: Vec::new(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn insteadof_and_as_adaptations_are_captured() {
+        let class = only_class(
+            "<?php class A {\n\
+                 use B, C {\n\
+                     B::hello insteadof C;\n\
+                     C::hello as protected hi;\n\
+                     bye as farewell;\n\
+                 }\n\
+             }",
+        );
+        let adaptations = &class.trait_uses.first().unwrap().adaptations;
+        assert_eq!(
+            adaptations[0],
+            TraitAdaptation::Precedence {
+                trait_name: Some("B".to_owned()),
+                member: "hello".to_owned(),
+                excluded: vec!["C".to_owned()],
+            },
+        );
+        assert_eq!(
+            adaptations[1],
+            TraitAdaptation::Alias {
+                trait_name: Some("C".to_owned()),
+                member: "hello".to_owned(),
+                visibility: Some(Visibility::Protected),
+                alias: Some("hi".to_owned()),
+            },
+        );
+        assert_eq!(
+            adaptations[2],
+            TraitAdaptation::Alias {
+                trait_name: None,
+                member: "bye".to_owned(),
+                visibility: None,
+                alias: Some("farewell".to_owned()),
+            },
+        );
+    }
+
+    #[test]
+    fn a_visibility_only_alias_has_no_new_name() {
+        let class = only_class("<?php class A { use B { hello as protected; } }");
+        assert_eq!(
+            class.trait_uses.first().unwrap().adaptations.first(),
+            Some(&TraitAdaptation::Alias {
+                trait_name: None,
+                member: "hello".to_owned(),
+                visibility: Some(Visibility::Protected),
+                alias: None,
+            }),
+        );
     }
 }

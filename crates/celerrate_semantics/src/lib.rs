@@ -30,7 +30,7 @@ pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, Us
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
 pub use members::{
     ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
-    Visibility,
+    TraitAdaptation, TraitUse, Visibility,
 };
 pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
 pub use reference_checks::{
