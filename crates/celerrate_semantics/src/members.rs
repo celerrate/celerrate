@@ -54,13 +54,35 @@ impl Default for MemberFlags {
     }
 }
 
+/// One parameter of a method signature, as written.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ParameterSignature {
+    pub name: String,
+    pub type_text: Option<String>,
+    pub default_text: Option<String>,
+    pub by_reference: bool,
+    pub variadic: bool,
+    pub is_promoted: bool,
+}
+
+/// One member's signature, every type an unresolved written text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
+pub struct MemberSignature {
+    pub parameters: Vec<ParameterSignature>,
+    pub type_text: Option<String>,
+    pub default_text: Option<String>,
+    pub by_reference: bool,
+}
+
 /// One member: original spelling (property names without the `$`),
-/// flags, and stable identity.
+/// flags, signature, docblock text, and stable identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Member {
     pub kind: MemberKind,
     pub name: String,
     pub flags: MemberFlags,
+    pub signature: MemberSignature,
+    pub docblock: Option<String>,
     pub ast_id: AstId,
 }
 
@@ -73,6 +95,7 @@ pub struct ClassMembers {
     pub name: Option<String>,
     pub namespace: String,
     pub ast_id: AstId,
+    pub docblock: Option<String>,
     pub members: Vec<Member>,
 }
 
@@ -140,6 +163,7 @@ fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
         name: name_token.map(|token| token.text().to_owned()),
         namespace: item.namespace.clone(),
         ast_id,
+        docblock: ast::docblock_token(&item.node).map(|token| token.text().to_owned()),
         members: Vec::new(),
     })
 }
@@ -157,6 +181,8 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                 kind: MemberKind::Method,
                 name: name.text().to_owned(),
                 flags: flags_of(method.modifiers()),
+                signature: method_signature(&method),
+                docblock: ast::docblock_token(node).map(|token| token.text().to_owned()),
                 ast_id,
             });
         }
@@ -165,6 +191,8 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                 return;
             };
             let flags = flags_of(property.modifiers());
+            let type_text = property.ty().map(|ty| ast::type_text(&ty));
+            let docblock = ast::docblock_token(node).map(|token| token.text().to_owned());
             for element in property.property_elements() {
                 let Some(name) = element.name_token() else {
                     continue;
@@ -173,6 +201,12 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                     kind: MemberKind::Property,
                     name: property_name(&name),
                     flags,
+                    signature: MemberSignature {
+                        type_text: type_text.clone(),
+                        default_text: element.expression().map(|e| ast::expression_text(&e)),
+                        ..MemberSignature::default()
+                    },
+                    docblock: docblock.clone(),
                     ast_id,
                 });
             }
@@ -182,6 +216,8 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                 return;
             };
             let flags = flags_of(constant.modifiers());
+            let type_text = constant.ty().map(|ty| ast::type_text(&ty));
+            let docblock = ast::docblock_token(node).map(|token| token.text().to_owned());
             for element in constant.constant_elements() {
                 let Some(name) = element.name_token() else {
                     continue;
@@ -190,6 +226,12 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                     kind: MemberKind::ClassConstant,
                     name: name.text().to_owned(),
                     flags,
+                    signature: MemberSignature {
+                        type_text: type_text.clone(),
+                        default_text: element.value().map(|e| ast::expression_text(&e)),
+                        ..MemberSignature::default()
+                    },
+                    docblock: docblock.clone(),
                     ast_id,
                 });
             }
@@ -205,10 +247,43 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                 kind: MemberKind::EnumCase,
                 name: name.text().to_owned(),
                 flags: MemberFlags::default(),
+                signature: MemberSignature {
+                    default_text: case.value().map(|e| ast::expression_text(&e)),
+                    ..MemberSignature::default()
+                },
+                docblock: ast::docblock_token(node).map(|token| token.text().to_owned()),
                 ast_id,
             });
         }
         _ => {}
+    }
+}
+
+/// One method's signature, as written: every type an unresolved text,
+/// no type resolution.
+fn method_signature(method: &ast::MethodDeclaration) -> MemberSignature {
+    MemberSignature {
+        parameters: method
+            .parameter_list()
+            .into_iter()
+            .flat_map(|list| list.parameters())
+            .filter_map(|parameter| {
+                let name = parameter.name_token()?;
+                Some(ParameterSignature {
+                    name: name.text().trim_start_matches('$').to_owned(),
+                    type_text: parameter.ty().map(|ty| ast::type_text(&ty)),
+                    default_text: parameter
+                        .default_value()
+                        .map(|expression| ast::expression_text(&expression)),
+                    by_reference: parameter.by_reference_token().is_some(),
+                    variadic: parameter.variadic_token().is_some(),
+                    is_promoted: parameter.modifiers().next().is_some(),
+                })
+            })
+            .collect(),
+        type_text: method.return_type().map(|ty| ast::type_text(&ty)),
+        default_text: None,
+        by_reference: method.by_reference_token().is_some(),
     }
 }
 
@@ -410,5 +485,108 @@ mod tests {
         assert_eq!(tree_of("<?php function free() {}").classes, Vec::new());
         let class = only_class("<?php class Empty {}");
         assert_eq!(class.members, Vec::new());
+    }
+
+    #[test]
+    fn a_method_signature_carries_parameters_return_type_and_reference() {
+        let class = only_class(
+            "<?php class A {\n\
+                 public function f(int $count, Foo\\Bar|null $subject = null, string ...$rest): static {}\n\
+                 public function &g() {}\n\
+             }",
+        );
+        let f = &class.members[0];
+        let parameters = &f.signature.parameters;
+        assert_eq!(parameters.len(), 3);
+        assert_eq!(parameters[0].name, "count");
+        assert_eq!(parameters[0].type_text.as_deref(), Some("int"));
+        assert_eq!(parameters[0].default_text, None);
+        assert_eq!(parameters[1].type_text.as_deref(), Some("Foo\\Bar|null"));
+        assert_eq!(parameters[1].default_text.as_deref(), Some("null"));
+        assert!(parameters[2].variadic);
+        assert_eq!(f.signature.type_text.as_deref(), Some("static"));
+        assert!(!f.signature.by_reference);
+        assert!(class.members[1].signature.by_reference);
+    }
+
+    #[test]
+    fn promoted_constructor_parameters_are_marked() {
+        let class = only_class(
+            "<?php class A { public function __construct(private readonly int $id, string $plain) {} }",
+        );
+        let constructor = &class.members[0];
+        assert!(constructor.signature.parameters[0].is_promoted);
+        assert!(!constructor.signature.parameters[1].is_promoted);
+    }
+
+    #[test]
+    fn property_and_constant_signatures_carry_type_and_default() {
+        let class = only_class(
+            "<?php class A {\n\
+                 public ?Logger $logger = null;\n\
+                 public array $bare = [];\n\
+                 final const int LIMIT = 10;\n\
+             }",
+        );
+        let logger = &class.members[0];
+        assert_eq!(logger.signature.type_text.as_deref(), Some("?Logger"));
+        assert_eq!(logger.signature.default_text.as_deref(), Some("null"));
+        let limit = &class.members[2];
+        assert_eq!(limit.signature.type_text.as_deref(), Some("int"));
+        assert_eq!(limit.signature.default_text.as_deref(), Some("10"));
+    }
+
+    #[test]
+    fn an_enum_case_value_is_its_default_text() {
+        let class = only_class("<?php enum Suit: string { case Hearts = 'h'; case Clubs; }");
+        assert_eq!(
+            class.members[0].signature.default_text.as_deref(),
+            Some("'h'"),
+        );
+        assert_eq!(class.members[1].signature.default_text, None);
+    }
+
+    #[test]
+    fn docblocks_attach_to_members_and_to_the_class() {
+        let class = only_class(
+            "<?php\n\
+             /** @template T */\n\
+             class Collection {\n\
+                 /** @return T|null */\n\
+                 public function first() {}\n\
+                 public function undocumented() {}\n\
+             }",
+        );
+        assert_eq!(class.docblock.as_deref(), Some("/** @template T */"));
+        assert_eq!(
+            class.members[0].docblock.as_deref(),
+            Some("/** @return T|null */"),
+        );
+        assert_eq!(class.members[1].docblock, None);
+    }
+
+    #[test]
+    fn a_docblock_edit_changes_the_member_tree_a_body_comment_does_not() {
+        // The spec's accepted cost, pinned: docblock text is a field,
+        // so editing it changes the value; a comment inside a body is
+        // still invisible.
+        let before = tree_of("<?php class A { /** @return int */ function f() { return 1; } }");
+        let docblock_edit =
+            tree_of("<?php class A { /** @return string */ function f() { return 1; } }");
+        let body_comment_edit =
+            tree_of("<?php class A { /** @return int */ function f() { /* note */ return 1; } }");
+        assert_ne!(before, docblock_edit);
+        assert_eq!(before, body_comment_edit);
+    }
+
+    #[test]
+    fn a_default_value_edit_changes_the_member_tree_formatting_does_not() {
+        // The comparable form is the projection typed judgments read:
+        // content changes invalidate, formatting does not.
+        let before = tree_of("<?php class A { public $x = new Foo(1, 2); }");
+        let content_edit = tree_of("<?php class A { public $x = new Foo(1, 3); }");
+        let formatting_edit = tree_of("<?php class A { public $x = new  Foo( 1,   2 ); }");
+        assert_ne!(before, content_edit);
+        assert_eq!(before, formatting_edit);
     }
 }

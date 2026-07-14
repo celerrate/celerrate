@@ -28,7 +28,10 @@ pub use index::{
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use lookup::{SymbolQuery, SymbolResolution, lookup_symbol};
-pub use members::{ClassMembers, Member, MemberFlags, MemberKind, MemberTree, Visibility};
+pub use members::{
+    ClassMembers, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
+    Visibility,
+};
 pub use queries::{ast_id_map, item_tree, semantic_diagnostics};
 pub use reference_checks::{
     ALLOCATED_IDENTIFIERS, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS,
