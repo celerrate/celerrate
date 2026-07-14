@@ -614,12 +614,16 @@ fn judge_ground<'db>(
         ),
         // The CannotProve islands, both directions: which values inhabit a
         // callable signature is program-dependent (a matching function-name
-        // string, class-string, array callable, shape, or class may or may
-        // not exist at runtime), so invokable objects and callable strings,
-        // class-strings, arrays, shapes, and classes stay undecidable
-        // whichever side is the candidate.
+        // string, class-string, array callable, shape, class, or enum case
+        // may or may not exist at runtime: PHP enums may declare
+        // `__invoke`), so invokable objects and callable strings,
+        // class-strings, arrays, shapes, classes, and enum cases stay
+        // undecidable whichever side is the candidate.
         (TypeData::Callable { .. }, TypeData::Object)
-        | (TypeData::Object | TypeData::Class { .. }, TypeData::Callable { .. })
+        | (
+            TypeData::Object | TypeData::Class { .. } | TypeData::EnumCase { .. },
+            TypeData::Callable { .. },
+        )
         | (TypeData::String { .. } | TypeData::ClassString { .. }, TypeData::Callable { .. })
         | (TypeData::Array { .. } | TypeData::Shape { .. }, TypeData::Callable { .. })
         | (
@@ -628,7 +632,8 @@ fn judge_ground<'db>(
             | TypeData::ClassString { .. }
             | TypeData::Array { .. }
             | TypeData::Shape { .. }
-            | TypeData::Class { .. },
+            | TypeData::Class { .. }
+            | TypeData::EnumCase { .. },
         ) => Proof::CannotProve,
         // Everything else is a refuted cross-kind pair.
         _ => Proof::Fails,
@@ -1096,6 +1101,7 @@ mod tests {
             TypeId::array(db, TypeId::int(db), TypeId::int(db)),
             TypeId::class(db, "Closure", vec![]),
             TypeId::object(db),
+            TypeId::enum_case(db, "Status", "Active"),
         ] {
             assert_eq!(judge(&f, callable, other), Proof::CannotProve);
             assert_eq!(judge(&f, other, callable), Proof::CannotProve);
