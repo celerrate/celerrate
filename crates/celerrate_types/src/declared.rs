@@ -70,8 +70,11 @@ fn lower_name<'db>(db: &'db dyn salsa::Database, site: &NameSite<'_>, name: &str
 }
 
 /// The keyword table: total over the native grammar (decision 3 for
-/// `callable`). `None` means "an ordinary class name".
-fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId<'db>> {
+/// `callable`). `None` means "an ordinary class name". `pub(crate)`:
+/// the type-syntax extension point's `AnnotationSite::keyword_type`
+/// shares this table so the native and annotation paths can never
+/// disagree.
+pub(crate) fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId<'db>> {
     let folded = name.to_ascii_lowercase();
     Some(match folded.as_str() {
         "int" => TypeId::int(db),
@@ -103,8 +106,10 @@ fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId
 }
 
 /// PHP class-name resolution is static: the first candidate is the
-/// fully qualified name whether or not the class exists.
-fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String {
+/// fully qualified name whether or not the class exists. `pub(crate)`:
+/// the type-syntax extension point's `AnnotationSite::qualify_class_name`
+/// shares this qualifier.
+pub(crate) fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String {
     match site {
         NameSite::Source { namespace, tables } => {
             resolve_candidates(written, SymbolSpace::ClassLike, namespace, tables)
