@@ -291,6 +291,9 @@ impl Watch {
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if let Ok(event) = event {
+                    if !changes_content(&event.kind) {
+                        return;
+                    }
                     for path in event.paths {
                         let _ = sender.send(as_the_project_names_it(&roots, path));
                     }
@@ -530,6 +533,18 @@ fn real_path(root: &Path) -> PathBuf {
     std::fs::canonicalize(root).unwrap_or_else(|_| root.to_path_buf())
 }
 
+/// Whether an event can change what analysis reads. Access events cannot:
+/// they report reads, and on Linux inotify reports the reads the session
+/// itself performs. `Session::absorb` reading an edited file raises one on
+/// the watched path, the cycle would treat that as a change and absorb it,
+/// absorbing it reads the file again, and the watch would feed on its own
+/// absorption forever. macOS and Windows never report reads, which is why
+/// only Linux ever looped. Filtering here, at the source, means no consumer
+/// downstream has to remember why.
+fn changes_content(kind: &notify::EventKind) -> bool {
+    !matches!(kind, notify::EventKind::Access(_))
+}
+
 /// Runs one analysis, restarting whenever a change overtakes it.
 ///
 /// The analysis runs on its own thread over its own database handle, so
@@ -639,7 +654,7 @@ mod tests {
 
     use super::{
         InputMutation, Resynchronized, UnwatchablePath, Watch, WatchedRoot,
-        as_the_project_names_it, reconcile, watched_roots,
+        as_the_project_names_it, changes_content, reconcile, watched_roots,
     };
     use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
     use crate::render;
@@ -1448,6 +1463,27 @@ mod tests {
                 .any(|(key, _)| key == blake3::hash(edited_source.as_bytes()).as_bytes()),
             "the pack on disk is keyed by the edited content",
         );
+    }
+
+    /// On Linux, inotify reports `IN_OPEN` as `EventKind::Access(_)`, and
+    /// `Session::absorb` reading a changed file raises exactly one of
+    /// those on the path it just read. An access event never changes
+    /// content, so it must not be forwarded: forwarding it is what turned
+    /// the watch's own read of an edit into another event, feeding the
+    /// cycle its own reads forever. macOS and Windows never emit these,
+    /// which is why only Linux ever looped.
+    #[test]
+    fn only_events_that_can_change_content_pass_the_filter() {
+        use notify::EventKind;
+        use notify::event::{AccessKind, CreateKind, ModifyKind, RemoveKind};
+
+        assert!(!changes_content(&EventKind::Access(AccessKind::Any)));
+        assert!(!changes_content(&EventKind::Access(AccessKind::Open(
+            notify::event::AccessMode::Any
+        ))));
+        assert!(changes_content(&EventKind::Modify(ModifyKind::Any)));
+        assert!(changes_content(&EventKind::Create(CreateKind::Any)));
+        assert!(changes_content(&EventKind::Remove(RemoveKind::Any)));
     }
 
     #[test]
