@@ -121,6 +121,11 @@ pub struct ClassMembers {
     pub docblock: Option<String>,
     pub members: Vec<Member>,
     pub trait_uses: Vec<TraitUse>,
+    /// The class-like attribute names as written (last segment kept by
+    /// consumers), e.g. `AllowDynamicProperties`. Read from the
+    /// declaration node's attribute groups so linearization need not
+    /// re-read the syntax tree.
+    pub attribute_names: Vec<String>,
 }
 
 /// The member projection of one file, in tree order.
@@ -163,30 +168,50 @@ impl MemberTree {
 
 /// The group of a class-like item node; `None` for anything else.
 fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
-    let (kind, name_token, trait_uses) = match item.node.kind() {
+    let (kind, name_token, trait_uses, attribute_names) = match item.node.kind() {
         SyntaxKind::ClassDeclaration => {
             let declaration = ast::ClassDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
-            (DeclarationKind::Class, declaration.name_token(), trait_uses)
+            let attribute_names = attribute_names_of(declaration.attribute_groups());
+            (
+                DeclarationKind::Class,
+                declaration.name_token(),
+                trait_uses,
+                attribute_names,
+            )
         }
         SyntaxKind::InterfaceDeclaration => {
             let declaration = ast::InterfaceDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
+            let attribute_names = attribute_names_of(declaration.attribute_groups());
             (
                 DeclarationKind::Interface,
                 declaration.name_token(),
                 trait_uses,
+                attribute_names,
             )
         }
         SyntaxKind::TraitDeclaration => {
             let declaration = ast::TraitDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
-            (DeclarationKind::Trait, declaration.name_token(), trait_uses)
+            let attribute_names = attribute_names_of(declaration.attribute_groups());
+            (
+                DeclarationKind::Trait,
+                declaration.name_token(),
+                trait_uses,
+                attribute_names,
+            )
         }
         SyntaxKind::EnumDeclaration => {
             let declaration = ast::EnumDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
-            (DeclarationKind::Enum, declaration.name_token(), trait_uses)
+            let attribute_names = attribute_names_of(declaration.attribute_groups());
+            (
+                DeclarationKind::Enum,
+                declaration.name_token(),
+                trait_uses,
+                attribute_names,
+            )
         }
         _ => return None,
     };
@@ -198,7 +223,17 @@ fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
         docblock: ast::docblock_token(&item.node).map(|token| token.text().to_owned()),
         members: Vec::new(),
         trait_uses,
+        attribute_names,
     })
+}
+
+/// The written names of every attribute across a class-like's attribute
+/// groups, in tree order, e.g. `[AllowDynamicProperties]`.
+fn attribute_names_of(groups: ast::AstChildren<ast::AttributeGroup>) -> Vec<String> {
+    groups
+        .flat_map(|group| group.attributes())
+        .filter_map(|attribute| attribute.name().map(|name| name.text()))
+        .collect()
 }
 
 /// The trait-use clauses of a class-like body, adaptations resolved.

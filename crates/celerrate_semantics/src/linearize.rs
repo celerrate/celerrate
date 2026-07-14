@@ -96,6 +96,33 @@ pub struct LinearizedMember {
     pub origin: MemberOrigin,
 }
 
+/// The per-kind suppression facts a class carries: whether the resolved
+/// table defines a magic method that answers otherwise-unknown members,
+/// and whether the class opts into dynamic properties.
+///
+/// `stdClass` is not marked here: it is a compiled stub, so a class
+/// extending it records the `stdclass` stub ancestor instead, and plan 8
+/// reads `stub_ancestors` to grant it dynamic properties. This struct
+/// only carries facts derivable from the source table and its own
+/// attributes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MagicMarkers {
+    /// `__get` is defined: unknown *property* reads are suppressed.
+    pub has_magic_get: bool,
+    /// `__set` is defined: unknown *property* writes may be suppressed
+    /// (plan 8 decides).
+    pub has_magic_set: bool,
+    /// `__call` is defined: unknown *instance method* calls are
+    /// suppressed.
+    pub has_magic_call: bool,
+    /// `__callStatic` is defined: unknown *static method* calls are
+    /// suppressed.
+    pub has_magic_call_static: bool,
+    /// `#[AllowDynamicProperties]` is present, own or inherited from any
+    /// visited source ancestor.
+    pub allows_dynamic_properties: bool,
+}
+
 /// The linearized view of one class-like: its resolved member table,
 /// the ancestry it walked, the stub boundary it reached, and whether an
 /// inheritance cycle was broken.
@@ -110,6 +137,8 @@ pub struct LinearizedClass {
     pub stub_ancestors: Vec<String>,
     /// A genuine inheritance cycle was detected and broken.
     pub cyclic: bool,
+    /// The per-kind magic-method and dynamic-property suppression facts.
+    pub magic: MagicMarkers,
 }
 
 /// The folded lookup key of one member: methods fold ASCII case (PHP
@@ -141,14 +170,21 @@ pub fn linearized_class<'db>(
     let mut members: Vec<LinearizedMember> = Vec::new();
     let mut ancestry: Vec<AncestorEdge> = Vec::new();
     let mut stub_ancestors: Vec<String> = Vec::new();
+    // Set once any visited source class-like opts into dynamic
+    // properties, own or inherited.
+    let mut allows_dynamic = false;
     // Whether the queried key itself fetched a source class-like: the
     // root is dequeued first, so the first fetch is the root's.
     let mut root_fetched = false;
 
-    let mut queue: VecDeque<(String, MemberOrigin)> = VecDeque::new();
-    queue.push_back((root_key, MemberOrigin::Own));
+    // The queue carries, alongside the folded key and origin, the
+    // resolved trait adaptations that the using class attached to this
+    // trait edge. Only trait entries carry `Some`; the context filters
+    // to this trait's key at push time.
+    let mut queue: VecDeque<(String, MemberOrigin, Option<ResolvedAdaptations>)> = VecDeque::new();
+    queue.push_back((root_key, MemberOrigin::Own, None));
 
-    while let Some((key, origin)) = queue.pop_front() {
+    while let Some((key, origin, adaptations)) = queue.pop_front() {
         if !visited.insert(key.clone()) {
             // Already linearized: a diamond re-visit or a cycle's
             // closing edge. The post-walk graph check tells them apart.
@@ -159,18 +195,28 @@ pub fn linearized_class<'db>(
         };
         root_fetched = true;
 
+        if !allows_dynamic
+            && found
+                .group
+                .attribute_names
+                .iter()
+                .any(|name| is_allow_dynamic_properties(name))
+        {
+            allows_dynamic = true;
+        }
+
         for member in &found.group.members {
-            members.push(LinearizedMember {
-                key: folded_member_key(member.kind, &member.name),
-                member: member.clone(),
-                owner: key.clone(),
-                origin,
-            });
+            push_member(member, &key, origin, adaptations.as_ref(), &mut members);
         }
 
         let Some(declaration) = found.declaration.as_ref() else {
             continue;
         };
+        // The adaptations of each trait-use clause, keyed by the folded
+        // key of every trait the clause names, so a trait edge can pick
+        // up the context to hand its members. Resolved at the using
+        // site, reusing the same candidate order as the edges.
+        let clause_context = resolve_clause_context(db, files, stubs, configuration, &found);
         for (relation, written) in edges_of(declaration) {
             let answer = resolve_ancestor(
                 db,
@@ -193,7 +239,12 @@ pub fn linearized_class<'db>(
                         (MemberOrigin::Own, AncestorRelation::UsesTrait) => MemberOrigin::Trait,
                         _ => MemberOrigin::Inherited,
                     };
-                    queue.push_back((folded_key, next_origin));
+                    let next_adaptations = if next_origin == MemberOrigin::Trait {
+                        clause_context.get(&folded_key).cloned()
+                    } else {
+                        None
+                    };
+                    queue.push_back((folded_key, next_origin, next_adaptations));
                 }
                 AncestorAnswer::Stub { folded_key } => stub_ancestors.push(folded_key),
                 AncestorAnswer::Unresolved => {}
@@ -213,12 +264,259 @@ pub fn linearized_class<'db>(
     stub_ancestors.sort();
     stub_ancestors.dedup();
 
+    let magic = magic_markers(&members, allows_dynamic);
+
     Some(LinearizedClass {
         members,
         ancestry,
         stub_ancestors,
         cyclic,
+        magic,
     })
+}
+
+/// One trait-use clause's `insteadof`/`as` adaptations, resolved at the
+/// using site: every trait reference folded to the key the walk uses,
+/// so a trait's members can filter by their own key. Cheap to clone;
+/// clauses carry a handful of adaptations at most.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ResolvedAdaptations {
+    precedences: Vec<ResolvedPrecedence>,
+    aliases: Vec<ResolvedAlias>,
+}
+
+/// A resolved `insteadof`: the member it names and the folded keys of
+/// the traits it excludes. Unresolvable excluded names are dropped, so
+/// they exclude nothing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedPrecedence {
+    member: String,
+    excluded_keys: Vec<String>,
+}
+
+/// A resolved `as`: the member it names, the providing trait when the
+/// reference was qualified (`A::m as ...`), the adapted visibility, and
+/// the new name. A qualified reference whose trait did not resolve keeps
+/// `qualified` true with `trait_key` `None`, so it matches no trait.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ResolvedAlias {
+    member: String,
+    qualified: bool,
+    trait_key: Option<String>,
+    visibility: Option<crate::members::Visibility>,
+    alias: Option<String>,
+}
+
+impl ResolvedAlias {
+    /// Whether this alias applies to a member of the given kind and
+    /// folded key provided by the trait keyed `owner`.
+    fn matches(&self, kind: MemberKind, member_key: &str, owner: &str) -> bool {
+        if folded_member_key(kind, &self.member) != member_key {
+            return false;
+        }
+        !self.qualified || self.trait_key.as_deref() == Some(owner)
+    }
+}
+
+/// Whether an `insteadof` excludes the given member provided by trait
+/// `owner`: some precedence names the same member key and lists this
+/// trait among its excluded (losing) traits.
+fn is_excluded(
+    context: &ResolvedAdaptations,
+    kind: MemberKind,
+    member_key: &str,
+    owner: &str,
+) -> bool {
+    context.precedences.iter().any(|precedence| {
+        folded_member_key(kind, &precedence.member) == member_key
+            && precedence
+                .excluded_keys
+                .iter()
+                .any(|excluded| excluded == owner)
+    })
+}
+
+/// Pushes one class member into the table, applying trait adaptations
+/// when the member came from a directly-used trait. Plain own or
+/// inherited members (and trait members with no adaptations) push once,
+/// verbatim.
+fn push_member(
+    member: &Member,
+    owner: &str,
+    origin: MemberOrigin,
+    adaptations: Option<&ResolvedAdaptations>,
+    members: &mut Vec<LinearizedMember>,
+) {
+    let member_key = folded_member_key(member.kind, &member.name);
+    let context = match (origin, adaptations) {
+        (MemberOrigin::Trait, Some(context)) => context,
+        _ => {
+            members.push(LinearizedMember {
+                key: member_key,
+                member: member.clone(),
+                owner: owner.to_owned(),
+                origin,
+            });
+            return;
+        }
+    };
+
+    // An `as` with a new name adds an entry regardless of any
+    // `insteadof` on the original; an `as` with only a visibility
+    // rewrites the original entry that is about to push.
+    let mut visibility_override = None;
+    for alias in &context.aliases {
+        if !alias.matches(member.kind, &member_key, owner) {
+            continue;
+        }
+        match &alias.alias {
+            Some(new_name) => {
+                let mut renamed = member.clone();
+                new_name.clone_into(&mut renamed.name);
+                if let Some(visibility) = alias.visibility {
+                    renamed.flags.visibility = visibility;
+                }
+                members.push(LinearizedMember {
+                    key: folded_member_key(member.kind, new_name),
+                    member: renamed,
+                    owner: owner.to_owned(),
+                    origin,
+                });
+            }
+            None => {
+                if let Some(visibility) = alias.visibility {
+                    visibility_override = Some(visibility);
+                }
+            }
+        }
+    }
+
+    if is_excluded(context, member.kind, &member_key, owner) {
+        return;
+    }
+
+    let mut original = member.clone();
+    if let Some(visibility) = visibility_override {
+        original.flags.visibility = visibility;
+    }
+    members.push(LinearizedMember {
+        key: member_key,
+        member: original,
+        owner: owner.to_owned(),
+        origin,
+    });
+}
+
+/// The adaptations of each trait-use clause of one class, resolved and
+/// indexed by the folded key of every trait the clause names. A trait
+/// edge looks its key up here to carry the context to its members.
+fn resolve_clause_context(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    found: &Fetched,
+) -> HashMap<String, ResolvedAdaptations> {
+    let mut context: HashMap<String, ResolvedAdaptations> = HashMap::new();
+    for clause in &found.group.trait_uses {
+        if clause.adaptations.is_empty() {
+            continue;
+        }
+        // The folded key of each trait the clause names, so excluded and
+        // qualified references resolve through the same candidate order.
+        let mut key_of: HashMap<&str, String> = HashMap::new();
+        for name in &clause.names {
+            if let Some(folded_key) = resolve_ancestor(
+                db,
+                files,
+                stubs,
+                configuration,
+                found.file,
+                &found.namespace,
+                name,
+            )
+            .source_key()
+            {
+                key_of.insert(name.as_str(), folded_key);
+            }
+        }
+        let resolved = resolve_adaptations(&clause.adaptations, &key_of);
+        for name in &clause.names {
+            if let Some(folded_key) = key_of.get(name.as_str()) {
+                context.insert(folded_key.clone(), resolved.clone());
+            }
+        }
+    }
+    context
+}
+
+/// Resolves one clause's written adaptations against the folded keys of
+/// its traits.
+fn resolve_adaptations(
+    adaptations: &[crate::members::TraitAdaptation],
+    key_of: &HashMap<&str, String>,
+) -> ResolvedAdaptations {
+    use crate::members::TraitAdaptation;
+    let mut resolved = ResolvedAdaptations::default();
+    for adaptation in adaptations {
+        match adaptation {
+            TraitAdaptation::Precedence {
+                member, excluded, ..
+            } => {
+                resolved.precedences.push(ResolvedPrecedence {
+                    member: member.clone(),
+                    excluded_keys: excluded
+                        .iter()
+                        .filter_map(|name| key_of.get(name.as_str()).cloned())
+                        .collect(),
+                });
+            }
+            TraitAdaptation::Alias {
+                trait_name,
+                member,
+                visibility,
+                alias,
+            } => {
+                resolved.aliases.push(ResolvedAlias {
+                    member: member.clone(),
+                    qualified: trait_name.is_some(),
+                    trait_key: trait_name
+                        .as_ref()
+                        .and_then(|name| key_of.get(name.as_str()).cloned()),
+                    visibility: *visibility,
+                    alias: alias.clone(),
+                });
+            }
+        }
+    }
+    resolved
+}
+
+/// The suppression facts of a finished table: a magic method is a member
+/// like any other, so its presence is a folded-key lookup.
+fn magic_markers(members: &[LinearizedMember], allows_dynamic: bool) -> MagicMarkers {
+    let has = |name: &str| {
+        members
+            .iter()
+            .any(|entry| entry.member.kind == MemberKind::Method && entry.key == name)
+    };
+    MagicMarkers {
+        has_magic_get: has("__get"),
+        has_magic_set: has("__set"),
+        has_magic_call: has("__call"),
+        has_magic_call_static: has("__callstatic"),
+        allows_dynamic_properties: allows_dynamic,
+    }
+}
+
+/// Whether a written attribute name is `AllowDynamicProperties`.
+/// Attribute names are class names: case-insensitive, and only the last
+/// namespace segment is compared.
+fn is_allow_dynamic_properties(written: &str) -> bool {
+    written
+        .rsplit('\\')
+        .next()
+        .is_some_and(|segment| segment.eq_ignore_ascii_case("AllowDynamicProperties"))
 }
 
 /// Whether the resolved inheritance graph the walk recorded contains a
@@ -612,6 +910,65 @@ mod tests {
     fn a_non_class_key_answers_none() {
         let fixture = fixture(&["<?php function free() {}"]);
         assert!(linearize(&fixture, "free").is_none());
+    }
+
+    #[test]
+    fn insteadof_excludes_and_as_aliases_trait_members() {
+        let fixture = fixture(&[
+            "<?php trait B { public function hello() { return 'b'; } }",
+            "<?php trait C { public function hello() { return 'c'; } }",
+            "<?php class A { use B, C { B::hello insteadof C; C::hello as protected hi; } }",
+        ]);
+        let a = linearize(&fixture, "A").unwrap();
+        // B::hello won; C::hello is excluded under its own name…
+        assert_eq!(
+            member_owner(&a, MemberKind::Method, "hello"),
+            Some(("b".to_owned(), MemberOrigin::Trait)),
+        );
+        // …but re-enters under the alias, with the adapted visibility.
+        let aliased = a
+            .members
+            .iter()
+            .find(|entry| entry.key == "hi" && entry.member.kind == MemberKind::Method)
+            .unwrap();
+        assert_eq!(aliased.owner, "c");
+        assert_eq!(
+            aliased.member.flags.visibility,
+            crate::members::Visibility::Protected,
+        );
+    }
+
+    #[test]
+    fn magic_methods_mark_the_class_own_or_inherited() {
+        let fixture = fixture(&[
+            "<?php class Base { public function __get($name) {} }",
+            "<?php class Child extends Base { public function __call($name, $arguments) {} }",
+        ]);
+        let child = linearize(&fixture, "Child").unwrap();
+        assert!(child.magic.has_magic_get);
+        assert!(child.magic.has_magic_call);
+        assert!(!child.magic.has_magic_set);
+        assert!(!child.magic.has_magic_call_static);
+    }
+
+    #[test]
+    fn the_allow_dynamic_properties_attribute_marks_the_class() {
+        let fixture = fixture(&[
+            "<?php #[AllowDynamicProperties] class Loose {}",
+            "<?php class Child extends Loose {}",
+        ]);
+        assert!(
+            linearize(&fixture, "Loose")
+                .unwrap()
+                .magic
+                .allows_dynamic_properties
+        );
+        assert!(
+            linearize(&fixture, "Child")
+                .unwrap()
+                .magic
+                .allows_dynamic_properties
+        );
     }
 
     #[test]

@@ -29,8 +29,8 @@ pub use index::{
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
-    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember, MemberOrigin,
-    linearized_class,
+    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember, MagicMarkers,
+    MemberOrigin, linearized_class,
 };
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
