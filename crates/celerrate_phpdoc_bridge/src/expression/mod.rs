@@ -7,9 +7,11 @@
 //! atom         := '?' atom | '(' union ')' | name
 //! ```
 //!
-//! Anything outside this grammar — generics (`array<int, string>`),
-//! shapes (`array{id: int}`), literals, `class-string<T>`, integer
-//! ranges — answers `None` here: loss is per construct, never per annotation.
+//! Atoms now include literals (string, integer, float constants) and
+//! name-headed generics (`name<type, ...>`) with call-site variance keywords
+//! consumed and dropped. Anything outside this grammar — shapes
+//! (`array{id: int}`), callables, const fetches, conditionals — answers
+//! `None` here: loss is per construct, never per annotation.
 //!
 //! The parser is a recursive descent over the token stream (Task 1) with
 //! a depth guard: adversarial nesting must not overflow the stack.
