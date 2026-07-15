@@ -3,9 +3,11 @@
 //! Psalm synonyms — as one plugin built on one docblock lexer and two
 //! semantic dialect modules, `dialect::phpstan` and `dialect::psalm`.
 //! The tag conflict table is `dialect`'s rustdoc; the total lowering
-//! table is `lowering`'s rustdoc; the pinned-reference coverage
-//! statement lives in `tests/phpstan_corpus/verdicts.txt` (repository
-//! documentation is the interim publication home until plan 9c).
+//! table is `lowering`'s rustdoc; the suppression mapping table (the
+//! written tags to the directive vocabulary) is `directives`' rustdoc;
+//! the pinned-reference coverage statement lives in
+//! `tests/phpstan_corpus/verdicts.txt` (repository documentation is
+//! the interim publication home until plan 9c).
 //! Depends on `celerrate_plugin` and nothing else in the workspace —
 //! enforced by `cargo xtask dependency-shape`. No docblock
 //! diagnostics: malformed annotations are silently ignored, per

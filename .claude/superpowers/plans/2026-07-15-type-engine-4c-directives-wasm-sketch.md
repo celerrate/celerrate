@@ -1986,5 +1986,55 @@ git commit -m "📝 docs(phpdoc-bridge): the directive table's home and the 4c c
 - No new `CEL####` identifier is allocated; the registry's gapless
   test stays at its current count (Global Constraints).
 
+## Accepted debt at closure
 
+Every clause above was walked against landed code at closure; none
+pointed at anything missing. The debt below is what the design itself
+accepted, executed as reality, plus what execution surfaced.
+
+- Identifier-level correspondence stayed deferred to the rule
+  framework: an identifier-bearing suppression
+  (`@phpstan-ignore method.notFound`, `@psalm-suppress
+  PossiblyNullReference`) extinguishes every diagnostic family on its
+  scope regardless of which identifier is named — design section 5's
+  own deferral, executed exactly as decision 8 states.
+- PHPStan 1.11's placement-dependent bare `@phpstan-ignore` resolves to
+  both candidate lines — the current line and the next, the
+  over-suppression superset — rather than inspecting whether the
+  comment trails code on the same line.
+- Recognition is word-boundary substring matching: prose that happens
+  to embed a literal tag at a word boundary (`// see
+  @phpstan-ignore-line above`) over-suppresses rather than
+  under-suppresses. The posture is deliberately aligned with
+  `is_recognized_annotation`
+  (`crates/celerrate_semantics/src/body.rs:415-423`), so any comment
+  the recognizer can read already invalidates the body IR on edit —
+  recognition and invalidation cannot drift apart.
+- Line-based scopes resolve against the whole comment token's lines,
+  not the tag's own line inside it: a directive buried on an interior
+  line of a multi-line block or docblock comment still covers the
+  comment's first and last lines, never just the line the tag sits on.
+- A docblock directive placed before a *statement* (not only before a
+  declaration) suppresses that statement's whole node span — its Psalm
+  scope — which is broader than one line whenever the statement itself
+  spans several.
+- No unused-suppression diagnostic exists: a directive that suppresses
+  nothing is silent. Reporting that is left to the rule framework era,
+  per the "no docblock diagnostics" global constraint.
+- The WASM sketch
+  (`.claude/superpowers/specs/2026-07-15-wasm-interface-sketch.md`)
+  stayed an internal draft, exactly as decision 11 fixed it: nothing in
+  it is implemented in this sub-project, and its first mechanical
+  exercise is sub-project 6's host. The dormant API-version gate
+  (`celerrate_plugin::PLUGIN_API_VERSION`) remains dormant — no
+  compiled-in plugin can fail it yet.
+- Task 6's libFuzzer run was skipped: the `cargo-fuzz` subcommand is
+  not installed on this machine, so `cargo +nightly fuzz run docblock
+  -- -max_total_time=60` could not execute. `cd fuzz && cargo check`
+  was run instead and proved the extended target (the
+  `comment_directives` calls added to `fuzz_targets/docblock.rs`)
+  compiles clean. No libFuzzer session against the new seed corpus
+  (`fuzz/corpus/docblock/seed_directives`) has run on this branch; the
+  in-source adversarial pins (Task 3's
+  `adversarial_inputs_never_panic`) are the coverage that did execute.
 
