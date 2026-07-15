@@ -544,15 +544,36 @@ mod tests {
     #[test]
     fn adversarial_expressions_never_panic() {
         let repeated = "a".repeat(10_000);
+        let deep_generics = format!("{}int{}", "array<".repeat(200), ">".repeat(200));
+        let deep_shapes = format!("{}int{}", "array{a:".repeat(200), "}".repeat(200));
+        let deep_callables = format!("{}int{}", "callable(".repeat(200), "): int".repeat(200));
+        let comment_bomb = "array{".to_owned() + &"// bomb\n".repeat(5_000) + "}";
         for text in [
             "????",
             "(((((",
             "]][[",
             "\u{0}|\u{0}",
             "&&&",
+            "'unterminated",
+            "\"unterminated",
+            "Foo::",
+            "$",
+            "T is ? :",
+            "int<",
+            "array{...<",
+            "callable():",
+            "-",
+            "...",
+            "::",
+            "a::*b::*c",
+            deep_generics.as_str(),
+            deep_shapes.as_str(),
+            deep_callables.as_str(),
+            comment_bomb.as_str(),
             repeated.as_str(),
         ] {
             let _ = parse_type_expression_text(text);
+            let _ = parse_type_expression_prefix(text);
         }
     }
 }
