@@ -211,7 +211,7 @@ fmt before the commit.
   `registrations: Vec<VirtualSymbolRegistration>`, `#[returns(ref)]`).
   Tasks 2, 12, 14, 16 consume all of these under exactly these names.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `crates/celerrate_semantics/src/virtual_symbols.rs` (tests module):
 
@@ -291,12 +291,12 @@ mod tests {
 `#![allow(clippy::indexing_slicing)]` — add it next to the unwrap
 allow.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_semantics virtual_symbols 2>&1 | tail -5`
 Expected: FAIL to compile (module does not exist).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `crates/celerrate_semantics/src/plugin.rs`:
 
@@ -419,12 +419,12 @@ VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
 VirtualSymbolRegistration, VirtualSymbolRegistry}` next to the
 existing re-exports.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_semantics virtual_symbols`
 Expected: PASS. Then `cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_semantics
@@ -449,7 +449,7 @@ git commit -m "✨ feat(semantics): plugin identity and the virtual-symbol exten
   the nearest declaration, exactly the real members' convention).
   Task 3 and plan 8 consume the field.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `linearize.rs`'s tests module (reuse the existing `Fixture`,
 `fixture`, and `linearize` helpers at linearize.rs:780-907; add the
@@ -546,12 +546,12 @@ in this file's implementation and tests to carry
 `virtual_members: Vec::new()` where a struct literal is built (the
 compiler lists the sites).
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_semantics linearize 2>&1 | tail -5`
 Expected: FAIL to compile (`virtual_members` field missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `linearize.rs`:
 
@@ -621,14 +621,14 @@ virtual_entries.sort_by(|left, right| {
 
 and store the result in the returned `LinearizedClass`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_semantics` — PASS; clippy; fmt.
 The invalidation-scope suite
 (`crates/celerrate_semantics/tests/invalidation_scope.rs`) must stay
 green: with no registry set, behavior is byte-identical to before.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_semantics
@@ -651,7 +651,7 @@ git commit -m "✨ feat(semantics): virtual members flow through class lineariza
   Precedence, fixed by this task: **source member, then stub member,
   then virtual member**. Tasks 8 and plan 8 consume the variant.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `member_lookup.rs`'s tests module (reuse the existing `fixture`
 helpers at member_lookup.rs:165-258; add the fake-provider trio as in
@@ -718,12 +718,12 @@ fn virtual_members_answer_only_method_and_property_queries() {
 (The `panic!` in the match arm needs the test module's existing panic
 allow; add `#![allow(clippy::panic)]` if absent.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_semantics member_lookup 2>&1 | tail -5`
 Expected: FAIL to compile (`MemberResolution::Virtual` missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add the variant to `MemberResolution` (member_lookup.rs:35-46):
 
@@ -764,7 +764,7 @@ None
 (`linearized` is the `Option<&LinearizedClass>` the function already
 holds for the source scan — keep it alive until this point.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_semantics` — PASS; clippy; fmt.
 Note: `MemberResolution` gained a variant — the compiler lists every
@@ -772,7 +772,7 @@ match that must add an arm (`crates/celerrate_types/src/declared.rs`
 matches it: give the new arm the same answer as `Stub`/absent for now;
 Task 8 replaces it with real typing).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_semantics crates/celerrate_types
@@ -840,7 +840,7 @@ pub(crate) fn type_of_expression<'db>(
 ) -> Option<TypeId<'db>>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `type_syntax.rs`'s tests module (reuse the `fixture` helper shape
 from `declared.rs:1019-1026`):
@@ -946,12 +946,12 @@ fn the_annotation_site_shares_the_native_keyword_table_and_the_site_qualifier() 
 (`identity` helper as in Task 1's tests. `AnnotationSite::new` is
 `pub(crate)` — tests live in the crate, fine.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_types type_syntax 2>&1 | tail -5`
 Expected: FAIL to compile (module does not exist).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `crates/celerrate_types/src/type_syntax.rs`:
 
@@ -1117,11 +1117,11 @@ and `qualified_class_name` stay `pub(crate)`; if `NameSite` lives in
 `declared.rs` as `pub(crate)`, no visibility change is needed for the
 dispatch functions' signatures.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_types` — PASS; clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1183,7 +1183,7 @@ pub fn validate_claims(
 ) -> Result<(), ClaimConflict>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[derive(Debug)]
@@ -1246,12 +1246,12 @@ fn a_provider_overlapping_itself_is_also_refused() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_types dynamic_type_provider 2>&1 | tail -5`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Write the module with the exact interface block above, plus:
 
@@ -1293,11 +1293,11 @@ monotone; `None` falls back to the declared or inferred type.
 singleton input — same shapes as Task 4. Re-export everything from
 `lib.rs`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_types` — PASS; clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1320,7 +1320,7 @@ git commit -m "✨ feat(types): the dynamic-type-provider extension point with c
   query signature does not change — plan 3 built the seam for exactly
   this one-body swap.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Replace the plan-3 pinned test
 `the_annotation_seam_answers_the_default_until_the_bridge_lands`
@@ -1399,14 +1399,14 @@ Existing tests to keep green untouched: `the_trust_rule_is_three_valued`,
 the inheritance tests (they inject readers directly and bypass the
 seam).
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_types declared 2>&1 | tail -5`
 Expected: the two new registry tests FAIL (seam still answers the
 default); the compile fails first if `throws` is referenced before it
 exists — add the field in the same step.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Add `pub throws: Vec<TypeId<'db>>` to `MemberAnnotations`
 (declared.rs:164-170) and merge it in `inherited_annotations`
@@ -1469,13 +1469,13 @@ ancestor's member and parses the ancestor's docblock directly — the
 same answer the inheritance walk would produce, one step earlier.
 Consistent by construction; do not "fix" it.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_types` — PASS; clippy; fmt.
 `cargo test --workspace` — the seam changes nothing for databases
 without a registry, so everything else stays green.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1502,7 +1502,7 @@ re-runs the annotation parse but nothing above it.
   registered in the fixture.
 - Produces: the pinned two-stage cutoff.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 ```rust
 #[test]
@@ -1567,19 +1567,19 @@ via `set_bytes`), `member_query`, and `executions_of` follow the
 existing shapes in this test file and in
 `crates/celerrate_semantics/tests/invalidation_scope.rs:285-315`.
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `cargo test --package celerrate_types --test invalidation_scope 2>&1 | tail -5`
 Expected: FAIL to compile (helpers missing) then, once compiling,
 both must pass — if the backdate assertion fails, the seam is reading
 something range-carrying; fix the seam, not the test.
 
-- [ ] **Step 3: Implement the helpers, run to green**
+- [x] **Step 3: Implement the helpers, run to green**
 
 Run: `cargo test --package celerrate_types --test invalidation_scope`
 Expected: PASS; clippy; fmt.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1605,7 +1605,7 @@ git commit -m "✅ test(types): the two-stage docblock cutoff is pinned at the p
   carry `optional`/`variadic` from the annotation, `by_reference:
   false`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -1668,13 +1668,13 @@ fn an_unparseable_virtual_type_degrades_to_mixed_native_only() {
 `celerrate_types` already dev-consumes `celerrate_semantics` types
 directly, so the fake provider compiles here.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_types declared 2>&1 | tail -5`
 Expected: FAIL — the Virtual arm (Task 3 gave it the absent answer)
 returns `None`.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `declared_member_signature`'s resolution match:
 
@@ -1718,11 +1718,11 @@ MemberResolution::Virtual { member, owner } => {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_types` — PASS; clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1763,7 +1763,7 @@ pub fn function_annotations<'db>(
   of hard-coding `None`/`Trust::NativeOnly`; the stub path is
   untouched.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```rust
 #[test]
@@ -1817,12 +1817,12 @@ fn an_unannotated_function_stays_native_only() {
 the member tests; add it with a two-class fixture and a fake syntax
 that resolves class names through `site.qualify_class_name`.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_types declared 2>&1 | tail -5`
 Expected: FAIL to compile (`function_annotations` missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `function_annotations`: locate the source `FreeFunction` exactly as
 `declared_function_signature`'s source path does (same lookup, same
@@ -1840,11 +1840,11 @@ the hard-coded `None` at declared.rs:855), and for the value replace
 the direct lowering + `Trust::NativeOnly` (declared.rs:858-859) with
 `refine(db, files, stubs, configuration, native_value, annotations.value)`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_types` — PASS; clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_types
@@ -1869,7 +1869,7 @@ git commit -m "✨ feat(types): the function annotation seam closes plan 3's rec
   `diagnostics`, `salsa`. Registries are **not** re-exported — the
   composition root reaches them through the owning crates.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 `crates/celerrate_plugin/src/lib.rs` will carry one test pinning the
 surface compiles and the version is what the composition root checks:
@@ -1888,12 +1888,12 @@ mod tests {
 against it alone; the dependency-shape check of Task 17 makes that
 mechanical.)
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `cargo test --package celerrate_plugin 2>&1 | tail -5`
 Expected: FAIL — the crate does not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `crates/celerrate_plugin/Cargo.toml`:
 
@@ -1970,13 +1970,13 @@ pub use salsa;
 root yet, add the root re-export in the owning crate rather than
 deep-pathing here.)
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_plugin` — PASS. Then the full
 workspace gate (the `crates/*` glob picks the crate up
 automatically): `cargo test --workspace`, clippy, fmt, `cargo deny check`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_plugin Cargo.lock
@@ -2000,7 +2000,7 @@ git commit -m "✨ feat(plugin): the aggregation facade with the dormant API ver
   dialect modules consume the same stream (one plugin, one docblock
   lexer, dialect modules behind it).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `lexer.rs`'s tests module:
 
@@ -2053,12 +2053,12 @@ fn adversarial_inputs_never_panic() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_phpdoc_bridge 2>&1 | tail -5`
 Expected: FAIL — the crate does not exist.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `Cargo.toml` (dev-dependencies arrive in Task 13; start without):
 
@@ -2151,12 +2151,12 @@ pub fn lex_docblock(text: &str) -> Vec<Tag> {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_phpdoc_bridge` — PASS; clippy;
 fmt; `cargo deny check` (new crate).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_phpdoc_bridge Cargo.lock
@@ -2207,7 +2207,7 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock;
 pub fn extract_virtual_members(tags: &[Tag]) -> Vec<VirtualMember>;
 ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `expression.rs` tests:
 
@@ -2345,12 +2345,12 @@ fn method_tags_declare_virtual_methods() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_phpdoc_bridge 2>&1 | tail -5`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `expression.rs`: a recursive-descent parser over a peekable char
 cursor with a depth guard (a `depth: u32` parameter refusing past 64 —
@@ -2388,11 +2388,11 @@ or answer `None`. No `unwrap`, no indexing — iterate with
 Wire `mod expression; mod tags;` plus `pub use` of the produced names
 in `lib.rs`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_phpdoc_bridge` — PASS; clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_phpdoc_bridge
@@ -2418,7 +2418,7 @@ git commit -m "✨ feat(phpdoc-bridge): standard tag extraction over the 4a expr
   configuration: "" }` and `api_version: PLUGIN_API_VERSION`.
   Task 16 registers exactly this pair.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Unit tests in `syntax.rs` need an `AnnotationSite`, which only
 `celerrate_types` constructs — so the lowering is tested end-to-end.
@@ -2553,12 +2553,12 @@ single-line docblocks are not part of the contract.) Add a
 `fixture`/`member_query` support block at the top of the file
 following `linearize.rs:834-863` and `declared.rs`'s test helpers.
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_phpdoc_bridge 2>&1 | tail -5`
 Expected: FAIL to compile (`PhpdocBridge`, `descriptor` missing).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/syntax.rs`:
 
@@ -2667,12 +2667,12 @@ pub fn descriptor() -> celerrate_plugin::PluginDescriptor {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_phpdoc_bridge` — PASS; then the
 workspace gate.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_phpdoc_bridge Cargo.lock
@@ -2694,7 +2694,7 @@ git commit -m "✨ feat(phpdoc-bridge): standard PHPDoc lowers through the type-
 - Produces: `impl VirtualSymbolProvider for PhpdocBridge`. Task 16
   registers the same `Arc<PhpdocBridge>` in both registries.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `virtual_members.rs` (pure, no database):
 
@@ -2767,12 +2767,12 @@ fn a_method_annotation_declares_a_typed_virtual_method() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_phpdoc_bridge 2>&1 | tail -5`
 Expected: FAIL to compile (`VirtualSymbolProvider` not implemented).
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `src/virtual_members.rs`:
 
@@ -2797,12 +2797,12 @@ impl VirtualSymbolProvider for PhpdocBridge {
 
 Add `mod virtual_members;` to `lib.rs`.
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_phpdoc_bridge` — PASS; workspace
 gate.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_phpdoc_bridge
@@ -2824,7 +2824,7 @@ git commit -m "✨ feat(phpdoc-bridge): property and method annotations declare 
 - Produces: the third fuzz target, same contract as the PHP parser —
   arbitrary input, never a panic (design section 10, harness 4).
 
-- [ ] **Step 1: Add the target**
+- [x] **Step 1: Add the target**
 
 `fuzz/Cargo.toml`: add
 `celerrate_phpdoc_bridge = { path = "../crates/celerrate_phpdoc_bridge" }`
@@ -2869,7 +2869,7 @@ fuzz_target!(|data: &[u8]| {
 after the `parse` line; update the job comment to "Three targets at
 30 minutes each" and `timeout-minutes` from 90 to 120.
 
-- [ ] **Step 2: Verify locally**
+- [x] **Step 2: Verify locally**
 
 Run: `cargo check --manifest-path fuzz/Cargo.toml` (the target
 compiles without nightly). If a nightly toolchain is available, a
@@ -2878,7 +2878,7 @@ short smoke run:
 Expected: no crash. If nightly is unavailable locally, the CI smoke
 run (60 seconds on push) covers it — say so in the task report.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add fuzz .github/workflows/fuzz.yml
@@ -2913,7 +2913,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins
   `Session` stores the result; a degraded run prints one warning line
   per excluded plugin on stderr before diagnostics render.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `plugins.rs`'s tests module:
 
@@ -2958,12 +2958,12 @@ fn an_api_version_mismatch_excludes_and_reports() {
 uses `version.workspace = true` — so the `env!` assertion holds in
 the CLI too.)
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package celerrate_cli plugins 2>&1 | tail -5`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 `crates/celerrate_cli/src/plugins.rs`:
 
@@ -3074,12 +3074,12 @@ check snapshots, cache equivalence, and registry tests all stay
 green; the new crates allocate no `CEL####` identifiers, so
 `tests/registry.rs` is unaffected).
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `cargo test --package celerrate_cli` — PASS; full workspace
 gate.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/celerrate_cli Cargo.lock
@@ -3104,7 +3104,7 @@ git commit -m "✨ feat(cli): the composition root registers the bridge into the
   `celerrate_plugin` (dev-dependencies exempt), or when a listed
   plugin crate is missing from the workspace.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 In `dependency_shape.rs`'s tests module (pure JSON fixtures, no
 cargo invocation):
@@ -3154,12 +3154,12 @@ fn a_missing_plugin_crate_fails() {
 }
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `cargo test --package xtask dependency_shape 2>&1 | tail -5`
 Expected: FAIL to compile.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```rust
 //! The dependency-shape check: plugin crates depend on
@@ -3243,13 +3243,13 @@ and extend the usage line. `.github/workflows/ci.yml`: in the `lint`
 job, after the clippy step, add
 `- run: cargo xtask dependency-shape`.
 
-- [ ] **Step 4: Run the tests and the check to verify they pass**
+- [x] **Step 4: Run the tests and the check to verify they pass**
 
 Run: `cargo test --package xtask && cargo xtask dependency-shape`
 Expected: PASS and a clean exit (the bridge's manifest is already
 shaped right). Clippy; fmt.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add xtask .github/workflows/ci.yml
@@ -3267,7 +3267,7 @@ git commit -m "✨ feat(xtask): the dependency-shape check makes the one-depende
   `crates/celerrate_phpdoc_bridge/src/lib.rs` (crate-doc polish only,
   if review finds gaps)
 
-- [ ] **Step 1: Verify against the design (the checklist below)**
+- [x] **Step 1: Verify against the design (the checklist below)**
 
 Walk `.claude/superpowers/specs/2026-07-14-type-engine-design.md`
 sections 4 and 5 (standard-PHPDoc scope) against the shipped code —
@@ -3299,7 +3299,7 @@ precedence (4b); comment directives, suppressions, the WASM sketch
 (4c); the template scope convention (arrives with `@template` in 4b);
 the stdlib provider (plan 7).
 
-- [ ] **Step 2: Write the debt ledger**
+- [x] **Step 2: Write the debt ledger**
 
 Append to this plan file a section `## Accepted debt at closure`
 listing at minimum (plus whatever execution surfaced):
@@ -3330,12 +3330,12 @@ listing at minimum (plus whatever execution surfaced):
   docblock directly through the child's query (consistent with the
   walk by construction, one redundant path).
 
-- [ ] **Step 3: The full gate, one last time**
+- [x] **Step 3: The full gate, one last time**
 
 Run: `cargo test --workspace && cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all -- --check && cargo deny check && cargo xtask dependency-shape`
 Expected: all green.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .claude/superpowers/plans/2026-07-15-type-engine-4a-plugin-api.md crates
@@ -3371,4 +3371,69 @@ git commit -m "📝 docs(plugin): the plugin API surface, its dispatch rules, an
 - Plan 3 seam ("plan 4a swaps one query body") → Task 6. Plan 3 debt
   "function annotations have no seam yet" → Task 9. Plan 1a deferred
   "second-stage cutoff is plan 4's" → Task 7.
+
+## Accepted debt at closure
+
+- Virtual members contribute no magic markers (`@method __call` does
+  not suppress) — plan 8 decides whether the corpus needs it.
+- Real members shadow virtual members entirely; PHPStan lets
+  `@method` override a real method's signature — revisit with 4b if
+  the corpus demands it.
+- `@property-read`/`@property-write` collapse to existence; the
+  read/write distinction is unmodeled.
+- Constructor-promoted properties do not read the constructor's
+  `@param` docblock for their property type.
+- The 4a expression grammar excludes generics, shapes, literals,
+  `class-string<T>` — plan 4b's dialect replaces the
+  whitespace-splitting tag grammar and the expression parser
+  together.
+- `can_parse` is trivially `true` for the bridge; the protocol is
+  exercised only by unit fakes until a second implementation exists.
+- The dynamic-type-provider trait has no caller until plan 5 and no
+  implementation until plan 7; `Invocation` is deliberately minimal.
+- `throws` annotations are parsed, resolved, and inherited with no
+  consumer in this sub-project.
+- Multi-tag single-line docblocks (`@param ... @return ...` on one
+  line) are not lexed apart — each tag on its own line is the
+  contract.
+- `member_annotations` on an inheriting class parses the ancestor's
+  docblock directly through the child's query (consistent with the
+  walk by construction, one redundant path).
+- **PLAN-TEXT DEVIATION (adjudicated at review, human can veto):** the
+  plan's Task 7 asserted `declared_member_signature` backdates to 0
+  executions on a prose-only docblock edit. Unachievable by
+  construction: `declared_member_signature` reads `lookup_member`,
+  whose `Member` value carries the raw docblock (whole-struct `Eq`),
+  the design's own accepted cost. The shipped pin asserts the honest
+  mechanism instead: `member_annotations` and `declared_member_signature`
+  both re-run (`executions_of(&log, ...) == 1`, with rationale
+  comments), the declared value type is unchanged, and a
+  member-dependent hierarchy probe (`subtype_of(value_type, Entity)`)
+  is spared at 0 executions, with a tag-edit companion test proving
+  the probe family discriminates (both in
+  `crates/celerrate_types/tests/invalidation_scope.rs`,
+  `a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage`
+  and `an_annotation_edit_reaches_the_declared_signature`).
+- `@return`/`@var` slots take the first PARSEABLE tag (fix a717703,
+  `crates/celerrate_phpdoc_bridge/src/tags.rs`) — an unparseable tag
+  consumes nothing, aligned with the per-construct-loss posture.
+- The fake-provider/fake-syntax test helpers are duplicated across
+  the `virtual_symbols`, `linearize`, `member_lookup`, `declared`, and
+  `type_syntax` test modules — the pre-existing
+  no-shared-test-support-module debt, now larger.
+- Coverage gaps carried: the throws-inheritance fill-from-ancestor
+  branch (`declared.rs`'s `inherited_annotations`) is untested
+  (mirror of the tested value merge); a virtual parameter with an
+  absent (vs. unparseable) `type_text` is untested; no "build" kind
+  fixture exists in the dependency-shape tests
+  (`xtask/src/dependency_shape.rs` only exercises `null` and `dev`
+  kinds); the docblock lexer
+  (`crates/celerrate_phpdoc_bridge/src/lexer.rs`) drops a mid-docblock
+  line starting with `@` followed by a non-name character instead of
+  folding it into the open tag's content.
+- `function_annotations` and `declared_function_signature`
+  (`crates/celerrate_types/src/declared.rs`) duplicate the five-step
+  source-function lookup (symbol query, declaration lookup, file
+  index binary search, member-tree find, docblock/site derivation) —
+  extraction deferred; drift risk on future edits.
 

@@ -71,9 +71,11 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
                 conflict.first, conflict.claim
             ),
         });
-        // With more than one provider, rebuild the vector without the
-        // excluded registrant and validate again; with none, nothing
-        // to do.
+        // The exclusion is recorded but the vector is NOT rebuilt —
+        // with zero registered providers the branch is unreachable.
+        // Plan 7, registering the first real provider, must rebuild
+        // the vector without the excluded registrant and re-validate
+        // before setting the registry.
     }
 
     let _ = celerrate_types::TypeSyntaxRegistry::builder(type_syntax)
