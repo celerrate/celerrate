@@ -11,6 +11,7 @@ cargo-fuzz = true
 libfuzzer-sys = "0.4"
 celerrate_source = { path = "../crates/celerrate_source" }
 celerrate_syntax = { path = "../crates/celerrate_syntax" }
+celerrate_phpdoc_bridge = { path = "../crates/celerrate_phpdoc_bridge" }
 
 [[bin]]
 name = "lex"
@@ -22,6 +23,13 @@ bench = false
 [[bin]]
 name = "parse"
 path = "fuzz_targets/parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "docblock"
+path = "fuzz_targets/docblock.rs"
 test = false
 doc = false
 bench = false
