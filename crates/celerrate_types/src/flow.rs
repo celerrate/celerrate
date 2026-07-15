@@ -6,13 +6,6 @@
 //! section 6). Absence is silence: a subject missing from the
 //! environment reads as its wide type, `mixed` for locals.
 
-// Interim scaffolding: `files`, `stubs`, `configuration`,
-// `owner_class_key`, and `method_is_static` are read starting Task 6
-// (member and call resolution) and Task 8 (property widening); this
-// task only threads them through the context so later tasks do not
-// have to change the walker's construction.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use celerrate_db::AnalyzedFileSet;
@@ -824,8 +817,11 @@ impl<'db> Walker<'db, '_, '_> {
         self.method_call_result_for_keys(keys, receiver, name)
     }
 
-    /// The provider-aware sibling of [`Self::method_call_result`],
-    /// resolving the receiver's keys itself.
+    /// An instance method call's result on a resolved receiver type,
+    /// with the single resolved signature when exactly one receiver
+    /// key answered (the by-reference write-back channel; `None` for
+    /// an opaque or union receiver — conservative, recorded).
+    /// Provider-aware: resolves the receiver's keys itself.
     fn method_call_result_with_provider(
         &mut self,
         receiver: TypeId<'db>,
@@ -839,21 +835,6 @@ impl<'db> Walker<'db, '_, '_> {
                 name,
                 argument_types,
             ),
-            None => (TypeId::mixed(self.db()), None),
-        }
-    }
-
-    /// An instance method call's result on a resolved receiver type,
-    /// with the single resolved signature when exactly one receiver
-    /// key answered (the by-reference write-back channel; `None` for
-    /// an opaque or union receiver — conservative, recorded).
-    fn method_call_result(
-        &mut self,
-        receiver: TypeId<'db>,
-        name: &str,
-    ) -> (TypeId<'db>, Option<DeclaredSignature<'db>>) {
-        match self.receiver_parts(receiver) {
-            Some(keys) => self.method_call_result_for_keys(&keys, receiver, name),
             None => (TypeId::mixed(self.db()), None),
         }
     }

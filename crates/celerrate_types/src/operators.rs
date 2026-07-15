@@ -6,12 +6,6 @@
 //! `match` and `===` narrowing. `mixed` is the answer to every form
 //! the table does not know: silence, never a guess.
 
-// Interim scaffolding: every rule here is consumed by Task 3's flow
-// walker, which does not exist yet. Until that walker lands, the
-// `pub(crate)` functions and their helpers are exercised only by this
-// module's tests, so the non-test lib target sees them as dead code.
-#![allow(dead_code)]
-
 use celerrate_syntax::SyntaxKind;
 
 use crate::representation::TypeId;
