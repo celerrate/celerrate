@@ -7,11 +7,11 @@
 //! atom         := '?' atom | '(' union ')' | name
 //! ```
 //!
-//! Atoms now include literals (string, integer, float constants) and
+//! Atoms now include literals (string, integer, float constants),
 //! name-headed generics (`name<type, ...>`) with call-site variance keywords
-//! consumed and dropped. Anything outside this grammar — shapes
-//! (`array{id: int}`), callables, const fetches, conditionals — answers
-//! `None` here: loss is per construct, never per annotation.
+//! consumed and dropped, and shapes (`array{id: int}`) on the shape bases.
+//! Anything outside this grammar — callables, const fetches, conditionals —
+//! answers `None` here: loss is per construct, never per annotation.
 //!
 //! The parser is a recursive descent over the token stream (Task 1) with
 //! a depth guard: adversarial nesting must not overflow the stack.
@@ -38,6 +38,31 @@ pub enum TypeExpression {
         base: String,
         arguments: Vec<TypeExpression>,
     },
+    Shape {
+        base: String,
+        fields: Vec<ShapeFieldExpression>,
+        unsealed: Option<UnsealedTail>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShapeFieldExpression {
+    pub key: Option<ShapeKeyExpression>,
+    pub optional: bool,
+    pub value: TypeExpression,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ShapeKeyExpression {
+    Integer(i64),
+    String(String),
+    Identifier(String),
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UnsealedTail {
+    pub key: Option<Box<TypeExpression>>,
+    pub value: Option<Box<TypeExpression>>,
 }
 
 /// Parses `text` as one type expression consuming the whole input
@@ -68,7 +93,7 @@ pub fn parse_type_expression_prefix(text: &str) -> Option<(TypeExpression, usize
 }
 
 #[cfg(test)]
-#[allow(clippy::unwrap_used)]
+#[allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 mod tests {
     use super::*;
 
@@ -209,9 +234,105 @@ mod tests {
     }
 
     #[test]
+    fn shapes_parse_with_every_key_form() {
+        let Some(TypeExpression::Shape {
+            base,
+            fields,
+            unsealed,
+        }) = parse_type_expression_text("array{id: int, name?: string, 'q': bool, 0: float}")
+        else {
+            panic!("expected a shape");
+        };
+        assert_eq!(base, "array");
+        assert!(unsealed.is_none());
+        assert_eq!(fields.len(), 4);
+        assert_eq!(
+            fields[0].key,
+            Some(ShapeKeyExpression::Identifier("id".to_owned()))
+        );
+        assert!(!fields[0].optional);
+        assert_eq!(
+            fields[1].key,
+            Some(ShapeKeyExpression::Identifier("name".to_owned()))
+        );
+        assert!(fields[1].optional);
+        assert_eq!(
+            fields[2].key,
+            Some(ShapeKeyExpression::String("q".to_owned()))
+        );
+        assert_eq!(fields[3].key, Some(ShapeKeyExpression::Integer(0)));
+    }
+
+    #[test]
+    fn tuples_empty_shapes_and_other_bases_parse() {
+        let Some(TypeExpression::Shape { fields, .. }) =
+            parse_type_expression_text("array{int, string}")
+        else {
+            panic!("expected a tuple shape");
+        };
+        assert!(fields.iter().all(|field| field.key.is_none()));
+        assert!(matches!(
+            parse_type_expression_text("array{}"),
+            Some(TypeExpression::Shape { fields, unsealed: None, .. }) if fields.is_empty()
+        ));
+        for text in [
+            "list{int, string}",
+            "object{a: int}",
+            "non-empty-array{a: int}",
+            "non-empty-list{int}",
+        ] {
+            assert!(
+                matches!(
+                    parse_type_expression_text(text),
+                    Some(TypeExpression::Shape { .. })
+                ),
+                "{text}",
+            );
+        }
+        // A brace after a non-shape base is not a shape.
+        assert_eq!(parse_type_expression_text("Foo{a: int}"), None);
+        assert!(matches!(
+            parse_type_expression_prefix("Foo{a: int}"),
+            Some((TypeExpression::Name(name), 3)) if name == "Foo"
+        ));
+    }
+
+    #[test]
+    fn unsealed_tails_parse() {
+        let Some(TypeExpression::Shape {
+            unsealed: Some(tail),
+            ..
+        }) = parse_type_expression_text("array{a: int, ...}")
+        else {
+            panic!("expected an unsealed shape");
+        };
+        assert_eq!(
+            tail,
+            UnsealedTail {
+                key: None,
+                value: None
+            }
+        );
+        let Some(TypeExpression::Shape {
+            unsealed: Some(tail),
+            ..
+        }) = parse_type_expression_text("array{a: int, ...<string, bool>}")
+        else {
+            panic!("expected a typed unsealed tail");
+        };
+        assert_eq!(
+            tail,
+            UnsealedTail {
+                key: Some(Box::new(TypeExpression::Name("string".to_owned()))),
+                value: Some(Box::new(TypeExpression::Name("bool".to_owned()))),
+            },
+        );
+    }
+
+    #[test]
     fn dialect_constructs_and_garbage_answer_none() {
         for text in [
-            "array{id: int}",
+            "array{a: int",
             "array<int",
             "Foo<>",
             "",
