@@ -153,7 +153,26 @@ fn parse_intersection(parser: &mut Parser<'_>, depth: u32) -> Option<TypeExpress
         return None;
     }
     let mut members = vec![parse_suffixed(parser, depth + 1)?];
-    while parser.eat(&TokenKind::Ampersand) {
+    loop {
+        if parser.peek() != Some(&TokenKind::Ampersand) {
+            break;
+        }
+        // `&` doubles as the by-reference marker in callable
+        // signatures (`callable(string&$out)`): it continues an
+        // intersection only when a type can follow it.
+        if matches!(
+            parser.peek_at(1),
+            Some(
+                TokenKind::Variable(_)
+                    | TokenKind::Ellipsis
+                    | TokenKind::Comma
+                    | TokenKind::CloseParenthesis
+                    | TokenKind::Equals
+            ) | None
+        ) {
+            break;
+        }
+        parser.advance();
         members.push(parse_suffixed(parser, depth + 1)?);
     }
     if members.len() == 1 {
@@ -408,7 +427,7 @@ fn parse_callable_signature(
     let mut parameters = Vec::new();
     if !parser.eat(&TokenKind::CloseParenthesis) {
         loop {
-            let parameter_type = parse_suffixed(parser, depth + 1)?;
+            let parameter_type = parse_type(parser, depth + 1)?;
             let by_reference = parser.eat(&TokenKind::Ampersand);
             let variadic = parser.eat(&TokenKind::Ellipsis);
             if matches!(parser.peek(), Some(TokenKind::Variable(_))) {

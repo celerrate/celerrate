@@ -410,6 +410,33 @@ mod tests {
             parse_type_expression_text("Closure<int>"),
             Some(TypeExpression::Generic { .. })
         ));
+
+        // Full types are parameter types: unions and intersections
+        // survive next to the by-reference marker.
+        let Some(TypeExpression::Callable { parameters, .. }) =
+            parse_type_expression_text("callable(int|string): void")
+        else {
+            panic!("expected a callable with a union parameter");
+        };
+        assert_eq!(
+            parameters[0].parameter_type,
+            TypeExpression::Union(vec![
+                TypeExpression::Name("int".to_owned()),
+                TypeExpression::Name("string".to_owned()),
+            ]),
+        );
+        let Some(TypeExpression::Callable { parameters, .. }) =
+            parse_type_expression_text("callable(Countable&Traversable): void")
+        else {
+            panic!("expected a callable with an intersection parameter");
+        };
+        assert_eq!(
+            parameters[0].parameter_type,
+            TypeExpression::Intersection(vec![
+                TypeExpression::Name("Countable".to_owned()),
+                TypeExpression::Name("Traversable".to_owned()),
+            ]),
+        );
     }
 
     #[test]
