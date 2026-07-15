@@ -264,6 +264,37 @@ mod tests {
     }
 
     #[test]
+    fn the_first_matching_implementations_answer_stands_with_no_fall_through() {
+        // Both implementations can parse the docblock; the first
+        // registered wins outright, even though its answer is the
+        // default and the second implementation would have answered
+        // something else. Dispatch never falls through past a winner.
+        let fixture = fixture(&["<?php class C {}"]);
+        let db = &fixture.db;
+        let _ = TypeSyntaxRegistry::builder(vec![
+            TypeSyntaxRegistration {
+                identity: identity("first"),
+                implementation: std::sync::Arc::new(FakeSyntax {
+                    accepts: "@",
+                    answer_int_return: false,
+                }),
+            },
+            TypeSyntaxRegistration {
+                identity: identity("second"),
+                implementation: std::sync::Arc::new(FakeSyntax {
+                    accepts: "@",
+                    answer_int_return: true,
+                }),
+            },
+        ])
+        .durability(salsa::Durability::HIGH)
+        .new(db);
+
+        let parsed = annotations_for_docblock(db, &NameSite::Global, "/** @return int */");
+        assert_eq!(parsed, ParsedAnnotations::default());
+    }
+
+    #[test]
     fn an_unset_registry_answers_the_default() {
         let fixture = fixture(&["<?php class C {}"]);
         let parsed = annotations_for_docblock(&fixture.db, &NameSite::Global, "/** @return int */");

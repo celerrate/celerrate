@@ -140,7 +140,7 @@ fn class_names_qualify_at_the_declaring_site() {
 #[test]
 fn param_var_and_throws_annotations_land() {
     let fixture = fixture(&[
-        "<?php class C { /** @var int[] */ public $numbers; /**\n * @param ?string $name\n * @return bool\n */ public function greet($name) {} }",
+        "<?php class C { /** @var int[] */ public $numbers; /**\n * @param ?string $name\n * @return bool\n * @throws \\RuntimeException\n */ public function greet($name) {} }",
     ]);
     register_bridge(&fixture.db);
     let db = &fixture.db;
@@ -182,6 +182,21 @@ fn param_var_and_throws_annotations_land() {
                 celerrate_types::TypeId::null(db),
             ],
         )),
+    );
+    let annotations = celerrate_types::member_annotations(
+        db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        greet,
+    );
+    assert_eq!(
+        annotations.throws,
+        vec![celerrate_types::TypeId::class(
+            db,
+            "RuntimeException",
+            Vec::new()
+        )],
     );
 }
 
