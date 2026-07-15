@@ -14,6 +14,7 @@ use std::process::Command;
 pub mod bench;
 pub mod codegen;
 pub mod corpus;
+pub mod dependency_shape;
 pub mod pin;
 pub mod release;
 pub mod stubs;
