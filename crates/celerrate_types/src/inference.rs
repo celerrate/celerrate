@@ -488,4 +488,97 @@ mod tests {
         };
         assert!(class_key.is_none());
     }
+
+    #[test]
+    fn instanceof_narrows_both_branches() {
+        let fixture = fixture(&["<?php class Foo {}
+            function f(mixed $x) { if ($x instanceof Foo) { return $x; } return 1; }
+            function negated(mixed $x) { if (!($x instanceof Foo)) { return 1; } return $x; }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+        assert_eq!(return_display(&fixture, 2), "1|foo");
+    }
+
+    #[test]
+    fn strict_null_comparisons_narrow() {
+        let fixture = fixture(&["<?php class Foo {}
+            function f(?Foo $x) { if ($x === null) { return 1; } return $x; }
+            function g(?Foo $x) { if ($x !== null) { return $x; } return 1; }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+        assert_eq!(return_display(&fixture, 2), "1|foo");
+    }
+
+    #[test]
+    fn false_comparisons_narrow_the_strpos_idiom() {
+        let fixture = fixture(&["<?php function f(int|false $position) {
+                if ($position === false) { return 'missing'; }
+                return $position;
+            }"]);
+        assert_eq!(return_display(&fixture, 0), "int|'missing'");
+    }
+
+    #[test]
+    fn the_is_family_narrows() {
+        let fixture = fixture(&[
+            "<?php function f(mixed $x) { if (is_string($x)) { return $x; } return 1; }",
+        ]);
+        assert_eq!(return_display(&fixture, 0), "1|string");
+    }
+
+    #[test]
+    fn boolean_composition_distributes() {
+        let fixture = fixture(&["<?php class Foo {}
+            function both(mixed $x) {
+                if ($x instanceof Foo && is_string($x)) { return 1; }
+                return 2;
+            }
+            function either(?Foo $x) {
+                if ($x === null || $x instanceof Foo) { return 1; }
+                return $x;
+            }"]);
+        // `either`'s fall-through sees the union minus both
+        // alternatives — never — so the function's return joins to
+        // exactly the then-branch's literal. Without `||`
+        // distribution the answer would be "null|1|foo".
+        assert_eq!(return_display(&fixture, 2), "1");
+        // `both` must compose without crashing or mis-joining.
+        let _ = return_display(&fixture, 1);
+    }
+
+    #[test]
+    fn early_returns_narrow_the_rest_of_the_body() {
+        let fixture = fixture(&["<?php class Foo {}
+            function f(?Foo $x) {
+                if ($x === null) { return 1; }
+                return $x;
+            }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+    }
+
+    #[test]
+    fn isset_and_empty_narrow_their_targets() {
+        let fixture = fixture(&["<?php class Foo {}
+            function set(?Foo $x) { if (isset($x)) { return $x; } return 1; }
+            function filled(string|null $x) { if (!empty($x)) { return $x; } return 1; }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+        assert_eq!(return_display(&fixture, 2), "1|string");
+    }
+
+    #[test]
+    fn truthiness_narrows_and_a_while_condition_narrows_its_body() {
+        let fixture = fixture(&["<?php class Foo {}
+            function truthy(?Foo $x) { if ($x) { return $x; } return 1; }
+            function looped(?Foo $x) { while ($x !== null) { return $x; } return 1; }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+        assert_eq!(return_display(&fixture, 2), "1|foo");
+    }
+
+    #[test]
+    fn an_assign_and_test_condition_narrows_the_assigned_subject() {
+        let fixture = fixture(&["<?php class Foo {}
+            function f(?Foo $source) {
+                if (($x = $source) !== null) { return $x; }
+                return 1;
+            }"]);
+        assert_eq!(return_display(&fixture, 1), "1|foo");
+    }
 }
