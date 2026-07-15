@@ -1,17 +1,12 @@
-//! The inherited PHPDoc type-expression grammar (decision 6):
+//! The inherited PHPDoc type-expression grammar is complete: union,
+//! intersection, nullable-inside-suffix, `[]` and offset suffixes,
+//! generics with dropped call-site variance, shapes with unsealed tails,
+//! callables with required returns and dropped parameter names, const fetches,
+//! `$this`, and conditional types.
 //!
-//! ```text
-//! union        := intersection ('|' intersection)*
-//! intersection := suffixed ('&' suffixed)*
-//! suffixed     := atom ('[' ']')*
-//! atom         := '?' atom | '(' union ')' | name
-//! ```
-//!
-//! Atoms now include literals (string, integer, float constants),
-//! name-headed generics (`name<type, ...>`) with call-site variance keywords
-//! consumed and dropped, and shapes (`array{id: int}`) on the shape bases.
-//! Anything outside this grammar — callables, const fetches, conditionals —
-//! answers `None` here: loss is per construct, never per annotation.
+//! The parser answers `None` for: out-of-grammar text, unterminated constructs
+//! (incomplete `<...>`, `{...}`, `(...)`, or conditional expressions), and
+//! nesting past the depth guard (per construct, never per annotation).
 //!
 //! The parser is a recursive descent over the token stream (Task 1) with
 //! a depth guard: adversarial nesting must not overflow the stack.
@@ -43,6 +38,30 @@ pub enum TypeExpression {
         fields: Vec<ShapeFieldExpression>,
         unsealed: Option<UnsealedTail>,
     },
+    Callable {
+        base: String,
+        /// Callable-scoped template names — decision 12: their
+        /// occurrences inside the signature lower to `mixed`.
+        templates: Vec<String>,
+        parameters: Vec<CallableParameterExpression>,
+        return_type: Box<TypeExpression>,
+    },
+    ConstFetch {
+        class: String,
+        constant: String,
+    },
+    This,
+    Offset {
+        base: Box<TypeExpression>,
+        offset: Box<TypeExpression>,
+    },
+    Conditional {
+        subject: ConditionalSubject,
+        negated: bool,
+        target: Box<TypeExpression>,
+        then_branch: Box<TypeExpression>,
+        otherwise_branch: Box<TypeExpression>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -63,6 +82,23 @@ pub enum ShapeKeyExpression {
 pub struct UnsealedTail {
     pub key: Option<Box<TypeExpression>>,
     pub value: Option<Box<TypeExpression>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CallableParameterExpression {
+    pub parameter_type: TypeExpression,
+    pub by_reference: bool,
+    pub variadic: bool,
+    pub optional: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ConditionalSubject {
+    /// A bare name — a template variable if one is in scope at
+    /// lowering time, otherwise undecided.
+    Template(String),
+    /// `$param` — undecided until plan 6 evaluates call sites.
+    Parameter(String),
 }
 
 /// Parses `text` as one type expression consuming the whole input
@@ -335,6 +371,109 @@ mod tests {
     }
 
     #[test]
+    fn callables_parse_with_parameter_flags_and_templates() {
+        let Some(TypeExpression::Callable {
+            base,
+            templates,
+            parameters,
+            return_type,
+        }) = parse_type_expression_text("callable(int, string&$out, User...$rest, bool=): ?string")
+        else {
+            panic!("expected a callable");
+        };
+        assert_eq!(base, "callable");
+        assert!(templates.is_empty());
+        assert_eq!(parameters.len(), 4);
+        assert!(parameters[1].by_reference);
+        assert!(parameters[2].variadic);
+        assert!(parameters[3].optional);
+        assert_eq!(
+            *return_type,
+            TypeExpression::Nullable(Box::new(TypeExpression::Name("string".to_owned()))),
+        );
+
+        let Some(TypeExpression::Callable {
+            base, templates, ..
+        }) = parse_type_expression_text("\\Closure<T of Foo>(T): T")
+        else {
+            panic!("expected a closure");
+        };
+        assert_eq!(base, "\\Closure");
+        assert_eq!(templates, vec!["T".to_owned()]);
+        // A bare `callable` without a signature stays a plain name.
+        assert_eq!(
+            parse_type_expression_text("callable"),
+            Some(TypeExpression::Name("callable".to_owned())),
+        );
+        // A generic Closure without a signature stays a generic.
+        assert!(matches!(
+            parse_type_expression_text("Closure<int>"),
+            Some(TypeExpression::Generic { .. })
+        ));
+    }
+
+    #[test]
+    fn const_fetches_this_and_offsets_parse() {
+        use TypeExpression::*;
+        assert_eq!(
+            parse_type_expression_text("Foo::BAR"),
+            Some(ConstFetch {
+                class: "Foo".to_owned(),
+                constant: "BAR".to_owned()
+            }),
+        );
+        assert_eq!(
+            parse_type_expression_text("Foo::*"),
+            Some(ConstFetch {
+                class: "Foo".to_owned(),
+                constant: "*".to_owned()
+            }),
+        );
+        assert_eq!(
+            parse_type_expression_text("Foo::BAR_*"),
+            Some(ConstFetch {
+                class: "Foo".to_owned(),
+                constant: "BAR_*".to_owned()
+            }),
+        );
+        assert_eq!(parse_type_expression_text("$this"), Some(This));
+        assert_eq!(
+            parse_type_expression_text("T[K]"),
+            Some(Offset {
+                base: Box::new(Name("T".to_owned())),
+                offset: Box::new(Name("K".to_owned())),
+            }),
+        );
+        // A lone `$param` is not a type.
+        assert_eq!(parse_type_expression_text("$param"), None);
+    }
+
+    #[test]
+    fn conditional_types_parse_for_both_subjects() {
+        let Some(TypeExpression::Conditional {
+            subject, negated, ..
+        }) = parse_type_expression_text("T is string ? int : bool")
+        else {
+            panic!("expected a conditional");
+        };
+        assert_eq!(subject, ConditionalSubject::Template("T".to_owned()));
+        assert!(!negated);
+
+        let Some(TypeExpression::Conditional {
+            subject,
+            negated,
+            then_branch,
+            ..
+        }) = parse_type_expression_text("($flags is not 1 ? array<string> : string)")
+        else {
+            panic!("expected a parameter conditional");
+        };
+        assert_eq!(subject, ConditionalSubject::Parameter("flags".to_owned()));
+        assert!(negated);
+        assert!(matches!(*then_branch, TypeExpression::Generic { .. }));
+    }
+
+    #[test]
     fn dialect_constructs_and_garbage_answer_none() {
         for text in [
             "array{a: int",
@@ -346,6 +485,7 @@ mod tests {
             "int|",
             "((int)",
             "int string",
+            "callable(int",
         ] {
             assert_eq!(parse_type_expression_text(text), None, "{text}");
         }

@@ -13,8 +13,8 @@ mod tags;
 mod virtual_members;
 
 pub use expression::{
-    ShapeFieldExpression, ShapeKeyExpression, TypeExpression, UnsealedTail,
-    parse_type_expression_prefix, parse_type_expression_text,
+    CallableParameterExpression, ConditionalSubject, ShapeFieldExpression, ShapeKeyExpression,
+    TypeExpression, UnsealedTail, parse_type_expression_prefix, parse_type_expression_text,
 };
 pub use lexer::{Tag, lex_docblock};
 pub use syntax::PhpdocBridge;

@@ -106,5 +106,11 @@ fn lower<'db>(site: &AnnotationSite<'db, '_>, expression: &TypeExpression) -> Ty
         }
         // Task 4: Parsed but not lowered yet. Task 6 will implement lowering.
         TypeExpression::Shape { .. } => TypeId::mixed(db),
+        // Task 5: Parsed but not lowered yet. Task 6/7 will implement lowering.
+        TypeExpression::Callable { .. } => TypeId::mixed(db),
+        TypeExpression::ConstFetch { .. } => TypeId::mixed(db),
+        TypeExpression::This => TypeId::mixed(db),
+        TypeExpression::Offset { .. } => TypeId::mixed(db),
+        TypeExpression::Conditional { .. } => TypeId::mixed(db),
     }
 }
