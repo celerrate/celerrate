@@ -38,6 +38,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     let mut excluded = Vec::new();
     let mut type_syntax = Vec::new();
     let mut virtual_symbols = Vec::new();
+    let mut comment_directives = Vec::new();
     let dynamic_providers = Vec::new();
 
     // Registration order, declared once: phpdoc-bridge first.
@@ -48,6 +49,10 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
             type_syntax.push(celerrate_types::TypeSyntaxRegistration {
                 identity: descriptor.identity.clone(),
                 implementation: bridge.clone(),
+            });
+            comment_directives.push(celerrate_semantics::CommentDirectiveRegistration {
+                identity: descriptor.identity.clone(),
+                provider: bridge.clone(),
             });
             virtual_symbols.push(celerrate_semantics::VirtualSymbolRegistration {
                 identity: descriptor.identity,
@@ -82,6 +87,9 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
         .durability(salsa::Durability::HIGH)
         .new(database);
     let _ = celerrate_semantics::VirtualSymbolRegistry::builder(virtual_symbols)
+        .durability(salsa::Durability::HIGH)
+        .new(database);
+    let _ = celerrate_semantics::CommentDirectiveRegistry::builder(comment_directives)
         .durability(salsa::Durability::HIGH)
         .new(database);
     let _ = celerrate_types::DynamicTypeProviderRegistry::builder(dynamic_providers)
