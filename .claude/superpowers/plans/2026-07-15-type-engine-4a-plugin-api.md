@@ -3399,7 +3399,8 @@ git commit -m "📝 docs(plugin): the plugin API surface, its dispatch rules, an
 - `member_annotations` on an inheriting class parses the ancestor's
   docblock directly through the child's query (consistent with the
   walk by construction, one redundant path).
-- **PLAN-TEXT DEVIATION (adjudicated at review, human can veto):** the
+- **PLAN-TEXT DEVIATION (adjudicated at review, human can veto —
+  validated by the human on 2026-07-15, deviation accepted):** the
   plan's Task 7 asserted `declared_member_signature` backdates to 0
   executions on a prose-only docblock edit. Unachievable by
   construction: `declared_member_signature` reads `lookup_member`,
