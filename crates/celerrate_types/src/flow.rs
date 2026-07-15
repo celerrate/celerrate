@@ -165,6 +165,19 @@ impl<'db> Environment<'db> {
     }
 }
 
+/// One conditional assertion collected while typing a call, applied
+/// when that call is a condition (`IfTrue`/`IfFalse`). `origin` is the
+/// call expression that produced it: `branch_environments` applies
+/// only the facts whose origin is the condition's own top-level call,
+/// so a fact from a call that was merely an argument never leaks.
+struct PendingAssertion<'db> {
+    origin: ExpressionId,
+    subject: NarrowingSubject,
+    asserted: TypeId<'db>,
+    polarity: crate::type_syntax::AssertionPolarity,
+    negated: bool,
+}
+
 pub(crate) struct Walker<'db, 'body, 'context> {
     context: &'context FlowContext<'db, 'body>,
     types: Vec<TypeId<'db>>,
@@ -175,6 +188,9 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     /// receiver was possibly null: the wrapper re-acquires `|null`
     /// once, at the end (the design's whole-chain rule).
     null_safe_reacquires: bool,
+    /// The most recently typed call's conditional assertions, drained
+    /// by `branch_environments`' default arm.
+    pending_condition_facts: Vec<PendingAssertion<'db>>,
 }
 
 /// Walks one body from its seeded parameter environment.
@@ -187,6 +203,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         saw_yield: false,
         edge_counts: InterproceduralEdgeCounts::default(),
         null_safe_reacquires: false,
+        pending_condition_facts: Vec::new(),
     };
     let mut environment = Environment::new();
     for (name, seeded) in &context.parameters {
@@ -570,6 +587,87 @@ impl<'db> Walker<'db, '_, '_> {
                         .parameter_type
                         .unwrap_or_else(|| TypeId::mixed(db)),
                 );
+            }
+        }
+    }
+
+    /// Applies a callee's assertion tags at this call site (decision
+    /// 17): `$name` subjects map through the declared parameters to
+    /// the argument's subject; `$this->name` maps to the caller's
+    /// property subject when the receiver is the caller's `$this`;
+    /// other subject shapes are ignored (recorded). `Always` applies
+    /// now; `IfTrue`/`IfFalse` queue for the condition consumer.
+    fn apply_call_assertions(
+        &mut self,
+        call: ExpressionId,
+        assertions: &[crate::type_syntax::ParsedAssertion<'db>],
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        receiver_is_this: bool,
+        arguments: &[celerrate_semantics::CallArgument],
+        environment: &mut Environment<'db>,
+    ) {
+        use crate::type_syntax::AssertionPolarity;
+        for assertion in assertions {
+            let subject = if let Some(property) = assertion.subject.strip_prefix("$this->") {
+                receiver_is_this.then(|| NarrowingSubject::ThisProperty {
+                    name: property.to_owned(),
+                })
+            } else if let Some(name) = assertion.subject.strip_prefix('$') {
+                let position = parameters
+                    .iter()
+                    .position(|parameter| parameter.name == name);
+                position.and_then(|position| {
+                    // A named argument matches by label regardless of
+                    // order; an unlabeled positional match halts at the
+                    // first spread, exactly as `apply_by_reference`
+                    // does ("a spread ends the positional mapping").
+                    let argument =
+                        arguments
+                            .iter()
+                            .enumerate()
+                            .find_map(|(index, argument)| match &argument.label {
+                                Some(label) if label == name => Some(argument),
+                                Some(_) => None,
+                                None if argument.spread => None,
+                                None if index == position => Some(argument),
+                                None => None,
+                            });
+                    // Reject a positional match that a preceding spread
+                    // has already invalidated (labeled matches survive).
+                    let argument = argument.filter(|argument| {
+                        argument.label.is_some()
+                            || !arguments
+                                .iter()
+                                .take(position)
+                                .any(|earlier| earlier.spread)
+                    })?;
+                    subject_of(self.context.ir, argument.value)
+                })
+            } else {
+                None
+            };
+            let Some(subject) = subject else {
+                continue;
+            };
+            match assertion.polarity {
+                AssertionPolarity::Always => {
+                    let current = self.subject_type(environment, &subject);
+                    let narrowed = if assertion.negated {
+                        self.removed_type(current, assertion.asserted)
+                    } else {
+                        self.narrowed_to(current, assertion.asserted)
+                    };
+                    environment.bind(subject, narrowed);
+                }
+                AssertionPolarity::IfTrue | AssertionPolarity::IfFalse => {
+                    self.pending_condition_facts.push(PendingAssertion {
+                        origin: call,
+                        subject,
+                        asserted: assertion.asserted,
+                        polarity: assertion.polarity,
+                        negated: assertion.negated,
+                    });
+                }
             }
         }
     }
@@ -1550,6 +1648,10 @@ impl<'db> Walker<'db, '_, '_> {
                         member: MemberReference::Named { name },
                         null_safe,
                     }) => {
+                        let receiver_is_this = matches!(
+                            self.context.ir.expression(receiver),
+                            Some(BodyExpression::Variable { name }) if name == "this"
+                        );
                         let receiver_type = self.expression(receiver, environment);
                         let resolving = if null_safe {
                             if crate::judgments::nullability(db, receiver_type)
@@ -1575,8 +1677,39 @@ impl<'db> Walker<'db, '_, '_> {
                         // this same call — is applied after the kill
                         // so it survives (decision 10, design section 6).
                         self.kill_property_bindings(environment);
-                        if let Some(signature) = signature {
+                        if let Some(signature) = &signature {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
+                        }
+                        // The assertion tags apply after the kill too
+                        // (they are knowledge about the post-call
+                        // state): only when exactly one receiver key
+                        // resolved (Task 8's single-signature channel)
+                        // does `signature` carry the unambiguous
+                        // declared parameters this needs.
+                        if let Some(signature) = &signature
+                            && let Some(keys) = self.receiver_parts(resolving)
+                            && let [key] = keys.as_slice()
+                        {
+                            let annotations = crate::declared::member_annotations(
+                                db,
+                                self.context.files,
+                                self.context.stubs,
+                                self.context.configuration,
+                                MemberQuery::new(
+                                    db,
+                                    key.clone(),
+                                    MemberKind::Method,
+                                    folded_member_key(MemberKind::Method, &name),
+                                ),
+                            );
+                            self.apply_call_assertions(
+                                id,
+                                &annotations.assertions,
+                                &signature.parameters,
+                                receiver_is_this,
+                                &arguments,
+                                environment,
+                            );
                         }
                         of
                     }
@@ -1584,14 +1717,19 @@ impl<'db> Walker<'db, '_, '_> {
                         subject,
                         member: MemberReference::Named { name },
                     }) => {
+                        let receiver_is_this = matches!(
+                            self.context.ir.expression(subject),
+                            Some(BodyExpression::NamedReference { text })
+                                if matches!(text.to_ascii_lowercase().as_str(), "self" | "static")
+                        );
                         let (subject_type, keys) = self.scoped_subject(subject, environment);
                         self.record(callee, TypeId::mixed(db));
                         let argument_types = self.typed_arguments(&arguments, environment);
-                        let (of, signature) = match keys {
+                        let (of, signature) = match &keys {
                             Some(keys) => {
                                 let receiver = subject_type;
                                 self.method_call_result_for_keys_with_provider(
-                                    &keys,
+                                    keys,
                                     receiver,
                                     &name,
                                     &argument_types,
@@ -1600,8 +1738,36 @@ impl<'db> Walker<'db, '_, '_> {
                             None => (TypeId::mixed(db), None),
                         };
                         self.kill_property_bindings(environment);
-                        if let Some(signature) = signature {
+                        if let Some(signature) = &signature {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
+                        }
+                        // Assertions apply after the kill (post-call
+                        // knowledge); the single-signature channel
+                        // gates them on an unambiguous receiver key.
+                        if let Some(signature) = &signature
+                            && let Some(keys) = &keys
+                            && let [key] = keys.as_slice()
+                        {
+                            let annotations = crate::declared::member_annotations(
+                                db,
+                                self.context.files,
+                                self.context.stubs,
+                                self.context.configuration,
+                                MemberQuery::new(
+                                    db,
+                                    key.clone(),
+                                    MemberKind::Method,
+                                    folded_member_key(MemberKind::Method, &name),
+                                ),
+                            );
+                            self.apply_call_assertions(
+                                id,
+                                &annotations.assertions,
+                                &signature.parameters,
+                                receiver_is_this,
+                                &arguments,
+                                environment,
+                            );
                         }
                         of
                     }
@@ -1634,12 +1800,34 @@ impl<'db> Walker<'db, '_, '_> {
                             self.context.files,
                             self.context.stubs,
                             self.context.configuration,
-                            crate::declared::FunctionQuery::new(db, key),
+                            crate::declared::FunctionQuery::new(db, key.clone()),
                         );
                         self.kill_property_bindings(environment);
-                        if let Some(signature) = declared {
+                        if let Some(signature) = &declared {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
                         }
+                        // A named function has no receiver: the
+                        // declared parameter list comes straight from
+                        // the signature (empty when unresolved).
+                        let parameters = declared
+                            .as_ref()
+                            .map(|signature| signature.parameters.as_slice())
+                            .unwrap_or(&[]);
+                        let annotations = crate::declared::function_annotations(
+                            db,
+                            self.context.files,
+                            self.context.stubs,
+                            self.context.configuration,
+                            crate::declared::FunctionQuery::new(db, key),
+                        );
+                        self.apply_call_assertions(
+                            id,
+                            &annotations.assertions,
+                            parameters,
+                            false,
+                            &arguments,
+                            environment,
+                        );
                         of
                     }
                     _ => {
@@ -1935,6 +2123,10 @@ impl<'db> Walker<'db, '_, '_> {
             // facts, or truthiness on the condition's own subject (a
             // bare variable, an assign-and-test).
             _ => {
+                // Cleared before typing: a call typed while evaluating
+                // an earlier, unrelated condition must never leak its
+                // facts into this one.
+                self.pending_condition_facts.clear();
                 self.expression_value(condition, environment);
                 if let Some((subject, target)) = self.type_check_facts(condition) {
                     let current = self.subject_type(environment, &subject);
@@ -1942,6 +2134,45 @@ impl<'db> Walker<'db, '_, '_> {
                     let mut when_false = environment.clone();
                     when_true.bind(subject.clone(), self.narrowed_to(current, target));
                     when_false.bind(subject, self.removed_type(current, target));
+                    return (when_true, when_false);
+                }
+                // Only the condition's OWN top-level call contributes
+                // conditional facts. A call that was merely an argument
+                // to it (`if (ok(helper($y)))`) also queued its facts,
+                // but its truthiness is never tested: filter those out
+                // by origin so they cannot narrow the branches.
+                let pending: Vec<PendingAssertion<'db>> =
+                    std::mem::take(&mut self.pending_condition_facts)
+                        .into_iter()
+                        .filter(|fact| fact.origin == condition)
+                        .collect();
+                if !pending.is_empty() {
+                    let mut when_true = environment.clone();
+                    let mut when_false = environment.clone();
+                    for fact in pending {
+                        use crate::type_syntax::AssertionPolarity;
+                        let current = self.subject_type(environment, &fact.subject);
+                        let (narrowed, removed) = if fact.negated {
+                            (
+                                self.removed_type(current, fact.asserted),
+                                self.narrowed_to(current, fact.asserted),
+                            )
+                        } else {
+                            (
+                                self.narrowed_to(current, fact.asserted),
+                                self.removed_type(current, fact.asserted),
+                            )
+                        };
+                        match fact.polarity {
+                            AssertionPolarity::IfTrue => {
+                                when_true.bind(fact.subject.clone(), narrowed);
+                            }
+                            AssertionPolarity::IfFalse => {
+                                when_false.bind(fact.subject.clone(), removed);
+                            }
+                            AssertionPolarity::Always => {}
+                        }
+                    }
                     return (when_true, when_false);
                 }
                 let subject = subject_of(ir, condition);

@@ -1161,4 +1161,120 @@ mod tests {
         // The budget sits far below salsa's cap (MAX_ITERATIONS=200).
         assert!(super::FIXPOINT_ITERATION_BUDGET < 200);
     }
+
+    fn register_fake_assertions(fixture: &Fixture) {
+        use crate::{
+            AssertionPolarity, ParsedAnnotations, ParsedAssertion, TypeSyntax,
+            TypeSyntaxRegistration, TypeSyntaxRegistry,
+        };
+
+        #[derive(Debug)]
+        struct FakeAssertions;
+
+        impl TypeSyntax for FakeAssertions {
+            fn can_parse(&self, docblock: &str) -> bool {
+                docblock.contains("@fake-")
+            }
+
+            fn parse_docblock<'db>(
+                &self,
+                site: &crate::AnnotationSite<'db, '_>,
+                docblock: &str,
+            ) -> ParsedAnnotations<'db> {
+                let db = site.database();
+                let mut parsed = ParsedAnnotations::default();
+                if docblock.contains("@fake-assert-string") {
+                    parsed.assertions.push(ParsedAssertion {
+                        subject: "$value".to_owned(),
+                        asserted: crate::TypeId::string(db),
+                        polarity: AssertionPolarity::Always,
+                        negated: false,
+                    });
+                }
+                if docblock.contains("@fake-if-true-string") {
+                    parsed.assertions.push(ParsedAssertion {
+                        subject: "$value".to_owned(),
+                        asserted: crate::TypeId::string(db),
+                        polarity: AssertionPolarity::IfTrue,
+                        negated: false,
+                    });
+                }
+                if docblock.contains("@fake-assert-this-prop") {
+                    parsed.assertions.push(ParsedAssertion {
+                        subject: "$this->prop".to_owned(),
+                        asserted: crate::TypeId::string(db),
+                        polarity: AssertionPolarity::Always,
+                        negated: false,
+                    });
+                }
+                parsed
+            }
+
+            fn parse_type_expression<'db>(
+                &self,
+                _site: &crate::AnnotationSite<'db, '_>,
+                _expression: &str,
+            ) -> Option<crate::TypeId<'db>> {
+                None
+            }
+        }
+
+        let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+            identity: fake_identity("fake-assertions"),
+            implementation: std::sync::Arc::new(FakeAssertions),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    #[test]
+    fn an_always_assertion_narrows_after_the_call() {
+        let fixture = fixture(&["<?php class Assert {
+                /** @fake-assert-string */
+                public static function string(mixed $value): void {}
+            }
+            function f(mixed $x) { Assert::string($x); return $x; }"]);
+        register_fake_assertions(&fixture);
+        assert_eq!(return_display(&fixture, 2), "string");
+    }
+
+    #[test]
+    fn an_if_true_assertion_narrows_the_condition_branches() {
+        let fixture = fixture(&["<?php
+            /** @fake-if-true-string */
+            function ok(mixed $value): bool { return true; }
+            function f(mixed $x) { if (ok($x)) { return $x; } return 1; }"]);
+        register_fake_assertions(&fixture);
+        assert_eq!(return_display(&fixture, 1), "1|string");
+    }
+
+    #[test]
+    fn a_nested_argument_calls_condition_fact_does_not_leak() {
+        // `helper($y)` is only an argument to the tested call `ok(...)`;
+        // its truthiness is never tested, so its `IfTrue` fact must not
+        // narrow `$y` in the true branch (decision 17). `$y` stays
+        // mixed, so the body returns mixed (mixed absorbs the `1`).
+        let fixture = fixture(&["<?php
+            /** @fake-if-true-string */
+            function ok(mixed $value): bool { return true; }
+            /** @fake-if-true-string */
+            function helper(mixed $value): bool { return true; }
+            function f(mixed $x, mixed $y) { if (ok(helper($y))) { return $y; } return 1; }"]);
+        register_fake_assertions(&fixture);
+        // Numbering: ok 0, helper 1, f 2.
+        assert_eq!(return_display(&fixture, 2), "mixed");
+    }
+
+    #[test]
+    fn a_this_subject_assertion_narrows_the_callers_property() {
+        let fixture = fixture(&["<?php class A {
+                public mixed $prop = null;
+                /** @fake-assert-this-prop */
+                public function check(): void {}
+                public function read() { $this->check(); return $this->prop; }
+            }"]);
+        register_fake_assertions(&fixture);
+        // Numbering: class 0, property 1, check 2, read 3.
+        assert_eq!(return_display(&fixture, 3), "string");
+    }
 }
