@@ -3,8 +3,8 @@
 
 use celerrate_plugin::{AnnotationSite, ParsedAnnotations, TypeId, TypeSyntax};
 
-use crate::expression::TypeExpression;
 use crate::lexer::lex_docblock;
+use crate::lowering::{LoweringScope, lower};
 use crate::tags::extract_member_docblock;
 
 /// The `phpdoc-bridge` plugin. Stateless by design: guest
@@ -33,25 +33,30 @@ impl TypeSyntax for PhpdocBridge {
     ) -> ParsedAnnotations<'db> {
         let tags = lex_docblock(docblock);
         let extracted = extract_member_docblock(&tags);
+        let mut scope = LoweringScope::default();
+        let return_type = extracted
+            .return_type
+            .as_ref()
+            .map(|expression| lower(site, &mut scope, expression));
+        let value_type = extracted
+            .value_type
+            .as_ref()
+            .map(|expression| lower(site, &mut scope, expression));
+        let parameters = extracted
+            .parameters
+            .iter()
+            .map(|(name, expression)| (name.clone(), lower(site, &mut scope, expression)))
+            .collect();
+        let throws = extracted
+            .throws
+            .iter()
+            .map(|expression| lower(site, &mut scope, expression))
+            .collect();
         ParsedAnnotations {
-            return_type: extracted
-                .return_type
-                .as_ref()
-                .map(|expression| lower(site, expression)),
-            value_type: extracted
-                .value_type
-                .as_ref()
-                .map(|expression| lower(site, expression)),
-            parameters: extracted
-                .parameters
-                .iter()
-                .map(|(name, expression)| (name.clone(), lower(site, expression)))
-                .collect(),
-            throws: extracted
-                .throws
-                .iter()
-                .map(|expression| lower(site, expression))
-                .collect(),
+            return_type,
+            value_type,
+            parameters,
+            throws,
         }
     }
 
@@ -60,57 +65,8 @@ impl TypeSyntax for PhpdocBridge {
         site: &AnnotationSite<'db, '_>,
         expression: &str,
     ) -> Option<TypeId<'db>> {
-        crate::expression::parse_type_expression_text(expression).map(|parsed| lower(site, &parsed))
-    }
-}
-
-/// Lowers a parsed expression through the facade's builders. Keywords
-/// go through the shared native table; everything else qualifies at
-/// the declaring site and becomes a class type.
-fn lower<'db>(site: &AnnotationSite<'db, '_>, expression: &TypeExpression) -> TypeId<'db> {
-    let db = site.database();
-    match expression {
-        TypeExpression::Name(name) => site
-            .keyword_type(name)
-            .unwrap_or_else(|| TypeId::class(db, &site.qualify_class_name(name), Vec::new())),
-        TypeExpression::Nullable(inner) => {
-            TypeId::union(db, [lower(site, inner), TypeId::null(db)])
-        }
-        TypeExpression::Union(parts) => TypeId::union(
-            db,
-            parts
-                .iter()
-                .map(|part| lower(site, part))
-                .collect::<Vec<_>>(),
-        ),
-        TypeExpression::Intersection(parts) => TypeId::intersection(
-            db,
-            parts
-                .iter()
-                .map(|part| lower(site, part))
-                .collect::<Vec<_>>(),
-        ),
-        TypeExpression::ArrayOf(element) => {
-            let key = TypeId::union(db, [TypeId::int(db), TypeId::string(db)]);
-            TypeId::array(db, key, lower(site, element))
-        }
-        // Task 3: Parsed but not lowered yet. Task 6 will implement lowering.
-        TypeExpression::IntLiteral(_) => TypeId::int(db),
-        TypeExpression::FloatLiteral(_) => TypeId::float(db),
-        TypeExpression::StringLiteral(_) => TypeId::string(db),
-        TypeExpression::Generic { base, arguments } => {
-            let lowered_arguments = arguments.iter().map(|arg| lower(site, arg)).collect();
-            site.keyword_type(base).unwrap_or_else(|| {
-                TypeId::class(db, &site.qualify_class_name(base), lowered_arguments)
-            })
-        }
-        // Task 4: Parsed but not lowered yet. Task 6 will implement lowering.
-        TypeExpression::Shape { .. } => TypeId::mixed(db),
-        // Task 5: Parsed but not lowered yet. Task 6/7 will implement lowering.
-        TypeExpression::Callable { .. } => TypeId::mixed(db),
-        TypeExpression::ConstFetch { .. } => TypeId::mixed(db),
-        TypeExpression::This => TypeId::mixed(db),
-        TypeExpression::Offset { .. } => TypeId::mixed(db),
-        TypeExpression::Conditional { .. } => TypeId::mixed(db),
+        let parsed = crate::expression::parse_type_expression_text(expression)?;
+        let mut scope = LoweringScope::default();
+        Some(lower(site, &mut scope, &parsed))
     }
 }

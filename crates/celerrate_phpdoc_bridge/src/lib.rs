@@ -8,6 +8,7 @@
 
 mod expression;
 mod lexer;
+mod lowering;
 mod syntax;
 mod tags;
 mod virtual_members;

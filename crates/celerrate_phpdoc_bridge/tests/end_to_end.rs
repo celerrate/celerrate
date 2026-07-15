@@ -282,3 +282,174 @@ fn a_method_annotation_declares_a_typed_virtual_method() {
         Some(celerrate_types::TypeId::int(&fixture.db)),
     );
 }
+
+#[test]
+fn dialect_atoms_and_generics_lower_through_the_table() {
+    let fixture = fixture(&[
+        "<?php class C {\n\
+         /** @return array<int, string> */ public function a() {}\n\
+         /** @return positive-int */ public function b() {}\n\
+         /** @return 'yes'|'no' */ public function c() {}\n\
+         /** @return int<1, max> */ public function d() {}\n\
+         /** @return class-string<\\App\\User> */ public function e() {}\n\
+         /** @return array-key */ public function f() {}\n\
+         /** @return non-empty-list<string> */ public function g() {}\n\
+         /** @return iterable<User> */ public function h() {}\n\
+         }",
+        "<?php class User {}",
+    ]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let value = |name: &str| {
+        let query = member_query(&fixture, "C", MemberKind::Method, name);
+        celerrate_types::declared_member_signature(
+            db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap()
+        .value_type
+    };
+    use celerrate_types::TypeId;
+    assert_eq!(
+        value("a"),
+        TypeId::array(db, TypeId::int(db), TypeId::string(db)),
+    );
+    assert_eq!(value("b"), TypeId::int_range(db, Some(1), None));
+    assert_eq!(
+        value("c"),
+        TypeId::union(
+            db,
+            [
+                TypeId::string_literal(db, "yes"),
+                TypeId::string_literal(db, "no"),
+            ]
+        ),
+    );
+    assert_eq!(value("d"), TypeId::int_range(db, Some(1), None));
+    assert_eq!(
+        value("e"),
+        TypeId::class_string(db, Some(TypeId::class(db, "App\\User", Vec::new()))),
+    );
+    assert_eq!(
+        value("f"),
+        TypeId::union(db, [TypeId::int(db), TypeId::string(db)]),
+    );
+    assert_eq!(value("g"), TypeId::non_empty_list(db, TypeId::string(db)),);
+    assert_eq!(
+        value("h"),
+        TypeId::iterable(db, TypeId::mixed(db), TypeId::class(db, "User", Vec::new())),
+    );
+}
+
+#[test]
+fn shapes_callables_and_the_documented_widenings_lower() {
+    let fixture = fixture(&["<?php class C {\n\
+         /** @return array{id: int, name?: string} */ public function a() {}\n\
+         /** @return array{id: int, ...} */ public function b() {}\n\
+         /** @return array{id: int, ...<string, bool>} */ public function c() {}\n\
+         /** @return object{a: int} */ public function d() {}\n\
+         /** @return callable(int, string=): bool */ public function e() {}\n\
+         /** @return $this */ public function f() {}\n\
+         /** @return Foo::BAR */ public function g() {}\n\
+         /** @return ($flags is 1 ? string : bool) */ public function h() {}\n\
+         /** @return \\Closure<T of Mode>(T): T */ public function i() {}\n\
+         }"]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let value = |name: &str| {
+        let query = member_query(&fixture, "C", MemberKind::Method, name);
+        celerrate_types::declared_member_signature(
+            db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap()
+        .value_type
+    };
+    use celerrate_types::{CallableParameter, ShapeField, ShapeKey, TypeId};
+    let array_key = TypeId::union(db, [TypeId::int(db), TypeId::string(db)]);
+    assert_eq!(
+        value("a"),
+        TypeId::shape(
+            db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("id".to_owned()),
+                    optional: false,
+                    value: TypeId::int(db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("name".to_owned()),
+                    optional: true,
+                    value: TypeId::string(db),
+                },
+            ]
+        ),
+    );
+    // Unsealed shapes give up their field knowledge: the documented
+    // widening is the general (non-empty when a field is required)
+    // array — a supertype, never a truncation into wrongness.
+    assert_eq!(
+        value("b"),
+        TypeId::non_empty_array(db, array_key, TypeId::mixed(db)),
+    );
+    assert_eq!(
+        value("c"),
+        TypeId::non_empty_array(
+            db,
+            array_key,
+            TypeId::union(db, [TypeId::int(db), TypeId::bool(db)]),
+        ),
+    );
+    // No object-shape lattice form: `object` is the widening.
+    assert_eq!(value("d"), TypeId::object(db));
+    assert_eq!(
+        value("e"),
+        TypeId::callable(
+            db,
+            vec![
+                CallableParameter {
+                    parameter_type: TypeId::int(db),
+                    optional: false,
+                    variadic: false,
+                    by_reference: false,
+                },
+                CallableParameter {
+                    parameter_type: TypeId::string(db),
+                    optional: true,
+                    variadic: false,
+                    by_reference: false,
+                },
+            ],
+            TypeId::bool(db),
+        ),
+    );
+    // `@return $this` collapses into `static` (design section 3).
+    assert_eq!(value("f"), TypeId::static_placeholder(db));
+    // Constant fetches await member facts: `mixed`, documented.
+    assert_eq!(value("g"), TypeId::mixed(db));
+    // Parameter-subject conditionals: the undecided branch union.
+    assert_eq!(
+        value("h"),
+        TypeId::union(db, [TypeId::string(db), TypeId::bool(db)]),
+    );
+    // Callable-scoped templates lower their occurrences to `mixed`.
+    assert_eq!(
+        value("i"),
+        TypeId::callable(
+            db,
+            vec![CallableParameter {
+                parameter_type: TypeId::mixed(db),
+                optional: false,
+                variadic: false,
+                by_reference: false,
+            }],
+            TypeId::mixed(db),
+        ),
+    );
+}
