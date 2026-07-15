@@ -28,6 +28,14 @@ pub enum TypeExpression {
     Union(Vec<TypeExpression>),
     Intersection(Vec<TypeExpression>),
     ArrayOf(Box<TypeExpression>),
+    IntLiteral(i64),
+    /// The written text; lowering parses it (`Eq` stays derivable).
+    FloatLiteral(String),
+    StringLiteral(String),
+    Generic {
+        base: String,
+        arguments: Vec<TypeExpression>,
+    },
 }
 
 /// Parses `text` as one type expression consuming the whole input
@@ -130,13 +138,80 @@ mod tests {
     }
 
     #[test]
+    fn literals_parse() {
+        use TypeExpression::*;
+        assert_eq!(
+            parse_type_expression_text("'active'"),
+            Some(StringLiteral("active".to_owned())),
+        );
+        assert_eq!(parse_type_expression_text("42"), Some(IntLiteral(42)));
+        assert_eq!(parse_type_expression_text("-1"), Some(IntLiteral(-1)));
+        assert_eq!(
+            parse_type_expression_text("1.5"),
+            Some(FloatLiteral("1.5".to_owned())),
+        );
+        assert_eq!(
+            parse_type_expression_text("'yes'|'no'"),
+            Some(Union(vec![
+                StringLiteral("yes".to_owned()),
+                StringLiteral("no".to_owned()),
+            ])),
+        );
+    }
+
+    #[test]
+    fn generics_parse_with_nesting_ranges_and_variance() {
+        use TypeExpression::*;
+        assert_eq!(
+            parse_type_expression_text("array<int, string>"),
+            Some(Generic {
+                base: "array".to_owned(),
+                arguments: vec![Name("int".to_owned()), Name("string".to_owned())],
+            }),
+        );
+        assert_eq!(
+            parse_type_expression_text("array<int, array<string, User>>"),
+            Some(Generic {
+                base: "array".to_owned(),
+                arguments: vec![
+                    Name("int".to_owned()),
+                    Generic {
+                        base: "array".to_owned(),
+                        arguments: vec![Name("string".to_owned()), Name("User".to_owned())],
+                    },
+                ],
+            }),
+        );
+        assert_eq!(
+            parse_type_expression_text("class-string<T>"),
+            Some(Generic {
+                base: "class-string".to_owned(),
+                arguments: vec![Name("T".to_owned())],
+            }),
+        );
+        assert_eq!(
+            parse_type_expression_text("int<1, max>"),
+            Some(Generic {
+                base: "int".to_owned(),
+                arguments: vec![IntLiteral(1), Name("max".to_owned())],
+            }),
+        );
+        // Call-site variance keywords are consumed and dropped.
+        assert_eq!(
+            parse_type_expression_text("Collection<covariant User>"),
+            Some(Generic {
+                base: "Collection".to_owned(),
+                arguments: vec![Name("User".to_owned())],
+            }),
+        );
+    }
+
+    #[test]
     fn dialect_constructs_and_garbage_answer_none() {
         for text in [
-            "array<int, string>",
             "array{id: int}",
-            "class-string<T>",
-            "'literal'",
-            "int<1, max>",
+            "array<int",
+            "Foo<>",
             "",
             "|",
             "?",

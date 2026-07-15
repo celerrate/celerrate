@@ -137,13 +137,68 @@ fn parse_atom(parser: &mut Parser<'_>, depth: u32) -> Option<TypeExpression> {
                 None
             }
         }
+        TokenKind::Integer(value) => {
+            let value = *value;
+            parser.advance();
+            Some(TypeExpression::IntLiteral(value))
+        }
+        TokenKind::Float(text) => {
+            let text = text.clone();
+            parser.advance();
+            Some(TypeExpression::FloatLiteral(text))
+        }
+        TokenKind::StringLiteral(value) => {
+            let value = value.clone();
+            parser.advance();
+            Some(TypeExpression::StringLiteral(value))
+        }
         TokenKind::Name(name) => {
             let name = name.clone();
             parser.advance();
-            // Tasks 3-5 extend name-headed constructs here (generics,
-            // shapes, callables, const fetches).
+            if parser.eat(&TokenKind::OpenAngle) {
+                let arguments = parse_generic_arguments(parser, depth + 1)?;
+                return Some(TypeExpression::Generic {
+                    base: name,
+                    arguments,
+                });
+            }
+            // Tasks 4-5 extend name-headed constructs here (shapes,
+            // callables, const fetches).
             Some(TypeExpression::Name(name))
         }
         _ => None,
+    }
+}
+
+/// The `<...>` argument list of a name-headed generic. Call-site
+/// variance keywords (`covariant`, `contravariant`) are consumed and
+/// dropped — the ignored-variance posture, documented in the ledger.
+/// A trailing comma is tolerated; an empty list is refused.
+fn parse_generic_arguments(parser: &mut Parser<'_>, depth: u32) -> Option<Vec<TypeExpression>> {
+    if depth >= MAXIMUM_DEPTH {
+        return None;
+    }
+    let mut arguments = Vec::new();
+    loop {
+        if let Some(TokenKind::Name(keyword)) = parser.peek()
+            && (keyword == "covariant" || keyword == "contravariant")
+            && !matches!(
+                parser.peek_at(1),
+                Some(TokenKind::CloseAngle | TokenKind::Comma) | None
+            )
+        {
+            parser.advance();
+        }
+        arguments.push(parse_type(parser, depth + 1)?);
+        if parser.eat(&TokenKind::Comma) {
+            if parser.eat(&TokenKind::CloseAngle) {
+                return Some(arguments);
+            }
+            continue;
+        }
+        if parser.eat(&TokenKind::CloseAngle) {
+            return Some(arguments);
+        }
+        return None;
     }
 }

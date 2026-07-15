@@ -282,7 +282,7 @@ mod tests {
     fn the_value_slot_takes_the_first_parseable_tag() {
         // An unparseable first @return must not suppress a later
         // parseable one: loss is per construct, never cross construct.
-        let tags = lex_docblock("/**\n * @return array<int>\n * @return string\n */");
+        let tags = lex_docblock("/**\n * @return array{\n * @return string\n */");
         assert_eq!(
             extract_member_docblock(&tags).return_type,
             Some(TypeExpression::Name("string".to_owned())),
@@ -308,7 +308,7 @@ mod tests {
         // The unparseable @param drops; the good one survives; the
         // by-reference and variadic sigils are tolerated.
         let tags = lex_docblock(
-            "/**\n * @param array<int> $broken\n * @param int $good\n * @param string &$reference\n * @param int ...$rest\n * @param $untyped\n */",
+            "/**\n * @param array< $broken\n * @param int $good\n * @param string &$reference\n * @param int ...$rest\n * @param $untyped\n */",
         );
         let extracted = extract_member_docblock(&tags);
         let names: Vec<&str> = extracted

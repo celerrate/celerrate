@@ -94,5 +94,15 @@ fn lower<'db>(site: &AnnotationSite<'db, '_>, expression: &TypeExpression) -> Ty
             let key = TypeId::union(db, [TypeId::int(db), TypeId::string(db)]);
             TypeId::array(db, key, lower(site, element))
         }
+        // Task 3: Parsed but not lowered yet. Task 6 will implement lowering.
+        TypeExpression::IntLiteral(_) => TypeId::int(db),
+        TypeExpression::FloatLiteral(_) => TypeId::float(db),
+        TypeExpression::StringLiteral(_) => TypeId::string(db),
+        TypeExpression::Generic { base, arguments } => {
+            let lowered_arguments = arguments.iter().map(|arg| lower(site, arg)).collect();
+            site.keyword_type(base).unwrap_or_else(|| {
+                TypeId::class(db, &site.qualify_class_name(base), lowered_arguments)
+            })
+        }
     }
 }
