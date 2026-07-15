@@ -28,7 +28,7 @@ use crate::inference::InterproceduralEdgeCounts;
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
 use crate::representation::TypeId;
-use crate::widening::join;
+use crate::widening::{join, widened_literals};
 
 /// Join-ascent passes a loop may take before the still-moving
 /// bindings widen to `mixed` — the deterministic bailout.
@@ -410,18 +410,54 @@ impl<'db> Walker<'db, '_, '_> {
                 let mut exits: Vec<Environment<'db>> = Vec::new();
                 let mut has_default = false;
                 for case in &cases {
+                    let mut case_fact: Option<(NarrowingSubject, TypeId<'db>)> = None;
                     if let Some(condition) = case.condition {
                         // Conditions evaluate against a scratch clone:
                         // their side effects on later cases are
                         // conservatively dropped.
                         let mut scratch = pre.clone();
-                        self.expression(condition, &mut scratch);
+                        let condition_type = self.expression(condition, &mut scratch);
+                        // A case narrows when its condition is an int
+                        // or string literal and the subject already
+                        // lies entirely within that scalar family —
+                        // loose equality then coincides with strict
+                        // (the design's "strict-safe cases").
+                        let literal_family = if condition_type.int_literal_value(db).is_some() {
+                            Some(TypeId::int(db))
+                        } else if condition_type.string_literal_value(db).is_some() {
+                            Some(TypeId::string(db))
+                        } else {
+                            None
+                        };
+                        if let (Some(family), Some(switch_subject)) =
+                            (literal_family, subject_of(self.context.ir, subject))
+                        {
+                            let current = self.subject_type(&pre, &switch_subject);
+                            let strict_safe = crate::judgments::subtype_of(
+                                db,
+                                self.context.files,
+                                self.context.stubs,
+                                self.context.configuration,
+                                current,
+                                family,
+                            ) == crate::judgments::Proof::Holds;
+                            if strict_safe {
+                                case_fact = Some((
+                                    switch_subject,
+                                    self.narrowed_to(current, condition_type),
+                                ));
+                            }
+                        }
                     } else {
                         has_default = true;
                     }
+                    let mut narrowed_pre = pre.clone();
+                    if let Some((switch_subject, narrowed)) = case_fact {
+                        narrowed_pre.bind(switch_subject, narrowed);
+                    }
                     let mut entry = match fall_in.take() {
-                        Some(previous) => Environment::join_any(db, &previous, &pre),
-                        None => pre.clone(),
+                        Some(previous) => Environment::join_any(db, &previous, &narrowed_pre),
+                        None => narrowed_pre,
                     };
                     self.statements(&case.statements, &mut entry);
                     if entry.is_reachable() {
@@ -581,6 +617,43 @@ impl<'db> Walker<'db, '_, '_> {
                 let operand_type = self.expression(operand, environment);
                 operators::postfix_type(db, operand_type)
             }
+            BodyExpression::Binary {
+                operator: SyntaxKind::QuestionQuestion,
+                lhs,
+                rhs,
+            } => {
+                let lhs_type = self.expression(lhs, environment);
+                let subject = subject_of(self.context.ir, lhs);
+                // The right operand evaluates only when the left was
+                // null; the result path re-joins both sides.
+                let mut when_null = environment.clone();
+                let mut when_present = environment.clone();
+                if let Some(subject) = &subject {
+                    when_null.bind(subject.clone(), TypeId::null(db));
+                    let current = self.subject_type(environment, subject);
+                    when_present.bind(subject.clone(), current.without_null(db));
+                }
+                let rhs_type = self.expression(rhs, &mut when_null);
+                *environment = Environment::join_any(db, &when_present, &when_null);
+                // `TypeId::union`, not `widening::join`: the two sides
+                // are alternative outcomes of a control-flow split
+                // (`Foo|null` must survive, not collapse to `mixed` the
+                // way `join(Foo, null)` does — the Task-3 convention).
+                // A side that is *itself* a single-value narrowing
+                // literal widens to its general type first, so a
+                // same-family literal absorbs before the union runs
+                // (`union` does no subsumption elimination, so without
+                // this `?string ?? 'd'` would answer `string|'d'`); a
+                // pre-existing union stays intact, so `(1|2|null) ?? 3`
+                // keeps `1|2`.
+                TypeId::union(
+                    db,
+                    [
+                        widen_if_literal(db, lhs_type.without_null(db)),
+                        widen_if_literal(db, rhs_type),
+                    ],
+                )
+            }
             BodyExpression::Binary { operator, lhs, rhs } => {
                 let lhs_type = self.expression(lhs, environment);
                 let rhs_type = self.expression(rhs, environment);
@@ -698,17 +771,69 @@ impl<'db> Walker<'db, '_, '_> {
                 TypeId::mixed(db)
             }
             BodyExpression::Match { subject, arms } => {
+                // Walk the subject for its recording side effect (the
+                // arms narrow off its subject binding, not its value).
                 self.expression(subject, environment);
+                // `match (true)` — the subject is the literal `true`.
+                let is_match_true = matches!(
+                    self.context.ir.expression(subject),
+                    Some(BodyExpression::NamedReference { text })
+                        if text.eq_ignore_ascii_case("true")
+                );
+                let match_subject = subject_of(self.context.ir, subject);
                 let mut result: Option<TypeId<'db>> = None;
                 let mut exits: Vec<Environment<'db>> = Vec::new();
+                let mut seen_condition_types: Vec<TypeId<'db>> = Vec::new();
                 for arm in &arms {
                     let mut arm_env = environment.clone();
-                    for condition in &arm.conditions {
-                        self.expression(*condition, &mut arm_env);
+                    if is_match_true {
+                        // Each condition is itself a condition; the
+                        // arm runs when any of them held.
+                        let mut condition_envs: Vec<Environment<'db>> = Vec::new();
+                        for condition in &arm.conditions {
+                            let mut base = environment.clone();
+                            let (when_true, _) = self.branch_environments(*condition, &mut base);
+                            condition_envs.push(when_true);
+                        }
+                        if let Some(joined) = condition_envs
+                            .into_iter()
+                            .reduce(|left, right| Environment::join_any(db, &left, &right))
+                        {
+                            arm_env = joined;
+                        }
+                    } else {
+                        let mut literals: Vec<TypeId<'db>> = Vec::new();
+                        let mut all_literal = !arm.conditions.is_empty();
+                        for condition in &arm.conditions {
+                            let condition_type = self.expression(*condition, &mut arm_env);
+                            if crate::narrowing::is_narrowing_literal(db, condition_type) {
+                                literals.push(condition_type);
+                            } else {
+                                all_literal = false;
+                            }
+                        }
+                        seen_condition_types.extend(literals.iter().copied());
+                        if arm.is_default {
+                            // The default arm subtracts every literal
+                            // condition seen across the arms.
+                            if let Some(match_subject) = &match_subject {
+                                let mut current = self.subject_type(&arm_env, match_subject);
+                                for literal in &seen_condition_types {
+                                    current = self.removed_type(current, *literal);
+                                }
+                                arm_env.bind(match_subject.clone(), current);
+                            }
+                        } else if all_literal && let Some(match_subject) = &match_subject {
+                            let current = self.subject_type(&arm_env, match_subject);
+                            let target = TypeId::union(db, literals.iter().copied());
+                            arm_env.bind(match_subject.clone(), self.narrowed_to(current, target));
+                        }
                     }
                     let body_type = self.expression(arm.body, &mut arm_env);
                     result = Some(match result {
-                        // Alternative arm outcomes: preserve them.
+                        // Alternative arm outcomes: preserve them
+                        // (`TypeId::union`, not `widening::join`, so
+                        // `1|2|'other'` does not collapse to `mixed`).
                         Some(previous) => TypeId::union(db, [previous, body_type]),
                         None => body_type,
                     });
@@ -745,6 +870,28 @@ impl<'db> Walker<'db, '_, '_> {
                 self.expression(chain, environment)
             }
             BodyExpression::Call { callee, arguments } => {
+                // The `assert()` special form: its argument is a
+                // condition, and a truthy assertion narrows the rest
+                // of the body exactly like an early-return `if` would
+                // (Tasks 6 and 9 keep this check first when they
+                // rewrite this arm for call resolution).
+                if let Some(BodyExpression::NamedReference { text }) =
+                    self.context.ir.expression(callee).cloned()
+                {
+                    let name = text.strip_prefix('\\').unwrap_or(text.as_str());
+                    if name.eq_ignore_ascii_case("assert")
+                        && let Some(first) = arguments.first().filter(|argument| !argument.spread)
+                    {
+                        let value = first.value;
+                        self.record(callee, TypeId::mixed(db));
+                        let (when_true, _) = self.branch_environments(value, environment);
+                        *environment = when_true;
+                        for argument in arguments.iter().skip(1) {
+                            self.expression(argument.value, environment);
+                        }
+                        return self.record(id, TypeId::bool(db));
+                    }
+                }
                 self.expression(callee, environment);
                 for argument in &arguments {
                     self.expression(argument.value, environment);
@@ -1174,6 +1321,27 @@ impl<'db> Walker<'db, '_, '_> {
         environment: &mut Environment<'db>,
     ) -> TypeId<'db> {
         let db = self.db();
+        if operator == SyntaxKind::QuestionQuestionEquals {
+            // `$x ??= v` reduces to `$x = $x ?? v`: the same
+            // gated-widen-then-union combination as the `??` arm (see
+            // its comment) so a same-family literal absorbs
+            // (`?int $x; $x ??= 0;` answers `int`) while a genuinely
+            // different alternative — or a pre-existing union — survives
+            // instead of collapsing. The value operand was already
+            // walked unconditionally by the `Assignment` arm above — its
+            // environment effects apply on both paths, a recorded
+            // conservative approximation.
+            let current = self.recorded(target);
+            let assigned = TypeId::union(
+                db,
+                [
+                    widen_if_literal(db, current.without_null(db)),
+                    widen_if_literal(db, value_type),
+                ],
+            );
+            self.assign_target(target, assigned, environment);
+            return assigned;
+        }
         if by_reference {
             // `$b = &$a`: aliased locals are unknowable without alias
             // analysis — both sides degrade to mixed (decision 10).
@@ -1239,6 +1407,21 @@ impl<'db> Walker<'db, '_, '_> {
                 }
             }
         }
+    }
+}
+
+/// Widen `of` to its general type only when it is a single-value
+/// narrowing literal; anything else (a plain scalar, a class, or a
+/// pre-existing union) passes through untouched. The `??` and `??=`
+/// result types union their two operands after this gate, so a
+/// same-family literal still absorbs (`?string ?? 'd'` → `string`)
+/// while a multi-literal union survives (`(1|2|null) ?? 3` → `1|2|int`)
+/// rather than collapsing the way widening the whole operand would.
+fn widen_if_literal<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> TypeId<'db> {
+    if crate::narrowing::is_narrowing_literal(db, of) {
+        widened_literals(db, of)
+    } else {
+        of
     }
 }
 

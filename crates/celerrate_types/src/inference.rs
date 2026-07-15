@@ -581,4 +581,70 @@ mod tests {
             }"]);
         assert_eq!(return_display(&fixture, 1), "1|foo");
     }
+
+    #[test]
+    fn match_arms_narrow_their_subject_and_the_default_subtracts() {
+        let fixture = fixture(&["<?php function f(int|string $x) {
+                return match ($x) { 1, 2 => $x, default => 'other' };
+            }"]);
+        // Arm: 1|2. Default: the literals are not subtractable from
+        // the general int, so int|string stays — joined with the arm.
+        assert_eq!(return_display(&fixture, 0), "1|2|'other'");
+    }
+
+    #[test]
+    fn the_match_true_idiom_narrows_by_arm_condition() {
+        let fixture = fixture(&["<?php function f(mixed $x) {
+                return match (true) { is_string($x) => $x, default => 1 };
+            }"]);
+        assert_eq!(return_display(&fixture, 0), "1|string");
+    }
+
+    #[test]
+    fn switch_narrows_strict_safe_cases() {
+        let fixture = fixture(&["<?php function f(int $x) {
+                switch ($x) { case 1: return $x; }
+                return 2;
+            }"]);
+        assert_eq!(return_display(&fixture, 0), "1|2");
+    }
+
+    #[test]
+    fn coalescing_drops_null_from_its_left_operand() {
+        let fixture = fixture(&["<?php class Foo {}
+            function coalesce(?string $x) { return $x ?? 'd'; }
+            function keeps(?Foo $x) { return $x ?? null; }
+            function assigns(?int $x) { $x ??= 0; return $x; }"]);
+        // join(string, 'd') absorbs the literal.
+        assert_eq!(return_display(&fixture, 1), "string");
+        // The brief's original expectation transposed the display's
+        // established null-last convention (`display.rs`'s
+        // `composites_render_with_null_last_in_unions`, and the
+        // sibling test above at line 380 rendering "1|null"); the
+        // correct rendering of `Foo|null` is "foo|null".
+        assert_eq!(return_display(&fixture, 2), "foo|null");
+        assert_eq!(return_display(&fixture, 3), "int");
+    }
+
+    #[test]
+    fn coalescing_preserves_a_multi_literal_left_operand() {
+        let fixture = fixture(&["<?php function f(int $flag) {
+                $x = $flag === 1 ? 1 : ($flag === 2 ? 2 : null);
+                return $x ?? 3;
+            }"]);
+        // The left operand is the union `1|2|null`; dropping null
+        // leaves `1|2`, which must survive (only a single-value
+        // literal widens). The single-value right literal `3` widens
+        // to `int`; `union` performs no subsumption, so `1` and `2`
+        // are not absorbed under it. The display's structural order
+        // renders the general `int` before the literals (decision 16).
+        assert_eq!(return_display(&fixture, 0), "int|1|2");
+    }
+
+    #[test]
+    fn assert_narrows_the_rest_of_the_body() {
+        let fixture = fixture(&["<?php class Foo {}
+            function f(mixed $x) { assert($x instanceof Foo); return $x; }"]);
+        assert_eq!(return_display(&fixture, 1), "foo");
+    }
 }
