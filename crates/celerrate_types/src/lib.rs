@@ -91,6 +91,7 @@ mod display;
 mod dynamic_type_provider;
 mod inference;
 mod judgments;
+mod operators;
 mod ordering;
 mod representation;
 mod type_syntax;
