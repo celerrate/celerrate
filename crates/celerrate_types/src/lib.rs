@@ -98,7 +98,8 @@ mod written;
 
 pub use declared::{
     DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
-    declared_function_signature, declared_member_signature, member_annotations,
+    declared_function_signature, declared_member_signature, function_annotations,
+    member_annotations,
 };
 pub use dynamic_type_provider::{
     ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration,

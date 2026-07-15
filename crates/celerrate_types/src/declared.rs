@@ -902,6 +902,58 @@ pub struct FunctionQuery<'db> {
     pub key: String,
 }
 
+/// The parsed annotation layer of one free function: own docblock,
+/// parsed through the type-syntax registry — the function's exact
+/// counterpart to [`member_annotations`]. Functions do not inherit
+/// (there is no ancestor to walk): a stub-only function, an absent
+/// source declaration, or a source declaration with no docblock all
+/// answer the default. `stubs` and `configuration` complete the
+/// input quartet the annotation seam shares with `member_annotations`
+/// (a uniform query shape callers never have to special-case); a
+/// free function's own docblock resolves without consulting either.
+#[salsa::tracked]
+pub fn function_annotations<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    query: FunctionQuery<'db>,
+) -> MemberAnnotations<'db> {
+    let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
+    let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
+        return MemberAnnotations::default();
+    };
+    let index = analyzed_file_index(db, files);
+    let Ok(position) = index.binary_search_by_key(&ast_id.file, |(id, _)| *id) else {
+        return MemberAnnotations::default();
+    };
+    let Some(&(_, file)) = index.get(position) else {
+        return MemberAnnotations::default();
+    };
+    let Some(function) = member_tree(db, file)
+        .functions
+        .iter()
+        .find(|function| function.ast_id == ast_id)
+        .cloned()
+    else {
+        return MemberAnnotations::default();
+    };
+    let Some(docblock) = function.docblock.clone() else {
+        return MemberAnnotations::default();
+    };
+    let tables = UseTables::for_namespace(item_tree(db, file), &function.namespace);
+    let site = NameSite::Source {
+        namespace: &function.namespace,
+        tables: &tables,
+    };
+    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &docblock);
+    MemberAnnotations {
+        value: parsed.return_type,
+        parameters: parsed.parameters,
+        throws: parsed.throws,
+    }
+}
+
 #[salsa::tracked]
 pub fn declared_function_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -947,17 +999,40 @@ pub fn declared_function_signature<'db>(
         namespace: &function.namespace,
         tables: &tables,
     };
+    let annotations = function_annotations(db, files, stubs, configuration, query);
+    let native_value = lowered_or_mixed(db, &site, function.signature.type_text.as_deref());
+    let (value_type, value_trust) = refine(
+        db,
+        files,
+        stubs,
+        configuration,
+        native_value,
+        annotations.value,
+    );
     Some(DeclaredSignature {
         parameters: function
             .signature
             .parameters
             .iter()
             .map(|parameter| {
-                declared_parameter(db, files, stubs, configuration, &site, parameter, None)
+                let annotation = annotations
+                    .parameters
+                    .iter()
+                    .find(|(name, _)| *name == parameter.name)
+                    .map(|(_, annotated)| *annotated);
+                declared_parameter(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    &site,
+                    parameter,
+                    annotation,
+                )
             })
             .collect(),
-        value_type: lowered_or_mixed(db, &site, function.signature.type_text.as_deref()),
-        value_trust: Trust::NativeOnly,
+        value_type,
+        value_trust,
         by_reference: function.signature.by_reference,
     })
 }
@@ -1280,6 +1355,51 @@ mod tests {
         }
     }
 
+    /// A `TypeSyntax` fake that parses `@return-class <Name>` into a
+    /// resolved class type through `site.qualify_class_name`, proving
+    /// that the function annotation seam resolves class names at the
+    /// function's own declaring site.
+    #[derive(Debug)]
+    struct FakeClassReturnSyntax;
+
+    impl TypeSyntax for FakeClassReturnSyntax {
+        fn can_parse(&self, docblock: &str) -> bool {
+            docblock.contains("@return-class")
+        }
+        fn parse_docblock<'db>(
+            &self,
+            site: &AnnotationSite<'db, '_>,
+            docblock: &str,
+        ) -> ParsedAnnotations<'db> {
+            let name = docblock
+                .split("@return-class")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_default();
+            let qualified = site.qualify_class_name(name);
+            ParsedAnnotations {
+                return_type: Some(TypeId::class(site.database(), &qualified, vec![])),
+                ..ParsedAnnotations::default()
+            }
+        }
+        fn parse_type_expression<'db>(
+            &self,
+            _site: &AnnotationSite<'db, '_>,
+            _expression: &str,
+        ) -> Option<TypeId<'db>> {
+            None
+        }
+    }
+
+    fn register_fake_class_syntax(fixture: &Fixture) {
+        let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+            identity: fake_identity("fake-return-class"),
+            implementation: std::sync::Arc::new(FakeClassReturnSyntax),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
     #[derive(Debug)]
     struct FakeBothSyntax;
 
@@ -1466,6 +1586,78 @@ mod tests {
                 [TypeId::class(db, "App\\Widget", vec![]), TypeId::null(db)]
             ),
         );
+    }
+
+    #[test]
+    fn a_function_docblock_parses_through_the_registry() {
+        let fixture = fixture(&["<?php /** @return int */ function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let annotations = super::function_annotations(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        );
+        assert_eq!(annotations.value, Some(TypeId::int(&fixture.db)));
+    }
+
+    #[test]
+    fn the_function_signature_refines_under_the_trust_rule() {
+        // int <: string fails: the annotation is rejected, native wins.
+        let fixture = fixture(&["<?php /** @return int */ function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::string(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::RejectedAnnotation);
+    }
+
+    #[test]
+    fn an_unannotated_function_stays_native_only() {
+        let fixture = fixture(&["<?php function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn a_function_signature_refines_through_a_resolved_class_annotation() {
+        // `@return-class Dog` against a native `Animal` return: Dog is
+        // a proven subtype, so the annotation refines (Holds).
+        let fixture = fixture(
+            &["<?php interface Animal {} class Dog implements Animal {}\n\
+             /** @return-class Dog */ function f(): Animal {}"],
+        );
+        register_fake_class_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        let db = &fixture.db;
+        assert_eq!(signature.value_type, TypeId::class(db, "Dog", vec![]));
+        assert_eq!(signature.value_trust, Trust::Refined);
     }
 
     #[test]
