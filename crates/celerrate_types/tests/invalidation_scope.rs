@@ -527,12 +527,13 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
 }
 
 /// A `TypeSyntax` fake that reads `@return <one word>`, ignoring every
-/// other tag and every word of surrounding prose, and lowers the word
-/// through the shared native keyword table (`site.keyword_type`) —
-/// `int` and `string` are the only words the pins below use. A
-/// prose-only edit after the tag word therefore reparses to the exact
-/// same `MemberAnnotations`; a changed tag word reparses to a
-/// different one. Mirrors `FakeReturnSyntax` in
+/// other tag and every word of surrounding prose. The word lowers
+/// through the shared native keyword table first (`site.keyword_type`)
+/// and falls back to a class type qualified at the declaring site
+/// (`site.qualify_class_name`) — the same two-step rule the native
+/// lowering applies. A prose-only edit after the tag word therefore
+/// reparses to the exact same `MemberAnnotations`; a changed tag word
+/// reparses to a different one. Mirrors `FakeReturnSyntax` in
 /// `crates/celerrate_types/src/declared.rs`'s test module, but reads
 /// the tag's own word instead of answering a constant `int`.
 #[derive(Debug)]
@@ -551,7 +552,11 @@ impl TypeSyntax for WordOnlyReturnSyntax {
         let return_type = docblock
             .split_once("@return")
             .and_then(|(_, rest)| rest.split_whitespace().next())
-            .and_then(|word| site.keyword_type(word));
+            .map(|word| {
+                site.keyword_type(word).unwrap_or_else(|| {
+                    TypeId::class(site.database(), &site.qualify_class_name(word), Vec::new())
+                })
+            });
         ParsedAnnotations {
             return_type,
             ..ParsedAnnotations::default()
@@ -665,28 +670,39 @@ fn member_query<'db>(
 /// `TypeSyntax` does. `member_annotations` also re-runs, for the same
 /// reason — but the fake syntax reads only the `@return` word, which
 /// the added prose never touches, so it answers a byte-identical
-/// `MemberAnnotations`. That equality is where the edit actually stops
-/// mattering: a verdict that shares `f`'s file but never reads `f`
-/// itself (`User <: Entity`, routed through `linearized_class` exactly
-/// as pin 2 and pin 5 route their probes, so "spared" is load-bearing
-/// and not a vacuous scalar short-circuit) stays memoized, proving the
-/// parsed-annotation stage — not `declared_member_signature`'s own
-/// re-execution — is plan 4a's cutoff.
+/// `MemberAnnotations`, and the annotation-refined declared return is
+/// the same interned `TypeId` as before the edit.
+///
+/// The probe is built FROM that declared return — `subtype_of(
+/// signature.value_type, Entity)` — so its memoized verdict depends
+/// transitively on what the seam produced, and it is hierarchy-routed
+/// (`User <: Entity`, two distinct class names reaching
+/// `linearized_class`) so "spared" cannot be a vacuous structural
+/// short-circuit. The companion test below builds the IDENTICAL probe
+/// construction after a tag edit and observes it re-run with a flipped
+/// verdict, proving this probe family is sensitive to the seam's
+/// output: its 0-execution result here is therefore load-bearing
+/// evidence of the parsed-annotation cutoff, not coarse same-file
+/// sparing.
 #[test]
 fn a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage() {
     let mut fixture =
         fixture_with_fake_syntax(&["<?php class Entity {} class User extends Entity {} \
-         class C { /** @return int */ public function f() {} }"]);
+         class C { /** @return User */ public function f() {} }"]);
     {
-        let entity = TypeId::class(&fixture.db, "Entity", vec![]);
-        let user = TypeId::class(&fixture.db, "User", vec![]);
         let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
-        let _ = declared_member_signature(
+        let signature = declared_member_signature(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             query,
+        )
+        .unwrap();
+        // The annotation refines the native-`mixed` return to `User`.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
         );
         assert_eq!(
             subtype_of(
@@ -694,8 +710,8 @@ fn a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage() {
                 fixture.files,
                 fixture.stubs,
                 fixture.configuration,
-                user,
-                entity
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
             ),
             Proof::Holds
         );
@@ -706,27 +722,37 @@ fn a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage() {
         &mut fixture,
         0,
         "<?php class Entity {} class User extends Entity {} \
-         class C { /** @return int (documented better) */ public function f() {} }",
+         class C { /** @return User (documented better) */ public function f() {} }",
     );
     {
-        let entity = TypeId::class(&fixture.db, "Entity", vec![]);
-        let user = TypeId::class(&fixture.db, "User", vec![]);
         let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
-        let _ = declared_member_signature(
+        let signature = declared_member_signature(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             query,
+        )
+        .unwrap();
+        // The direct second-stage assertion: the parsed `@return User`
+        // word is untouched by the prose, so the refined declared
+        // return is the SAME interned type as before the edit.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
         );
+        // The identical probe re-derived from the declared return: the
+        // same interned key, and every hierarchy input it read
+        // backdated, so the memoized verdict must answer without
+        // executing.
         assert_eq!(
             subtype_of(
                 &fixture.db,
                 fixture.files,
                 fixture.stubs,
                 fixture.configuration,
-                user,
-                entity
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
             ),
             Proof::Holds
         );
@@ -745,22 +771,27 @@ fn a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage() {
     assert_eq!(
         executions_of(&log, "subtype_of"),
         0,
-        "a verdict that shares f's file but never reads f itself must stay \
-         spared: the edit stops mattering at the parsed-annotation stage, \
-         not at declared_member_signature's own re-execution: {log:?}"
+        "the verdict derived from the declared return must stay spared: the \
+         edit stops mattering at the parsed-annotation stage, not at \
+         declared_member_signature's own re-execution: {log:?}"
     );
 }
 
-/// The counterexample: editing the `@return` word itself (`int` ->
-/// `string`) changes what the fake syntax extracts, so
-/// `member_annotations` produces a genuinely different value, the
-/// declared signature's own refined return type changes with it, and a
-/// verdict that reads that return type re-runs (and its answer flips):
-/// the cutoff does not apply when the parsed annotation itself changed.
+/// The counterexample, sharing the EXACT probe construction of the
+/// prose pin above (`subtype_of(signature.value_type, Entity)`):
+/// editing the `@return` word itself (`User` -> `Other`) changes what
+/// the fake syntax extracts, so `member_annotations` produces a
+/// genuinely different value, the refined declared return changes with
+/// it, and the probe re-executes with a flipped verdict (`Other` does
+/// not extend `Entity`). This proves the shared probe family is
+/// sensitive to the seam's output — the prose pin's 0-execution result
+/// discriminates the parsed-annotation cutoff, not same-file sparing.
 #[test]
 fn an_annotation_edit_reaches_the_declared_signature() {
-    let mut fixture =
-        fixture_with_fake_syntax(&["<?php class C { /** @return int */ public function f() {} }"]);
+    let mut fixture = fixture_with_fake_syntax(&[
+        "<?php class Entity {} class User extends Entity {} class Other {} \
+         class C { /** @return User */ public function f() {} }",
+    ]);
     {
         let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
         let signature = declared_member_signature(
@@ -771,7 +802,10 @@ fn an_annotation_edit_reaches_the_declared_signature() {
             query,
         )
         .unwrap();
-        assert_eq!(signature.value_type, TypeId::int(&fixture.db));
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
         assert_eq!(
             subtype_of(
                 &fixture.db,
@@ -779,7 +813,7 @@ fn an_annotation_edit_reaches_the_declared_signature() {
                 fixture.stubs,
                 fixture.configuration,
                 signature.value_type,
-                TypeId::int(&fixture.db)
+                TypeId::class(&fixture.db, "Entity", vec![])
             ),
             Proof::Holds
         );
@@ -789,7 +823,8 @@ fn an_annotation_edit_reaches_the_declared_signature() {
     set_source(
         &mut fixture,
         0,
-        "<?php class C { /** @return string */ public function f() {} }",
+        "<?php class Entity {} class User extends Entity {} class Other {} \
+         class C { /** @return Other */ public function f() {} }",
     );
     {
         let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
@@ -801,9 +836,13 @@ fn an_annotation_edit_reaches_the_declared_signature() {
             query,
         )
         .unwrap();
-        // The annotation refines a native-`mixed` return: the declared
-        // return genuinely changes from `int` to `string`.
-        assert_eq!(signature.value_type, TypeId::string(&fixture.db));
+        // The declared return genuinely changed with the tag word.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "Other", vec![])
+        );
+        // The same probe construction, now keyed on the new declared
+        // return: it must execute, and its verdict flips.
         assert_eq!(
             subtype_of(
                 &fixture.db,
@@ -811,7 +850,7 @@ fn an_annotation_edit_reaches_the_declared_signature() {
                 fixture.stubs,
                 fixture.configuration,
                 signature.value_type,
-                TypeId::int(&fixture.db)
+                TypeId::class(&fixture.db, "Entity", vec![])
             ),
             Proof::Fails
         );
