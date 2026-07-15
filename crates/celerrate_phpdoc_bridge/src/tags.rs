@@ -22,11 +22,11 @@ pub struct MemberDocblock {
 }
 
 /// Extracts `@param`/`@return`/`@var`/`@throws` from `tags`. Malformed
-/// tags are dropped individually; well-formed siblings survive.
+/// tags are dropped individually; well-formed siblings survive: an
+/// unparseable `@return`/`@var` consumes nothing, so the slot takes
+/// the first parseable tag.
 pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
     let mut extracted = MemberDocblock::default();
-    let mut return_claimed = false;
-    let mut value_claimed = false;
     let mut seen_parameters: HashSet<String> = HashSet::new();
     for tag in tags {
         match tag.name.as_str() {
@@ -36,14 +36,12 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
                 }
             }
             "return" => {
-                if !return_claimed {
-                    return_claimed = true;
+                if extracted.return_type.is_none() {
                     extracted.return_type = first_token_type(&tag.content);
                 }
             }
             "var" => {
-                if !value_claimed {
-                    value_claimed = true;
+                if extracted.value_type.is_none() {
                     extracted.value_type = first_token_type(&tag.content);
                 }
             }
@@ -222,6 +220,9 @@ fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
     } else {
         name_token.strip_prefix('$')?
     };
+    // A space-less default (`$x=5`) rides on the name token: the name
+    // stops at the first `=`.
+    let name = name.split('=').next().unwrap_or(name).trim();
     if name.is_empty() {
         return None;
     }
@@ -267,6 +268,31 @@ mod tests {
             extract_member_docblock(&tags).return_type,
             Some(TypeExpression::Name("int".to_owned())),
         );
+    }
+
+    #[test]
+    fn the_value_slot_takes_the_first_parseable_tag() {
+        // An unparseable first @return must not suppress a later
+        // parseable one: loss is per construct, never cross construct.
+        let tags = lex_docblock("/**\n * @return array<int>\n * @return string\n */");
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("string".to_owned())),
+        );
+    }
+
+    #[test]
+    fn method_parameter_names_stop_at_the_default() {
+        // A space-less default (`$x=5`) must not pollute the name.
+        let tags = lex_docblock("/** @method void go(int $x=5, string $y = 'a') */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        let parameters = &members[0].parameters;
+        assert_eq!(parameters.len(), 2);
+        assert_eq!(parameters[0].name, "x");
+        assert!(parameters[0].optional);
+        assert_eq!(parameters[1].name, "y");
+        assert!(parameters[1].optional);
     }
 
     #[test]
