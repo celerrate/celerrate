@@ -4931,16 +4931,19 @@ git commit -m "📝 docs(phpdoc-bridge): the dialect tables, the coverage statem
 
 ## Accepted debt at closure
 
-- **The coverage statement**: 226 of 241 pinned `TypeParserTest` inputs
+- **The coverage statement**: 225 of 241 pinned `TypeParserTest` inputs
   parse (93%), against phpstan/phpdoc-parser 2.3.3
   (`fb19eedd2bb67ff8cf7a5502ad329e701d6398a3`), per
   `tests/phpstan_corpus/verdicts.txt`. The plan's original "~253"
   estimate was an over-count: the pinned commit's `provideParseData`
-  carries 241 cases, not ~253. The 15 non-parsing inputs break down as:
+  carries 241 cases, not ~253. The 16 non-parsing inputs break down as:
   13 deliberately-invalid upstream inputs (the reference itself expects
-  a `ParserException` on them), 1 full-consumption probe artifact
+  a `ParserException` on them), 2 full-consumption probe artifacts
   (`MongoCollection <p>...`, prose that a prefix parse consumes into
-  and a full-text parse correctly rejects), and 1 structural gap (the
+  and a full-text parse correctly rejects, and `array [ int ]`, an
+  upstream partial-parse probe that stops at `array` — it flipped from
+  coincidentally-ok to rejected at final review when offset suffixes
+  gained the reference's adjacency rule), and 1 structural gap (the
   const-fetch shape key below). The docblock-level reference corpus
   (`PhpDocParserTest.php`) is not measured: debt, as decision 9 already
   traces.
@@ -5014,6 +5017,11 @@ git commit -m "📝 docs(phpdoc-bridge): the dialect tables, the coverage statem
   the `DoubleColon` token and the first constant token. Recorded for
   final-review triage rather than fixed here, since tightening it has
   no test pressure from the pinned corpus.
+  **Final review resolution**: the doc comment was amended (not the
+  code) to state the actual behavior — whitespace after `::` is
+  tolerated, upstream-consistent with the pinned reference; only the
+  run of constant tokens is adjacency-checked. The tolerance itself is
+  kept, not tightened.
 - A trailing `&` or `&$var` after an otherwise-valid type ends the
   type prefix instead of failing the whole construct. This is a
   deliberate consequence of the intersection-parsing stop set (an

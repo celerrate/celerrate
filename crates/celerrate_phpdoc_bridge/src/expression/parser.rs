@@ -196,17 +196,31 @@ fn parse_suffixed(parser: &mut Parser<'_>, depth: u32) -> Option<TypeExpression>
             expression = TypeExpression::ArrayOf(Box::new(expression));
             continue;
         }
-        if parser.peek() == Some(&TokenKind::OpenBracket) {
+        // Offset access (`T[K]`) requires the `[` to be adjacent to
+        // the token just consumed — a whitespace-separated bracket is
+        // prose (`bool [true when the lock was acquired]`), not an
+        // offset. A failed inner type or a missing `]` rewinds to the
+        // checkpoint and stops the suffix loop, returning the base
+        // expression already parsed: loss is per suffix, mirroring
+        // the reference's `tryParseArrayOrOffsetAccess`, never the
+        // whole expression.
+        if parser.peek() == Some(&TokenKind::OpenBracket)
+            && parser
+                .peek_token()
+                .is_some_and(|token| Some(token.start) == parser.consumed_end())
+        {
+            let checkpoint = parser.checkpoint();
             parser.advance();
-            let offset = parse_type(parser, depth + 1)?;
-            if !parser.eat(&TokenKind::CloseBracket) {
-                return None;
+            if let Some(offset) = parse_type(parser, depth + 1)
+                && parser.eat(&TokenKind::CloseBracket)
+            {
+                expression = TypeExpression::Offset {
+                    base: Box::new(expression),
+                    offset: Box::new(offset),
+                };
+                continue;
             }
-            expression = TypeExpression::Offset {
-                base: Box::new(expression),
-                offset: Box::new(offset),
-            };
-            continue;
+            parser.rewind(checkpoint);
         }
         break;
     }
@@ -359,9 +373,12 @@ fn is_callable_base(name: &str) -> bool {
     )
 }
 
-/// `Foo::BAR`, `Foo::*`, `Foo::BAR_*`: the constant is the adjacent
-/// run of name and `*` tokens after the `::` (adjacency by byte
-/// offset — whitespace breaks the run).
+/// `Foo::BAR`, `Foo::*`, `Foo::BAR_*`. Whitespace between the `::` and
+/// the constant is tolerated (upstream-consistent: the pinned
+/// reference tolerates it too); only the RUN of `Name`/`Asterisk`
+/// tokens making up the constant itself is adjacency-checked by byte
+/// offset, so `Foo::BAR _*` stops after `BAR` rather than gluing
+/// unrelated trailing prose onto the constant.
 fn parse_constant_name(parser: &mut Parser<'_>) -> Option<String> {
     let mut constant = String::new();
     let mut previous_end: Option<usize> = None;

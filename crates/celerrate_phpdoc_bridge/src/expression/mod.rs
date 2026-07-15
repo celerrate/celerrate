@@ -499,6 +499,26 @@ mod tests {
     }
 
     #[test]
+    fn offset_suffixes_roll_back_at_prose_boundaries() {
+        // A whitespace-separated bracket is prose, not offset access
+        // (the reference requires adjacency and rolls back on failure).
+        assert_eq!(
+            parse_type_expression_prefix("bool [true when the lock was acquired]"),
+            Some((TypeExpression::Name("bool".to_owned()), 4)),
+        );
+        // A failed offset body rolls back to the base type.
+        assert_eq!(
+            parse_type_expression_prefix("int[|]"),
+            Some((TypeExpression::Name("int".to_owned()), 3)),
+        );
+        // Adjacent, well-formed offset access still parses.
+        assert!(matches!(
+            parse_type_expression_text("T[K]"),
+            Some(TypeExpression::Offset { .. })
+        ));
+    }
+
+    #[test]
     fn conditional_types_parse_for_both_subjects() {
         let Some(TypeExpression::Conditional {
             subject, negated, ..

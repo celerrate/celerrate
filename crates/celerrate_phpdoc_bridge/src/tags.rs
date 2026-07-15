@@ -276,11 +276,16 @@ fn strip_variable_sigils(token: &str) -> Option<String> {
 }
 
 /// `@property[-read|-write] [type] $name`: a leading `$name` means
-/// untyped (the member still exists). `type_text` stores the consumed
-/// prefix verbatim: unresolved text is the virtual-symbol contract.
+/// untyped (the member still exists), UNLESS that leading word is
+/// exactly `$this` — `$this` is a valid type (`TypeExpression::This`),
+/// not the property's own variable, so it falls through to the typed
+/// path below. `type_text` stores the consumed prefix verbatim:
+/// unresolved text is the virtual-symbol contract.
 fn parse_property_tag(content: &str) -> Option<VirtualMember> {
     let first_word = content.split_whitespace().next()?;
-    if let Some(name) = first_word.strip_prefix('$') {
+    if first_word != "$this"
+        && let Some(name) = first_word.strip_prefix('$')
+    {
         if name.is_empty() {
             return None;
         }
@@ -376,14 +381,19 @@ fn parse_method_parameters(segment: &str) -> Vec<VirtualParameter> {
 
 /// Top-level comma split, depth-aware across `()<>{}[]`, so callable
 /// signatures, generics, shapes, and array defaults ride inside one
-/// parameter chunk.
+/// parameter chunk. A `>` that is part of `=>` or `->` (an array
+/// default's arrow, e.g. `['a' => 1]`) is not a closing angle
+/// bracket: it must not decrement `depth`, or a comma inside the
+/// default would wrongly read as top-level and split the parameter.
 fn split_top_level_commas(segment: &str) -> Vec<&str> {
     let mut chunks = Vec::new();
     let mut depth = 0i64;
     let mut start = 0usize;
+    let mut previous_character: Option<char> = None;
     for (offset, character) in segment.char_indices() {
         match character {
             '(' | '<' | '{' | '[' => depth += 1,
+            '>' if matches!(previous_character, Some('=' | '-')) => {}
             ')' | '>' | '}' | ']' => depth -= 1,
             ',' if depth == 0 => {
                 if let Some(chunk) = segment.get(start..offset) {
@@ -393,6 +403,7 @@ fn split_top_level_commas(segment: &str) -> Vec<&str> {
             }
             _ => {}
         }
+        previous_character = Some(character);
     }
     if let Some(chunk) = segment.get(start..) {
         chunks.push(chunk);
@@ -697,6 +708,28 @@ mod tests {
         );
         assert!(extracted.parameters.is_empty());
         assert!(extracted.throws.is_empty());
+    }
+
+    #[test]
+    fn arrow_defaults_do_not_break_the_parameter_split() {
+        let tags = lex_docblock("/** @method void go(array $x = ['a' => 1], int $y) */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        let names: Vec<&str> = members[0]
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn a_this_typed_property_keeps_this_as_its_type() {
+        let tags = lex_docblock("/** @property $this $owner */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "owner");
+        assert_eq!(members[0].type_text.as_deref(), Some("$this"));
     }
 
     #[test]

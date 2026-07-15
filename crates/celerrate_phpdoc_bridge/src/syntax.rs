@@ -1,5 +1,8 @@
-//! The bridge as a type-syntax implementation: standard PHPDoc over
-//! the 4a expression grammar, lowered through the facade's builders.
+//! The bridge's `TypeSyntax` implementation: wires tag extraction
+//! (`tags::extract_member_docblock`) into a per-docblock template
+//! scope (`docblock_scope`, `declare_into`), then lowers every
+//! extracted expression through the total lowering table
+//! (`lowering::lower`) into the facade's builders.
 
 use celerrate_plugin::{AnnotationSite, ParsedAnnotations, ParsedAssertion, TypeId, TypeSyntax};
 

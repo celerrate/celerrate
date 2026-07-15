@@ -1,5 +1,5 @@
 # The pinned-reference coverage statement (type-engine design, section 5).
-# 226 of 241 TypeParserTest inputs parse (93%).
+# 225 of 241 TypeParserTest inputs parse (93%).
 # The corpus deliberately includes invalid inputs (upstream
 # expects a ParserException on them): they count as rejected.
 ok: array{\n\t\t\t\t\t// a is for apple\n\t\t\t\t\ta: int,\n\t\t\t\t}
@@ -118,7 +118,7 @@ rejected: callable<>(): void
 ok: Closure<T of Model>(T, int): (T|false)
 ok: \\Closure<Tx of X|Z, Ty of Y>(Tx, Ty): array{ Ty, Tx }
 ok: (Foo\\Bar<array<mixed, string>, (int | (string<foo> & bar)[])> | Lorem)
-ok: array [ int ]
+rejected: array [ int ]
 ok: array[ int ]
 ok: self::TYPES[ int ]
 ok: ?\t\\xA009
