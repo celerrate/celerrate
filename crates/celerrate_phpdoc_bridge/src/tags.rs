@@ -151,8 +151,14 @@ fn parse_method_tag(content: &str) -> Option<VirtualMember> {
     if !is_valid_identifier(name_token) {
         return None;
     }
-    let is_static = before_tokens.contains(&"static");
-    let mut leftover = before_tokens.into_iter().filter(|token| *token != "static");
+    // Only a LEADING "static" token is the staticness modifier: strip
+    // at most one from the front, then whatever remains (even a token
+    // spelled "static") is the return type.
+    let is_static = before_tokens.first() == Some(&"static");
+    if is_static {
+        before_tokens.remove(0);
+    }
+    let mut leftover = before_tokens.into_iter();
     let type_text = match (leftover.next(), leftover.next()) {
         (None, None) => None,
         (Some(token), None) => Some(token.to_owned()),
@@ -221,8 +227,10 @@ fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
         name_token.strip_prefix('$')?
     };
     // A space-less default (`$x=5`) rides on the name token: the name
-    // stops at the first `=`.
-    let name = name.split('=').next().unwrap_or(name).trim();
+    // stops at the first `=`. `split_once` has no unreachable arm to
+    // fall back on (unlike `split('=').next().unwrap_or(name)`, which
+    // can never actually take its `unwrap_or` branch).
+    let name = name.split_once('=').map_or(name, |(head, _)| head).trim();
     if name.is_empty() {
         return None;
     }
@@ -350,5 +358,19 @@ mod tests {
         assert!(!clear.is_static);
         assert_eq!(clear.type_text.as_deref(), Some("void"));
         assert!(clear.parameters.is_empty());
+    }
+
+    #[test]
+    fn a_method_tag_can_return_the_static_type() {
+        // Only a LEADING "static" token is the staticness modifier; a
+        // second "static" token is the return type, spelled the same
+        // as the modifier.
+        let tags = lex_docblock("/** @method static static create() */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        let create = &members[0];
+        assert_eq!(create.name, "create");
+        assert!(create.is_static);
+        assert_eq!(create.type_text.as_deref(), Some("static"));
     }
 }

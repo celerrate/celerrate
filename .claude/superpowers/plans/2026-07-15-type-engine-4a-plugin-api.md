@@ -3436,4 +3436,9 @@ git commit -m "📝 docs(plugin): the plugin API surface, its dispatch rules, an
   source-function lookup (symbol query, declaration lookup, file
   index binary search, member-tree find, docblock/site derivation) —
   extraction deferred; drift risk on future edits.
+- Degraded-run plugin warnings print through a raw `eprintln!` in
+  `crates/celerrate_cli/src/lib.rs` rather than the injectable output
+  stream `run` receives, so the exclusion path has no in-process test;
+  route it through a testable surface when plan 7 makes exclusion
+  reachable.
 
