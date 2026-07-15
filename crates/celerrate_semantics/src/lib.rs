@@ -14,6 +14,7 @@ mod ast_id;
 mod body;
 mod body_lowering;
 mod cache;
+mod comment_directives;
 mod index;
 mod item_nodes;
 mod items;
@@ -39,6 +40,10 @@ pub use body::{
     is_recognized_annotation,
 };
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
+pub use comment_directives::{
+    CommentDirective, CommentDirectiveProvider, CommentDirectiveRegistration,
+    CommentDirectiveRegistry, CommentKind, DirectiveScope, is_suppressed, suppressed_ranges,
+};
 pub use index::{
     StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable,
     source_symbol_table, stub_signature_table, stub_symbol_table,

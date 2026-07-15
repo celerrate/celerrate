@@ -27,7 +27,13 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// rebuild.
 ///
 /// 3: the stub blob gains SECTION_SIGNATURES (plan 3).
-pub const CACHE_SCHEMA_VERSION: u32 = 3;
+///
+/// 4: verdict diagnostics are stored post-suppression (plan 4c). The
+/// shapes are unchanged; their meaning is not — a pack written before
+/// the directive filter existed carries findings the filter would have
+/// extinguished, and must not speak. In practice the binary self-hash
+/// already discards it; this is the named, reviewable record.
+pub const CACHE_SCHEMA_VERSION: u32 = 4;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, and the PHP version range. Any mismatch

@@ -10,7 +10,7 @@ use std::sync::Arc;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
-use celerrate_source::FileId;
+use celerrate_source::{FileId, TextSize};
 use celerrate_stubs::StubIndexInput;
 use rayon::prelude::*;
 
@@ -133,10 +133,16 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
 }
 
 /// One file's diagnostics, computed: decode and syntax, then references
-/// and gating. The single composition point — `analyze_one` serves it on
-/// a cache miss, `persist` re-composes through it, and the equivalence
-/// harness recomputes through it — so the composers cannot drift (audit
-/// finding I2's first hand-maintained mirror).
+/// and gating, then the directive filter. The single composition
+/// point — `analyze_one` serves it on a cache miss, `persist`
+/// re-composes through it, and the equivalence harness recomputes
+/// through it — so the composers cannot drift (audit finding I2's
+/// first hand-maintained mirror). Filtering here, below the verdict,
+/// is sound because directives are strictly file-local: the verdict's
+/// content-hash key covers every directive edit, and it keeps the
+/// exit-code count, the printed report, and the persisted verdict the
+/// same post-filter set by construction (the vendor-filter rationale
+/// above, applied again).
 pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
@@ -151,6 +157,16 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
         .iter()
         .cloned(),
     );
+    let suppressed = celerrate_semantics::suppressed_ranges(database, file);
+    if !suppressed.is_empty() {
+        let text_end = celerrate_db::source_text(database, file)
+            .as_ref()
+            .map(|text| TextSize::of(text.text()))
+            .unwrap_or_default();
+        diagnostics.retain(|diagnostic| {
+            !celerrate_semantics::is_suppressed(suppressed, diagnostic.range.start(), text_end)
+        });
+    }
     diagnostics
 }
 

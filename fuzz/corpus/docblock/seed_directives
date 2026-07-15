@@ -1,0 +1,7 @@
+/** @psalm-suppress PossiblyNullReference, InvalidArgument */
+// @phpstan-ignore-line
+// @phpstan-ignore-next-line
+// @phpstan-ignore method.notFound, property.notFound (nullable receiver)
+# @phpstan-ignore-line
+/* @psalm-suppress all */
+/** @phpstan-ignore identifier */

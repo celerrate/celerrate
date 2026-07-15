@@ -24,9 +24,10 @@ pub struct PluginDescriptor {
     pub api_version: u32,
 }
 
-// Identity and the virtual-symbol extension point.
+// Identity and the comment-directive and virtual-symbol extension points.
 pub use celerrate_semantics::{
-    PluginIdentity, VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
+    CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveScope, PluginIdentity,
+    VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
 };
 
 // The type-syntax and dynamic-type-provider extension points, and the
