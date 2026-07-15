@@ -105,8 +105,6 @@ fn lower<'db>(site: &AnnotationSite<'db, '_>, expression: &TypeExpression) -> Ty
             })
         }
         // Task 4: Parsed but not lowered yet. Task 6 will implement lowering.
-        TypeExpression::Shape { .. } => site
-            .keyword_type("mixed")
-            .unwrap_or_else(|| TypeId::mixed(db)),
+        TypeExpression::Shape { .. } => TypeId::mixed(db),
     }
 }

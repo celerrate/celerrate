@@ -289,6 +289,11 @@ mod tests {
                 "{text}",
             );
         }
+        // Shape bases are case-insensitive.
+        assert!(matches!(
+            parse_type_expression_text("Array{a: int}"),
+            Some(TypeExpression::Shape { .. })
+        ));
         // A brace after a non-shape base is not a shape.
         assert_eq!(parse_type_expression_text("Foo{a: int}"), None);
         assert!(matches!(
