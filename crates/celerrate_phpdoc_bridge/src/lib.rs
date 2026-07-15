@@ -6,6 +6,7 @@
 //! `cargo xtask dependency-shape`. No docblock diagnostics: malformed
 //! annotations are silently ignored, per construct.
 
+mod dialect;
 mod expression;
 mod lexer;
 mod lowering;

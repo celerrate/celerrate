@@ -4,12 +4,14 @@
 //! `-write` variants) and `@method` feed the virtual-member vocabulary
 //! from `celerrate_plugin`. Tag contents parse a maximal type-expression
 //! prefix; trailing prose is free text. Loss is per construct, never per
-//! annotation: one unparseable tag drops, its siblings survive.
-
-use std::collections::HashSet;
+//! annotation: one unparseable tag drops, its siblings survive. Dialect
+//! classification and tier-aware slot resolution provide inter-dialect
+//! precedence: PHPStan-prefixed over Psalm-prefixed over bare, within a
+//! tier first parseable wins; `@throws` accumulates.
 
 use celerrate_plugin::{VirtualMember, VirtualMemberKind, VirtualParameter};
 
+use crate::dialect::{self, TagRole, TagTier};
 use crate::{Tag, TypeExpression, parse_type_expression_prefix};
 
 /// The standard tags a single member's docblock contributes:
@@ -22,61 +24,108 @@ pub struct MemberDocblock {
     pub throws: Vec<TypeExpression>,
 }
 
-/// Extracts `@param`/`@return`/`@var`/`@throws` from `tags`. Malformed
-/// tags are dropped individually; well-formed siblings survive: an
-/// unparseable `@return`/`@var` consumes nothing, so the slot takes
-/// the first parseable tag.
+/// Extracts the member slots under the tier rule (decision 8):
+/// PHPStan-prefixed over Psalm-prefixed over bare; within a tier the
+/// first parseable tag wins; `@param` resolves per parameter name;
+/// `@throws` accumulates across tiers.
 pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
-    let mut extracted = MemberDocblock::default();
-    let mut seen_parameters: HashSet<String> = HashSet::new();
+    let mut return_slot: Option<(TagTier, TypeExpression)> = None;
+    let mut value_slot: Option<(TagTier, TypeExpression)> = None;
+    let mut parameters: Vec<(String, TagTier, TypeExpression)> = Vec::new();
+    let mut throws = Vec::new();
     for tag in tags {
-        match tag.name.as_str() {
-            "param" => {
-                if let Some(parameter) = parse_param_tag(&tag.content, &mut seen_parameters) {
-                    extracted.parameters.push(parameter);
+        let Some(classified) = dialect::classify(&tag.name) else {
+            continue;
+        };
+        match classified.role {
+            TagRole::Return => offer_value(&mut return_slot, classified.tier, &tag.content),
+            TagRole::Var => offer_value(&mut value_slot, classified.tier, &tag.content),
+            TagRole::Param => offer_parameter(&mut parameters, classified.tier, &tag.content),
+            TagRole::Throws => {
+                if let Some(expression) = value_type(&tag.content) {
+                    throws.push(expression);
                 }
             }
-            "return" => {
-                if extracted.return_type.is_none() {
-                    extracted.return_type = value_type(&tag.content);
-                }
-            }
-            "var" => {
-                if extracted.value_type.is_none() {
-                    extracted.value_type = value_type(&tag.content);
-                }
-            }
-            "throws" => {
-                if let Some(type_expression) = value_type(&tag.content) {
-                    extracted.throws.push(type_expression);
-                }
-            }
-            _ => {}
+            TagRole::Property | TagRole::Method | TagRole::Ignored => {}
         }
     }
-    extracted
+    MemberDocblock {
+        return_type: return_slot.map(|(_, expression)| expression),
+        value_type: value_slot.map(|(_, expression)| expression),
+        parameters: parameters
+            .into_iter()
+            .map(|(name, _, expression)| (name, expression))
+            .collect(),
+        throws,
+    }
 }
 
-/// Extracts the virtual members declared by `@property` (and its
-/// `-read` / `-write` variants) and `@method` tags.
+/// A stronger tier replaces; the same or a weaker tier keeps the
+/// holder (first parseable within a tier). An unparseable candidate
+/// never touches the slot.
+fn offer_value(slot: &mut Option<(TagTier, TypeExpression)>, tier: TagTier, content: &str) {
+    if matches!(slot, Some((existing, _)) if *existing <= tier) {
+        return;
+    }
+    if let Some(expression) = value_type(content) {
+        *slot = Some((tier, expression));
+    }
+}
+
+/// Per-name slots in first-appearance order, so the output stays
+/// deterministic without a map.
+fn offer_parameter(
+    parameters: &mut Vec<(String, TagTier, TypeExpression)>,
+    tier: TagTier,
+    content: &str,
+) {
+    let Some((name, expression)) = parse_param_tag(content) else {
+        return;
+    };
+    match parameters
+        .iter_mut()
+        .find(|(existing, _, _)| *existing == name)
+    {
+        Some((_, existing_tier, existing_expression)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_expression = expression;
+            }
+        }
+        None => parameters.push((name, tier, expression)),
+    }
+}
+
+/// Virtual members under the same tier rule, resolved per
+/// `(kind, name)`; the first declaration wins within a tier.
 pub fn extract_virtual_members(tags: &[Tag]) -> Vec<VirtualMember> {
-    let mut members = Vec::new();
+    let mut members: Vec<(TagTier, VirtualMember)> = Vec::new();
     for tag in tags {
-        match tag.name.as_str() {
-            "property" | "property-read" | "property-write" => {
-                if let Some(member) = parse_property_tag(&tag.content) {
-                    members.push(member);
+        let Some(classified) = dialect::classify(&tag.name) else {
+            continue;
+        };
+        let parsed = match classified.role {
+            TagRole::Property => parse_property_tag(&tag.content),
+            TagRole::Method => parse_method_tag(&tag.content),
+            _ => None,
+        };
+        let Some(member) = parsed else {
+            continue;
+        };
+        match members
+            .iter_mut()
+            .find(|(_, existing)| existing.kind == member.kind && existing.name == member.name)
+        {
+            Some((existing_tier, existing)) => {
+                if classified.tier < *existing_tier {
+                    *existing_tier = classified.tier;
+                    *existing = member;
                 }
             }
-            "method" => {
-                if let Some(member) = parse_method_tag(&tag.content) {
-                    members.push(member);
-                }
-            }
-            _ => {}
+            None => members.push((classified.tier, member)),
         }
     }
-    members
+    members.into_iter().map(|(_, member)| member).collect()
 }
 
 /// The tag's value slot: a maximal type-expression prefix; trailing
@@ -88,9 +137,7 @@ fn value_type(content: &str) -> Option<TypeExpression> {
 
 /// `@param type $name ...prose` (or `&$name` / `...$name` when the
 /// type is omitted, in which case there is nothing to contribute).
-/// The first tag for a given parameter name wins; later duplicates
-/// are dropped.
-fn parse_param_tag(content: &str, seen: &mut HashSet<String>) -> Option<(String, TypeExpression)> {
+fn parse_param_tag(content: &str) -> Option<(String, TypeExpression)> {
     let trimmed = content.trim_start();
     if trimmed.starts_with('$') || trimmed.starts_with("...$") || trimmed.starts_with("&$") {
         return None;
@@ -99,10 +146,6 @@ fn parse_param_tag(content: &str, seen: &mut HashSet<String>) -> Option<(String,
     let remainder = content.get(consumed..)?;
     let variable_token = remainder.split_whitespace().next()?;
     let name = strip_variable_sigils(variable_token)?;
-    if seen.contains(&name) {
-        return None;
-    }
-    seen.insert(name.clone());
     Some((name, type_expression))
 }
 
@@ -473,5 +516,74 @@ mod tests {
         assert_eq!(create.name, "create");
         assert!(create.is_static);
         assert_eq!(create.type_text.as_deref(), Some("static"));
+    }
+
+    #[test]
+    fn tool_prefixed_tags_win_over_bare_regardless_of_order() {
+        let tags = lex_docblock(
+            "/**\n * @return string\n * @psalm-return bool\n * @phpstan-return int\n */",
+        );
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("int".to_owned())),
+        );
+        // Without a PHPStan-prefixed tag, the Psalm synonym beats bare.
+        let tags = lex_docblock("/**\n * @psalm-return bool\n * @return string\n */");
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("bool".to_owned())),
+        );
+    }
+
+    #[test]
+    fn an_unparseable_prefixed_tag_never_clears_a_parseable_bare_one() {
+        let tags = lex_docblock("/**\n * @phpstan-return array{\n * @return string\n */");
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("string".to_owned())),
+        );
+    }
+
+    #[test]
+    fn param_precedence_resolves_per_parameter_name() {
+        let tags = lex_docblock(
+            "/**\n * @param string $a\n * @param string $b\n * @phpstan-param int $a\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.parameters.len(), 2);
+        assert_eq!(
+            extracted.parameters[0],
+            ("a".to_owned(), TypeExpression::Name("int".to_owned())),
+        );
+        assert_eq!(
+            extracted.parameters[1],
+            ("b".to_owned(), TypeExpression::Name("string".to_owned())),
+        );
+    }
+
+    #[test]
+    fn psalm_synonyms_and_virtual_member_prefixes_extract() {
+        let tags = lex_docblock("/** @psalm-var non-empty-string */");
+        assert!(extract_member_docblock(&tags).value_type.is_some());
+        let tags = lex_docblock("/** @psalm-property string $title */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "title");
+    }
+
+    #[test]
+    fn the_ignored_divergent_bucket_contributes_nothing_and_disturbs_nothing() {
+        // The enumerated bucket (design section 5): parsed, ignored
+        // without error, siblings survive.
+        let tags = lex_docblock(
+            "/**\n * @psalm-pure\n * @psalm-mutation-free\n * @psalm-taint-sink html $output\n * @psalm-taint-source input\n * @psalm-if-this-is Foo\n * @phpstan-pure\n * @return int\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(
+            extracted.return_type,
+            Some(TypeExpression::Name("int".to_owned())),
+        );
+        assert!(extracted.parameters.is_empty());
+        assert!(extracted.throws.is_empty());
     }
 }

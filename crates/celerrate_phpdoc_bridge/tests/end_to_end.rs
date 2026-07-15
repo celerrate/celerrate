@@ -453,3 +453,24 @@ fn shapes_callables_and_the_documented_widenings_lower() {
         ),
     );
 }
+
+#[test]
+fn tool_prefixed_precedence_holds_through_the_seam() {
+    let fixture = fixture(&[
+        "<?php class C { /**\n * @return string\n * @phpstan-return int\n */ public function pick() {} }",
+    ]);
+    register_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Method, "pick");
+    let signature = celerrate_types::declared_member_signature(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    )
+    .unwrap();
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::int(&fixture.db)
+    );
+}
