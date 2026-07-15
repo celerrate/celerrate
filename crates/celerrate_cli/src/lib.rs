@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod arguments;
 pub mod cache;
 pub mod database;
+pub mod plugins;
 pub mod render;
 pub mod session;
 pub mod watch;
@@ -90,6 +91,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
                 }
             };
             let mut session = Session::start(&root);
+            report_excluded_plugins(&session);
             if watch {
                 return watch::watch(&mut session, output);
             }
@@ -170,6 +172,21 @@ fn unusable_root(path: &std::path::Path) -> Option<String> {
             "error: {} cannot be read: {reason}",
             path.display(),
         )),
+    }
+}
+
+/// The composition root's registration ran inside `Session::start`,
+/// before any query and before this function's caller sees the
+/// session back. Any plugin it excluded is announced here, once, on
+/// stderr, before either the single pass or `--watch` renders its
+/// first picture: a degraded run must say so before it says anything
+/// else.
+fn report_excluded_plugins(session: &Session) {
+    for excluded in &session.plugins.excluded {
+        eprintln!(
+            "warning: plugin {} excluded: {}; the run is degraded",
+            excluded.name, excluded.reason,
+        );
     }
 }
 

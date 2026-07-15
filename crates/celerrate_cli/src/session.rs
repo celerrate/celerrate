@@ -26,6 +26,7 @@ use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
+use crate::plugins::{RegisteredPlugins, register_plugins};
 use crate::watch::{InputMutation, reconcile};
 
 /// Something that must never happen happened. The run continues, the
@@ -91,6 +92,10 @@ pub struct Session {
     /// `SnapshotCache` and with every `AnalysisInputs` clone. Never
     /// read by analysis; rendered to stderr on opt-in.
     pub statistics: Arc<CacheStatistics>,
+    /// The plugins the composition root registered into the extension
+    /// registries, and the ones it excluded. Set once, right after the
+    /// database's other singleton inputs, before any query runs.
+    pub plugins: RegisteredPlugins,
 }
 
 impl Session {
@@ -131,6 +136,11 @@ impl Session {
         .durability(salsa::Durability::HIGH)
         .new(&database);
 
+        // Registration happens here, right after the database's other
+        // singleton inputs and before any query runs: the registries
+        // are themselves salsa singletons, set once per database.
+        let plugins = register_plugins(&database);
+
         let mut session = Self {
             database,
             vfs: Vfs::default(),
@@ -144,6 +154,7 @@ impl Session {
             cache_directory,
             cache_loaded_range,
             statistics,
+            plugins,
         };
         let walk = enumerate_php_files(&session.discovery.walk_roots());
         session.load(&walk);
