@@ -1,5 +1,6 @@
 #![no_main]
 
+use celerrate_plugin::CommentKind;
 use libfuzzer_sys::fuzz_target;
 
 fuzz_target!(|data: &[u8]| {
@@ -8,5 +9,8 @@ fuzz_target!(|data: &[u8]| {
         let _ = celerrate_phpdoc_bridge::extract_member_docblock(&tags);
         let _ = celerrate_phpdoc_bridge::extract_virtual_members(&tags);
         let _ = celerrate_phpdoc_bridge::parse_type_expression_text(text);
+        for kind in [CommentKind::Line, CommentKind::Block, CommentKind::Docblock] {
+            let _ = celerrate_phpdoc_bridge::comment_directives(kind, text);
+        }
     }
 });

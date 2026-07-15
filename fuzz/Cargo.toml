@@ -12,6 +12,7 @@ libfuzzer-sys = "0.4"
 celerrate_source = { path = "../crates/celerrate_source" }
 celerrate_syntax = { path = "../crates/celerrate_syntax" }
 celerrate_phpdoc_bridge = { path = "../crates/celerrate_phpdoc_bridge" }
+celerrate_plugin = { path = "../crates/celerrate_plugin" }
 
 [[bin]]
 name = "lex"
