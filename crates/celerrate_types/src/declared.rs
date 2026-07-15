@@ -174,6 +174,8 @@ pub struct MemberAnnotations<'db> {
     pub parameters: Vec<(String, TypeId<'db>)>,
     /// `@throws`: annotated exception types.
     pub throws: Vec<TypeId<'db>>,
+    /// `@assert` family: carried for plan 5's narrowing.
+    pub assertions: Vec<crate::type_syntax::ParsedAssertion<'db>>,
 }
 
 #[salsa::tracked]
@@ -218,6 +220,7 @@ pub fn member_annotations<'db>(
         },
         parameters: parsed.parameters,
         throws: parsed.throws,
+        assertions: parsed.assertions,
     }
 }
 
@@ -277,6 +280,7 @@ fn inherited_annotations<'db>(
     for ancestor in ancestors {
         let value_missing = merged.value.is_none();
         let throws_missing = merged.throws.is_empty();
+        let assertions_missing = merged.assertions.is_empty();
         let missing_parameters: Vec<&String> = parameter_names
             .iter()
             .filter(|name| {
@@ -286,7 +290,8 @@ fn inherited_annotations<'db>(
                     .any(|(merged_name, _)| merged_name == *name)
             })
             .collect();
-        if !value_missing && !throws_missing && missing_parameters.is_empty() {
+        if !value_missing && !throws_missing && !assertions_missing && missing_parameters.is_empty()
+        {
             return merged;
         }
         if !declares(ancestor) {
@@ -298,6 +303,9 @@ fn inherited_annotations<'db>(
         }
         if throws_missing {
             merged.throws = ancestor_annotations.throws;
+        }
+        if assertions_missing {
+            merged.assertions = ancestor_annotations.assertions;
         }
         for name in missing_parameters {
             if let Some((_, annotated)) = ancestor_annotations
@@ -987,6 +995,7 @@ pub fn function_annotations<'db>(
         value: parsed.return_type,
         parameters: parsed.parameters,
         throws: parsed.throws,
+        assertions: parsed.assertions,
     }
 }
 
@@ -1829,12 +1838,14 @@ mod tests {
                     value: None,
                     parameters: vec![("x".to_owned(), string)],
                     throws: Vec::new(),
+                    assertions: Vec::new(),
                 },
                 // The far ancestor annotates both.
                 "far" => super::MemberAnnotations {
                     value: Some(int),
                     parameters: vec![("x".to_owned(), bool_type)],
                     throws: Vec::new(),
+                    assertions: Vec::new(),
                 },
                 _ => super::MemberAnnotations::default(),
             }
@@ -1862,6 +1873,7 @@ mod tests {
             value: Some(int),
             parameters: vec![],
             throws: Vec::new(),
+            assertions: Vec::new(),
         };
         let merged = super::inherited_annotations(
             own.clone(),
@@ -1872,6 +1884,7 @@ mod tests {
                 value: Some(string),
                 parameters: vec![],
                 throws: Vec::new(),
+                assertions: Vec::new(),
             },
         );
         assert_eq!(merged.value, Some(int), "own annotation shadows");
@@ -1886,6 +1899,7 @@ mod tests {
                 value: Some(string),
                 parameters: vec![],
                 throws: Vec::new(),
+                assertions: Vec::new(),
             },
         );
         assert_eq!(merged.value, None);

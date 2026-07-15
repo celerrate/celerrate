@@ -15,7 +15,7 @@ use crate::dialect::{self, TagRole, TagTier};
 use crate::{Tag, TypeExpression, parse_type_expression_prefix};
 
 /// The standard tags a single member's docblock contributes:
-/// `@param`, `@return`, `@var`, `@throws`, `@template`.
+/// `@param`, `@return`, `@var`, `@throws`, `@template`, `@assert` family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemberDocblock {
     pub return_type: Option<TypeExpression>,
@@ -23,6 +23,7 @@ pub struct MemberDocblock {
     pub parameters: Vec<(String, TypeExpression)>,
     pub throws: Vec<TypeExpression>,
     pub templates: Vec<TemplateDeclaration>,
+    pub assertions: Vec<AssertionDeclaration>,
 }
 
 /// One `@template` declaration: `T`, `T of Bound`, `T as Bound`
@@ -35,17 +36,28 @@ pub struct TemplateDeclaration {
     pub bound: Option<TypeExpression>,
 }
 
+/// One assertion tag (`@psalm-assert`, `@phpstan-assert` family):
+/// unresolved type expression pending plan 5's narrowing consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertionDeclaration {
+    pub subject: String,
+    pub asserted: TypeExpression,
+    pub polarity: celerrate_plugin::AssertionPolarity,
+    pub negated: bool,
+}
+
 /// Extracts the member slots under the tier rule (decision 8):
 /// PHPStan-prefixed over Psalm-prefixed over bare; within a tier the
 /// first parseable tag wins; `@param` resolves per parameter name;
-/// `@throws` accumulates across tiers; `@template` resolves per
-/// declared name under the same tier rule.
+/// `@throws` and `@assert` family accumulate across tiers; `@template`
+/// resolves per declared name under the same tier rule.
 pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
     let mut return_slot: Option<(TagTier, TypeExpression)> = None;
     let mut value_slot: Option<(TagTier, TypeExpression)> = None;
     let mut parameters: Vec<(String, TagTier, TypeExpression)> = Vec::new();
     let mut throws = Vec::new();
     let mut templates: Vec<(String, TagTier, TemplateDeclaration)> = Vec::new();
+    let mut extracted_assertions = Vec::new();
     for tag in tags {
         let Some(classified) = dialect::classify(&tag.name) else {
             continue;
@@ -60,6 +72,11 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
                 }
             }
             TagRole::Template => offer_template(&mut templates, classified.tier, &tag.content),
+            TagRole::Assert(polarity) => {
+                if let Some(assertion) = parse_assert_tag(&tag.content, polarity) {
+                    extracted_assertions.push(assertion);
+                }
+            }
             TagRole::Property | TagRole::Method | TagRole::Ignored => {}
         }
     }
@@ -75,6 +92,7 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
             .into_iter()
             .map(|(_, _, declaration)| declaration)
             .collect(),
+        assertions: extracted_assertions,
     }
 }
 
@@ -158,6 +176,35 @@ fn parse_template_tag(content: &str) -> Option<TemplateDeclaration> {
     Some(TemplateDeclaration {
         name: name.to_owned(),
         bound,
+    })
+}
+
+/// `[!]Type $subject`: the negation applies to the asserted type; the
+/// subject travels verbatim. A `=`-prefixed content is Psalm's
+/// exact-assertion divergence: ignored without error.
+fn parse_assert_tag(
+    content: &str,
+    polarity: celerrate_plugin::AssertionPolarity,
+) -> Option<AssertionDeclaration> {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with('=') {
+        return None;
+    }
+    let (negated, rest) = match trimmed.strip_prefix('!') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+    let (asserted, consumed) = parse_type_expression_prefix(rest)?;
+    let remainder = rest.get(consumed..)?;
+    let subject = remainder.split_whitespace().next()?;
+    if !subject.starts_with('$') {
+        return None;
+    }
+    Some(AssertionDeclaration {
+        subject: subject.to_owned(),
+        asserted,
+        polarity,
+        negated,
     })
 }
 
@@ -650,5 +697,25 @@ mod tests {
         );
         assert!(extracted.parameters.is_empty());
         assert!(extracted.throws.is_empty());
+    }
+
+    #[test]
+    fn assertion_tags_extract_with_polarity_and_negation() {
+        use celerrate_plugin::AssertionPolarity;
+        let tags = lex_docblock(
+            "/**\n * @psalm-assert string $value\n * @phpstan-assert-if-true !null $user\n * @psalm-assert =string $exact\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.assertions.len(), 2);
+        let first = &extracted.assertions[0];
+        assert_eq!(first.subject, "$value");
+        assert_eq!(first.polarity, AssertionPolarity::Always);
+        assert!(!first.negated);
+        let second = &extracted.assertions[1];
+        assert_eq!(second.subject, "$user");
+        assert_eq!(second.polarity, AssertionPolarity::IfTrue);
+        assert!(second.negated);
+        // The `=`-prefixed exact form is the divergent bucket: ignored.
+        assert!(!extracted.assertions.iter().any(|a| a.subject == "$exact"));
     }
 }

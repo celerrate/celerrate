@@ -45,6 +45,9 @@ pub(crate) enum TagRole {
     /// `@template`, `@template-covariant`, `@template-contravariant`:
     /// the variance marker is recognized and dropped (decision 6).
     Template,
+    /// Assertion tags: `@psalm-assert`, `@phpstan-assert` family,
+    /// carried for plan 5's narrowing.
+    Assert(celerrate_plugin::AssertionPolarity),
     /// The enumerated divergent bucket: parsed, ignored without error.
     Ignored,
 }

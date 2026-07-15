@@ -21,7 +21,8 @@ pub use expression::{
 pub use lexer::{Tag, lex_docblock};
 pub use syntax::PhpdocBridge;
 pub use tags::{
-    MemberDocblock, TemplateDeclaration, extract_member_docblock, extract_virtual_members,
+    AssertionDeclaration, MemberDocblock, TemplateDeclaration, extract_member_docblock,
+    extract_virtual_members,
 };
 
 /// What the composition root registers.

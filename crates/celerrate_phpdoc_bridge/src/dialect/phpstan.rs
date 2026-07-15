@@ -2,6 +2,7 @@
 //! their `@phpstan-` prefixed forms.
 
 use super::{ClassifiedTag, TagRole, TagTier};
+use celerrate_plugin::AssertionPolarity;
 
 pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
     let (tier, bare) = match name.strip_prefix("phpstan-") {
@@ -16,6 +17,13 @@ pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
         "property" | "property-read" | "property-write" => TagRole::Property,
         "method" => TagRole::Method,
         "template" | "template-covariant" | "template-contravariant" => TagRole::Template,
+        "assert" if tier == TagTier::PhpstanPrefixed => TagRole::Assert(AssertionPolarity::Always),
+        "assert-if-true" if tier == TagTier::PhpstanPrefixed => {
+            TagRole::Assert(AssertionPolarity::IfTrue)
+        }
+        "assert-if-false" if tier == TagTier::PhpstanPrefixed => {
+            TagRole::Assert(AssertionPolarity::IfFalse)
+        }
         // Purity is out of this sub-project's scope end to end
         // (design section 1): ignored without error.
         "pure" | "impure" => TagRole::Ignored,

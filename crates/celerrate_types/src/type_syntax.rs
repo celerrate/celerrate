@@ -12,6 +12,28 @@ use celerrate_semantics::PluginIdentity;
 use crate::declared::NameSite;
 use crate::representation::TypeId;
 
+/// Assertion tag polarity: always asserts, or only when the condition
+/// is true or false (design section 5, plan 5 consumer).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
+pub enum AssertionPolarity {
+    Always,
+    IfTrue,
+    IfFalse,
+}
+
+/// Carried assertion from a docblock, lowered and ready for plan 5's
+/// narrowing consumer. The subject travels verbatim; the negation
+/// applies to the asserted type.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct ParsedAssertion<'db> {
+    /// The asserted subject, verbatim (`$value`, `$this->prop`):
+    /// interpretation is plan 5's.
+    pub subject: String,
+    pub asserted: TypeId<'db>,
+    pub polarity: AssertionPolarity,
+    pub negated: bool,
+}
+
 /// The declaring-scope context one annotation parse needs beyond name
 /// qualification: `@template` resolution needs to know the scope key
 /// its own declarations bind under, and — for member docblocks — the
@@ -103,6 +125,8 @@ pub struct ParsedAnnotations<'db> {
     pub parameters: Vec<(String, TypeId<'db>)>,
     /// `@throws`, accumulated across tags.
     pub throws: Vec<TypeId<'db>>,
+    /// `@assert` family, accumulated across tags and carried for plan 5's narrowing.
+    pub assertions: Vec<ParsedAssertion<'db>>,
 }
 
 /// An implementation understands one annotation notation. Must be a

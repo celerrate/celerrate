@@ -1,7 +1,7 @@
 //! The bridge as a type-syntax implementation: standard PHPDoc over
 //! the 4a expression grammar, lowered through the facade's builders.
 
-use celerrate_plugin::{AnnotationSite, ParsedAnnotations, TypeId, TypeSyntax};
+use celerrate_plugin::{AnnotationSite, ParsedAnnotations, ParsedAssertion, TypeId, TypeSyntax};
 
 use crate::lexer::lex_docblock;
 use crate::lowering::{LoweringScope, lower};
@@ -52,11 +52,22 @@ impl TypeSyntax for PhpdocBridge {
             .iter()
             .map(|expression| lower(site, &mut scope, expression))
             .collect();
+        let assertions = extracted
+            .assertions
+            .iter()
+            .map(|assertion| ParsedAssertion {
+                subject: assertion.subject.clone(),
+                asserted: lower(site, &mut scope, &assertion.asserted),
+                polarity: assertion.polarity,
+                negated: assertion.negated,
+            })
+            .collect();
         ParsedAnnotations {
             return_type,
             value_type,
             parameters,
             throws,
+            assertions,
         }
     }
 

@@ -108,6 +108,7 @@ pub use dynamic_type_provider::{
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
-    AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
+    AnnotationSite, AssertionPolarity, ParsedAnnotations, ParsedAssertion, TypeSyntax,
+    TypeSyntaxRegistration, TypeSyntaxRegistry,
 };
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};

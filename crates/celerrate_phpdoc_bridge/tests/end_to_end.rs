@@ -622,3 +622,30 @@ fn a_variance_marked_template_still_declares_and_a_template_conditional_lowers()
         ),
     );
 }
+
+#[test]
+fn assertions_are_carried_through_the_annotation_seam() {
+    // The webmozart/assert pattern (design section 5).
+    let fixture = fixture(&[
+        "<?php class Assert { /** @psalm-assert string $value */ public static function string($value) {} }",
+    ]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let query = member_query(&fixture, "Assert", MemberKind::Method, "string");
+    let annotations = celerrate_types::member_annotations(
+        db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    assert_eq!(
+        annotations.assertions,
+        vec![celerrate_types::ParsedAssertion {
+            subject: "$value".to_owned(),
+            asserted: celerrate_types::TypeId::string(db),
+            polarity: celerrate_types::AssertionPolarity::Always,
+            negated: false,
+        }],
+    );
+}
