@@ -15,11 +15,14 @@
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, SymbolSpace, body_ir,
-    folded_symbol_key, fully_qualified_name, member_tree,
+    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberSignature, SymbolSpace,
+    UseTables, body_ir, folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
+    member_tree,
 };
 use celerrate_stubs::StubIndexInput;
 
+use crate::declared::{declared_function_signature, declared_member_signature};
+use crate::flow::{FlowContext, walk_body};
 use crate::representation::TypeId;
 
 /// The interprocedural edge classes one body's inference took, as
@@ -124,14 +127,106 @@ pub fn inferred_body_types<'db>(
     file: SourceFile,
     body: BodyQuery<'db>,
 ) -> Option<InferredBody<'db>> {
-    let _ = (files, stubs, configuration);
     let ir = body_ir(db, file, body).as_ref()?;
-    let mixed = TypeId::mixed(db);
+    let owner = body_owner(db, file, body);
+    let (namespace, owner_class_key, method_is_static, parameters) = match owner {
+        Some(BodyOwner::Function(function)) => {
+            let key = folded_symbol_key(
+                SymbolSpace::Function,
+                &fully_qualified_name(&function.namespace, &function.name),
+            );
+            let declared = declared_function_signature(
+                db,
+                files,
+                stubs,
+                configuration,
+                crate::declared::FunctionQuery::new(db, key),
+            );
+            (
+                function.namespace.clone(),
+                None,
+                false,
+                seeded_parameters(db, declared.as_ref(), &function.signature),
+            )
+        }
+        Some(BodyOwner::Method {
+            class_key,
+            namespace,
+            member,
+        }) => {
+            let declared = class_key.as_ref().and_then(|key| {
+                declared_member_signature(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    celerrate_semantics::MemberQuery::new(
+                        db,
+                        key.clone(),
+                        MemberKind::Method,
+                        folded_member_key(MemberKind::Method, &member.name),
+                    ),
+                )
+            });
+            (
+                namespace.clone(),
+                class_key.clone(),
+                member.flags.is_static,
+                seeded_parameters(db, declared.as_ref(), &member.signature),
+            )
+        }
+        None => (String::new(), None, false, Vec::new()),
+    };
+    let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
+    let context = FlowContext {
+        db,
+        files,
+        stubs,
+        configuration,
+        ir,
+        namespace,
+        tables,
+        owner_class_key,
+        method_is_static,
+        parameters,
+    };
+    let result = walk_body(&context);
     Some(InferredBody {
-        expression_types: vec![mixed; ir.expressions.len()],
-        return_type: mixed,
-        edge_counts: InterproceduralEdgeCounts::default(),
+        expression_types: result.expression_types,
+        return_type: result.return_type,
+        edge_counts: result.edge_counts,
     })
+}
+
+/// Parameter names paired with their seeded types: the declared
+/// parameter type (the plan-3 layer, annotation-refined) or `mixed`,
+/// a variadic parameter collecting into a list of it.
+fn seeded_parameters<'db>(
+    db: &'db dyn salsa::Database,
+    declared: Option<&crate::declared::DeclaredSignature<'db>>,
+    signature: &MemberSignature,
+) -> Vec<(String, TypeId<'db>)> {
+    signature
+        .parameters
+        .iter()
+        .map(|parameter| {
+            let declared_type = declared
+                .and_then(|signature| {
+                    signature
+                        .parameters
+                        .iter()
+                        .find(|candidate| candidate.name == parameter.name)
+                })
+                .and_then(|candidate| candidate.parameter_type)
+                .unwrap_or_else(|| TypeId::mixed(db));
+            let seeded = if parameter.variadic {
+                TypeId::list(db, declared_type)
+            } else {
+                declared_type
+            };
+            (parameter.name.clone(), seeded)
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -212,6 +307,123 @@ mod tests {
         let ir = body_ir(&fixture.db, file, body).as_ref().unwrap();
         assert_eq!(inferred.expression_types.len(), ir.expressions.len());
         assert!(!ir.expressions.is_empty(), "the fixture has expressions");
+        // `1 + 2` types as int now that the walk runs.
+        let super::InferredBody {
+            expression_types, ..
+        } = inferred;
+        assert!(
+            expression_types
+                .iter()
+                .any(|of| *of == crate::TypeId::int(&fixture.db)),
+            "the sum typed as int",
+        );
+    }
+
+    /// The display of the inferred return of declaration `index` in
+    /// file 0 — the assertion shape most flow tests use (decision 16).
+    fn return_display(fixture: &Fixture, index: u32) -> String {
+        let file = fixture.handles[0];
+        let body = body_query(fixture, index);
+        inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap()
+        .return_type
+        .display(&fixture.db)
+    }
+
+    #[test]
+    fn a_literal_return_types_the_body() {
+        let fixture = fixture(&["<?php function f() { return 1; }"]);
+        assert_eq!(return_display(&fixture, 0), "1");
+    }
+
+    #[test]
+    fn assignment_propagates_to_a_later_read() {
+        let fixture = fixture(&["<?php function f() { $x = 'a'; return $x; }"]);
+        assert_eq!(return_display(&fixture, 0), "'a'");
+    }
+
+    #[test]
+    fn parameters_seed_from_their_declared_types() {
+        let fixture = fixture(&["<?php function f(int $x) { return $x; }"]);
+        assert_eq!(return_display(&fixture, 0), "int");
+    }
+
+    #[test]
+    fn a_variadic_parameter_seeds_as_a_list() {
+        let fixture = fixture(&["<?php function f(int ...$x) { return $x; }"]);
+        assert_eq!(return_display(&fixture, 0), "list<int>");
+    }
+
+    #[test]
+    fn branches_join_and_one_sided_assignment_is_silence() {
+        let fixture = fixture(&["<?php
+            function two(bool $c) { if ($c) { $x = 1; } else { $x = 2; } return $x; }
+            function one(bool $c) { if ($c) { $y = 1; } return $y; }"]);
+        assert_eq!(return_display(&fixture, 0), "1|2");
+        // Assigned on one path only: the absent side reads mixed.
+        assert_eq!(return_display(&fixture, 1), "mixed");
+    }
+
+    #[test]
+    fn a_reachable_fall_through_joins_null_and_a_throwing_body_is_never() {
+        let fixture = fixture(&["<?php
+            function maybe(bool $c) { if ($c) { return 1; } }
+            function raises() { throw new \\RuntimeException('boom'); }"]);
+        assert_eq!(return_display(&fixture, 0), "1|null");
+        assert_eq!(return_display(&fixture, 1), "never");
+    }
+
+    #[test]
+    fn a_yielding_body_returns_a_generator() {
+        let fixture = fixture(&["<?php function f() { yield 1; }"]);
+        assert_eq!(return_display(&fixture, 0), "generator");
+    }
+
+    #[test]
+    fn a_loop_joins_its_passes_and_terminates_deterministically() {
+        let fixture = fixture(&["<?php
+            function joins(bool $c) { $x = 1; while ($c) { $x = 'a'; } return $x; }
+            function grows(bool $c) { $x = 1; while ($c) { $x = [$x]; } return $x; }"]);
+        assert_eq!(return_display(&fixture, 0), "1|'a'");
+        // The growing case must terminate (budget + caps) and be
+        // reproducible; the exact widened form is not the contract.
+        let first = return_display(&fixture, 1);
+        let again = self::fixture(&["<?php
+            function joins(bool $c) { $x = 1; while ($c) { $x = 'a'; } return $x; }
+            function grows(bool $c) { $x = 1; while ($c) { $x = [$x]; } return $x; }"]);
+        assert_eq!(first, return_display(&again, 1));
+    }
+
+    #[test]
+    fn unset_forgets_and_a_catch_variable_types() {
+        let fixture = fixture(&[
+            "<?php
+            function forgets() { $x = 1; unset($x); return $x; }
+            function catches() { try { return 1; } catch (\\RuntimeException $e) { return $e; } }",
+        ]);
+        assert_eq!(return_display(&fixture, 0), "mixed");
+        assert_eq!(return_display(&fixture, 1), "1|runtimeexception");
+    }
+
+    #[test]
+    fn destructuring_binds_element_types() {
+        let fixture = fixture(&["<?php function f() { [$a, $b] = [1, 'x']; return $a; }"]);
+        assert_eq!(return_display(&fixture, 0), "1");
+    }
+
+    #[test]
+    fn methods_seed_their_declared_parameters_too() {
+        let fixture = fixture(&["<?php class A { public function m(string $s) { return $s; } }"]);
+        // Numbering: class = 0, method = 1.
+        assert_eq!(return_display(&fixture, 1), "string");
     }
 
     #[test]

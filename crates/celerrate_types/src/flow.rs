@@ -1,0 +1,1071 @@
+//! The flow walk of one body: expression typing with an environment
+//! of narrowing subjects threaded through statements. Branches join,
+//! divergence (return, throw, break, goto) marks the path
+//! unreachable, and loops run an inner join-ascent fixpoint with a
+//! budget — the interprocedural discipline in miniature (design
+//! section 6). Absence is silence: a subject missing from the
+//! environment reads as its wide type, `mixed` for locals.
+
+// Interim scaffolding: `files`, `stubs`, `configuration`,
+// `owner_class_key`, and `method_is_static` are read starting Task 6
+// (member and call resolution) and Task 8 (property widening); this
+// task only threads them through the context so later tasks do not
+// have to change the walker's construction.
+#![allow(dead_code)]
+
+use std::collections::BTreeMap;
+
+use celerrate_db::AnalyzedFileSet;
+use celerrate_project::ProjectConfiguration;
+use celerrate_semantics::{
+    ArrayEntry, BodyExpression, BodyIr, BodyStatement, ExpressionId, StatementId, StringPart,
+    UseTables,
+};
+use celerrate_stubs::StubIndexInput;
+use celerrate_syntax::SyntaxKind;
+
+use crate::inference::InterproceduralEdgeCounts;
+use crate::narrowing::{NarrowingSubject, subject_of};
+use crate::operators;
+use crate::representation::TypeId;
+use crate::widening::join;
+
+/// Join-ascent passes a loop may take before the still-moving
+/// bindings widen to `mixed` — the deterministic bailout.
+pub(crate) const LOOP_ITERATION_BUDGET: u32 = 4;
+
+/// Everything one body's walk needs, resolved once by
+/// `inferred_body_types`.
+pub(crate) struct FlowContext<'db, 'body> {
+    pub db: &'db dyn salsa::Database,
+    pub files: AnalyzedFileSet,
+    pub stubs: StubIndexInput,
+    pub configuration: ProjectConfiguration,
+    pub ir: &'body BodyIr,
+    pub namespace: String,
+    pub tables: UseTables,
+    /// The defining class's folded key; `None` for free functions and
+    /// anonymous-class methods (decision 12).
+    pub owner_class_key: Option<String>,
+    pub method_is_static: bool,
+    /// Parameter names with their seeded (declared) types.
+    pub parameters: Vec<(String, TypeId<'db>)>,
+}
+
+pub(crate) struct FlowResult<'db> {
+    pub expression_types: Vec<TypeId<'db>>,
+    pub return_type: TypeId<'db>,
+    pub edge_counts: InterproceduralEdgeCounts,
+}
+
+/// The abstract state at one program point. `reachable` is the
+/// divergence flag: joins ignore an unreachable side, which is
+/// exactly how an early return narrows the code after an `if`.
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) struct Environment<'db> {
+    bindings: BTreeMap<NarrowingSubject, TypeId<'db>>,
+    reachable: bool,
+}
+
+impl<'db> Environment<'db> {
+    pub(crate) fn new() -> Self {
+        Self {
+            bindings: BTreeMap::new(),
+            reachable: true,
+        }
+    }
+
+    pub(crate) fn bind(&mut self, subject: NarrowingSubject, of: TypeId<'db>) {
+        self.bindings.insert(subject, of);
+    }
+
+    pub(crate) fn binding(&self, subject: &NarrowingSubject) -> Option<TypeId<'db>> {
+        self.bindings.get(subject).copied()
+    }
+
+    pub(crate) fn remove(&mut self, subject: &NarrowingSubject) {
+        self.bindings.remove(subject);
+    }
+
+    /// Forget everything (a `goto` label: any jump may land here).
+    pub(crate) fn clear(&mut self) {
+        self.bindings.clear();
+        self.reachable = true;
+    }
+
+    pub(crate) fn mark_unreachable(&mut self) {
+        self.reachable = false;
+    }
+
+    pub(crate) fn is_reachable(&self) -> bool {
+        self.reachable
+    }
+
+    /// The control-flow join: an unreachable side contributes
+    /// nothing; two reachable sides join pointwise, an absent side
+    /// contributing `mixed` (absence is silence).
+    pub(crate) fn join(db: &'db dyn salsa::Database, left: &Self, right: &Self) -> Self {
+        if !left.reachable {
+            return right.clone();
+        }
+        if !right.reachable {
+            return left.clone();
+        }
+        Self::join_any(db, left, right)
+    }
+
+    /// The pointwise join regardless of reachability — the
+    /// exception-edge combinator (a partially executed `try` body) and
+    /// the loop accumulator. Reachable when either side is.
+    ///
+    /// Combines each subject's two candidate bindings with
+    /// `TypeId::union` rather than `crate::widening::join`: a branch
+    /// or a loop pass is a genuine execution-path alternative (`1|2`,
+    /// not a widened `int<1, 2>`), and `TypeId::union` already falls
+    /// back to the pairwise join once a subject's accumulated
+    /// alternatives cross the arity cap, so termination is still
+    /// guaranteed.
+    pub(crate) fn join_any(db: &'db dyn salsa::Database, left: &Self, right: &Self) -> Self {
+        let mut bindings = BTreeMap::new();
+        let mixed = TypeId::mixed(db);
+        for subject in left.bindings.keys().chain(right.bindings.keys()) {
+            if bindings.contains_key(subject) {
+                continue;
+            }
+            let a = left.binding(subject).unwrap_or(mixed);
+            let b = right.binding(subject).unwrap_or(mixed);
+            bindings.insert(subject.clone(), TypeId::union(db, [a, b]));
+        }
+        Self {
+            bindings,
+            reachable: left.reachable || right.reachable,
+        }
+    }
+
+    /// The loop-budget bailout: every binding that still differs from
+    /// `wider` widens to `mixed`, deterministically.
+    pub(crate) fn widened_where_changed(&self, db: &'db dyn salsa::Database, wider: &Self) -> Self {
+        let mut result = self.clone();
+        for (subject, value) in &wider.bindings {
+            if self.binding(subject) != Some(*value) {
+                result.bindings.insert(subject.clone(), TypeId::mixed(db));
+            }
+        }
+        result
+    }
+}
+
+pub(crate) struct Walker<'db, 'body, 'context> {
+    context: &'context FlowContext<'db, 'body>,
+    types: Vec<TypeId<'db>>,
+    returns: Vec<TypeId<'db>>,
+    saw_yield: bool,
+    edge_counts: InterproceduralEdgeCounts,
+}
+
+/// Walks one body from its seeded parameter environment.
+pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> {
+    let db = context.db;
+    let mut walker = Walker {
+        context,
+        types: vec![TypeId::mixed(db); context.ir.expressions.len()],
+        returns: Vec::new(),
+        saw_yield: false,
+        edge_counts: InterproceduralEdgeCounts::default(),
+    };
+    let mut environment = Environment::new();
+    for (name, seeded) in &context.parameters {
+        environment.bind(NarrowingSubject::Local { name: name.clone() }, *seeded);
+    }
+    walker.statements(&context.ir.root.clone(), &mut environment);
+    let return_type = if walker.saw_yield {
+        TypeId::class(db, "Generator", vec![])
+    } else {
+        // The explicit returns are alternative outcomes, not a
+        // widened common supertype: `TypeId::union` preserves them
+        // (`1|2`), matching the branch and loop join above.
+        let explicit = walker
+            .returns
+            .iter()
+            .copied()
+            .reduce(|left, right| TypeId::union(db, [left, right]));
+        match (explicit, environment.is_reachable()) {
+            // A reachable end of body returns null implicitly.
+            (Some(joined), true) => TypeId::union(db, [joined, TypeId::null(db)]),
+            (None, true) => TypeId::null(db),
+            (Some(joined), false) => joined,
+            // No return statement ever reached: the body never
+            // returns normally.
+            (None, false) => TypeId::never(db),
+        }
+    };
+    FlowResult {
+        expression_types: walker.types,
+        return_type,
+        edge_counts: walker.edge_counts,
+    }
+}
+
+impl<'db> Walker<'db, '_, '_> {
+    fn db(&self) -> &'db dyn salsa::Database {
+        self.context.db
+    }
+
+    fn record(&mut self, id: ExpressionId, of: TypeId<'db>) -> TypeId<'db> {
+        if let Some(slot) = self.types.get_mut(id.index() as usize) {
+            *slot = of;
+        }
+        of
+    }
+
+    fn recorded(&self, id: ExpressionId) -> TypeId<'db> {
+        self.types
+            .get(id.index() as usize)
+            .copied()
+            .unwrap_or_else(|| TypeId::mixed(self.db()))
+    }
+
+    /// A written class name resolved at the body's declaring site.
+    fn class_type_of_written(&self, written: &str) -> TypeId<'db> {
+        let site = crate::declared::NameSite::Source {
+            namespace: &self.context.namespace,
+            tables: &self.context.tables,
+        };
+        TypeId::class(
+            self.db(),
+            &crate::declared::qualified_class_name(&site, written),
+            vec![],
+        )
+    }
+
+    /// The current type of a subject: its binding, or the wide type —
+    /// `mixed` in this task (Task 8 widens property subjects to their
+    /// declared type).
+    fn subject_type(
+        &self,
+        environment: &Environment<'db>,
+        subject: &NarrowingSubject,
+    ) -> TypeId<'db> {
+        environment
+            .binding(subject)
+            .unwrap_or_else(|| TypeId::mixed(self.db()))
+    }
+
+    fn statements(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
+        for &statement in list {
+            if !environment.is_reachable() {
+                // Dead code still gets its expressions typed (the
+                // table covers the whole arena), against a throwaway
+                // empty environment — reachable locally so nested
+                // joins behave, discarded so it cannot resurrect the
+                // real path.
+                let mut scratch = Environment::new();
+                self.statement(statement, &mut scratch);
+                continue;
+            }
+            self.statement(statement, environment);
+        }
+    }
+
+    fn statement(&mut self, id: StatementId, environment: &mut Environment<'db>) {
+        let db = self.db();
+        let Some(statement) = self.context.ir.statement(id).cloned() else {
+            return;
+        };
+        match statement {
+            BodyStatement::Missing | BodyStatement::Declaration { .. } => {}
+            BodyStatement::Block { statements } => self.statements(&statements, environment),
+            BodyStatement::Expression { expression } => {
+                self.expression(expression, environment);
+            }
+            BodyStatement::Return { value } => {
+                let returned = match value {
+                    Some(value) => self.expression(value, environment),
+                    None => TypeId::null(db),
+                };
+                self.returns.push(returned);
+                environment.mark_unreachable();
+            }
+            BodyStatement::Echo { values } => {
+                for value in values {
+                    self.expression(value, environment);
+                }
+            }
+            BodyStatement::Break { level } | BodyStatement::Continue { level } => {
+                if let Some(level) = level {
+                    self.expression(level, environment);
+                }
+                // Conservative: the path's bindings are dropped, and
+                // dropped reads as mixed — silence (decision 9).
+                environment.mark_unreachable();
+            }
+            BodyStatement::Global { targets } => {
+                for target in targets {
+                    self.expression(target, environment);
+                    if let Some(subject) = subject_of(self.context.ir, target) {
+                        environment.bind(subject, TypeId::mixed(db));
+                    }
+                }
+            }
+            BodyStatement::StaticVariables { variables } => {
+                for variable in variables {
+                    if let Some(initializer) = variable.initializer {
+                        self.expression(initializer, environment);
+                    }
+                    // A static local persists across calls: mixed.
+                    environment.bind(
+                        NarrowingSubject::Local {
+                            name: variable.name.clone(),
+                        },
+                        TypeId::mixed(db),
+                    );
+                }
+            }
+            BodyStatement::Unset { targets } => {
+                for target in targets {
+                    self.expression(target, environment);
+                    if let Some(subject) = subject_of(self.context.ir, target) {
+                        environment.remove(&subject);
+                    }
+                }
+            }
+            BodyStatement::Goto { .. } => environment.mark_unreachable(),
+            BodyStatement::Label { .. } => environment.clear(),
+            BodyStatement::If {
+                condition,
+                then_branch,
+                else_branch,
+            } => {
+                self.expression(condition, environment);
+                let mut when_true = environment.clone();
+                let mut when_false = environment.clone();
+                self.statements(&then_branch, &mut when_true);
+                self.statements(&else_branch, &mut when_false);
+                *environment = Environment::join(db, &when_true, &when_false);
+            }
+            BodyStatement::While { condition, body } => {
+                self.looped(environment, |walker, env| {
+                    walker.expression(condition, env);
+                    let exit = env.clone();
+                    walker.statements(&body, env);
+                    exit
+                });
+            }
+            BodyStatement::DoWhile { body, condition } => {
+                self.looped(environment, |walker, env| {
+                    walker.statements(&body, env);
+                    walker.expression(condition, env);
+                    env.clone()
+                });
+            }
+            BodyStatement::For {
+                initializers,
+                conditions,
+                updates,
+                body,
+            } => {
+                for initializer in &initializers {
+                    self.expression(*initializer, environment);
+                }
+                self.looped(environment, |walker, env| {
+                    for condition in &conditions {
+                        walker.expression(*condition, env);
+                    }
+                    let exit = env.clone();
+                    walker.statements(&body, env);
+                    for update in &updates {
+                        walker.expression(*update, env);
+                    }
+                    exit
+                });
+            }
+            BodyStatement::Foreach {
+                subject,
+                key,
+                value,
+                by_reference: _,
+                body,
+            } => {
+                self.expression(subject, environment);
+                self.looped(environment, |walker, env| {
+                    // Iteration typing is plan 6: key and value are
+                    // mixed, honestly.
+                    if let Some(key) = key
+                        && let Some(subject) = subject_of(walker.context.ir, key)
+                    {
+                        walker.expression(key, env);
+                        env.bind(subject, TypeId::mixed(walker.db()));
+                    }
+                    walker.expression(value, env);
+                    if let Some(subject) = subject_of(walker.context.ir, value) {
+                        env.bind(subject, TypeId::mixed(walker.db()));
+                    }
+                    walker.statements(&body, env);
+                    env.clone()
+                });
+            }
+            BodyStatement::Switch { subject, cases } => {
+                self.expression(subject, environment);
+                let pre = environment.clone();
+                let mut fall_in: Option<Environment<'db>> = None;
+                let mut exits: Vec<Environment<'db>> = Vec::new();
+                let mut has_default = false;
+                for case in &cases {
+                    if let Some(condition) = case.condition {
+                        // Conditions evaluate against a scratch clone:
+                        // their side effects on later cases are
+                        // conservatively dropped.
+                        let mut scratch = pre.clone();
+                        self.expression(condition, &mut scratch);
+                    } else {
+                        has_default = true;
+                    }
+                    let mut entry = match fall_in.take() {
+                        Some(previous) => Environment::join_any(db, &previous, &pre),
+                        None => pre.clone(),
+                    };
+                    self.statements(&case.statements, &mut entry);
+                    if entry.is_reachable() {
+                        fall_in = Some(entry.clone());
+                    }
+                    exits.push(entry);
+                }
+                let mut post = exits
+                    .into_iter()
+                    .reduce(|left, right| Environment::join(db, &left, &right))
+                    .unwrap_or_else(|| pre.clone());
+                if !has_default {
+                    post = Environment::join(db, &post, &pre);
+                }
+                *environment = post;
+            }
+            BodyStatement::Try {
+                body,
+                catches,
+                finally,
+            } => {
+                let entry = environment.clone();
+                let mut after_try = environment.clone();
+                self.statements(&body, &mut after_try);
+                // A catch entry sees any prefix of the try body:
+                // pointwise join regardless of reachability.
+                let catch_entry = Environment::join_any(db, &entry, &after_try);
+                let mut exits = vec![after_try];
+                for catch in &catches {
+                    let mut arm = catch_entry.clone();
+                    let caught = TypeId::union(
+                        db,
+                        catch
+                            .types
+                            .iter()
+                            .map(|written| self.class_type_of_written(written)),
+                    );
+                    if let Some(variable) = &catch.variable {
+                        arm.bind(
+                            NarrowingSubject::Local {
+                                name: variable.clone(),
+                            },
+                            caught,
+                        );
+                    }
+                    self.statements(&catch.statements, &mut arm);
+                    exits.push(arm);
+                }
+                let mut post = exits
+                    .into_iter()
+                    .reduce(|left, right| Environment::join(db, &left, &right))
+                    .unwrap_or(entry);
+                if let Some(finally) = finally {
+                    self.statements(&finally, &mut post);
+                }
+                *environment = post;
+            }
+            BodyStatement::Declare { statements } => self.statements(&statements, environment),
+        }
+    }
+
+    /// The loop discipline (decision 9): join-ascent passes to a
+    /// fixpoint under `LOOP_ITERATION_BUDGET`, deterministic widening
+    /// to `mixed` on exhaustion, then one final recording pass from
+    /// the fixed environment. The pass closure answers the loop's
+    /// *exit* environment (a `while`'s condition-false state); the
+    /// final pass's exit becomes the post-loop environment.
+    fn looped<F>(&mut self, environment: &mut Environment<'db>, mut pass: F)
+    where
+        F: FnMut(&mut Self, &mut Environment<'db>) -> Environment<'db>,
+    {
+        let db = self.db();
+        let mut current = environment.clone();
+        let mut budget = LOOP_ITERATION_BUDGET;
+        loop {
+            let mut attempt = current.clone();
+            let _ = pass(self, &mut attempt);
+            let joined = Environment::join_any(db, &current, &attempt);
+            if joined == current {
+                break;
+            }
+            if budget == 0 {
+                current = current.widened_where_changed(db, &joined);
+                break;
+            }
+            budget -= 1;
+            current = joined;
+        }
+        let mut fixed = current;
+        let exit = pass(self, &mut fixed);
+        *environment = exit;
+    }
+
+    fn expression(&mut self, id: ExpressionId, environment: &mut Environment<'db>) -> TypeId<'db> {
+        let db = self.db();
+        let Some(expression) = self.context.ir.expression(id).cloned() else {
+            return self.record(id, TypeId::mixed(db));
+        };
+        let of = match expression {
+            BodyExpression::Missing => TypeId::mixed(db),
+            BodyExpression::Literal { text } => operators::literal_type(db, &text),
+            BodyExpression::Variable { name } => {
+                if name == "this" {
+                    // Task 6 types `$this` as the defining class.
+                    TypeId::mixed(db)
+                } else {
+                    self.subject_type(environment, &NarrowingSubject::Local { name })
+                }
+            }
+            BodyExpression::NamedReference { text } => {
+                operators::named_reference_type(db, &text).unwrap_or_else(|| TypeId::mixed(db))
+            }
+            BodyExpression::DynamicVariable { target } => {
+                self.expression(target, environment);
+                TypeId::mixed(db)
+            }
+            BodyExpression::Unary { operator, operand } => {
+                let operand_type = self.expression(operand, environment);
+                operators::unary_type(db, operator, operand_type)
+            }
+            BodyExpression::Postfix { operand, .. } => {
+                let operand_type = self.expression(operand, environment);
+                operators::postfix_type(db, operand_type)
+            }
+            BodyExpression::Binary { operator, lhs, rhs } => {
+                let lhs_type = self.expression(lhs, environment);
+                let rhs_type = self.expression(rhs, environment);
+                operators::binary_type(db, operator, lhs_type, rhs_type)
+            }
+            BodyExpression::Assignment {
+                operator,
+                by_reference,
+                target,
+                value,
+            } => {
+                self.expression(target, environment);
+                let value_type = self.expression(value, environment);
+                self.assignment(
+                    operator,
+                    by_reference,
+                    target,
+                    value,
+                    value_type,
+                    environment,
+                )
+            }
+            BodyExpression::Cast { operator, operand } => {
+                let operand_type = self.expression(operand, environment);
+                operators::cast_type(db, operator, operand_type)
+            }
+            BodyExpression::Ternary {
+                condition,
+                middle,
+                alternative,
+            } => {
+                self.expression(condition, environment);
+                let mut when_true = environment.clone();
+                let mut when_false = environment.clone();
+                let middle_type = match middle {
+                    Some(middle) => self.expression(middle, &mut when_true),
+                    // The short ternary answers the condition's value
+                    // when it is truthy.
+                    None => self.recorded(condition),
+                };
+                let alternative_type = self.expression(alternative, &mut when_false);
+                *environment = Environment::join(db, &when_true, &when_false);
+                // The two branches are alternative outcomes: preserve
+                // them (see `join_any`'s doc comment).
+                TypeId::union(db, [middle_type, alternative_type])
+            }
+            BodyExpression::Array { entries } => self.array_literal(&entries, environment),
+            BodyExpression::InterpolatedString { parts } => {
+                self.string_parts(&parts, environment);
+                TypeId::string(db)
+            }
+            BodyExpression::ShellExec { parts } => {
+                self.string_parts(&parts, environment);
+                TypeId::union(
+                    db,
+                    [
+                        TypeId::string(db),
+                        TypeId::bool_literal(db, false),
+                        TypeId::null(db),
+                    ],
+                )
+            }
+            BodyExpression::Isset { targets } => {
+                for target in targets {
+                    self.expression(target, environment);
+                }
+                TypeId::bool(db)
+            }
+            BodyExpression::Empty { target } => {
+                self.expression(target, environment);
+                TypeId::bool(db)
+            }
+            BodyExpression::Eval { argument } => {
+                self.expression(argument, environment);
+                // eval can rewrite every local: forget them all.
+                let locals: Vec<NarrowingSubject> = environment
+                    .bindings
+                    .keys()
+                    .filter(|subject| matches!(subject, NarrowingSubject::Local { .. }))
+                    .cloned()
+                    .collect();
+                for subject in locals {
+                    environment.remove(&subject);
+                }
+                TypeId::mixed(db)
+            }
+            BodyExpression::Exit { argument } => {
+                if let Some(argument) = argument {
+                    self.expression(argument, environment);
+                }
+                environment.mark_unreachable();
+                TypeId::never(db)
+            }
+            BodyExpression::Print { operand } => {
+                self.expression(operand, environment);
+                TypeId::int_literal(db, 1)
+            }
+            BodyExpression::Clone { operand } => self.expression(operand, environment),
+            BodyExpression::Throw { operand } => {
+                self.expression(operand, environment);
+                environment.mark_unreachable();
+                TypeId::never(db)
+            }
+            BodyExpression::Yield { key, value, .. } => {
+                self.saw_yield = true;
+                if let Some(key) = key {
+                    self.expression(key, environment);
+                }
+                if let Some(value) = value {
+                    self.expression(value, environment);
+                }
+                TypeId::mixed(db)
+            }
+            BodyExpression::Include { operand, .. } => {
+                self.expression(operand, environment);
+                TypeId::mixed(db)
+            }
+            BodyExpression::Match { subject, arms } => {
+                self.expression(subject, environment);
+                let mut result: Option<TypeId<'db>> = None;
+                let mut exits: Vec<Environment<'db>> = Vec::new();
+                for arm in &arms {
+                    let mut arm_env = environment.clone();
+                    for condition in &arm.conditions {
+                        self.expression(*condition, &mut arm_env);
+                    }
+                    let body_type = self.expression(arm.body, &mut arm_env);
+                    result = Some(match result {
+                        // Alternative arm outcomes: preserve them.
+                        Some(previous) => TypeId::union(db, [previous, body_type]),
+                        None => body_type,
+                    });
+                    exits.push(arm_env);
+                }
+                // An unmatched subject throws: only arm exits join.
+                if let Some(post) = exits
+                    .into_iter()
+                    .reduce(|left, right| Environment::join(db, &left, &right))
+                {
+                    *environment = post;
+                }
+                result.unwrap_or_else(|| TypeId::never(db))
+            }
+            BodyExpression::MemberAccess {
+                receiver, member, ..
+            } => {
+                self.expression(receiver, environment);
+                if let celerrate_semantics::MemberReference::Computed { expression } = member {
+                    self.expression(expression, environment);
+                }
+                // Task 6 resolves member reads.
+                TypeId::mixed(db)
+            }
+            BodyExpression::ScopedAccess { subject, member } => {
+                self.expression(subject, environment);
+                if let celerrate_semantics::MemberReference::Computed { expression } = member {
+                    self.expression(expression, environment);
+                }
+                TypeId::mixed(db)
+            }
+            BodyExpression::NullSafeChain { chain } => {
+                // Task 7 implements the whole-chain rule.
+                self.expression(chain, environment)
+            }
+            BodyExpression::Call { callee, arguments } => {
+                self.expression(callee, environment);
+                for argument in &arguments {
+                    self.expression(argument.value, environment);
+                }
+                // Tasks 6 and 9 resolve call results.
+                TypeId::mixed(db)
+            }
+            BodyExpression::CallableReference { callee } => {
+                self.expression(callee, environment);
+                TypeId::mixed(db)
+            }
+            BodyExpression::New { class, arguments } => {
+                if let celerrate_semantics::ClassReference::Dynamic { expression } = &class {
+                    self.expression(*expression, environment);
+                }
+                for argument in &arguments {
+                    self.expression(argument.value, environment);
+                }
+                TypeId::mixed(db)
+            }
+            BodyExpression::Index { subject, index } => {
+                let subject_type = self.expression(subject, environment);
+                let index_type = index.map(|index| self.expression(index, environment));
+                operators::index_type(db, subject_type, index_type)
+            }
+            BodyExpression::Closure { body, .. } => {
+                // Task 9 types closures and seeds captures; the inner
+                // body is walked now so the table covers its arena.
+                let mut inner = Environment::new();
+                self.statements_nested(&body, &mut inner);
+                TypeId::mixed(db)
+            }
+            BodyExpression::ArrowFunction { body, .. } => {
+                let mut inner = environment.clone();
+                let _ = self.expression_nested(body, &mut inner);
+                TypeId::mixed(db)
+            }
+        };
+        self.record(id, of)
+    }
+
+    /// Walks a nested body (closure) without contributing its
+    /// `return` statements to the enclosing body's return type.
+    fn statements_nested(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
+        let saved_returns = std::mem::take(&mut self.returns);
+        let saved_yield = self.saw_yield;
+        self.statements(list, environment);
+        self.returns = saved_returns;
+        self.saw_yield = saved_yield;
+    }
+
+    fn expression_nested(
+        &mut self,
+        id: ExpressionId,
+        environment: &mut Environment<'db>,
+    ) -> TypeId<'db> {
+        let saved_returns = std::mem::take(&mut self.returns);
+        let saved_yield = self.saw_yield;
+        let of = self.expression(id, environment);
+        self.returns = saved_returns;
+        self.saw_yield = saved_yield;
+        of
+    }
+
+    fn string_parts(&mut self, parts: &[StringPart], environment: &mut Environment<'db>) {
+        for part in parts {
+            if let StringPart::Interpolation { expression } = part {
+                self.expression(*expression, environment);
+            }
+        }
+    }
+
+    /// An array literal: a shape when every entry has a statically
+    /// known key (or none — positional) and no spread; otherwise the
+    /// general array of the joined keys and values.
+    fn array_literal(
+        &mut self,
+        entries: &[ArrayEntry],
+        environment: &mut Environment<'db>,
+    ) -> TypeId<'db> {
+        let db = self.db();
+        let mut fields: Vec<crate::representation::ShapeField<'db>> = Vec::new();
+        let mut next_index: i64 = 0;
+        let mut shape_holds = true;
+        let mut joined_key: Option<TypeId<'db>> = None;
+        let mut joined_value: Option<TypeId<'db>> = None;
+        let mut is_list = true;
+        for entry in entries {
+            let ArrayEntry::Element {
+                key,
+                value,
+                spread,
+                by_reference: _,
+            } = entry
+            else {
+                continue; // a destructuring hole never appears in a literal read
+            };
+            let key_type = key.map(|key| self.expression(key, environment));
+            let value_type = self.expression(*value, environment);
+            if *spread {
+                shape_holds = false;
+                is_list = false;
+                let spread_key = value_type
+                    .array_key(db)
+                    .unwrap_or_else(|| TypeId::union(db, [TypeId::int(db), TypeId::string(db)]));
+                let spread_value = value_type
+                    .array_value(db)
+                    .unwrap_or_else(|| TypeId::mixed(db));
+                joined_key = Some(joined_key.map_or(spread_key, |k| join(db, k, spread_key)));
+                joined_value =
+                    Some(joined_value.map_or(spread_value, |v| join(db, v, spread_value)));
+                continue;
+            }
+            let shape_key = match key_type {
+                None => {
+                    let index = next_index;
+                    next_index += 1;
+                    Some(crate::representation::ShapeKey::Integer(index))
+                }
+                Some(of) => {
+                    is_list = false;
+                    of.int_literal_value(db)
+                        .map(crate::representation::ShapeKey::Integer)
+                        .or_else(|| {
+                            of.string_literal_value(db)
+                                .map(crate::representation::ShapeKey::String)
+                        })
+                }
+            };
+            match shape_key {
+                Some(shape_key) if shape_holds => fields.push(crate::representation::ShapeField {
+                    key: shape_key,
+                    optional: false,
+                    value: value_type,
+                }),
+                _ => shape_holds = false,
+            }
+            let this_key = key_type.unwrap_or_else(|| TypeId::int(db));
+            joined_key = Some(joined_key.map_or(this_key, |k| join(db, k, this_key)));
+            joined_value = Some(joined_value.map_or(value_type, |v| join(db, v, value_type)));
+        }
+        if shape_holds && !fields.is_empty() {
+            return TypeId::shape(db, fields);
+        }
+        match (joined_key, joined_value) {
+            (Some(key), Some(value)) => {
+                if is_list {
+                    TypeId::non_empty_list(db, value)
+                } else {
+                    TypeId::non_empty_array(db, key, value)
+                }
+            }
+            // The empty literal.
+            _ => TypeId::shape(db, vec![]),
+        }
+    }
+
+    /// One assignment: propagate to the target's subject, updating
+    /// array bases on index writes and destructuring element-wise.
+    /// Answers the expression's own type (the assigned value; the
+    /// computed value for compound forms).
+    fn assignment(
+        &mut self,
+        operator: SyntaxKind,
+        by_reference: bool,
+        target: ExpressionId,
+        _value: ExpressionId,
+        value_type: TypeId<'db>,
+        environment: &mut Environment<'db>,
+    ) -> TypeId<'db> {
+        let db = self.db();
+        if by_reference {
+            // `$b = &$a`: aliased locals are unknowable without alias
+            // analysis — both sides degrade to mixed (decision 10).
+            if let Some(subject) = subject_of(self.context.ir, target) {
+                environment.bind(subject, TypeId::mixed(db));
+            }
+            if let Some(subject) = subject_of(self.context.ir, _value) {
+                environment.bind(subject, TypeId::mixed(db));
+            }
+            return TypeId::mixed(db);
+        }
+        let assigned = match compound_base(operator) {
+            Some(base) => {
+                let current = self.recorded(target);
+                operators::binary_type(db, base, current, value_type)
+            }
+            None => value_type,
+        };
+        self.assign_target(target, assigned, environment);
+        assigned
+    }
+
+    fn assign_target(
+        &mut self,
+        target: ExpressionId,
+        value_type: TypeId<'db>,
+        environment: &mut Environment<'db>,
+    ) {
+        let db = self.db();
+        match self.context.ir.expression(target).cloned() {
+            // Destructuring: `[$a, $b] = ...`, `['k' => $v] = ...`.
+            Some(BodyExpression::Array { entries }) => {
+                let mut next_index: i64 = 0;
+                for entry in &entries {
+                    let ArrayEntry::Element { key, value, .. } = entry else {
+                        next_index += 1;
+                        continue;
+                    };
+                    let key_type = match key {
+                        Some(key) => Some(self.recorded(*key)),
+                        None => {
+                            let index = next_index;
+                            next_index += 1;
+                            Some(TypeId::int_literal(db, index))
+                        }
+                    };
+                    let element = operators::index_type(db, value_type, key_type);
+                    self.assign_target(*value, element, environment);
+                }
+            }
+            // An index write rebinds the base array.
+            Some(BodyExpression::Index { subject, index }) => {
+                if let Some(base) = subject_of(self.context.ir, subject) {
+                    let current = environment.binding(&base);
+                    let key_type = index.map(|index| self.recorded(index));
+                    let updated = updated_array(db, current, key_type, value_type);
+                    environment.bind(base, updated);
+                }
+            }
+            _ => {
+                if let Some(subject) = subject_of(self.context.ir, target) {
+                    environment.bind(subject, value_type);
+                }
+            }
+        }
+    }
+}
+
+/// `$a op= $b` reduces to `op`; `None` for plain `=` (and for `??=`,
+/// which Task 5 handles in the walker).
+fn compound_base(operator: SyntaxKind) -> Option<SyntaxKind> {
+    Some(match operator {
+        SyntaxKind::PlusEquals => SyntaxKind::Plus,
+        SyntaxKind::MinusEquals => SyntaxKind::Minus,
+        SyntaxKind::StarEquals => SyntaxKind::Star,
+        SyntaxKind::SlashEquals => SyntaxKind::Slash,
+        SyntaxKind::DotEquals => SyntaxKind::Dot,
+        SyntaxKind::PercentEquals => SyntaxKind::Percent,
+        SyntaxKind::StarStarEquals => SyntaxKind::StarStar,
+        SyntaxKind::AmpersandEquals => SyntaxKind::Ampersand,
+        SyntaxKind::PipeEquals => SyntaxKind::Pipe,
+        SyntaxKind::CaretEquals => SyntaxKind::Caret,
+        SyntaxKind::LessLessEquals => SyntaxKind::LessLess,
+        SyntaxKind::GreaterGreaterEquals => SyntaxKind::GreaterGreater,
+        _ => return None,
+    })
+}
+
+/// The new type of an array base after `$a[k] = v`: a shape upserts
+/// the field when the key is a known literal, an array joins key and
+/// value, anything else becomes an array from this write.
+fn updated_array<'db>(
+    db: &'db dyn salsa::Database,
+    current: Option<TypeId<'db>>,
+    key_type: Option<TypeId<'db>>,
+    value_type: TypeId<'db>,
+) -> TypeId<'db> {
+    use crate::representation::{ShapeField, ShapeKey};
+    let literal_key = key_type.and_then(|key| {
+        key.int_literal_value(db)
+            .map(ShapeKey::Integer)
+            .or_else(|| key.string_literal_value(db).map(ShapeKey::String))
+    });
+    if let Some(current) = current {
+        if let Some(mut fields) = current.shape_fields(db) {
+            match (&literal_key, key_type) {
+                (Some(wanted), _) => {
+                    fields.retain(|field| field.key != *wanted);
+                    fields.push(ShapeField {
+                        key: wanted.clone(),
+                        optional: false,
+                        value: value_type,
+                    });
+                    return TypeId::shape(db, fields);
+                }
+                (None, None) => {
+                    // `$a[] = v`: the next free integer key.
+                    let next = fields
+                        .iter()
+                        .filter_map(|field| match &field.key {
+                            ShapeKey::Integer(index) => Some(*index + 1),
+                            ShapeKey::String(_) => None,
+                        })
+                        .max()
+                        .unwrap_or(0);
+                    fields.push(ShapeField {
+                        key: ShapeKey::Integer(next),
+                        optional: false,
+                        value: value_type,
+                    });
+                    return TypeId::shape(db, fields);
+                }
+                (None, Some(_)) => {
+                    // A dynamic key on a shape: degrade to the array
+                    // of the joined parts.
+                    let (key, value) = shape_join(db, &fields);
+                    let key_join = key_type.map_or(key, |of| join(db, key, of));
+                    return TypeId::array(db, key_join, join(db, value, value_type));
+                }
+            }
+        }
+        if let (Some(key), Some(value)) = (current.array_key(db), current.array_value(db)) {
+            let pushed_key = key_type.unwrap_or_else(|| TypeId::int(db));
+            return TypeId::non_empty_array(
+                db,
+                join(db, key, pushed_key),
+                join(db, value, value_type),
+            );
+        }
+    }
+    // Anything else (absent, mixed, scalar): the write makes it an
+    // array from here on.
+    match (literal_key, key_type) {
+        (Some(key), _) => TypeId::shape(
+            db,
+            vec![ShapeField {
+                key,
+                optional: false,
+                value: value_type,
+            }],
+        ),
+        (None, None) => TypeId::non_empty_list(db, value_type),
+        (None, Some(key)) => TypeId::non_empty_array(db, key, value_type),
+    }
+}
+
+fn shape_join<'db>(
+    db: &'db dyn salsa::Database,
+    fields: &[crate::representation::ShapeField<'db>],
+) -> (TypeId<'db>, TypeId<'db>) {
+    use crate::representation::ShapeKey;
+    let mut key: Option<TypeId<'db>> = None;
+    let mut value: Option<TypeId<'db>> = None;
+    for field in fields {
+        let field_key = match &field.key {
+            ShapeKey::Integer(index) => TypeId::int_literal(db, *index),
+            ShapeKey::String(text) => TypeId::string_literal(db, text),
+        };
+        key = Some(key.map_or(field_key, |k| join(db, k, field_key)));
+        value = Some(value.map_or(field.value, |v| join(db, v, field.value)));
+    }
+    (
+        key.unwrap_or_else(|| TypeId::union(db, [TypeId::int(db), TypeId::string(db)])),
+        value.unwrap_or_else(|| TypeId::mixed(db)),
+    )
+}
