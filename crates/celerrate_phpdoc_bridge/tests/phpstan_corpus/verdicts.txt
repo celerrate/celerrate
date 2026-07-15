@@ -1,0 +1,245 @@
+# The pinned-reference coverage statement (type-engine design, section 5).
+# 226 of 241 TypeParserTest inputs parse (93%).
+# The corpus deliberately includes invalid inputs (upstream
+# expects a ParserException on them): they count as rejected.
+ok: array{\n\t\t\t\t\t// a is for apple\n\t\t\t\t\ta: int,\n\t\t\t\t}
+ok: array{\n\t\t\t\t\t// a is for // apple\n\t\t\t\t\ta: int,\n\t\t\t\t}
+ok: array{\n\t\t\t\t\t// a is for * apple\n\t\t\t\t\ta: int,\n\t\t\t\t}
+ok: array{\n\t\t\t\t\t// a is for http://www.apple.com/\n\t\t\t\t\ta: int,\n\t\t\t\t}
+ok: array{\n\t\t\t\t\t// a is for apple\n\t\t\t\t\t// a is also for awesome\n\t\t\t\t\ta: int,\n\t\t\t\t}
+ok: string
+ok:   string  
+ok:  ( string ) 
+ok: ( ( string ) )
+ok: \\Foo\\Bar\\Baz
+ok:   \\Foo\\Bar\\Baz  
+ok:  ( \\Foo\\Bar\\Baz ) 
+ok: string
+ok:   string  
+ok:  ( string ) 
+ok: ( ( string ) )
+ok: \\Foo\\Bar\\Baz
+ok:   \\Foo\\Bar\\Baz  
+ok:  ( \\Foo\\Bar\\Baz ) 
+ok: ( ( \\Foo\\Bar\\Baz ) )
+ok: string|int
+ok: string | int
+ok: (string | int)
+ok: string | int | float
+ok: string&int
+ok: string & int
+ok: (string & int)
+ok: (\n  string\n  &\n  int\n)
+ok: string & int & float
+ok: string & (int | float)
+ok: string | (int & float)
+ok: string & int | float
+ok: string | int & float
+ok: string[]
+ok: string [  ] 
+ok: (string | int | float)[]
+ok: string[][][]
+ok: string [  ] [][]
+ok: (((string | int | float)[])[])[]
+ok: $this
+ok: ?int
+ok: ?Foo<Bar>
+ok: array<int, Foo\\Bar>
+ok: array<\n\t\t\t\t\t// index with an int\n\t\t\t\t\tint,\n\t\t\t\t\tFoo\\Bar\n\t\t\t\t>
+ok: array {'a': int}
+ok: array{a: int}
+ok: array{a: ?int}
+ok: array{a?: ?int}
+ok: array{0: int}
+ok: array{0?: int}
+ok: array{int, int}
+ok: array{a: int, b: string}
+ok: array{a?: int, b: string, 0: int, 1?: DateTime, hello: string}
+ok: array{a: int, b: array{c: callable(): int}}
+ok: ?array{a: int}
+rejected: array{
+rejected: array{a => int}
+ok: array{"a": int}
+ok: array{'a': int}
+ok: array{'$ref': int}
+ok: array{"$ref": int}
+ok: array{\n\t\t\t\t *\ta: int\n\t\t\t\t *}
+ok: array{\n\t\t\t\t \ta: int,\n\t\t\t\t }
+ok: array{\n\t\t\t\t \ta: int,\n\t\t\t\t \tb: string,\n\t\t\t\t }
+ok: array{\n\t\t\t\t \ta: int\n\t\t\t\t \t, b: string\n\t\t\t\t \t, c: string\n\t\t\t\t }
+ok: array{\n\t\t\t\t \ta: int,\n\t\t\t\t \tb: string\n\t\t\t\t }
+ok: array{a: int, b: int, ...}
+ok: array{int, string, ...}
+ok: array{...}
+ok: array{\n\t\t\t\t *\ta: int,\n\t\t\t\t *\t...\n\t\t\t\t *}
+ok: array{\n\t\t\t\t\ta: int,\n\t\t\t\t\t...,\n\t\t\t\t}
+rejected: array{int, ..., string}
+ok: list{\n\t\t\t\t \tint,\n\t\t\t\t \tstring\n\t\t\t\t }
+ok: non-empty-array{\n\t\t\t\t \tint,\n\t\t\t\t \tstring\n\t\t\t\t }
+ok: callable(): non-empty-array{int, string}
+ok: callable(): non-empty-list{int, string}
+ok: non-empty-list{\n\t\t\t\t \tint,\n\t\t\t\t \tstring\n\t\t\t\t }
+ok: array{...<string>}
+ok: array{a: int, b?: int, ...<string>}
+ok: array{a:int,b?:int,...<string>}
+ok: array{a: int, b?: int, ...  \n  <  \n  string  \n  >  \n  ,  \n }
+ok: array{...<int, string>}
+ok: array{a: int, b?: int, ...<int, string>}
+ok: array{a:int,b?:int,...<int,string>}
+ok: array{a: int, b?: int, ...  \n  <  \n  int  \n  ,  \n  string  \n  >  \n  ,  \n  }
+ok: list{...<string>}
+ok: list{int, int, ...<string>}
+ok: list{int,int,...<string>}
+ok: list{int, int, ...  \n  <  \n  string  \n  >  \n  ,  \n  }
+ok: list{0: int, 1?: int, ...<string>}
+ok: list{0:int,1?:int,...<string>}
+ok: list{0: int, 1?: int, ...  \n  <  \n  string  \n  >  \n  ,  \n  }
+rejected: array{...<>}
+rejected: array{...<int,>}
+rejected: array{...<int, string,>}
+rejected: array{...<int, string, string>}
+rejected: list{...<>}
+rejected: list{...<int,>}
+ok: list{...<int, string>}
+ok: callable(): Foo
+ok: pure-callable(): Foo
+ok: pure-Closure(): Foo
+ok: callable(): ?Foo
+ok: callable(): Foo<Bar>
+ok: callable(): Foo<Bar>[]
+ok: callable(): Foo|Bar
+ok: callable(): Foo&Bar
+ok: callable(): (Foo|Bar)
+ok: callable(): (Foo&Bar)
+ok: callable(): array{a: int}
+ok: callable(A&...$a=, B&...=, C): Foo
+ok: callable<A>(B): C
+rejected: callable<>(): void
+ok: Closure<T of Model>(T, int): (T|false)
+ok: \\Closure<Tx of X|Z, Ty of Y>(Tx, Ty): array{ Ty, Tx }
+ok: (Foo\\Bar<array<mixed, string>, (int | (string<foo> & bar)[])> | Lorem)
+ok: array [ int ]
+ok: array[ int ]
+ok: self::TYPES[ int ]
+ok: ?\t\\xA009
+ok: Collection<array-key, int>[]
+ok: int | Collection<array-key, int>[]
+ok: array{foo: int}[]
+ok: int | array{foo: int}[]
+ok: $this[]
+ok: int | $this[]
+ok: callable(): int[]
+ok: ?int[]
+ok: callable(mixed...): TReturn
+ok: 'foo'|'bar'
+ok: Foo::FOO_CONSTANT
+ok: 123
+ok: 123_456
+ok: _123
+ok: 123_
+ok: 123.2
+ok: 123_456.789_012
+ok: +0x10_20|+8e+2 | -0b11
+ok: 18_446_744_073_709_551_616|8.2023437675747321e-18_446_744_073_709_551_617
+ok: "bar"
+ok: Foo::FOO_*
+ok: Foo::FOO_*BAR
+ok: Foo::*FOO*
+ok: Foo::A*B*C
+ok: self::*BAR
+ok: Foo::*
+ok: Foo::**
+ok: Foo::*a
+ok: ( "foo" | Foo::FOO_* )
+ok: DateTimeImmutable::*|DateTime::*
+ok: ParameterTier::*|null
+ok: list<QueueAttributeName::*>
+ok: array<\n  Foo\n>
+ok: array<\n  Foo,\n  Bar\n>
+ok: array<\n  Foo, Bar\n>
+ok: array<\n  Foo,\n  array<\n    Bar\n  >\n>
+ok: array<\n  Foo,\n  array<\n    Bar,\n  >\n>
+ok: array{}
+ok: array{}|int
+ok: int|array{}
+ok: callable(\n  Foo\n): void
+ok: callable(\n  Foo,\n  Bar\n): void
+ok: callable(\n  Foo, Bar\n): void
+ok: callable(\n  Foo,\n  callable(\n    Bar\n  ): void\n): void
+ok: callable(\n  Foo,\n  callable(\n    Bar,\n  ): void\n): void
+ok: (Foo is Bar ? never : int)
+ok: (\n\t\t\t\t\tFoo is Bar\n\t\t\t\t\t?\n\t\t\t\t\t// never, I say\n\t\t\t\t\tnever\n\t\t\t\t\t:\n\t\t\t\t\tint)
+ok: (Foo is not Bar ? never : int)
+ok: (T is self::TYPE_STRING ? string : (T is self::TYPE_INT ? int : bool))
+ok: (Foo is Bar|Baz ? never : int|string)
+ok: (\n  TRandList is array ? array<TRandKey, TRandVal> : (\n  TRandList is XIterator ? XIterator<TRandKey, TRandVal> :\n  IteratorIterator<TRandKey, TRandVal>|LimitIterator<TRandKey, TRandVal>\n))
+ok: ($foo is Bar|Baz ? never : int|string)
+ok: (\n  $foo is Bar|Baz\n    ? never\n    : int|string\n)
+ok: ?Currency::CURRENCY_*
+ok: (T is Foo ? true : T is Bar ? false : null)
+ok: (T is Foo ? T is Bar ? true : false : null)
+ok: ($foo is Foo ? true : $foo is Bar ? false : null)
+ok: ($foo is Foo ? $foo is Bar ? true : false : null)
+ok: Foo<covariant Bar, Baz>
+ok: Foo<Bar, contravariant Baz>
+ok: Foo<covariant>
+rejected: Foo<typovariant Bar>
+ok: Foo<Bar, *>
+ok: object{a: int}
+ok: object{a: ?int}
+ok: object{a?: ?int}
+ok: object{a: int, b: string}
+ok: object{a: int, b: array{c: callable(): int}}
+ok: object{a: int, b: object{c: callable(): int}}
+ok: ?object{a: int}
+rejected: object{
+rejected: object{a => int}
+ok: object{int}
+ok: object{0: int}
+ok: object{0?: int}
+ok: object{"a": int}
+ok: object{'a': int}
+ok: object{'$ref': int}
+ok: object{"$ref": int}
+ok: object{\n\t\t\t\t *\ta: int\n\t\t\t\t *}
+ok: object{\n\t\t\t\t \ta: int,\n\t\t\t\t }
+ok: object{\n\t\t\t\t\t// a is for apple\n\t\t\t\t \ta: int,\n\t\t\t\t }
+ok: object{\n\t\t\t\t \ta: int,\n\t\t\t\t \tb: string,\n\t\t\t\t }
+ok: object{\n\t\t\t\t \ta: int\n\t\t\t\t \t, b: string\n\t\t\t\t \t, c: string\n\t\t\t\t }
+ok: object{\n\t\t\t\t \ta: int,\n\t\t\t\t \tb: string\n\t\t\t\t }
+ok: object{foo: int}[]
+ok: int | object{foo: int}[]
+ok: object{}
+ok: object{}|int
+ok: int|object{}
+ok: object{attribute:string, value?:string}
+ok: Closure(Foo): (Closure(Foo): Bar)
+ok: callable(): ?int
+ok: callable(): object{foo: int}
+ok: callable(): object{foo: int}[]
+ok: callable(): int[][][]
+ok: callable(): (int[][][])
+ok: (callable(): int[])[][]
+ok: callable(): $this
+ok: callable(): $this[]
+ok: 2.5|3
+ok: callable(): 3.5
+ok: callable(): 3.5[]
+ok: callable(): Foo
+ok: callable(): (Foo)[]
+ok: callable(): Foo::BAR
+ok: callable(): Foo::*
+ok: ?Foo[]
+ok: callable(): ?Foo
+ok: callable(): ?Foo[]
+ok: ?(Foo|Bar)
+ok: Foo | (Bar & Baz)
+ok: (?Foo) | Bar
+ok: ?(Foo|Bar)
+ok: ?(Foo&Bar)
+ok: ?Foo[]
+ok: (?Foo)[]
+ok: Foo | Bar | (Baz | Lorem)
+ok: Closure(Container):($serviceId is class-string<TService> ? TService : mixed)
+rejected: MongoCollection <p>Returns a collection object representing the new collection.</p>
+rejected: array{Foo::BAR: int}

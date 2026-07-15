@@ -304,6 +304,8 @@ fn parse_atom(parser: &mut Parser<'_>, depth: u32) -> Option<TypeExpression> {
 /// The `<...>` argument list of a name-headed generic. Call-site
 /// variance keywords (`covariant`, `contravariant`) are consumed and
 /// dropped — the ignored-variance posture, documented in the ledger.
+/// A bare `*` argument (the bivariant wildcard: "unknown, don't care")
+/// carries no type of its own and lowers to `mixed`, the same posture.
 /// A trailing comma is tolerated; an empty list is refused.
 fn parse_generic_arguments(parser: &mut Parser<'_>, depth: u32) -> Option<Vec<TypeExpression>> {
     if depth >= MAXIMUM_DEPTH {
@@ -320,7 +322,12 @@ fn parse_generic_arguments(parser: &mut Parser<'_>, depth: u32) -> Option<Vec<Ty
         {
             parser.advance();
         }
-        arguments.push(parse_type(parser, depth + 1)?);
+        if parser.peek() == Some(&TokenKind::Asterisk) {
+            parser.advance();
+            arguments.push(TypeExpression::Name("mixed".to_owned()));
+        } else {
+            arguments.push(parse_type(parser, depth + 1)?);
+        }
         if parser.eat(&TokenKind::Comma) {
             if parser.eat(&TokenKind::CloseAngle) {
                 return Some(arguments);
@@ -441,6 +448,12 @@ fn parse_callable_signature(
                 optional,
             });
             if parser.eat(&TokenKind::Comma) {
+                // A trailing comma before the closing parenthesis is
+                // tolerated, same as the shape and generic argument
+                // lists (`parse_shape_body`, `parse_generic_arguments`).
+                if parser.eat(&TokenKind::CloseParenthesis) {
+                    break;
+                }
                 continue;
             }
             if parser.eat(&TokenKind::CloseParenthesis) {

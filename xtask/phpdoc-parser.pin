@@ -1,0 +1,6 @@
+# phpstan/phpdoc-parser, the PHPStan dialect's pinned reference
+# (type-engine design, section 5). Tag 2.3.3. Bump deliberately:
+# change the commit, run `cargo xtask phpdoc-cases`, re-bless the
+# bridge's verdict snapshot, and commit all three together.
+repository = https://github.com/phpstan/phpdoc-parser
+commit = fb19eedd2bb67ff8cf7a5502ad329e701d6398a3

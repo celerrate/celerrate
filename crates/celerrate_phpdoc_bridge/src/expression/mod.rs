@@ -267,6 +267,17 @@ mod tests {
                 arguments: vec![Name("User".to_owned())],
             }),
         );
+        // A bare `*` argument is the bivariant wildcard (the pinned
+        // reference's "unknown, don't care" marker): it carries no
+        // type of its own, so it lowers to `mixed`, same posture as
+        // the dropped variance keywords above.
+        assert_eq!(
+            parse_type_expression_text("Foo<Bar, *>"),
+            Some(Generic {
+                base: "Foo".to_owned(),
+                arguments: vec![Name("Bar".to_owned()), Name("mixed".to_owned())],
+            }),
+        );
     }
 
     #[test]
@@ -436,6 +447,18 @@ mod tests {
                 TypeExpression::Name("Countable".to_owned()),
                 TypeExpression::Name("Traversable".to_owned()),
             ]),
+        );
+
+        // A trailing comma before the closing parenthesis is
+        // tolerated, same as the shape and generic argument lists.
+        let Some(TypeExpression::Callable { parameters, .. }) =
+            parse_type_expression_text("callable(Bar,): void")
+        else {
+            panic!("expected a callable with a trailing-comma parameter list");
+        };
+        assert_eq!(
+            parameters[0].parameter_type,
+            TypeExpression::Name("Bar".to_owned()),
         );
     }
 

@@ -3,8 +3,11 @@
 //! token table; `fetch-stubs` and `compile-stubs` fetch the pinned
 //! phpstorm-stubs snapshot and drive the stub compiler to (re)produce
 //! the committed stub blob; `corpus` and `bench` fetch the pinned
-//! benchmark corpus and measure it. xtask deliberately depends on no
-//! `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
+//! benchmark corpus and measure it; `fetch-phpdoc-parser` and
+//! `phpdoc-cases` fetch the pinned phpstan/phpdoc-parser snapshot and
+//! extract its `TypeParserTest` inputs into the committed case file the
+//! phpdoc-bridge coverage test consumes. xtask deliberately depends on
+//! no `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
 //! `hyperfine`, and the built `celerrate` binary, so a broken generated
 //! file, blob, or build can never prevent regenerating what fixes it.
 
@@ -15,6 +18,7 @@ pub mod bench;
 pub mod codegen;
 pub mod corpus;
 pub mod dependency_shape;
+pub mod phpdoc_corpus;
 pub mod pin;
 pub mod release;
 pub mod stubs;

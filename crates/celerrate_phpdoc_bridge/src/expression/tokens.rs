@@ -51,11 +51,28 @@ pub(crate) struct Token {
 pub(crate) fn tokenize(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut cursor = text.char_indices().peekable();
+    // Tracks whether we have crossed a newline since the last real
+    // token, so a following docblock continuation `*` reads as
+    // trivia (see below) rather than the wildcard token.
+    let mut after_newline = false;
     while let Some(&(start, character)) = cursor.peek() {
         if character.is_whitespace() {
+            after_newline = after_newline || character == '\n' || character == '\r';
             cursor.next();
             continue;
         }
+        // A docblock continuation marker: the pinned reference's
+        // lexer folds a `*` that follows a newline into the same
+        // trivia as the newline itself, as long as it is not the
+        // phpdoc close marker `*/`. This lets a shape wrap docblock
+        // lines (each conventionally starting `* `) without upsetting
+        // the type grammar.
+        if after_newline && character == '*' && !starts_with_at(text, start, "*/") {
+            after_newline = false;
+            cursor.next();
+            continue;
+        }
+        after_newline = false;
         // `//` comments run to the end of their line (the pinned
         // reference accepts them inside array shapes).
         if character == '/' && starts_with_at(text, start, "//") {
@@ -122,7 +139,7 @@ fn lex_token(
         }
         '$' => lex_variable(cursor, start),
         '\'' | '"' => lex_string(cursor, start, character),
-        '-' => {
+        '-' | '+' => {
             let mut lookahead = cursor.clone();
             lookahead.next();
             match lookahead.peek() {
@@ -265,8 +282,8 @@ fn lex_number(
     let mut written = String::new();
     let mut end = start;
     let mut is_float = false;
-    if let Some(&(_, '-')) = cursor.peek() {
-        written.push('-');
+    if let Some(&(_, sign @ ('-' | '+'))) = cursor.peek() {
+        written.push(sign);
         end += 1;
         cursor.next();
     }
@@ -420,6 +437,21 @@ mod tests {
         );
     }
 
+    /// The pinned reference accepts an explicit leading `+` on a const
+    /// numeric literal (`+8e+2`), same as the leading `-` above.
+    #[test]
+    fn a_leading_plus_sign_tokenizes_like_a_leading_minus() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("+42 +1.5 +8e+2"),
+            vec![
+                Integer(42),
+                Float("+1.5".to_owned()),
+                Float("+8e+2".to_owned()),
+            ],
+        );
+    }
+
     #[test]
     fn strings_tokenize_with_escapes_per_quote_kind() {
         use TokenKind::*;
@@ -447,6 +479,38 @@ mod tests {
                 Variable("next".to_owned()),
             ],
         );
+    }
+
+    /// The pinned reference's lexer folds a docblock continuation `*`
+    /// (one per line, the conventional `/** ... * ... */` body) into
+    /// the same trivia as the newline that precedes it, so a shape
+    /// wrapped across docblock lines parses like one written on a
+    /// single line. A `*` with no newline before it (mid-line, or the
+    /// phpdoc close marker `*/`) stays a real token.
+    #[test]
+    fn a_docblock_continuation_star_after_a_newline_is_trivia() {
+        use TokenKind::*;
+        assert_eq!(
+            kinds("array{\n *\ta: int\n *}"),
+            vec![
+                Name("array".to_owned()),
+                OpenBrace,
+                Name("a".to_owned()),
+                Colon,
+                Name("int".to_owned()),
+                CloseBrace,
+            ],
+        );
+        // No newline precedes this one: it is the wildcard token.
+        assert_eq!(
+            kinds("Foo::*"),
+            vec![Name("Foo".to_owned()), DoubleColon, Asterisk]
+        );
+        // `*/` right after a newline is the phpdoc close marker, not
+        // the continuation marker: it is not swallowed as trivia (a
+        // lone `/` is not itself tokenizable, so scanning stops there,
+        // same as any other untokenizable character).
+        assert_eq!(kinds("a\n*/b"), vec![Name("a".to_owned()), Asterisk]);
     }
 
     #[test]
