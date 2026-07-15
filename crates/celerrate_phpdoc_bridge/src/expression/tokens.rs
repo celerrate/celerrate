@@ -48,8 +48,6 @@ pub(crate) struct Token {
     pub(crate) end: usize,
 }
 
-// Temporary: consumed by the token parser of the next task.
-#[allow(dead_code)]
 pub(crate) fn tokenize(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut cursor = text.char_indices().peekable();

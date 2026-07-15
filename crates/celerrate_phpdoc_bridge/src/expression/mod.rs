@@ -1,28 +1,26 @@
-//! The 4a standard type-expression grammar (decision 6):
+//! The inherited PHPDoc type-expression grammar (decision 6):
 //!
 //! ```text
 //! union        := intersection ('|' intersection)*
 //! intersection := suffixed ('&' suffixed)*
 //! suffixed     := atom ('[' ']')*
-//! atom         := '?' suffixed | '(' union ')' | name
+//! atom         := '?' atom | '(' union ')' | name
 //! ```
 //!
 //! Anything outside this grammar — generics (`array<int, string>`),
 //! shapes (`array{id: int}`), literals, `class-string<T>`, integer
-//! ranges — is the PHPStan dialect (plan 4b) and answers `None` here:
-//! loss is per construct, never per annotation.
+//! ranges — answers `None` here: loss is per construct, never per annotation.
 //!
-//! The parser is a recursive descent over a peekable char cursor with
+//! The parser is a recursive descent over the token stream (Task 1) with
 //! a depth guard: adversarial nesting must not overflow the stack.
-//! No `unwrap`, no indexing: only `chars().peekable()` and owned
-//! strings.
+//! Entry points `parse_type_expression_text` consumes a whole input;
+//! `parse_type_expression_prefix` reports the consumed byte length so
+//! the tag layer can split type from prose.
 
+mod parser;
 mod tokens;
 
-use std::iter::Peekable;
-use std::str::Chars;
-
-/// A parsed standard-notation type expression.
+/// A parsed type expression of the inherited PHPDoc dialect family.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum TypeExpression {
     Name(String),
@@ -32,150 +30,65 @@ pub enum TypeExpression {
     ArrayOf(Box<TypeExpression>),
 }
 
-/// Nesting is refused past this depth: adversarial input (`(((((...`)
-/// must not overflow the stack.
-const MAXIMUM_DEPTH: u32 = 64;
-
-/// Parses `text` as a standard-notation type expression. The whole
-/// input must be consumed (trailing whitespace allowed); anything
-/// left over, anything outside the grammar, or anything nested past
-/// [`MAXIMUM_DEPTH`] answers `None`.
+/// Parses `text` as one type expression consuming the whole input
+/// (trailing whitespace allowed); anything left over, anything outside
+/// the grammar, or anything nested past the depth guard answers
+/// `None`.
 pub fn parse_type_expression_text(text: &str) -> Option<TypeExpression> {
-    let mut cursor = text.chars().peekable();
-    let expression = parse_union(&mut cursor, 0)?;
-    skip_whitespace(&mut cursor);
-    if cursor.next().is_some() {
-        return None;
-    }
-    Some(expression)
-}
-
-fn skip_whitespace(cursor: &mut Peekable<Chars<'_>>) {
-    while let Some(character) = cursor.peek() {
-        if character.is_whitespace() {
-            cursor.next();
-        } else {
-            break;
-        }
-    }
-}
-
-fn is_name_character(character: char) -> bool {
-    character.is_alphanumeric() || character == '_' || character == '\\' || character >= '\u{80}'
-}
-
-fn parse_union(cursor: &mut Peekable<Chars<'_>>, depth: u32) -> Option<TypeExpression> {
-    if depth >= MAXIMUM_DEPTH {
-        return None;
-    }
-    let mut members = vec![parse_intersection(cursor, depth + 1)?];
-    loop {
-        skip_whitespace(cursor);
-        let mut lookahead = cursor.clone();
-        if lookahead.next() != Some('|') {
-            break;
-        }
-        cursor.next();
-        skip_whitespace(cursor);
-        members.push(parse_intersection(cursor, depth + 1)?);
-    }
-    if members.len() == 1 {
-        members.into_iter().next()
+    let (expression, consumed) = parse_type_expression_prefix(text)?;
+    let remainder = text.get(consumed..)?;
+    if remainder.trim().is_empty() {
+        Some(expression)
     } else {
-        Some(TypeExpression::Union(members))
-    }
-}
-
-fn parse_intersection(cursor: &mut Peekable<Chars<'_>>, depth: u32) -> Option<TypeExpression> {
-    if depth >= MAXIMUM_DEPTH {
-        return None;
-    }
-    let mut members = vec![parse_suffixed(cursor, depth + 1)?];
-    loop {
-        skip_whitespace(cursor);
-        let mut lookahead = cursor.clone();
-        if lookahead.next() != Some('&') {
-            break;
-        }
-        cursor.next();
-        skip_whitespace(cursor);
-        members.push(parse_suffixed(cursor, depth + 1)?);
-    }
-    if members.len() == 1 {
-        members.into_iter().next()
-    } else {
-        Some(TypeExpression::Intersection(members))
-    }
-}
-
-fn parse_suffixed(cursor: &mut Peekable<Chars<'_>>, depth: u32) -> Option<TypeExpression> {
-    if depth >= MAXIMUM_DEPTH {
-        return None;
-    }
-    let mut expression = parse_atom(cursor, depth + 1)?;
-    loop {
-        skip_whitespace(cursor);
-        let mut lookahead = cursor.clone();
-        if lookahead.next() != Some('[') {
-            break;
-        }
-        if lookahead.next() != Some(']') {
-            break;
-        }
-        cursor.next();
-        cursor.next();
-        expression = TypeExpression::ArrayOf(Box::new(expression));
-    }
-    Some(expression)
-}
-
-fn parse_atom(cursor: &mut Peekable<Chars<'_>>, depth: u32) -> Option<TypeExpression> {
-    if depth >= MAXIMUM_DEPTH {
-        return None;
-    }
-    skip_whitespace(cursor);
-    match cursor.peek() {
-        Some('?') => {
-            cursor.next();
-            skip_whitespace(cursor);
-            let inner = parse_suffixed(cursor, depth + 1)?;
-            Some(TypeExpression::Nullable(Box::new(inner)))
-        }
-        Some('(') => {
-            cursor.next();
-            skip_whitespace(cursor);
-            let inner = parse_union(cursor, depth + 1)?;
-            skip_whitespace(cursor);
-            if cursor.next() != Some(')') {
-                return None;
-            }
-            Some(inner)
-        }
-        Some(character) if is_name_character(*character) => parse_name(cursor),
-        _ => None,
-    }
-}
-
-fn parse_name(cursor: &mut Peekable<Chars<'_>>) -> Option<TypeExpression> {
-    let mut name = String::new();
-    while let Some(character) = cursor.peek() {
-        if is_name_character(*character) {
-            name.push(*character);
-            cursor.next();
-        } else {
-            break;
-        }
-    }
-    if name.is_empty() {
         None
-    } else {
-        Some(TypeExpression::Name(name))
     }
+}
+
+/// Parses a maximal well-formed type expression from the start of
+/// `text` and reports the consumed byte length — the tag layer takes
+/// the type from the prefix and the variable or prose from the
+/// remainder. Grammar failure anywhere answers `None` for the whole
+/// expression: loss is per construct, never partially recovered.
+pub fn parse_type_expression_prefix(text: &str) -> Option<(TypeExpression, usize)> {
+    let tokens = tokens::tokenize(text);
+    let mut cursor = parser::Parser::new(&tokens);
+    let expression = parser::parse_type(&mut cursor, 0)?;
+    let consumed = cursor.consumed_end()?;
+    Some((expression, consumed))
 }
 
 #[cfg(test)]
+#[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nullable_binds_inside_the_array_suffix() {
+        // The reference parses `?int[]` as an array of nullable int
+        // ((?int)[]), not a nullable array — decision 4.
+        use TypeExpression::*;
+        assert_eq!(
+            parse_type_expression_text("?int[]"),
+            Some(ArrayOf(Box::new(Nullable(Box::new(Name(
+                "int".to_owned()
+            )))))),
+        );
+    }
+
+    #[test]
+    fn prefix_parsing_reports_the_consumed_length() {
+        let (expression, consumed) =
+            parse_type_expression_prefix("int|string $x the identifier").unwrap();
+        assert_eq!(
+            expression,
+            TypeExpression::Union(vec![
+                TypeExpression::Name("int".to_owned()),
+                TypeExpression::Name("string".to_owned()),
+            ]),
+        );
+        assert_eq!(consumed, "int|string".len());
+        assert!(parse_type_expression_prefix("$x only prose").is_none());
+    }
 
     #[test]
     fn the_standard_grammar_parses() {

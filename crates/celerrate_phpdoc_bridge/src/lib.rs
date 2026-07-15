@@ -12,7 +12,7 @@ mod syntax;
 mod tags;
 mod virtual_members;
 
-pub use expression::{TypeExpression, parse_type_expression_text};
+pub use expression::{TypeExpression, parse_type_expression_prefix, parse_type_expression_text};
 pub use lexer::{Tag, lex_docblock};
 pub use syntax::PhpdocBridge;
 pub use tags::{MemberDocblock, extract_member_docblock, extract_virtual_members};
