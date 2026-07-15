@@ -120,7 +120,6 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use super::*;
-    use celerrate_plugin::{CommentDirective, CommentKind, DirectiveScope};
 
     fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
         CommentDirective::Suppress {

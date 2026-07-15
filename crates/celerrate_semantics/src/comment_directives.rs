@@ -13,6 +13,10 @@
 
 use std::sync::Arc;
 
+use celerrate_db::SourceFile;
+use celerrate_source::{LineColumn, LineIndex, TextRange, TextSize};
+use celerrate_syntax::{SyntaxKind, SyntaxToken};
+
 use crate::plugin::PluginIdentity;
 
 /// The comment shapes a provider may be handed.
@@ -94,10 +98,6 @@ pub struct CommentDirectiveRegistry {
     #[returns(ref)]
     pub registrations: Vec<CommentDirectiveRegistration>,
 }
-
-use celerrate_db::SourceFile;
-use celerrate_source::{LineColumn, LineIndex, TextRange, TextSize};
-use celerrate_syntax::{SyntaxKind, SyntaxToken};
 
 /// The file's suppressed ranges: every comment handed to every
 /// registered provider, the symbolic scopes resolved against the line
@@ -366,6 +366,16 @@ mod tests {
         assert!(suppressed_at(&db, file, source, "$x"));
         assert!(!suppressed_at(&db, file, source, "$y"));
         assert!(!suppressed_at(&db, file, source, "<?php"));
+    }
+
+    #[test]
+    fn a_current_line_directive_in_a_multi_line_comment_covers_all_its_lines() {
+        let source = "<?php\n$before = 1;\n/* @line\n   spans two lines */\n$after = 1;\n";
+        let (db, file) = fixture(source);
+        assert!(suppressed_at(&db, file, source, "/* @line"));
+        assert!(suppressed_at(&db, file, source, "spans two"));
+        assert!(!suppressed_at(&db, file, source, "$before"));
+        assert!(!suppressed_at(&db, file, source, "$after"));
     }
 
     #[test]

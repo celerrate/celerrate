@@ -119,6 +119,14 @@ mod tests {
         let virtual_symbols =
             celerrate_semantics::VirtualSymbolRegistry::try_get(&database).unwrap();
         assert_eq!(virtual_symbols.registrations(&database).len(), 1);
+        let comment_directives =
+            celerrate_semantics::CommentDirectiveRegistry::try_get(&database).unwrap();
+        let comment_directive_registrations = comment_directives.registrations(&database);
+        assert_eq!(comment_directive_registrations.len(), 1);
+        assert_eq!(
+            comment_directive_registrations[0].identity.name,
+            "phpdoc-bridge"
+        );
         let providers = celerrate_types::DynamicTypeProviderRegistry::try_get(&database).unwrap();
         assert!(providers.registrations(&database).is_empty());
     }
