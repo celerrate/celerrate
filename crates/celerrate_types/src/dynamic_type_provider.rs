@@ -1,0 +1,206 @@
+//! The dynamic-type-provider extension point: contribute return types
+//! at call sites. Owned by this crate per the design; the registry
+//! input lives here too, or the DAG would break upward. Dispatch rule,
+//! fixed now: providers claim symbols; overlapping claims are a
+//! registration-time error unless resolved by documented precedence at
+//! the composition root (none is documented yet — the composition root
+//! excludes the later registrant and reports the run degraded).
+//! Deterministic: claims are gathered in registered order.
+
+use std::sync::Arc;
+
+use celerrate_semantics::PluginIdentity;
+
+use crate::representation::TypeId;
+
+/// A symbol within a resolved callable, claimed by a dynamic-type
+/// provider. Folded keys, normalized for comparison — the same form as
+/// the symbol table.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub enum SymbolClaim {
+    /// Global function.
+    Function { key: String },
+    /// Method: class, then method (both folded keys).
+    Method {
+        class_key: String,
+        method_key: String,
+    },
+}
+
+/// The invocation context for a dynamic-type provider querying the
+/// return type at a call site. Owned struct: implementations extend it
+/// additively (argument *values* travel as literal types interrogable
+/// on `TypeId`).
+pub struct Invocation<'db> {
+    pub claim: SymbolClaim,
+    pub receiver_type: Option<TypeId<'db>>,
+    pub argument_types: Vec<TypeId<'db>>,
+}
+
+/// An implementation contributes return types at call sites for claimed
+/// symbols. Contributions are widened at the consumption boundary inside
+/// `celerrate_types` (the fixpoint of plan 5) — a provider never
+/// controls termination. Implementations must be deterministic and
+/// monotone; `None` falls back to the declared or inferred type.
+pub trait DynamicTypeProvider: Send + Sync {
+    /// All symbols this provider claims to handle. Used for
+    /// overlap detection at registration time.
+    fn claims(&self) -> Vec<SymbolClaim>;
+    /// Return type for an invocation, if the provider wishes to
+    /// contribute one.
+    fn return_type<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        invocation: &Invocation<'db>,
+    ) -> Option<TypeId<'db>>;
+}
+
+/// One registration: the implementation travels with its identity,
+/// so reading it records the dependency an upgrade invalidates.
+pub struct DynamicTypeProviderRegistration {
+    pub identity: PluginIdentity,
+    pub provider: Arc<dyn DynamicTypeProvider>,
+}
+
+impl std::fmt::Debug for DynamicTypeProviderRegistration {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DynamicTypeProviderRegistration")
+            .field("identity", &self.identity)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Set once per process at the composition root, HIGH durability,
+/// never mutated. Unset (every plain test database): the no-plugin
+/// path — dynamic contributions answer the declared or inferred type.
+#[salsa::input(singleton)]
+pub struct DynamicTypeProviderRegistry {
+    #[returns(ref)]
+    pub registrations: Vec<DynamicTypeProviderRegistration>,
+}
+
+/// A claim conflict: two providers registered for the same symbol.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ClaimConflict {
+    pub claim: SymbolClaim,
+    pub first: String,  // plugin name holding the claim
+    pub second: String, // plugin name colliding with it
+}
+
+/// Validate that all claims in the registry are disjoint. Overlaps are
+/// a registration-time error, detected deterministically in registered
+/// order.
+pub fn validate_claims(
+    registrations: &[DynamicTypeProviderRegistration],
+) -> Result<(), ClaimConflict> {
+    let mut holders: std::collections::BTreeMap<SymbolClaim, String> =
+        std::collections::BTreeMap::new();
+    for registration in registrations {
+        for claim in registration.provider.claims() {
+            if let Some(first) = holders.get(&claim) {
+                return Err(ClaimConflict {
+                    claim,
+                    first: first.clone(),
+                    second: registration.identity.name.clone(),
+                });
+            }
+            holders.insert(claim, registration.identity.name.clone());
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use celerrate_semantics::PluginIdentity;
+
+    use super::{
+        ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration, Invocation,
+        SymbolClaim, validate_claims,
+    };
+    use crate::representation::TypeId;
+
+    #[derive(Debug)]
+    struct FakeProvider {
+        claimed: Vec<SymbolClaim>,
+    }
+
+    impl DynamicTypeProvider for FakeProvider {
+        fn claims(&self) -> Vec<SymbolClaim> {
+            self.claimed.clone()
+        }
+        fn return_type<'db>(
+            &self,
+            db: &'db dyn salsa::Database,
+            _invocation: &Invocation<'db>,
+        ) -> Option<TypeId<'db>> {
+            Some(TypeId::int(db))
+        }
+    }
+
+    fn identity(name: &str) -> PluginIdentity {
+        PluginIdentity {
+            name: name.to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        }
+    }
+
+    fn registration(name: &str, claimed: Vec<SymbolClaim>) -> DynamicTypeProviderRegistration {
+        DynamicTypeProviderRegistration {
+            identity: identity(name),
+            provider: std::sync::Arc::new(FakeProvider { claimed }),
+        }
+    }
+
+    #[test]
+    fn disjoint_claims_validate() {
+        let registrations = vec![
+            registration(
+                "first",
+                vec![SymbolClaim::Function {
+                    key: "array_map".to_owned(),
+                }],
+            ),
+            registration(
+                "second",
+                vec![SymbolClaim::Function {
+                    key: "explode".to_owned(),
+                }],
+            ),
+        ];
+        assert_eq!(validate_claims(&registrations), Ok(()));
+    }
+
+    #[test]
+    fn overlapping_claims_are_a_registration_time_error_naming_both_plugins() {
+        let claim = SymbolClaim::Method {
+            class_key: "collection".to_owned(),
+            method_key: "map".to_owned(),
+        };
+        let registrations = vec![
+            registration("first", vec![claim.clone()]),
+            registration("second", vec![claim.clone()]),
+        ];
+        assert_eq!(
+            validate_claims(&registrations),
+            Err(ClaimConflict {
+                claim,
+                first: "first".to_owned(),
+                second: "second".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn a_provider_overlapping_itself_is_also_refused() {
+        let claim = SymbolClaim::Function {
+            key: "current".to_owned(),
+        };
+        let registrations = vec![registration("solo", vec![claim.clone(), claim.clone()])];
+        assert!(validate_claims(&registrations).is_err());
+    }
+}

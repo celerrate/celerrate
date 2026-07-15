@@ -1,0 +1,11 @@
+/**
+ * Summary prose.
+ *
+ * @param int|string $id
+ * @param ?App\Model\User $user
+ * @return (int|string)[]
+ * @throws \RuntimeException
+ * @property-read string $title
+ * @method static User find(int $id, ?string $name = null)
+ * @var Countable&Traversable
+ */

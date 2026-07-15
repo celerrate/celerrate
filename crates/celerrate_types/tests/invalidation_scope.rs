@@ -12,16 +12,32 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
 
+use std::sync::Arc;
+
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    MemberKind, MemberQuery, SymbolSpace, folded_member_key, folded_symbol_key,
+    MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key, folded_symbol_key,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndex, StubIndexInput};
-use celerrate_types::{Proof, TypeId, declared_member_signature, subtype_of};
+use celerrate_types::{
+    AnnotationSite, ParsedAnnotations, Proof, TypeId, TypeSyntax, TypeSyntaxRegistration,
+    TypeSyntaxRegistry, declared_member_signature, subtype_of,
+};
 use salsa::Setter;
+
+/// Counts how many times a query appears in an executed-query log (the
+/// `celerrate_semantics` invalidation-scope tests' `executions_of`
+/// pattern, duplicated here: no shared test-support module exists per
+/// the design).
+fn executions_of(log: &[String], query: &str) -> usize {
+    let prefix = format!("{query}(");
+    log.iter()
+        .filter(|entry| entry.contains(prefix.as_str()))
+        .count()
+}
 
 #[test]
 fn a_body_edit_does_not_recompute_a_hierarchy_verdict() {
@@ -507,5 +523,348 @@ fn an_unrelated_member_signature_edit_spares_the_other_members_verdict() {
     assert!(
         !executed.iter().any(|query| query.contains("subtype_of")),
         "an unrelated member edit must spare the other member's verdict: {executed:?}"
+    );
+}
+
+/// A `TypeSyntax` fake that reads `@return <one word>`, ignoring every
+/// other tag and every word of surrounding prose. The word lowers
+/// through the shared native keyword table first (`site.keyword_type`)
+/// and falls back to a class type qualified at the declaring site
+/// (`site.qualify_class_name`) — the same two-step rule the native
+/// lowering applies. A prose-only edit after the tag word therefore
+/// reparses to the exact same `MemberAnnotations`; a changed tag word
+/// reparses to a different one. Mirrors `FakeReturnSyntax` in
+/// `crates/celerrate_types/src/declared.rs`'s test module, but reads
+/// the tag's own word instead of answering a constant `int`.
+#[derive(Debug)]
+struct WordOnlyReturnSyntax;
+
+impl TypeSyntax for WordOnlyReturnSyntax {
+    fn can_parse(&self, docblock: &str) -> bool {
+        docblock.contains("@return")
+    }
+
+    fn parse_docblock<'db>(
+        &self,
+        site: &AnnotationSite<'db, '_>,
+        docblock: &str,
+    ) -> ParsedAnnotations<'db> {
+        let return_type = docblock
+            .split_once("@return")
+            .and_then(|(_, rest)| rest.split_whitespace().next())
+            .map(|word| {
+                site.keyword_type(word).unwrap_or_else(|| {
+                    TypeId::class(site.database(), &site.qualify_class_name(word), Vec::new())
+                })
+            });
+        ParsedAnnotations {
+            return_type,
+            ..ParsedAnnotations::default()
+        }
+    }
+
+    fn parse_type_expression<'db>(
+        &self,
+        _site: &AnnotationSite<'db, '_>,
+        _expression: &str,
+    ) -> Option<TypeId<'db>> {
+        None
+    }
+}
+
+fn fake_identity(name: &str) -> PluginIdentity {
+    PluginIdentity {
+        name: name.to_owned(),
+        version: "0.0.0".to_owned(),
+        configuration: String::new(),
+    }
+}
+
+/// One project's inputs, with [`WordOnlyReturnSyntax`] registered at
+/// HIGH durability before the first query runs — the two-stage cutoff
+/// pins need annotations actually parsed through the registry, not the
+/// no-plugin default every other fixture in this file exercises. File
+/// handles are kept alongside so [`set_source`] can edit any one of
+/// them.
+struct AnnotationFixture {
+    db: TestDatabase,
+    handles: Vec<SourceFile>,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+}
+
+fn fixture_with_fake_syntax(sources: &[&str]) -> AnnotationFixture {
+    let db = TestDatabase::default();
+    let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+        identity: fake_identity("fake-word-return"),
+        implementation: Arc::new(WordOnlyReturnSyntax),
+    }])
+    .durability(salsa::Durability::HIGH)
+    .new(&db);
+    let handles: Vec<SourceFile> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+        })
+        .collect();
+    let files = AnalyzedFileSet::new(&db, handles.clone());
+    let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    AnnotationFixture {
+        db,
+        handles,
+        files,
+        stubs,
+        configuration,
+    }
+}
+
+/// Overwrites one file's bytes in place, the mutation every pin below
+/// performs.
+fn set_source(fixture: &mut AnnotationFixture, index: usize, source: &str) {
+    fixture.handles[index]
+        .set_bytes(&mut fixture.db)
+        .to(source.as_bytes().to_vec());
+}
+
+/// A folded `MemberQuery` for one class-and-member pair, tied to the
+/// database's own borrow rather than the whole fixture, so it can be
+/// rebuilt around a `set_bytes` edit without holding a borrow live
+/// across the mutation (the accommodation `method_query` above already
+/// makes, generalized here over `MemberKind`).
+fn member_query<'db>(
+    db: &'db TestDatabase,
+    class_written: &str,
+    kind: MemberKind,
+    member_written: &str,
+) -> MemberQuery<'db> {
+    MemberQuery::new(
+        db,
+        folded_symbol_key(SymbolSpace::ClassLike, class_written),
+        kind,
+        folded_member_key(kind, member_written),
+    )
+}
+
+/// Pin 6 (task 7): the second-stage parsed-annotation cutoff, exercised
+/// through an ACTUALLY REGISTERED, actually parsing `TypeSyntax`,
+/// rather than the no-plugin default pin 2 (above) exercises.
+///
+/// A prose-only docblock edit changes the raw text, so stage one
+/// (`member_tree`, read through `lookup_member`) re-runs — the spec's
+/// accepted cost. `declared_member_signature` ALSO re-runs (asserted
+/// below, deliberately, not zero): it independently calls
+/// `lookup_member` for the member's own structural payload (kind,
+/// name, native signature), exactly as pin 2 documents ("the member
+/// payload carries the docblock text by design"), and that call sees
+/// the same changed `Member` value regardless of what any registered
+/// `TypeSyntax` does. `member_annotations` also re-runs, for the same
+/// reason — but the fake syntax reads only the `@return` word, which
+/// the added prose never touches, so it answers a byte-identical
+/// `MemberAnnotations`, and the annotation-refined declared return is
+/// the same interned `TypeId` as before the edit.
+///
+/// The probe is built FROM that declared return — `subtype_of(
+/// signature.value_type, Entity)` — so its memoized verdict depends
+/// transitively on what the seam produced, and it is hierarchy-routed
+/// (`User <: Entity`, two distinct class names reaching
+/// `linearized_class`) so "spared" cannot be a vacuous structural
+/// short-circuit. The companion test below builds the IDENTICAL probe
+/// construction after a tag edit and observes it re-run with a flipped
+/// verdict, proving this probe family is sensitive to the seam's
+/// output: its 0-execution result here is therefore load-bearing
+/// evidence of the parsed-annotation cutoff, not coarse same-file
+/// sparing.
+#[test]
+fn a_prose_only_docblock_edit_backdates_at_the_parsed_annotation_stage() {
+    let mut fixture =
+        fixture_with_fake_syntax(&["<?php class Entity {} class User extends Entity {} \
+         class C { /** @return User */ public function f() {} }"]);
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        // The annotation refines the native-`mixed` return to `User`.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Holds
+        );
+    }
+    fixture.db.take_executed();
+
+    set_source(
+        &mut fixture,
+        0,
+        "<?php class Entity {} class User extends Entity {} \
+         class C { /** @return User (documented better) */ public function f() {} }",
+    );
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        // The direct second-stage assertion: the parsed `@return User`
+        // word is untouched by the prose, so the refined declared
+        // return is the SAME interned type as before the edit.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
+        // The identical probe re-derived from the declared return: the
+        // same interned key, and every hierarchy input it read
+        // backdated, so the memoized verdict must answer without
+        // executing.
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Holds
+        );
+    }
+
+    let log = fixture.db.take_executed();
+    assert_eq!(executions_of(&log, "member_annotations"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "declared_member_signature"),
+        1,
+        "declared_member_signature independently reads lookup_member for the \
+         member's own structural payload, which carries the docblock text by \
+         design (pin 2's accepted cost): it re-runs on every docblock edit, \
+         prose or tag, regardless of the parsed-annotation cutoff: {log:?}"
+    );
+    assert_eq!(
+        executions_of(&log, "subtype_of"),
+        0,
+        "the verdict derived from the declared return must stay spared: the \
+         edit stops mattering at the parsed-annotation stage, not at \
+         declared_member_signature's own re-execution: {log:?}"
+    );
+}
+
+/// The counterexample, sharing the EXACT probe construction of the
+/// prose pin above (`subtype_of(signature.value_type, Entity)`):
+/// editing the `@return` word itself (`User` -> `Other`) changes what
+/// the fake syntax extracts, so `member_annotations` produces a
+/// genuinely different value, the refined declared return changes with
+/// it, and the probe re-executes with a flipped verdict (`Other` does
+/// not extend `Entity`). This proves the shared probe family is
+/// sensitive to the seam's output — the prose pin's 0-execution result
+/// discriminates the parsed-annotation cutoff, not same-file sparing.
+#[test]
+fn an_annotation_edit_reaches_the_declared_signature() {
+    let mut fixture = fixture_with_fake_syntax(&[
+        "<?php class Entity {} class User extends Entity {} class Other {} \
+         class C { /** @return User */ public function f() {} }",
+    ]);
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Holds
+        );
+    }
+    fixture.db.take_executed();
+
+    set_source(
+        &mut fixture,
+        0,
+        "<?php class Entity {} class User extends Entity {} class Other {} \
+         class C { /** @return Other */ public function f() {} }",
+    );
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        // The declared return genuinely changed with the tag word.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "Other", vec![])
+        );
+        // The same probe construction, now keyed on the new declared
+        // return: it must execute, and its verdict flips.
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Fails
+        );
+    }
+
+    let log = fixture.db.take_executed();
+    assert_eq!(executions_of(&log, "member_annotations"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "declared_member_signature"),
+        1,
+        "{log:?}"
+    );
+    assert!(
+        executions_of(&log, "subtype_of") >= 1,
+        "a changed declared return must reach the dependent verdict: {log:?}"
     );
 }

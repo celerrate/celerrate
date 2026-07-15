@@ -25,9 +25,9 @@ env:
 jobs:
   fuzz:
     runs-on: ubuntu-latest
-    # Two targets at 30 minutes each on the nightly run, plus the build.
-    # 90 minutes leaves comfortable headroom.
-    timeout-minutes: 90
+    # Three targets at 30 minutes each on the nightly run, plus the build.
+    # 120 minutes leaves comfortable headroom.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@v1
@@ -74,6 +74,7 @@ jobs:
       # invariant under test); -rss_limit_mb bounds runaway memory.
       - run: cargo +nightly fuzz run lex -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
       - run: cargo +nightly fuzz run parse -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
+      - run: cargo +nightly fuzz run docblock -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@v4

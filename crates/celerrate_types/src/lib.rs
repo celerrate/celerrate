@@ -88,16 +88,26 @@
 mod construction;
 mod declared;
 mod display;
+mod dynamic_type_provider;
 mod judgments;
 mod ordering;
 mod representation;
+mod type_syntax;
 mod widening;
 mod written;
 
 pub use declared::{
     DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
-    declared_function_signature, declared_member_signature, member_annotations,
+    declared_function_signature, declared_member_signature, function_annotations,
+    member_annotations,
+};
+pub use dynamic_type_provider::{
+    ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration,
+    DynamicTypeProviderRegistry, Invocation, SymbolClaim, validate_claims,
 };
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
+pub use type_syntax::{
+    AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
+};
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};

@@ -14,6 +14,7 @@ use crate::index::{StubSignatureTable, stub_signature_table};
 use crate::linearize::{ClassQuery, MemberOrigin, folded_member_key, linearized_class};
 use crate::members::{Member, MemberKind};
 use crate::symbols::{SymbolSpace, folded_symbol_key};
+use crate::virtual_symbols::{VirtualMember, VirtualMemberKind};
 
 /// One member to look up: its class (a **pre-folded** ClassLike key),
 /// its kind, and its **pre-folded** member key (fold with
@@ -43,15 +44,25 @@ pub enum MemberResolution {
         member: StubMember,
         owner: String,
     },
+    /// An annotation-declared member (`@property`, `@method`). Real
+    /// members — source and stub alike — shadow virtual members; the
+    /// type expressions inside `member` are unresolved text that
+    /// `celerrate_types` resolves through the type-syntax registry.
+    Virtual {
+        member: VirtualMember,
+        owner: String,
+    },
 }
 
 /// Resolves one (class, kind, member) query. The source linearized table
 /// wins first; failing that, the stub graph behind each stub edge is
 /// walked in edge walk order; and when the queried class is not a source
 /// class-like at all, the stub graph is walked from the class key
-/// itself. `None` when nothing answers. The linearized table's first
-/// entry per `(kind, key)` is the precedence winner, so a source member
-/// shadows a stub member of the same key.
+/// itself. Failing both, a virtual member of the same key — method or
+/// property queries only — answers last. `None` when nothing answers.
+/// The linearized table's first entry per `(kind, key)` is the
+/// precedence winner, so a source member shadows a stub member of the
+/// same key, and either shadows a virtual member of the same key.
 #[salsa::tracked]
 pub fn lookup_member<'db>(
     db: &'db dyn salsa::Database,
@@ -65,7 +76,10 @@ pub fn lookup_member<'db>(
     let key = query.member_key(db);
     let range = configuration.php_version_range(db);
     let table = stub_signature_table(db, stubs);
-    match linearized_class(db, files, stubs, configuration, class).as_ref() {
+    // Kept alive to the end: the virtual-member scan (last resort) reads
+    // the same linearized table the source scan above already fetched.
+    let linearized = linearized_class(db, files, stubs, configuration, class).as_ref();
+    match linearized {
         Some(linearized) => {
             if let Some(entry) = linearized
                 .members
@@ -87,11 +101,34 @@ pub fn lookup_member<'db>(
                     return Some(found);
                 }
             }
-            None
         }
         // Not a source class-like: the stub graph from the key itself.
-        None => stub_member(table, range, query.class_key(db), kind, key),
+        None => {
+            if let Some(found) = stub_member(table, range, query.class_key(db), kind, key) {
+                return Some(found);
+            }
+        }
     }
+
+    // Virtual members answer last: a real member of the same key,
+    // source or stub, always wins (decision 4 of the plan header).
+    let virtual_kind = match kind {
+        MemberKind::Method => Some(VirtualMemberKind::Method),
+        MemberKind::Property => Some(VirtualMemberKind::Property),
+        MemberKind::ClassConstant | MemberKind::EnumCase => None,
+    };
+    if let (Some(virtual_kind), Some(linearized)) = (virtual_kind, linearized)
+        && let Some(entry) = linearized
+            .virtual_members
+            .iter()
+            .find(|entry| entry.member.kind == virtual_kind && entry.key == *key)
+    {
+        return Some(MemberResolution::Virtual {
+            member: entry.member.clone(),
+            owner: entry.owner.clone(),
+        });
+    }
+    None
 }
 
 /// Breadth-first over the compiled parent links from `start`: the first
@@ -160,7 +197,59 @@ mod tests {
     use super::{MemberQuery, MemberResolution, lookup_member};
     use crate::linearize::{MemberOrigin, folded_member_key};
     use crate::members::MemberKind;
+    use crate::plugin::PluginIdentity;
     use crate::symbols::{SymbolSpace, folded_symbol_key};
+    use crate::virtual_symbols::{
+        VirtualMember, VirtualMemberKind, VirtualSymbolProvider, VirtualSymbolRegistration,
+        VirtualSymbolRegistry,
+    };
+
+    /// A provider that answers its fixed member set only when the
+    /// docblock text carries `@fake`. Duplicated from `linearize.rs`'s
+    /// test module (itself duplicated from `virtual_symbols.rs`) — the
+    /// crate has no shared test-support module yet, which is already
+    /// recorded debt.
+    #[derive(Debug)]
+    struct FakeProvider {
+        members: Vec<VirtualMember>,
+    }
+
+    impl VirtualSymbolProvider for FakeProvider {
+        fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
+            if class_docblock.contains("@fake") {
+                self.members.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn identity(name: &str) -> PluginIdentity {
+        PluginIdentity {
+            name: name.to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        }
+    }
+
+    fn register_fake_provider(fixture: &Fixture, members: Vec<VirtualMember>) {
+        let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
+            identity: identity("fake"),
+            provider: std::sync::Arc::new(FakeProvider { members }),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    fn virtual_property(name: &str) -> VirtualMember {
+        VirtualMember {
+            kind: VirtualMemberKind::Property,
+            name: name.to_owned(),
+            is_static: false,
+            type_text: Some("string".to_owned()),
+            parameters: Vec::new(),
+        }
+    }
 
     struct Fixture {
         db: TestDatabase,
@@ -398,5 +487,34 @@ mod tests {
         assert!(lookup(&fixture, "Ghost", MemberKind::Method, "f").is_none());
         // Kinds are distinct spaces: a method never answers a property.
         assert!(lookup(&fixture, "A", MemberKind::Property, "f").is_none());
+    }
+
+    #[test]
+    fn a_virtual_member_resolves_when_no_real_member_exists() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_provider(&fixture, vec![virtual_property("title")]);
+        let resolution = lookup(&fixture, "Post", MemberKind::Property, "title");
+        match resolution {
+            Some(MemberResolution::Virtual { member, owner }) => {
+                assert_eq!(member.name, "title");
+                assert_eq!(owner, "post");
+            }
+            other => panic!("expected a virtual resolution, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_real_member_shadows_a_virtual_member_of_the_same_name() {
+        let fixture = fixture(&["<?php /** @fake */ class Post { public string $title; }"]);
+        register_fake_provider(&fixture, vec![virtual_property("title")]);
+        let resolution = lookup(&fixture, "Post", MemberKind::Property, "title");
+        assert!(matches!(resolution, Some(MemberResolution::Source { .. })));
+    }
+
+    #[test]
+    fn virtual_members_answer_only_method_and_property_queries() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_provider(&fixture, vec![virtual_property("TITLE")]);
+        assert!(lookup(&fixture, "Post", MemberKind::ClassConstant, "TITLE").is_none());
     }
 }

@@ -138,11 +138,14 @@ dependencies = [
  "blake3",
  "celerrate_db",
  "celerrate_diagnostics",
+ "celerrate_phpdoc_bridge",
+ "celerrate_plugin",
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",
  "celerrate_stubs",
  "celerrate_syntax",
+ "celerrate_types",
  "celerrate_vfs",
  "clap",
  "insta",
@@ -170,6 +173,31 @@ name = "celerrate_diagnostics"
 version = "0.0.2"
 dependencies = [
  "celerrate_source",
+]
+
+[[package]]
+name = "celerrate_phpdoc_bridge"
+version = "0.0.2"
+dependencies = [
+ "celerrate_db",
+ "celerrate_plugin",
+ "celerrate_project",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_stubs",
+ "celerrate_types",
+ "salsa",
+]
+
+[[package]]
+name = "celerrate_plugin"
+version = "0.0.2"
+dependencies = [
+ "celerrate_diagnostics",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_types",
+ "salsa",
 ]
 
 [[package]]

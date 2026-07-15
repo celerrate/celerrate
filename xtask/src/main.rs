@@ -6,6 +6,7 @@ fn main() -> ExitCode {
         (Some("bench"), None) => xtask::bench::run(false),
         (Some("bench"), Some("--ceilings")) => xtask::bench::run(true),
         (Some("codegen"), None) => xtask::codegen::run(),
+        (Some("dependency-shape"), None) => xtask::dependency_shape::run(),
         (Some("fetch-stubs"), None) => xtask::stubs::fetch(),
         (Some("compile-stubs"), None) => xtask::stubs::compile(false),
         (Some("compile-stubs"), Some("--check")) => xtask::stubs::compile(true),
@@ -15,7 +16,7 @@ fn main() -> ExitCode {
         (Some("release-notes"), Some(version)) => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | bench [--ceilings] | release-notes <version>>"
+                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | bench [--ceilings] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }

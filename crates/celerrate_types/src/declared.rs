@@ -70,8 +70,11 @@ fn lower_name<'db>(db: &'db dyn salsa::Database, site: &NameSite<'_>, name: &str
 }
 
 /// The keyword table: total over the native grammar (decision 3 for
-/// `callable`). `None` means "an ordinary class name".
-fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId<'db>> {
+/// `callable`). `None` means "an ordinary class name". `pub(crate)`:
+/// the type-syntax extension point's `AnnotationSite::keyword_type`
+/// shares this table so the native and annotation paths can never
+/// disagree.
+pub(crate) fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId<'db>> {
     let folded = name.to_ascii_lowercase();
     Some(match folded.as_str() {
         "int" => TypeId::int(db),
@@ -103,8 +106,10 @@ fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId
 }
 
 /// PHP class-name resolution is static: the first candidate is the
-/// fully qualified name whether or not the class exists.
-fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String {
+/// fully qualified name whether or not the class exists. `pub(crate)`:
+/// the type-syntax extension point's `AnnotationSite::qualify_class_name`
+/// shares this qualifier.
+pub(crate) fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String {
     match site {
         NameSite::Source { namespace, tables } => {
             resolve_candidates(written, SymbolSpace::ClassLike, namespace, tables)
@@ -157,16 +162,17 @@ pub struct DeclaredSignature<'db> {
     pub by_reference: bool,
 }
 
-/// The parsed annotation layer of one member. Plan 4a's bridge fills
-/// this through the type-syntax registry; until then every member
-/// answers the default (no annotations). The seam is a tracked query
-/// so the bridge swap changes ONE body and no signatures.
+/// The parsed annotation layer of one member: own docblock, parsed
+/// through the type-syntax registry (no registered implementation, or
+/// no docblock at all, answers the default — no annotations).
 #[derive(Debug, Clone, Default, PartialEq, Eq, salsa::Update)]
 pub struct MemberAnnotations<'db> {
     /// `@return` / `@var`: the annotated value type.
     pub value: Option<TypeId<'db>>,
     /// `@param`: annotated parameter types by parameter name.
     pub parameters: Vec<(String, TypeId<'db>)>,
+    /// `@throws`: annotated exception types.
+    pub throws: Vec<TypeId<'db>>,
 }
 
 #[salsa::tracked]
@@ -177,11 +183,33 @@ pub fn member_annotations<'db>(
     configuration: ProjectConfiguration,
     query: MemberQuery<'db>,
 ) -> MemberAnnotations<'db> {
-    // The seam: plan 4a's bridge replaces this body with the
-    // docblock parse through the type-syntax registry. Everything
-    // downstream (precedence, trust, inheritance) is already wired.
-    let _ = (db, files, stubs, configuration, query);
-    MemberAnnotations::default()
+    // Stub members carry no docblocks (their types come from the
+    // signature payload), virtual members have no docblock of their
+    // own, and unresolved members have nothing to parse.
+    let Some(MemberResolution::Source { member, owner, .. }) =
+        lookup_member(db, files, stubs, configuration, query)
+    else {
+        return MemberAnnotations::default();
+    };
+    let Some(docblock) = member.docblock.clone() else {
+        return MemberAnnotations::default();
+    };
+    // The declaring site: the owner class-like's namespace and use
+    // tables, exactly as native signature resolution derives them —
+    // reuse `declaring_site` (via `with_declaring_site`) so the two
+    // paths can never disagree.
+    let parsed = with_declaring_site(db, files, &owner, |site| {
+        crate::type_syntax::annotations_for_docblock(db, site, &docblock)
+    });
+    MemberAnnotations {
+        value: match member.kind {
+            MemberKind::Method => parsed.return_type,
+            MemberKind::Property | MemberKind::ClassConstant => parsed.value_type,
+            MemberKind::EnumCase => None,
+        },
+        parameters: parsed.parameters,
+        throws: parsed.throws,
+    }
 }
 
 /// The source-precedence rule of the design's section 3: an
@@ -239,6 +267,7 @@ fn inherited_annotations<'db>(
     let mut merged = own;
     for ancestor in ancestors {
         let value_missing = merged.value.is_none();
+        let throws_missing = merged.throws.is_empty();
         let missing_parameters: Vec<&String> = parameter_names
             .iter()
             .filter(|name| {
@@ -248,7 +277,7 @@ fn inherited_annotations<'db>(
                     .any(|(merged_name, _)| merged_name == *name)
             })
             .collect();
-        if !value_missing && missing_parameters.is_empty() {
+        if !value_missing && !throws_missing && missing_parameters.is_empty() {
             return merged;
         }
         if !declares(ancestor) {
@@ -257,6 +286,9 @@ fn inherited_annotations<'db>(
         let ancestor_annotations = read(ancestor);
         if value_missing {
             merged.value = ancestor_annotations.value;
+        }
+        if throws_missing {
+            merged.throws = ancestor_annotations.throws;
         }
         for name in missing_parameters {
             if let Some((_, annotated)) = ancestor_annotations
@@ -292,6 +324,48 @@ pub fn declared_member_signature<'db>(
                 &owner,
                 &member,
             ));
+        }
+        // A virtual member's whole type comes from its annotation text,
+        // resolved through the type-syntax registry at the owner's
+        // site. There is no native declaration: refinement runs
+        // against `mixed`, so any parsed annotation holds
+        // (`Trust::Refined`) and an absent or unparseable one stays
+        // `(mixed, NativeOnly)`.
+        MemberResolution::Virtual { member, owner } => {
+            let mixed = TypeId::mixed(db);
+            return Some(with_declaring_site(db, files, &owner, |site| {
+                let annotation = member
+                    .type_text
+                    .as_deref()
+                    .and_then(|text| crate::type_syntax::type_of_expression(db, site, text));
+                let (value_type, value_trust) =
+                    refine(db, files, stubs, configuration, mixed, annotation);
+                let parameters = member
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let annotation = parameter.type_text.as_deref().and_then(|text| {
+                            crate::type_syntax::type_of_expression(db, site, text)
+                        });
+                        let (parameter_type, trust) =
+                            refine(db, files, stubs, configuration, mixed, annotation);
+                        DeclaredParameter {
+                            name: parameter.name.clone(),
+                            parameter_type: Some(parameter_type),
+                            trust,
+                            optional: parameter.optional,
+                            variadic: parameter.variadic,
+                            by_reference: false,
+                        }
+                    })
+                    .collect();
+                DeclaredSignature {
+                    parameters,
+                    value_type,
+                    value_trust,
+                    by_reference: false,
+                }
+            }));
         }
     };
     let site_parts = declaring_site(db, files, &owner)?;
@@ -373,6 +447,33 @@ fn declaring_site(
         namespace,
         ast_id,
     })
+}
+
+/// Borrows one owner's declaring `NameSite` across a closure call and
+/// answers the closure's result. The site is `NameSite::Source`
+/// (namespace plus `use` tables), built the same way the native
+/// signature path builds it; when the owner is not (or no longer) a
+/// resolvable source class-like, the closure still runs, against
+/// `NameSite::Global` — an unresolvable owner degrades the name
+/// qualification, it does not abort the parse.
+fn with_declaring_site<T>(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    owner_key: &str,
+    parse: impl FnOnce(&NameSite<'_>) -> T,
+) -> T {
+    match declaring_site(db, files, owner_key) {
+        Some(site_parts) => {
+            let tables =
+                UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
+            let site = NameSite::Source {
+                namespace: &site_parts.namespace,
+                tables: &tables,
+            };
+            parse(&site)
+        }
+        None => parse(&NameSite::Global),
+    }
 }
 
 /// Whether `class_key`'s OWN member group declares a member of this
@@ -801,6 +902,58 @@ pub struct FunctionQuery<'db> {
     pub key: String,
 }
 
+/// The parsed annotation layer of one free function: own docblock,
+/// parsed through the type-syntax registry — the function's exact
+/// counterpart to [`member_annotations`]. Functions do not inherit
+/// (there is no ancestor to walk): a stub-only function, an absent
+/// source declaration, or a source declaration with no docblock all
+/// answer the default. `stubs` and `configuration` complete the
+/// input quartet the annotation seam shares with `member_annotations`
+/// (a uniform query shape callers never have to special-case); a
+/// free function's own docblock resolves without consulting either.
+#[salsa::tracked]
+pub fn function_annotations<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    query: FunctionQuery<'db>,
+) -> MemberAnnotations<'db> {
+    let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
+    let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
+        return MemberAnnotations::default();
+    };
+    let index = analyzed_file_index(db, files);
+    let Ok(position) = index.binary_search_by_key(&ast_id.file, |(id, _)| *id) else {
+        return MemberAnnotations::default();
+    };
+    let Some(&(_, file)) = index.get(position) else {
+        return MemberAnnotations::default();
+    };
+    let Some(function) = member_tree(db, file)
+        .functions
+        .iter()
+        .find(|function| function.ast_id == ast_id)
+        .cloned()
+    else {
+        return MemberAnnotations::default();
+    };
+    let Some(docblock) = function.docblock.clone() else {
+        return MemberAnnotations::default();
+    };
+    let tables = UseTables::for_namespace(item_tree(db, file), &function.namespace);
+    let site = NameSite::Source {
+        namespace: &function.namespace,
+        tables: &tables,
+    };
+    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &docblock);
+    MemberAnnotations {
+        value: parsed.return_type,
+        parameters: parsed.parameters,
+        throws: parsed.throws,
+    }
+}
+
 #[salsa::tracked]
 pub fn declared_function_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -846,17 +999,40 @@ pub fn declared_function_signature<'db>(
         namespace: &function.namespace,
         tables: &tables,
     };
+    let annotations = function_annotations(db, files, stubs, configuration, query);
+    let native_value = lowered_or_mixed(db, &site, function.signature.type_text.as_deref());
+    let (value_type, value_trust) = refine(
+        db,
+        files,
+        stubs,
+        configuration,
+        native_value,
+        annotations.value,
+    );
     Some(DeclaredSignature {
         parameters: function
             .signature
             .parameters
             .iter()
             .map(|parameter| {
-                declared_parameter(db, files, stubs, configuration, &site, parameter, None)
+                let annotation = annotations
+                    .parameters
+                    .iter()
+                    .find(|(name, _)| *name == parameter.name)
+                    .map(|(_, annotated)| *annotated);
+                declared_parameter(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    &site,
+                    parameter,
+                    annotation,
+                )
             })
             .collect(),
-        value_type: lowered_or_mixed(db, &site, function.signature.type_text.as_deref()),
-        value_trust: Trust::NativeOnly,
+        value_type,
+        value_trust,
         by_reference: function.signature.by_reference,
     })
 }
@@ -1002,7 +1178,9 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{
-        MemberKind, MemberQuery, SymbolSpace, folded_member_key, folded_symbol_key,
+        MemberKind, MemberQuery, PluginIdentity, SymbolSpace, VirtualMember, VirtualMemberKind,
+        VirtualParameter, VirtualSymbolProvider, VirtualSymbolRegistration, VirtualSymbolRegistry,
+        folded_member_key, folded_symbol_key,
     };
     use celerrate_source::FileId;
     use celerrate_stubs::{
@@ -1014,6 +1192,9 @@ mod tests {
     use super::{
         DeclaredSignature, FunctionQuery, Trust, declared_function_signature,
         declared_member_signature,
+    };
+    use crate::type_syntax::{
+        AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
     };
 
     struct Fixture {
@@ -1050,18 +1231,210 @@ mod tests {
         }
     }
 
+    /// A folded `MemberQuery` for one class-and-member pair, the shape
+    /// every member-facing test needs to build.
+    fn member_query<'db>(
+        fixture: &'db Fixture,
+        class_written: &str,
+        kind: MemberKind,
+        member_written: &str,
+    ) -> MemberQuery<'db> {
+        MemberQuery::new(
+            &fixture.db,
+            folded_symbol_key(SymbolSpace::ClassLike, class_written),
+            kind,
+            folded_member_key(kind, member_written),
+        )
+    }
+
+    /// Registers a `TypeSyntax` fake that parses any docblock
+    /// containing `@return` to `return_type: Some(int)`; everything
+    /// else in `ParsedAnnotations` stays default. Its bare-expression
+    /// path answers "int" -> int and refuses anything else, covering
+    /// both the parsed and unparseable virtual-member cases. Duplicated
+    /// from `type_syntax`'s test module `FakeSyntax` (recorded debt: no
+    /// shared test-support module per the design).
+    fn register_fake_syntax(fixture: &Fixture) {
+        let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+            identity: fake_identity("fake-return"),
+            implementation: std::sync::Arc::new(FakeReturnSyntax),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    /// Registers a `TypeSyntax` fake that parses any docblock
+    /// containing `@tags` to BOTH `return_type: Some(int)` and
+    /// `value_type: Some(string)` — proving the kind-based pick in
+    /// `member_annotations`: methods read `return_type`, properties
+    /// and class constants read `value_type`.
+    fn register_fake_syntax_both(fixture: &Fixture) {
+        let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+            identity: fake_identity("fake-both"),
+            implementation: std::sync::Arc::new(FakeBothSyntax),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    fn fake_identity(name: &str) -> PluginIdentity {
+        PluginIdentity {
+            name: name.to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        }
+    }
+
+    /// A provider that answers its fixed member set only when the
+    /// class docblock carries `@fake`. Duplicated from
+    /// `celerrate_semantics`'s own test modules (`linearize.rs`,
+    /// `member_lookup.rs`, `virtual_symbols.rs`) — recorded debt, no
+    /// shared test-support module exists across crates.
+    #[derive(Debug)]
+    struct FakeProvider {
+        members: Vec<VirtualMember>,
+    }
+
+    impl VirtualSymbolProvider for FakeProvider {
+        fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
+            if class_docblock.contains("@fake") {
+                self.members.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn register_fake_virtual_provider(fixture: &Fixture, members: Vec<VirtualMember>) {
+        let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
+            identity: fake_identity("fake-virtual"),
+            provider: std::sync::Arc::new(FakeProvider { members }),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    /// A non-static virtual property with an annotated type text and
+    /// no parameters.
+    fn virtual_property_with_text(name: &str, type_text: &str) -> VirtualMember {
+        VirtualMember {
+            kind: VirtualMemberKind::Property,
+            name: name.to_owned(),
+            is_static: false,
+            type_text: Some(type_text.to_owned()),
+            parameters: Vec::new(),
+        }
+    }
+
+    #[derive(Debug)]
+    struct FakeReturnSyntax;
+
+    impl TypeSyntax for FakeReturnSyntax {
+        fn can_parse(&self, docblock: &str) -> bool {
+            docblock.contains("@return")
+        }
+        fn parse_docblock<'db>(
+            &self,
+            site: &AnnotationSite<'db, '_>,
+            _docblock: &str,
+        ) -> ParsedAnnotations<'db> {
+            ParsedAnnotations {
+                return_type: Some(TypeId::int(site.database())),
+                ..ParsedAnnotations::default()
+            }
+        }
+        fn parse_type_expression<'db>(
+            &self,
+            site: &AnnotationSite<'db, '_>,
+            expression: &str,
+        ) -> Option<TypeId<'db>> {
+            // Answers "int" -> int and refuses anything else, so tests
+            // exercising virtual-member typing can prove both the
+            // parsed and the unparseable path through this one fake.
+            (expression == "int").then(|| TypeId::int(site.database()))
+        }
+    }
+
+    /// A `TypeSyntax` fake that parses `@return-class <Name>` into a
+    /// resolved class type through `site.qualify_class_name`, proving
+    /// that the function annotation seam resolves class names at the
+    /// function's own declaring site.
+    #[derive(Debug)]
+    struct FakeClassReturnSyntax;
+
+    impl TypeSyntax for FakeClassReturnSyntax {
+        fn can_parse(&self, docblock: &str) -> bool {
+            docblock.contains("@return-class")
+        }
+        fn parse_docblock<'db>(
+            &self,
+            site: &AnnotationSite<'db, '_>,
+            docblock: &str,
+        ) -> ParsedAnnotations<'db> {
+            let name = docblock
+                .split("@return-class")
+                .nth(1)
+                .and_then(|rest| rest.split_whitespace().next())
+                .unwrap_or_default();
+            let qualified = site.qualify_class_name(name);
+            ParsedAnnotations {
+                return_type: Some(TypeId::class(site.database(), &qualified, vec![])),
+                ..ParsedAnnotations::default()
+            }
+        }
+        fn parse_type_expression<'db>(
+            &self,
+            _site: &AnnotationSite<'db, '_>,
+            _expression: &str,
+        ) -> Option<TypeId<'db>> {
+            None
+        }
+    }
+
+    fn register_fake_class_syntax(fixture: &Fixture) {
+        let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
+            identity: fake_identity("fake-return-class"),
+            implementation: std::sync::Arc::new(FakeClassReturnSyntax),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    #[derive(Debug)]
+    struct FakeBothSyntax;
+
+    impl TypeSyntax for FakeBothSyntax {
+        fn can_parse(&self, docblock: &str) -> bool {
+            docblock.contains("@tags")
+        }
+        fn parse_docblock<'db>(
+            &self,
+            site: &AnnotationSite<'db, '_>,
+            _docblock: &str,
+        ) -> ParsedAnnotations<'db> {
+            let db = site.database();
+            ParsedAnnotations {
+                return_type: Some(TypeId::int(db)),
+                value_type: Some(TypeId::string(db)),
+                ..ParsedAnnotations::default()
+            }
+        }
+        fn parse_type_expression<'db>(
+            &self,
+            _site: &AnnotationSite<'db, '_>,
+            _expression: &str,
+        ) -> Option<TypeId<'db>> {
+            None
+        }
+    }
+
     fn member<'db>(
         fixture: &'db Fixture,
         class_written: &str,
         kind: MemberKind,
         member_written: &str,
     ) -> Option<DeclaredSignature<'db>> {
-        let query = MemberQuery::new(
-            &fixture.db,
-            folded_symbol_key(SymbolSpace::ClassLike, class_written),
-            kind,
-            folded_member_key(kind, member_written),
-        );
+        let query = member_query(fixture, class_written, kind, member_written);
         declared_member_signature(
             &fixture.db,
             fixture.files,
@@ -1216,6 +1589,78 @@ mod tests {
     }
 
     #[test]
+    fn a_function_docblock_parses_through_the_registry() {
+        let fixture = fixture(&["<?php /** @return int */ function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let annotations = super::function_annotations(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        );
+        assert_eq!(annotations.value, Some(TypeId::int(&fixture.db)));
+    }
+
+    #[test]
+    fn the_function_signature_refines_under_the_trust_rule() {
+        // int <: string fails: the annotation is rejected, native wins.
+        let fixture = fixture(&["<?php /** @return int */ function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::string(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::RejectedAnnotation);
+    }
+
+    #[test]
+    fn an_unannotated_function_stays_native_only() {
+        let fixture = fixture(&["<?php function f(): string {}"]);
+        register_fake_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn a_function_signature_refines_through_a_resolved_class_annotation() {
+        // `@return-class Dog` against a native `Animal` return: Dog is
+        // a proven subtype, so the annotation refines (Holds).
+        let fixture = fixture(
+            &["<?php interface Animal {} class Dog implements Animal {}\n\
+             /** @return-class Dog */ function f(): Animal {}"],
+        );
+        register_fake_class_syntax(&fixture);
+        let query = FunctionQuery::new(&fixture.db, folded_symbol_key(SymbolSpace::Function, "f"));
+        let signature = declared_function_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        let db = &fixture.db;
+        assert_eq!(signature.value_type, TypeId::class(db, "Dog", vec![]));
+        assert_eq!(signature.value_trust, Trust::Refined);
+    }
+
+    #[test]
     fn unknown_members_and_malformed_types_degrade_cleanly() {
         let fixture = fixture(&["<?php class C { public function f(): int {} }"]);
         assert!(member(&fixture, "C", MemberKind::Method, "ghost").is_none());
@@ -1251,14 +1696,11 @@ mod tests {
     }
 
     #[test]
-    fn the_annotation_seam_answers_the_default_until_the_bridge_lands() {
+    fn the_annotation_seam_answers_the_default_with_no_registered_syntax() {
+        // No registry, no annotations — the no-plugin path every test
+        // database takes.
         let fixture = fixture(&["<?php class C { /** @return int */ public function f() {} }"]);
-        let query = MemberQuery::new(
-            &fixture.db,
-            folded_symbol_key(SymbolSpace::ClassLike, "C"),
-            MemberKind::Method,
-            folded_member_key(MemberKind::Method, "f"),
-        );
+        let query = member_query(&fixture, "C", MemberKind::Method, "f");
         let annotations = super::member_annotations(
             &fixture.db,
             fixture.files,
@@ -1267,6 +1709,75 @@ mod tests {
             query,
         );
         assert_eq!(annotations, super::MemberAnnotations::default());
+    }
+
+    #[test]
+    fn the_seam_parses_the_own_docblock_through_the_registry() {
+        let fixture =
+            fixture(&["<?php class C { /** @return int */ public function f(): string {} }"]);
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "C", MemberKind::Method, "f");
+        let annotations = super::member_annotations(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        );
+        assert_eq!(annotations.value, Some(TypeId::int(&fixture.db)));
+    }
+
+    #[test]
+    fn the_value_annotation_is_picked_by_member_kind() {
+        // A fake syntax answering BOTH return_type=int and
+        // value_type=string proves the kind-based pick: methods read
+        // @return, properties @var.
+        let fixture = fixture(&[
+            "<?php class C { /** @tags */ public $p; /** @tags */ public function f() {} }",
+        ]);
+        register_fake_syntax_both(&fixture);
+        let property = member_query(&fixture, "C", MemberKind::Property, "p");
+        let method = member_query(&fixture, "C", MemberKind::Method, "f");
+        let db = &fixture.db;
+        assert_eq!(
+            super::member_annotations(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                property
+            )
+            .value,
+            Some(TypeId::string(db)),
+        );
+        assert_eq!(
+            super::member_annotations(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                method
+            )
+            .value,
+            Some(TypeId::int(db)),
+        );
+    }
+
+    #[test]
+    fn stub_and_missing_members_answer_the_default() {
+        let fixture = fixture(&["<?php class C {}"]);
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "C", MemberKind::Method, "ghost");
+        assert_eq!(
+            super::member_annotations(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                query,
+            ),
+            super::MemberAnnotations::default(),
+        );
     }
 
     #[test]
@@ -1281,11 +1792,13 @@ mod tests {
                 "near" => super::MemberAnnotations {
                     value: None,
                     parameters: vec![("x".to_owned(), string)],
+                    throws: Vec::new(),
                 },
                 // The far ancestor annotates both.
                 "far" => super::MemberAnnotations {
                     value: Some(int),
                     parameters: vec![("x".to_owned(), bool_type)],
+                    throws: Vec::new(),
                 },
                 _ => super::MemberAnnotations::default(),
             }
@@ -1312,6 +1825,7 @@ mod tests {
         let own = super::MemberAnnotations {
             value: Some(int),
             parameters: vec![],
+            throws: Vec::new(),
         };
         let merged = super::inherited_annotations(
             own.clone(),
@@ -1321,6 +1835,7 @@ mod tests {
             |_| super::MemberAnnotations {
                 value: Some(string),
                 parameters: vec![],
+                throws: Vec::new(),
             },
         );
         assert_eq!(merged.value, Some(int), "own annotation shadows");
@@ -1334,6 +1849,7 @@ mod tests {
             |_| super::MemberAnnotations {
                 value: Some(string),
                 parameters: vec![],
+                throws: Vec::new(),
             },
         );
         assert_eq!(merged.value, None);
@@ -1852,5 +2368,81 @@ mod tests {
             configuration,
         };
         assert!(function(&fixture, "futureOnly").is_none());
+    }
+
+    #[test]
+    fn a_virtual_property_types_through_the_type_syntax_registry() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(&fixture, vec![virtual_property_with_text("title", "int")]);
+        register_fake_syntax(&fixture); // parse_type_expression: "int" -> int
+        let query = member_query(&fixture, "Post", MemberKind::Property, "title");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::int(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::Refined);
+    }
+
+    #[test]
+    fn a_virtual_method_carries_its_annotated_parameters() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(
+            &fixture,
+            vec![VirtualMember {
+                kind: VirtualMemberKind::Method,
+                name: "find".to_owned(),
+                is_static: true,
+                type_text: Some("int".to_owned()),
+                parameters: vec![VirtualParameter {
+                    name: "id".to_owned(),
+                    type_text: Some("int".to_owned()),
+                    optional: false,
+                    variadic: false,
+                }],
+            }],
+        );
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "Post", MemberKind::Method, "find");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::int(&fixture.db));
+        assert_eq!(signature.parameters.len(), 1);
+        assert_eq!(signature.parameters[0].name, "id");
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::int(&fixture.db))
+        );
+    }
+
+    #[test]
+    fn an_unparseable_virtual_type_degrades_to_mixed_native_only() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(
+            &fixture,
+            vec![virtual_property_with_text("title", "no<such>notation")],
+        );
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "Post", MemberKind::Property, "title");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::mixed(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
     }
 }

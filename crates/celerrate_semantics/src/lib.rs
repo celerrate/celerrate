@@ -21,6 +21,7 @@ mod linearize;
 mod lookup;
 mod member_lookup;
 mod members;
+mod plugin;
 mod queries;
 mod reference_checks;
 mod references;
@@ -28,6 +29,7 @@ mod resolve;
 mod revalidation;
 mod symbols;
 mod syntax_gating;
+mod virtual_symbols;
 
 pub use ast_id::{AstId, AstIdMap};
 pub use body::{
@@ -43,8 +45,8 @@ pub use index::{
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
-    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember, MagicMarkers,
-    MemberOrigin, folded_member_key, linearized_class,
+    AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember,
+    LinearizedVirtualMember, MagicMarkers, MemberOrigin, folded_member_key, linearized_class,
 };
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration,
@@ -55,6 +57,7 @@ pub use members::{
     ClassMembers, FreeFunction, Member, MemberFlags, MemberKind, MemberSignature, MemberTree,
     ParameterSignature, TraitAdaptation, TraitUse, Visibility,
 };
+pub use plugin::PluginIdentity;
 pub use queries::{ast_id_map, item_tree, member_tree, semantic_diagnostics};
 pub use reference_checks::{
     ALLOCATED_IDENTIFIERS, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS,
@@ -65,3 +68,7 @@ pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution_records};
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};
+pub use virtual_symbols::{
+    VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
+    VirtualSymbolRegistration, VirtualSymbolRegistry,
+};
