@@ -42,6 +42,14 @@ pub struct Invocation<'db> {
 /// `celerrate_types` (the fixpoint of plan 5) — a provider never
 /// controls termination. Implementations must be deterministic and
 /// monotone; `None` falls back to the declared or inferred type.
+///
+/// Contributions feed fixpoint iteration: a provider is expected to
+/// answer monotonically with respect to its argument types (a wider
+/// invocation never yields a strictly narrower answer). The
+/// expectation is documented, not enforced — a non-convergent
+/// contribution hits the iteration budget and the result widens to
+/// `mixed`, the deterministic bailout: a plugin never controls
+/// termination.
 pub trait DynamicTypeProvider: Send + Sync {
     /// All symbols this provider claims to handle. Used for
     /// overlap detection at registration time.

@@ -908,4 +908,115 @@ mod tests {
         // this same Call arm (which reuses `apply_by_reference`).
         assert_eq!(return_display(&fixture, 3), "int");
     }
+
+    #[test]
+    fn function_calls_take_declared_returns_and_resolve_through_the_namespace() {
+        let fixture = fixture(&["<?php namespace App;
+            function g(): string { return 'x'; }
+            function f() { return g(); }"]);
+        // Numbering: the namespace declaration is itself a numbered
+        // item (namespace = 0, g = 1, f = 2 — the same convention as
+        // `body_owner_resolves_free_functions_and_methods` above).
+        assert_eq!(return_display(&fixture, 2), "string");
+        let file = fixture.handles[0];
+        let body = body_query(&fixture, 2);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.edge_counts.declared_return_edges, 1);
+    }
+
+    fn fake_identity(name: &str) -> celerrate_semantics::PluginIdentity {
+        celerrate_semantics::PluginIdentity {
+            name: name.to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        }
+    }
+
+    fn register_fake_provider(fixture: &Fixture) {
+        use crate::{
+            DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, Invocation, SymbolClaim,
+        };
+
+        #[derive(Debug)]
+        struct FakeMaker;
+
+        impl crate::DynamicTypeProvider for FakeMaker {
+            fn claims(&self) -> Vec<SymbolClaim> {
+                vec![SymbolClaim::Function {
+                    key: "maker".to_owned(),
+                }]
+            }
+
+            fn return_type<'db>(
+                &self,
+                db: &'db dyn salsa::Database,
+                _invocation: &Invocation<'db>,
+            ) -> Option<crate::TypeId<'db>> {
+                Some(crate::TypeId::int(db))
+            }
+        }
+
+        let _ = DynamicTypeProviderRegistry::builder(vec![DynamicTypeProviderRegistration {
+            identity: fake_identity("fake-maker"),
+            provider: std::sync::Arc::new(FakeMaker),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    #[test]
+    fn a_dynamic_provider_claim_answers_first_and_counts() {
+        let fixture = fixture(&["<?php function maker(): string { return 'x'; }
+            function f() { return maker(); }"]);
+        register_fake_provider(&fixture);
+        assert_eq!(return_display(&fixture, 1), "int");
+        let file = fixture.handles[0];
+        let body = body_query(&fixture, 1);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.edge_counts.provider_edges, 1);
+        assert_eq!(inferred.edge_counts.declared_return_edges, 0);
+    }
+
+    #[test]
+    fn closures_and_arrows_type_as_callables_and_invoke() {
+        let fixture = fixture(&["<?php
+            function declared() { $g = function (): int { return 1; }; return $g(); }
+            function inferred() { $g = function () { return 'a'; }; return $g(); }
+            function captured() { $x = 'a'; $g = fn () => $x; return $g(); }"]);
+        assert_eq!(return_display(&fixture, 0), "int");
+        assert_eq!(return_display(&fixture, 1), "'a'");
+        assert_eq!(return_display(&fixture, 2), "'a'");
+    }
+
+    #[test]
+    fn first_class_callables_project_the_declared_signature() {
+        let fixture = fixture(&["<?php function g(int $n): string { return 'x'; }
+            function f() { $r = g(...); return $r(); }"]);
+        assert_eq!(return_display(&fixture, 1), "string");
+    }
+
+    #[test]
+    fn function_by_reference_arguments_write_back() {
+        let fixture = fixture(&["<?php function fill(array &$out): void {}
+            function f() { $x = null; fill($x); return $x; }"]);
+        assert_eq!(return_display(&fixture, 1), "array<int|string, mixed>");
+    }
 }

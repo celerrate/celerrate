@@ -25,7 +25,9 @@ use celerrate_semantics::{
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
 
-use crate::declared::{DeclaredSignature, Trust, declared_member_signature};
+use crate::declared::{
+    DeclaredSignature, Trust, declared_function_signature, declared_member_signature,
+};
 use crate::inference::InterproceduralEdgeCounts;
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
@@ -569,6 +571,168 @@ impl<'db> Walker<'db, '_, '_> {
                         .unwrap_or_else(|| TypeId::mixed(db)),
                 );
             }
+        }
+    }
+
+    /// The folded Function-space key a written callee resolves to,
+    /// and whether a source declaration exists (the inferred-return
+    /// gate: only source bodies can be inferred). Mirrors the
+    /// reference checks' own resolution (`resolve_name`): the
+    /// namespaced spelling first, the global fallback last, the first
+    /// existing candidate wins (source, then stubs), the last
+    /// candidate as the never-resolves fallback (so a provider claim
+    /// on an undeclared helper still matches a deterministic key).
+    /// Every candidate is folded before the lookup: `SymbolQuery`'s key
+    /// (like `FunctionQuery`'s) is pre-folded, and `resolve_candidates`
+    /// itself answers case-preserved spellings.
+    fn resolved_function_key(&self, written: &str) -> (String, bool) {
+        let db = self.db();
+        let candidates = celerrate_semantics::resolve_candidates(
+            written,
+            celerrate_semantics::SymbolSpace::Function,
+            &self.context.namespace,
+            &self.context.tables,
+        );
+        let folded: Vec<String> = candidates
+            .iter()
+            .map(|candidate| {
+                celerrate_semantics::folded_symbol_key(
+                    celerrate_semantics::SymbolSpace::Function,
+                    candidate,
+                )
+            })
+            .collect();
+        for key in &folded {
+            let query = celerrate_semantics::SymbolQuery::new(
+                db,
+                celerrate_semantics::SymbolSpace::Function,
+                key.clone(),
+            );
+            if celerrate_semantics::lookup_function_declaration(db, self.context.files, query)
+                .is_some()
+            {
+                return (key.clone(), true);
+            }
+        }
+        for key in &folded {
+            if celerrate_semantics::stub_symbol_table(
+                db,
+                self.context.stubs,
+                self.context.configuration,
+            )
+            .lookup(celerrate_semantics::SymbolSpace::Function, key)
+            .is_some()
+            {
+                return (key.clone(), false);
+            }
+        }
+        (
+            folded
+                .into_iter()
+                .last()
+                .unwrap_or_else(|| written.trim_start_matches('\\').to_ascii_lowercase()),
+            false,
+        )
+    }
+
+    /// Decision 3, first tier: a provider that claims the callee
+    /// answers, widened at the consumption boundary — a plugin never
+    /// controls termination.
+    fn provider_return(
+        &mut self,
+        claim: crate::dynamic_type_provider::SymbolClaim,
+        receiver_type: Option<TypeId<'db>>,
+        argument_types: &[TypeId<'db>],
+    ) -> Option<TypeId<'db>> {
+        let db = self.db();
+        let registry = crate::dynamic_type_provider::DynamicTypeProviderRegistry::try_get(db)?;
+        for registration in registry.registrations(db) {
+            if !registration.provider.claims().contains(&claim) {
+                continue;
+            }
+            let invocation = crate::dynamic_type_provider::Invocation {
+                claim: claim.clone(),
+                receiver_type,
+                argument_types: argument_types.to_vec(),
+            };
+            if let Some(answer) = registration.provider.return_type(db, &invocation) {
+                self.edge_counts.provider_edges += 1;
+                return Some(crate::widening::capped_child(db, answer));
+            }
+        }
+        None
+    }
+
+    /// Decision 3, tiers two and three, for a named function call.
+    /// Task 10 replaces the `mixed` fallback with the fixpoint.
+    fn function_call_result(&mut self, key: &str, source_exists: bool) -> TypeId<'db> {
+        let db = self.db();
+        let declared = declared_function_signature(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            crate::declared::FunctionQuery::new(db, key.to_owned()),
+        );
+        if let Some(signature) = &declared
+            && self.declared_present(signature)
+        {
+            self.edge_counts.declared_return_edges += 1;
+            return signature.value_type;
+        }
+        let _ = source_exists;
+        TypeId::mixed(db)
+    }
+
+    /// Task 9(f): a provider consulted for a method call before the
+    /// declared tier, when the receiver resolves to exactly one key
+    /// (an ambiguous union receiver never reaches a provider — the
+    /// same conservative stance the by-reference write-back channel
+    /// already takes). A `Some` answer wins the call outright; the
+    /// declared-tier edge is not also counted.
+    fn method_call_result_for_keys_with_provider(
+        &mut self,
+        keys: &[String],
+        receiver: TypeId<'db>,
+        name: &str,
+        argument_types: &[TypeId<'db>],
+    ) -> (TypeId<'db>, Option<DeclaredSignature<'db>>) {
+        if keys.len() == 1
+            && let Some(class_key) = keys.first().cloned()
+        {
+            let method_key = folded_member_key(MemberKind::Method, name);
+            if let Some(answer) = self.provider_return(
+                crate::dynamic_type_provider::SymbolClaim::Method {
+                    class_key,
+                    method_key,
+                },
+                Some(receiver),
+                argument_types,
+            ) {
+                let mut signatures = self.method_signatures(keys, name);
+                let signature = (signatures.len() == 1).then(|| signatures.remove(0));
+                return (answer, signature);
+            }
+        }
+        self.method_call_result_for_keys(keys, receiver, name)
+    }
+
+    /// The provider-aware sibling of [`Self::method_call_result`],
+    /// resolving the receiver's keys itself.
+    fn method_call_result_with_provider(
+        &mut self,
+        receiver: TypeId<'db>,
+        name: &str,
+        argument_types: &[TypeId<'db>],
+    ) -> (TypeId<'db>, Option<DeclaredSignature<'db>>) {
+        match self.receiver_parts(receiver) {
+            Some(keys) => self.method_call_result_for_keys_with_provider(
+                &keys,
+                receiver,
+                name,
+                argument_types,
+            ),
+            None => (TypeId::mixed(self.db()), None),
         }
     }
 
@@ -1389,10 +1553,12 @@ impl<'db> Walker<'db, '_, '_> {
                             receiver_type
                         };
                         self.record(callee, TypeId::mixed(db));
-                        // Task 9's provider tier reads the argument
-                        // types; until then they type for the table.
-                        let _argument_types = self.typed_arguments(&arguments, environment);
-                        let (of, signature) = self.method_call_result(resolving, &name);
+                        let argument_types = self.typed_arguments(&arguments, environment);
+                        let (of, signature) = self.method_call_result_with_provider(
+                            resolving,
+                            &name,
+                            &argument_types,
+                        );
                         // Order is load-bearing: the receiver and
                         // arguments were typed under the pre-call
                         // environment above; the kill runs after, and
@@ -1411,11 +1577,16 @@ impl<'db> Walker<'db, '_, '_> {
                     }) => {
                         let (subject_type, keys) = self.scoped_subject(subject, environment);
                         self.record(callee, TypeId::mixed(db));
-                        let _argument_types = self.typed_arguments(&arguments, environment);
+                        let argument_types = self.typed_arguments(&arguments, environment);
                         let (of, signature) = match keys {
                             Some(keys) => {
                                 let receiver = subject_type;
-                                self.method_call_result_for_keys(&keys, receiver, &name)
+                                self.method_call_result_for_keys_with_provider(
+                                    &keys,
+                                    receiver,
+                                    &name,
+                                    &argument_types,
+                                )
                             }
                             None => (TypeId::mixed(db), None),
                         };
@@ -1425,33 +1596,94 @@ impl<'db> Walker<'db, '_, '_> {
                         }
                         of
                     }
-                    other => {
-                        // Task 9: named function calls and callable
-                        // values. Until then: walk and stay silent.
-                        self.expression(callee, environment);
-                        self.typed_arguments(&arguments, environment);
+                    Some(BodyExpression::NamedReference { text }) => {
+                        self.record(callee, TypeId::mixed(db));
+                        let argument_types = self.typed_arguments(&arguments, environment);
+                        let (key, source_exists) = self.resolved_function_key(&text);
                         // `extract()` rewrites every local from its
                         // array argument's keys: an aggressive sweep on
-                        // top of the general kill below (this fall-through
-                        // spot survives Task 9's rewrite of this arm).
-                        if let Some(BodyExpression::NamedReference { text }) = other {
-                            let name = text.strip_prefix('\\').unwrap_or(text.as_str());
-                            if name.eq_ignore_ascii_case("extract") {
-                                for subject in environment.subjects() {
-                                    if matches!(subject, NarrowingSubject::Local { .. }) {
-                                        environment.remove(&subject);
-                                    }
+                        // top of the general kill below.
+                        let name = text.strip_prefix('\\').unwrap_or(text.as_str());
+                        if name.eq_ignore_ascii_case("extract") {
+                            for subject in environment.subjects() {
+                                if matches!(subject, NarrowingSubject::Local { .. }) {
+                                    environment.remove(&subject);
                                 }
                             }
                         }
+                        let of = self
+                            .provider_return(
+                                crate::dynamic_type_provider::SymbolClaim::Function {
+                                    key: key.clone(),
+                                },
+                                None,
+                                &argument_types,
+                            )
+                            .unwrap_or_else(|| self.function_call_result(&key, source_exists));
+                        let declared = declared_function_signature(
+                            db,
+                            self.context.files,
+                            self.context.stubs,
+                            self.context.configuration,
+                            crate::declared::FunctionQuery::new(db, key),
+                        );
                         self.kill_property_bindings(environment);
-                        TypeId::mixed(db)
+                        if let Some(signature) = declared {
+                            self.apply_by_reference(&signature.parameters, &arguments, environment);
+                        }
+                        of
+                    }
+                    _ => {
+                        // A callable value: a variable, an array
+                        // `[obj, 'method']` shape, an invocation result
+                        // — anything not statically a named or member
+                        // callee. `callable_return` invokes through the
+                        // callable-typed value (Decision 3's final,
+                        // dynamic-shape tier); an opaque or non-callable
+                        // value stays silent.
+                        let callee_type = self.expression(callee, environment);
+                        self.typed_arguments(&arguments, environment);
+                        self.kill_property_bindings(environment);
+                        callee_type
+                            .callable_return(db)
+                            .unwrap_or_else(|| TypeId::mixed(db))
                     }
                 }
             }
             BodyExpression::CallableReference { callee } => {
-                self.expression(callee, environment);
-                TypeId::mixed(db)
+                match self.context.ir.expression(callee).cloned() {
+                    Some(BodyExpression::NamedReference { text }) => {
+                        self.record(callee, TypeId::mixed(db));
+                        let (key, source_exists) = self.resolved_function_key(&text);
+                        self.projected_callable_of_function(&key, source_exists)
+                    }
+                    Some(BodyExpression::MemberAccess {
+                        receiver,
+                        member: MemberReference::Named { name },
+                        ..
+                    }) => {
+                        let receiver_type = self.expression(receiver, environment);
+                        self.record(callee, TypeId::mixed(db));
+                        self.projected_callable_of_method(receiver_type, &name)
+                    }
+                    Some(BodyExpression::ScopedAccess {
+                        subject,
+                        member: MemberReference::Named { name },
+                    }) => {
+                        let (subject_type, keys) = self.scoped_subject(subject, environment);
+                        self.record(callee, TypeId::mixed(db));
+                        match keys {
+                            Some(keys) => {
+                                self.projected_callable_of_keys(&keys, subject_type, &name)
+                            }
+                            None => TypeId::mixed(db),
+                        }
+                    }
+                    _ => {
+                        self.expression(callee, environment);
+                        TypeId::mixed(db)
+                    }
+                }
             }
             BodyExpression::New { class, arguments } => {
                 let of = match &class {
@@ -1496,34 +1728,71 @@ impl<'db> Walker<'db, '_, '_> {
                 let index_type = index.map(|index| self.expression(index, environment));
                 operators::index_type(db, subject_type, index_type)
             }
-            BodyExpression::Closure { body, uses, .. } => {
-                // Task 9 types closures and seeds captures; the inner
-                // body is walked now so the table covers its arena.
+            BodyExpression::Closure {
+                parameters,
+                uses,
+                return_type_text,
+                is_static: _,
+                by_reference: _,
+                body,
+            } => {
                 let mut inner = Environment::new();
-                self.statements_nested(&body, &mut inner);
-                // `use (&$x)`: the local is aliased into the closure's
-                // scope for as long as the closure lives, unknowable
-                // without alias analysis — degrade it now (decision 10).
                 for capture in &uses {
+                    let subject = NarrowingSubject::Local {
+                        name: capture.name.clone(),
+                    };
                     if capture.by_reference {
-                        environment.bind(
-                            NarrowingSubject::Local {
-                                name: capture.name.clone(),
-                            },
-                            TypeId::mixed(db),
-                        );
+                        // `use (&$x)`: the local is aliased into the
+                        // closure's scope for as long as the closure
+                        // lives, unknowable without alias analysis —
+                        // degrade both sides now (decision 10).
+                        inner.bind(subject.clone(), TypeId::mixed(db));
+                        environment.bind(subject, TypeId::mixed(db));
+                    } else {
+                        let captured = self.subject_type(environment, &subject);
+                        inner.bind(subject, captured);
                     }
                 }
+                self.seed_written_parameters(&parameters, &mut inner);
+                let (returns, saw_yield, end_reachable) =
+                    self.nested_returns(|walker, env| walker.statements(&body, env), &mut inner);
                 // Closure creation may run arbitrary code (decision 10).
                 self.kill_property_bindings(environment);
-                TypeId::mixed(db)
+                self.closure_type(
+                    &parameters,
+                    return_type_text.as_deref(),
+                    returns,
+                    saw_yield,
+                    end_reachable,
+                )
             }
-            BodyExpression::ArrowFunction { body, .. } => {
+            BodyExpression::ArrowFunction {
+                parameters,
+                return_type_text,
+                is_static: _,
+                by_reference: _,
+                body,
+            } => {
+                // Arrow functions capture the whole scope by value.
                 let mut inner = environment.clone();
-                let _ = self.expression_nested(body, &mut inner);
+                self.seed_written_parameters(&parameters, &mut inner);
+                let mut returned: Vec<TypeId<'db>> = Vec::new();
+                let (_, saw_yield, _) = self.nested_returns(
+                    |walker, env| {
+                        let of = walker.expression(body, env);
+                        returned.push(of);
+                    },
+                    &mut inner,
+                );
                 // Decision 10: closure creation kills property bindings.
                 self.kill_property_bindings(environment);
-                TypeId::mixed(db)
+                self.closure_type(
+                    &parameters,
+                    return_type_text.as_deref(),
+                    returned,
+                    saw_yield,
+                    false,
+                )
             }
         };
         self.record(id, of)
@@ -1787,27 +2056,200 @@ impl<'db> Walker<'db, '_, '_> {
         Some((subject, target))
     }
 
-    /// Walks a nested body (closure) without contributing its
-    /// `return` statements to the enclosing body's return type.
-    fn statements_nested(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
+    /// Walks a nested body (a closure or arrow function) with its own
+    /// return accumulator, so its `return`/`yield` never leak into the
+    /// enclosing body's return type; answers the returns it collected,
+    /// whether it yielded, and whether its end is reachable (a
+    /// closure's implicit-null fall-through).
+    fn nested_returns(
+        &mut self,
+        walk: impl FnOnce(&mut Self, &mut Environment<'db>),
+        environment: &mut Environment<'db>,
+    ) -> (Vec<TypeId<'db>>, bool, bool) {
         let saved_returns = std::mem::take(&mut self.returns);
-        let saved_yield = self.saw_yield;
-        self.statements(list, environment);
-        self.returns = saved_returns;
-        self.saw_yield = saved_yield;
+        let saved_yield = std::mem::replace(&mut self.saw_yield, false);
+        walk(self, environment);
+        let inner_returns = std::mem::replace(&mut self.returns, saved_returns);
+        let inner_yield = std::mem::replace(&mut self.saw_yield, saved_yield);
+        (inner_returns, inner_yield, environment.is_reachable())
     }
 
-    fn expression_nested(
+    /// The callable type of a closure or arrow function: parameters
+    /// from the written signature (lowered at the declaring site, the
+    /// native `= null` implicit nullability included), the declared
+    /// return text when present, the inner returns joined otherwise.
+    fn closure_type(
         &mut self,
-        id: ExpressionId,
-        environment: &mut Environment<'db>,
+        parameters: &[celerrate_semantics::ParameterSignature],
+        return_type_text: Option<&str>,
+        returns: Vec<TypeId<'db>>,
+        saw_yield: bool,
+        end_reachable: bool,
     ) -> TypeId<'db> {
-        let saved_returns = std::mem::take(&mut self.returns);
-        let saved_yield = self.saw_yield;
-        let of = self.expression(id, environment);
-        self.returns = saved_returns;
-        self.saw_yield = saved_yield;
-        of
+        let db = self.db();
+        let site = crate::declared::NameSite::Source {
+            namespace: &self.context.namespace,
+            tables: &self.context.tables,
+        };
+        let callable_parameters = parameters
+            .iter()
+            .map(|parameter| {
+                let mut parameter_type = parameter
+                    .type_text
+                    .as_deref()
+                    .and_then(|text| crate::declared::lower_written_text(db, &site, text))
+                    .unwrap_or_else(|| TypeId::mixed(db));
+                if parameter.default_text.as_deref() == Some("null") {
+                    parameter_type = TypeId::union(db, [parameter_type, TypeId::null(db)]);
+                }
+                crate::representation::CallableParameter {
+                    parameter_type,
+                    optional: parameter.default_text.is_some(),
+                    variadic: parameter.variadic,
+                    by_reference: parameter.by_reference,
+                }
+            })
+            .collect();
+        let return_type = return_type_text
+            .and_then(|text| crate::declared::lower_written_text(db, &site, text))
+            .unwrap_or_else(|| {
+                if saw_yield {
+                    return TypeId::class(db, "Generator", vec![]);
+                }
+                let joined = returns
+                    .into_iter()
+                    .reduce(|left, right| join(db, left, right));
+                match (joined, end_reachable) {
+                    (Some(joined), true) => join(db, joined, TypeId::null(db)),
+                    (None, true) => TypeId::null(db),
+                    (Some(joined), false) => joined,
+                    (None, false) => TypeId::never(db),
+                }
+            });
+        TypeId::callable(db, callable_parameters, return_type)
+    }
+
+    /// Seeds a closure or arrow function's own parameters into its
+    /// inner environment: the closure-side sibling of the per-body
+    /// `seeded_parameters` in `inference.rs` — written texts, not
+    /// declared queries, because a closure has no `FunctionQuery`
+    /// identity of its own.
+    fn seed_written_parameters(
+        &self,
+        parameters: &[celerrate_semantics::ParameterSignature],
+        environment: &mut Environment<'db>,
+    ) {
+        let db = self.db();
+        let site = crate::declared::NameSite::Source {
+            namespace: &self.context.namespace,
+            tables: &self.context.tables,
+        };
+        for parameter in parameters {
+            let mut of = parameter
+                .type_text
+                .as_deref()
+                .and_then(|text| crate::declared::lower_written_text(db, &site, text))
+                .unwrap_or_else(|| TypeId::mixed(db));
+            if parameter.default_text.as_deref() == Some("null") {
+                of = TypeId::union(db, [of, TypeId::null(db)]);
+            }
+            if parameter.variadic {
+                of = TypeId::list(db, of);
+            }
+            environment.bind(
+                NarrowingSubject::Local {
+                    name: parameter.name.clone(),
+                },
+                of,
+            );
+        }
+    }
+
+    /// Task 9(e): a callee's declared signature projected into a
+    /// callable type, shared by every first-class-callable form. A
+    /// `self`/`static` return placeholder substitutes the receiver
+    /// (decision 6); the parameters are never substituted (plan 6
+    /// revisits generic callables).
+    fn projected_callable(
+        &mut self,
+        signature: Option<DeclaredSignature<'db>>,
+        receiver: Option<TypeId<'db>>,
+        return_fallback: TypeId<'db>,
+    ) -> TypeId<'db> {
+        let db = self.db();
+        let Some(signature) = signature else {
+            return TypeId::mixed(db);
+        };
+        let parameters = signature
+            .parameters
+            .iter()
+            .map(|parameter| crate::representation::CallableParameter {
+                parameter_type: parameter
+                    .parameter_type
+                    .unwrap_or_else(|| TypeId::mixed(db)),
+                optional: parameter.optional,
+                variadic: parameter.variadic,
+                by_reference: parameter.by_reference,
+            })
+            .collect();
+        let mut return_type = if self.declared_present(&signature) {
+            self.edge_counts.declared_return_edges += 1;
+            signature.value_type
+        } else {
+            return_fallback
+        };
+        if let Some(receiver) = receiver {
+            return_type = self.substitute_receiver(return_type, receiver);
+        }
+        TypeId::callable(db, parameters, return_type)
+    }
+
+    /// A named function's declared signature, projected (`g(...)`).
+    fn projected_callable_of_function(
+        &mut self,
+        key: &str,
+        _source_exists: bool, // Task 10 threads this into the inferred fallback
+    ) -> TypeId<'db> {
+        let db = self.db();
+        let signature = declared_function_signature(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            crate::declared::FunctionQuery::new(db, key.to_owned()),
+        );
+        self.projected_callable(signature, None, TypeId::mixed(db))
+    }
+
+    /// A method's declared signature on a resolved receiver, projected
+    /// (`$obj->method(...)`); `mixed` for an opaque or union receiver.
+    fn projected_callable_of_method(
+        &mut self,
+        receiver_type: TypeId<'db>,
+        name: &str,
+    ) -> TypeId<'db> {
+        let db = self.db();
+        let keys = match self.receiver_parts(receiver_type.without_null(db)) {
+            Some(keys) => keys,
+            None => return TypeId::mixed(db),
+        };
+        self.projected_callable_of_keys(&keys, receiver_type, name)
+    }
+
+    /// A method's declared signature across resolved keys, projected
+    /// (`Foo::method(...)`, `self::method(...)`); a union receiver's
+    /// differing signatures is ambiguous and answers `mixed`.
+    fn projected_callable_of_keys(
+        &mut self,
+        keys: &[String],
+        receiver: TypeId<'db>,
+        name: &str,
+    ) -> TypeId<'db> {
+        let db = self.db();
+        let mut signatures = self.method_signatures(keys, name);
+        // One key, one signature: more is a union receiver, silence.
+        let signature = (signatures.len() == 1).then(|| signatures.remove(0));
+        self.projected_callable(signature, Some(receiver), TypeId::mixed(db))
     }
 
     fn string_parts(&mut self, parts: &[StringPart], environment: &mut Environment<'db>) {
