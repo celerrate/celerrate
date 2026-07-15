@@ -75,7 +75,15 @@ fn register_bridge(db: &celerrate_db::testing::TestDatabase) {
     let _ = celerrate_types::TypeSyntaxRegistry::builder(vec![
         celerrate_types::TypeSyntaxRegistration {
             identity: identity.clone(),
-            implementation: bridge,
+            implementation: bridge.clone(),
+        },
+    ])
+    .durability(salsa::Durability::HIGH)
+    .new(db);
+    let _ = celerrate_semantics::VirtualSymbolRegistry::builder(vec![
+        celerrate_semantics::VirtualSymbolRegistration {
+            identity,
+            provider: bridge,
         },
     ])
     .durability(salsa::Durability::HIGH)
@@ -201,4 +209,61 @@ fn a_function_docblock_flows_through_the_function_seam() {
         celerrate_types::TypeId::int(&fixture.db)
     );
     assert_eq!(signature.value_trust, celerrate_types::Trust::Refined);
+}
+
+#[test]
+fn a_property_annotation_declares_a_member_that_exists_and_types() {
+    let fixture = fixture(&["<?php /** @property string $title */ class Post {}"]);
+    register_bridge(&fixture.db);
+    let query = member_query(&fixture, "Post", MemberKind::Property, "title");
+    let resolution = celerrate_semantics::lookup_member(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    assert!(matches!(
+        resolution,
+        Some(celerrate_semantics::MemberResolution::Virtual { .. }),
+    ));
+    let signature = celerrate_types::declared_member_signature(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    )
+    .unwrap();
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::string(&fixture.db)
+    );
+    assert_eq!(signature.value_trust, celerrate_types::Trust::Refined);
+}
+
+#[test]
+fn a_method_annotation_declares_a_typed_virtual_method() {
+    let fixture = fixture(&[
+        "<?php class User {} /** @method static User find(int $id) */ class Repository {}",
+    ]);
+    register_bridge(&fixture.db);
+    let query = member_query(&fixture, "Repository", MemberKind::Method, "find");
+    let signature = celerrate_types::declared_member_signature(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    )
+    .unwrap();
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::class(&fixture.db, "User", Vec::new()),
+    );
+    assert_eq!(signature.parameters.len(), 1);
+    assert_eq!(
+        signature.parameters[0].parameter_type,
+        Some(celerrate_types::TypeId::int(&fixture.db)),
+    );
 }
