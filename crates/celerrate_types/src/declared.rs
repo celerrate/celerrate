@@ -325,10 +325,48 @@ pub fn declared_member_signature<'db>(
                 &member,
             ));
         }
-        // A later task types virtual members through the type-syntax
-        // registry; for now a virtual resolution answers the same as an
-        // absent one (decision folded in from task 3's review).
-        MemberResolution::Virtual { .. } => return None,
+        // A virtual member's whole type comes from its annotation text,
+        // resolved through the type-syntax registry at the owner's
+        // site. There is no native declaration: refinement runs
+        // against `mixed`, so any parsed annotation holds
+        // (`Trust::Refined`) and an absent or unparseable one stays
+        // `(mixed, NativeOnly)`.
+        MemberResolution::Virtual { member, owner } => {
+            let mixed = TypeId::mixed(db);
+            return Some(with_declaring_site(db, files, &owner, |site| {
+                let annotation = member
+                    .type_text
+                    .as_deref()
+                    .and_then(|text| crate::type_syntax::type_of_expression(db, site, text));
+                let (value_type, value_trust) =
+                    refine(db, files, stubs, configuration, mixed, annotation);
+                let parameters = member
+                    .parameters
+                    .iter()
+                    .map(|parameter| {
+                        let annotation = parameter.type_text.as_deref().and_then(|text| {
+                            crate::type_syntax::type_of_expression(db, site, text)
+                        });
+                        let (parameter_type, trust) =
+                            refine(db, files, stubs, configuration, mixed, annotation);
+                        DeclaredParameter {
+                            name: parameter.name.clone(),
+                            parameter_type: Some(parameter_type),
+                            trust,
+                            optional: parameter.optional,
+                            variadic: parameter.variadic,
+                            by_reference: false,
+                        }
+                    })
+                    .collect();
+                DeclaredSignature {
+                    parameters,
+                    value_type,
+                    value_trust,
+                    by_reference: false,
+                }
+            }));
+        }
     };
     let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
@@ -1065,7 +1103,9 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{
-        MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key, folded_symbol_key,
+        MemberKind, MemberQuery, PluginIdentity, SymbolSpace, VirtualMember, VirtualMemberKind,
+        VirtualParameter, VirtualSymbolProvider, VirtualSymbolRegistration, VirtualSymbolRegistry,
+        folded_member_key, folded_symbol_key,
     };
     use celerrate_source::FileId;
     use celerrate_stubs::{
@@ -1134,8 +1174,10 @@ mod tests {
 
     /// Registers a `TypeSyntax` fake that parses any docblock
     /// containing `@return` to `return_type: Some(int)`; everything
-    /// else in `ParsedAnnotations` stays default. Duplicated from
-    /// `type_syntax`'s test module `FakeSyntax` (recorded debt: no
+    /// else in `ParsedAnnotations` stays default. Its bare-expression
+    /// path answers "int" -> int and refuses anything else, covering
+    /// both the parsed and unparseable virtual-member cases. Duplicated
+    /// from `type_syntax`'s test module `FakeSyntax` (recorded debt: no
     /// shared test-support module per the design).
     fn register_fake_syntax(fixture: &Fixture) {
         let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
@@ -1168,6 +1210,47 @@ mod tests {
         }
     }
 
+    /// A provider that answers its fixed member set only when the
+    /// class docblock carries `@fake`. Duplicated from
+    /// `celerrate_semantics`'s own test modules (`linearize.rs`,
+    /// `member_lookup.rs`, `virtual_symbols.rs`) — recorded debt, no
+    /// shared test-support module exists across crates.
+    #[derive(Debug)]
+    struct FakeProvider {
+        members: Vec<VirtualMember>,
+    }
+
+    impl VirtualSymbolProvider for FakeProvider {
+        fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
+            if class_docblock.contains("@fake") {
+                self.members.clone()
+            } else {
+                Vec::new()
+            }
+        }
+    }
+
+    fn register_fake_virtual_provider(fixture: &Fixture, members: Vec<VirtualMember>) {
+        let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
+            identity: fake_identity("fake-virtual"),
+            provider: std::sync::Arc::new(FakeProvider { members }),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&fixture.db);
+    }
+
+    /// A non-static virtual property with an annotated type text and
+    /// no parameters.
+    fn virtual_property_with_text(name: &str, type_text: &str) -> VirtualMember {
+        VirtualMember {
+            kind: VirtualMemberKind::Property,
+            name: name.to_owned(),
+            is_static: false,
+            type_text: Some(type_text.to_owned()),
+            parameters: Vec::new(),
+        }
+    }
+
     #[derive(Debug)]
     struct FakeReturnSyntax;
 
@@ -1187,10 +1270,13 @@ mod tests {
         }
         fn parse_type_expression<'db>(
             &self,
-            _site: &AnnotationSite<'db, '_>,
-            _expression: &str,
+            site: &AnnotationSite<'db, '_>,
+            expression: &str,
         ) -> Option<TypeId<'db>> {
-            None
+            // Answers "int" -> int and refuses anything else, so tests
+            // exercising virtual-member typing can prove both the
+            // parsed and the unparseable path through this one fake.
+            (expression == "int").then(|| TypeId::int(site.database()))
         }
     }
 
@@ -2090,5 +2176,81 @@ mod tests {
             configuration,
         };
         assert!(function(&fixture, "futureOnly").is_none());
+    }
+
+    #[test]
+    fn a_virtual_property_types_through_the_type_syntax_registry() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(&fixture, vec![virtual_property_with_text("title", "int")]);
+        register_fake_syntax(&fixture); // parse_type_expression: "int" -> int
+        let query = member_query(&fixture, "Post", MemberKind::Property, "title");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::int(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::Refined);
+    }
+
+    #[test]
+    fn a_virtual_method_carries_its_annotated_parameters() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(
+            &fixture,
+            vec![VirtualMember {
+                kind: VirtualMemberKind::Method,
+                name: "find".to_owned(),
+                is_static: true,
+                type_text: Some("int".to_owned()),
+                parameters: vec![VirtualParameter {
+                    name: "id".to_owned(),
+                    type_text: Some("int".to_owned()),
+                    optional: false,
+                    variadic: false,
+                }],
+            }],
+        );
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "Post", MemberKind::Method, "find");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::int(&fixture.db));
+        assert_eq!(signature.parameters.len(), 1);
+        assert_eq!(signature.parameters[0].name, "id");
+        assert_eq!(
+            signature.parameters[0].parameter_type,
+            Some(TypeId::int(&fixture.db))
+        );
+    }
+
+    #[test]
+    fn an_unparseable_virtual_type_degrades_to_mixed_native_only() {
+        let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
+        register_fake_virtual_provider(
+            &fixture,
+            vec![virtual_property_with_text("title", "no<such>notation")],
+        );
+        register_fake_syntax(&fixture);
+        let query = member_query(&fixture, "Post", MemberKind::Property, "title");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::mixed(&fixture.db));
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
     }
 }

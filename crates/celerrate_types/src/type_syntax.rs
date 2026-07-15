@@ -137,9 +137,9 @@ pub(crate) fn annotations_for_docblock<'db>(
     ParsedAnnotations::default()
 }
 
-/// Registered order, first `Some` wins. Not yet called outside tests:
-/// the virtual-member payload path (a later task) wires this in.
-#[allow(dead_code)]
+/// Registered order, first `Some` wins. Wired into the virtual-member
+/// payload path (`declared::declared_member_signature`'s `Virtual`
+/// arm).
 pub(crate) fn type_of_expression<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
