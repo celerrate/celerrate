@@ -44,3 +44,17 @@ jobs:
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
       - run: sudo apt-get update && sudo apt-get install --yes hyperfine
       - run: cargo xtask bench --ceilings
+
+  phpdoc-cases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: target/phpdoc-parser
+          key: phpdoc-parser-${{ hashFiles('xtask/phpdoc-parser.pin') }}
+      - run: cargo xtask phpdoc-cases --check

@@ -1,0 +1,15 @@
+/**
+ * @template T of \Entity
+ * @param array{id: int, name?: string, ...<string, mixed>} $row
+ * @param class-string<T> $class
+ * @phpstan-param int<1, max> $limit
+ * @psalm-param non-empty-list<'a'|'b'> $choices
+ * @param callable(User, int=): ?string $mapper
+ * @return ($limit is 1 ? T : list<T>)
+ * @psalm-assert !null $row
+ * @phpstan-assert-if-true string $class
+ * @throws \RuntimeException|\LogicException
+ * @property Collection<covariant T> $items
+ * @method static Closure<U of T>(U): U pipe(callable(): U ...$stages)
+ * @psalm-pure
+ */

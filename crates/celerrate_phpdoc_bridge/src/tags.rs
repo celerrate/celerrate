@@ -2,104 +2,262 @@
 //! produced by the docblock lexer: `@param`, `@return`, `@var`,
 //! `@throws` feed [`MemberDocblock`]; `@property` (and its `-read` /
 //! `-write` variants) and `@method` feed the virtual-member vocabulary
-//! from `celerrate_plugin`. Loss is per construct, never per
-//! annotation: one unparseable tag drops, its siblings survive.
-
-use std::collections::HashSet;
+//! from `celerrate_plugin`. Tag contents parse a maximal type-expression
+//! prefix; trailing prose is free text. Loss is per construct, never per
+//! annotation: one unparseable tag drops, its siblings survive. Dialect
+//! classification and tier-aware slot resolution provide inter-dialect
+//! precedence: PHPStan-prefixed over Psalm-prefixed over bare, within a
+//! tier first parseable wins; `@throws` accumulates.
 
 use celerrate_plugin::{VirtualMember, VirtualMemberKind, VirtualParameter};
 
-use crate::{Tag, TypeExpression, parse_type_expression_text};
+use crate::dialect::{self, TagRole, TagTier};
+use crate::{Tag, TypeExpression, parse_type_expression_prefix};
 
 /// The standard tags a single member's docblock contributes:
-/// `@param`, `@return`, `@var`, `@throws`.
+/// `@param`, `@return`, `@var`, `@throws`, `@template`, `@assert` family.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemberDocblock {
     pub return_type: Option<TypeExpression>,
     pub value_type: Option<TypeExpression>,
     pub parameters: Vec<(String, TypeExpression)>,
     pub throws: Vec<TypeExpression>,
+    pub templates: Vec<TemplateDeclaration>,
+    pub assertions: Vec<AssertionDeclaration>,
 }
 
-/// Extracts `@param`/`@return`/`@var`/`@throws` from `tags`. Malformed
-/// tags are dropped individually; well-formed siblings survive: an
-/// unparseable `@return`/`@var` consumes nothing, so the slot takes
-/// the first parseable tag.
+/// One `@template` declaration: `T`, `T of Bound`, `T as Bound`
+/// (the Psalm keyword is a synonym). A `= Default` tail and the
+/// variance of `-covariant`/`-contravariant` variants are dropped
+/// (decision 6; recorded debt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateDeclaration {
+    pub name: String,
+    pub bound: Option<TypeExpression>,
+}
+
+/// One assertion tag (`@psalm-assert`, `@phpstan-assert` family):
+/// unresolved type expression pending plan 5's narrowing consumer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AssertionDeclaration {
+    pub subject: String,
+    pub asserted: TypeExpression,
+    pub polarity: celerrate_plugin::AssertionPolarity,
+    pub negated: bool,
+}
+
+/// Extracts the member slots under the tier rule (decision 8):
+/// PHPStan-prefixed over Psalm-prefixed over bare; within a tier the
+/// first parseable tag wins; `@param` resolves per parameter name;
+/// `@throws` and `@assert` family accumulate across tiers; `@template`
+/// resolves per declared name under the same tier rule.
 pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
-    let mut extracted = MemberDocblock::default();
-    let mut seen_parameters: HashSet<String> = HashSet::new();
+    let mut return_slot: Option<(TagTier, TypeExpression)> = None;
+    let mut value_slot: Option<(TagTier, TypeExpression)> = None;
+    let mut parameters: Vec<(String, TagTier, TypeExpression)> = Vec::new();
+    let mut throws = Vec::new();
+    let mut templates: Vec<(String, TagTier, TemplateDeclaration)> = Vec::new();
+    let mut extracted_assertions = Vec::new();
     for tag in tags {
-        match tag.name.as_str() {
-            "param" => {
-                if let Some(parameter) = parse_param_tag(&tag.content, &mut seen_parameters) {
-                    extracted.parameters.push(parameter);
+        let Some(classified) = dialect::classify(&tag.name) else {
+            continue;
+        };
+        match classified.role {
+            TagRole::Return => offer_value(&mut return_slot, classified.tier, &tag.content),
+            TagRole::Var => offer_value(&mut value_slot, classified.tier, &tag.content),
+            TagRole::Param => offer_parameter(&mut parameters, classified.tier, &tag.content),
+            TagRole::Throws => {
+                if let Some(expression) = value_type(&tag.content) {
+                    throws.push(expression);
                 }
             }
-            "return" => {
-                if extracted.return_type.is_none() {
-                    extracted.return_type = first_token_type(&tag.content);
+            TagRole::Template => offer_template(&mut templates, classified.tier, &tag.content),
+            TagRole::Assert(polarity) => {
+                if let Some(assertion) = parse_assert_tag(&tag.content, polarity) {
+                    extracted_assertions.push(assertion);
                 }
             }
-            "var" => {
-                if extracted.value_type.is_none() {
-                    extracted.value_type = first_token_type(&tag.content);
-                }
-            }
-            "throws" => {
-                if let Some(type_expression) = first_token_type(&tag.content) {
-                    extracted.throws.push(type_expression);
-                }
-            }
-            _ => {}
+            TagRole::Property | TagRole::Method | TagRole::Ignored => {}
         }
     }
-    extracted
+    MemberDocblock {
+        return_type: return_slot.map(|(_, expression)| expression),
+        value_type: value_slot.map(|(_, expression)| expression),
+        parameters: parameters
+            .into_iter()
+            .map(|(name, _, expression)| (name, expression))
+            .collect(),
+        throws,
+        templates: templates
+            .into_iter()
+            .map(|(_, _, declaration)| declaration)
+            .collect(),
+        assertions: extracted_assertions,
+    }
 }
 
-/// Extracts the virtual members declared by `@property` (and its
-/// `-read` / `-write` variants) and `@method` tags.
+/// A stronger tier replaces; the same or a weaker tier keeps the
+/// holder (first parseable within a tier). An unparseable candidate
+/// never touches the slot.
+fn offer_value(slot: &mut Option<(TagTier, TypeExpression)>, tier: TagTier, content: &str) {
+    if matches!(slot, Some((existing, _)) if *existing <= tier) {
+        return;
+    }
+    if let Some(expression) = value_type(content) {
+        *slot = Some((tier, expression));
+    }
+}
+
+/// Per-name slots in first-appearance order, so the output stays
+/// deterministic without a map.
+fn offer_parameter(
+    parameters: &mut Vec<(String, TagTier, TypeExpression)>,
+    tier: TagTier,
+    content: &str,
+) {
+    let Some((name, expression)) = parse_param_tag(content) else {
+        return;
+    };
+    match parameters
+        .iter_mut()
+        .find(|(existing, _, _)| *existing == name)
+    {
+        Some((_, existing_tier, existing_expression)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_expression = expression;
+            }
+        }
+        None => parameters.push((name, tier, expression)),
+    }
+}
+
+/// Per-name slots in first-appearance order (mirrors
+/// `offer_parameter`): a stronger tier replaces, the same or a weaker
+/// tier keeps the first declaration within that tier.
+fn offer_template(
+    templates: &mut Vec<(String, TagTier, TemplateDeclaration)>,
+    tier: TagTier,
+    content: &str,
+) {
+    let Some(declaration) = parse_template_tag(content) else {
+        return;
+    };
+    match templates
+        .iter_mut()
+        .find(|(existing, _, _)| *existing == declaration.name)
+    {
+        Some((_, existing_tier, existing_declaration)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_declaration = declaration;
+            }
+        }
+        None => templates.push((declaration.name.clone(), tier, declaration)),
+    }
+}
+
+/// `@template T [of|as Bound] [= Default]`.
+fn parse_template_tag(content: &str) -> Option<TemplateDeclaration> {
+    let trimmed = content.trim_start();
+    let name_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let name = trimmed.get(..name_end)?;
+    if !is_valid_identifier(name) {
+        return None;
+    }
+    let rest = trimmed.get(name_end..)?.trim_start();
+    let bound = match rest.strip_prefix("of").or_else(|| rest.strip_prefix("as")) {
+        Some(after_keyword) if after_keyword.starts_with(char::is_whitespace) => {
+            let (expression, _) = parse_type_expression_prefix(after_keyword)?;
+            Some(expression)
+        }
+        _ => None,
+    };
+    Some(TemplateDeclaration {
+        name: name.to_owned(),
+        bound,
+    })
+}
+
+/// `[!]Type $subject`: the negation applies to the asserted type; the
+/// subject travels verbatim. A `=`-prefixed content is Psalm's
+/// exact-assertion divergence: ignored without error.
+fn parse_assert_tag(
+    content: &str,
+    polarity: celerrate_plugin::AssertionPolarity,
+) -> Option<AssertionDeclaration> {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with('=') {
+        return None;
+    }
+    let (negated, rest) = match trimmed.strip_prefix('!') {
+        Some(rest) => (true, rest),
+        None => (false, trimmed),
+    };
+    let (asserted, consumed) = parse_type_expression_prefix(rest)?;
+    let remainder = rest.get(consumed..)?;
+    let subject = remainder.split_whitespace().next()?;
+    if !subject.starts_with('$') {
+        return None;
+    }
+    Some(AssertionDeclaration {
+        subject: subject.to_owned(),
+        asserted,
+        polarity,
+        negated,
+    })
+}
+
+/// Virtual members under the same tier rule, resolved per
+/// `(kind, name)`; the first declaration wins within a tier.
 pub fn extract_virtual_members(tags: &[Tag]) -> Vec<VirtualMember> {
-    let mut members = Vec::new();
+    let mut members: Vec<(TagTier, VirtualMember)> = Vec::new();
     for tag in tags {
-        match tag.name.as_str() {
-            "property" | "property-read" | "property-write" => {
-                if let Some(member) = parse_property_tag(&tag.content) {
-                    members.push(member);
+        let Some(classified) = dialect::classify(&tag.name) else {
+            continue;
+        };
+        let parsed = match classified.role {
+            TagRole::Property => parse_property_tag(&tag.content),
+            TagRole::Method => parse_method_tag(&tag.content),
+            _ => None,
+        };
+        let Some(member) = parsed else {
+            continue;
+        };
+        match members
+            .iter_mut()
+            .find(|(_, existing)| existing.kind == member.kind && existing.name == member.name)
+        {
+            Some((existing_tier, existing)) => {
+                if classified.tier < *existing_tier {
+                    *existing_tier = classified.tier;
+                    *existing = member;
                 }
             }
-            "method" => {
-                if let Some(member) = parse_method_tag(&tag.content) {
-                    members.push(member);
-                }
-            }
-            _ => {}
+            None => members.push((classified.tier, member)),
         }
     }
-    members
+    members.into_iter().map(|(_, member)| member).collect()
 }
 
-fn first_token_type(content: &str) -> Option<TypeExpression> {
-    let first = content.split_whitespace().next()?;
-    parse_type_expression_text(first)
+/// The tag's value slot: a maximal type-expression prefix; trailing
+/// prose is free text.
+fn value_type(content: &str) -> Option<TypeExpression> {
+    let (expression, _) = parse_type_expression_prefix(content)?;
+    Some(expression)
 }
 
-/// `@param [type] $name ...prose` (or `&$name` / `...$name` when the
-/// type is omitted, in which case there is nothing to contribute: the
-/// produced tuple has no slot for an untyped parameter). The first
-/// tag for a given parameter name wins; later duplicates are dropped.
-fn parse_param_tag(content: &str, seen: &mut HashSet<String>) -> Option<(String, TypeExpression)> {
-    let mut tokens = content.split_whitespace();
-    let first = tokens.next()?;
-    if first.starts_with("...$") || first.starts_with("&$") || first.starts_with('$') {
+/// `@param type $name ...prose` (or `&$name` / `...$name` when the
+/// type is omitted, in which case there is nothing to contribute).
+fn parse_param_tag(content: &str) -> Option<(String, TypeExpression)> {
+    let trimmed = content.trim_start();
+    if trimmed.starts_with('$') || trimmed.starts_with("...$") || trimmed.starts_with("&$") {
         return None;
     }
-    let type_expression = parse_type_expression_text(first)?;
-    let variable_token = tokens.next()?;
+    let (type_expression, consumed) = parse_type_expression_prefix(content)?;
+    let remainder = content.get(consumed..)?;
+    let variable_token = remainder.split_whitespace().next()?;
     let name = strip_variable_sigils(variable_token)?;
-    if seen.contains(&name) {
-        return None;
-    }
-    seen.insert(name.clone());
     Some((name, type_expression))
 }
 
@@ -117,18 +275,32 @@ fn strip_variable_sigils(token: &str) -> Option<String> {
     }
 }
 
-/// `@property[-read|-write] [type] $name`: a single `$name` token
-/// means untyped (the member still exists). `type_text` stores the
-/// raw token verbatim: unresolved text is the virtual-symbol
-/// contract, so it is not run through the expression parser here.
+/// `@property[-read|-write] [type] $name`: a leading `$name` means
+/// untyped (the member still exists), UNLESS that leading word is
+/// exactly `$this` — `$this` is a valid type (`TypeExpression::This`),
+/// not the property's own variable, so it falls through to the typed
+/// path below. `type_text` stores the consumed prefix verbatim:
+/// unresolved text is the virtual-symbol contract.
 fn parse_property_tag(content: &str) -> Option<VirtualMember> {
-    let tokens: Vec<&str> = content.split_whitespace().collect();
-    let (type_text, name_token) = match tokens.as_slice() {
-        [] => return None,
-        [name_token] => (None, *name_token),
-        [type_token, name_token, ..] => (Some((*type_token).to_owned()), *name_token),
-    };
-    let name = name_token.strip_prefix('$')?;
+    let first_word = content.split_whitespace().next()?;
+    if first_word != "$this"
+        && let Some(name) = first_word.strip_prefix('$')
+    {
+        if name.is_empty() {
+            return None;
+        }
+        return Some(VirtualMember {
+            kind: VirtualMemberKind::Property,
+            name: name.to_owned(),
+            is_static: false,
+            type_text: None,
+            parameters: Vec::new(),
+        });
+    }
+    let (_, consumed) = parse_type_expression_prefix(content)?;
+    let type_text = content.get(..consumed)?.trim().to_owned();
+    let remainder = content.get(consumed..)?;
+    let name = remainder.split_whitespace().next()?.strip_prefix('$')?;
     if name.is_empty() {
         return None;
     }
@@ -136,58 +308,108 @@ fn parse_property_tag(content: &str) -> Option<VirtualMember> {
         kind: VirtualMemberKind::Property,
         name: name.to_owned(),
         is_static: false,
-        type_text,
+        type_text: Some(type_text),
         parameters: Vec::new(),
     })
 }
 
-/// `@method [static] [type] name(parameters)`. No nested parentheses
-/// in 4a: a nested `(` or a missing `)` skips the tag. The name must
-/// be a valid identifier.
+/// `@method [static] [type] name(parameters)`. The return type is a
+/// dialect prefix taken verbatim; when the prefix turns out to be the
+/// method name itself (the next character is `(`), the method is
+/// untyped. The parameter segment ends at the matching parenthesis,
+/// so callable parameters nest.
 fn parse_method_tag(content: &str) -> Option<VirtualMember> {
-    let (before, after_open) = content.split_once('(')?;
-    let mut before_tokens: Vec<&str> = before.split_whitespace().collect();
-    let name_token = before_tokens.pop()?;
-    if !is_valid_identifier(name_token) {
-        return None;
-    }
-    // Only a LEADING "static" token is the staticness modifier: strip
-    // at most one from the front, then whatever remains (even a token
-    // spelled "static") is the return type.
-    let is_static = before_tokens.first() == Some(&"static");
-    if is_static {
-        before_tokens.remove(0);
-    }
-    let mut leftover = before_tokens.into_iter();
-    let type_text = match (leftover.next(), leftover.next()) {
-        (None, None) => None,
-        (Some(token), None) => Some(token.to_owned()),
-        _ => return None,
+    let trimmed = content.trim_start();
+    let (is_static, after_static) = match trimmed.strip_prefix("static") {
+        Some(rest) if rest.starts_with(char::is_whitespace) => (true, rest.trim_start()),
+        _ => (false, trimmed),
     };
-
-    let mut parameter_segment = String::new();
-    let mut closed = false;
-    for character in after_open.chars() {
-        if character == '(' {
-            return None;
+    let (type_text, rest) = match parse_type_expression_prefix(after_static) {
+        Some((_, consumed)) => {
+            let text = after_static.get(..consumed)?.trim();
+            let after_type = after_static.get(consumed..)?.trim_start();
+            if after_type.starts_with('(') {
+                (None, after_static)
+            } else {
+                (Some(text.to_owned()), after_type)
+            }
         }
-        if character == ')' {
-            closed = true;
-            break;
-        }
-        parameter_segment.push(character);
-    }
-    if !closed {
+        None => (None, after_static),
+    };
+    let open = rest.find('(')?;
+    let name = rest.get(..open)?.trim();
+    if !is_valid_identifier(name) {
         return None;
     }
-
+    let after_open = rest.get(open + 1..)?;
+    let (parameter_segment, _) = split_at_matching_parenthesis(after_open)?;
     Some(VirtualMember {
         kind: VirtualMemberKind::Method,
-        name: name_token.to_owned(),
+        name: name.to_owned(),
         is_static,
         type_text,
-        parameters: parse_method_parameters(&parameter_segment),
+        parameters: parse_method_parameters(parameter_segment),
     })
+}
+
+/// Splits `text` at the parenthesis matching an already-consumed `(`:
+/// the segment before it, and the remainder after it. `None` when
+/// unbalanced.
+fn split_at_matching_parenthesis(text: &str) -> Option<(&str, &str)> {
+    let mut depth = 0usize;
+    for (offset, character) in text.char_indices() {
+        match character {
+            '(' => depth += 1,
+            ')' => {
+                if depth == 0 {
+                    return Some((text.get(..offset)?, text.get(offset + 1..)?));
+                }
+                depth -= 1;
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn parse_method_parameters(segment: &str) -> Vec<VirtualParameter> {
+    split_top_level_commas(segment)
+        .into_iter()
+        .filter_map(parse_method_parameter)
+        .collect()
+}
+
+/// Top-level comma split, depth-aware across `()<>{}[]`, so callable
+/// signatures, generics, shapes, and array defaults ride inside one
+/// parameter chunk. A `>` that is part of `=>` or `->` (an array
+/// default's arrow, e.g. `['a' => 1]`) is not a closing angle
+/// bracket: it must not decrement `depth`, or a comma inside the
+/// default would wrongly read as top-level and split the parameter.
+fn split_top_level_commas(segment: &str) -> Vec<&str> {
+    let mut chunks = Vec::new();
+    let mut depth = 0i64;
+    let mut start = 0usize;
+    let mut previous_character: Option<char> = None;
+    for (offset, character) in segment.char_indices() {
+        match character {
+            '(' | '<' | '{' | '[' => depth += 1,
+            '>' if matches!(previous_character, Some('=' | '-')) => {}
+            ')' | '>' | '}' | ']' => depth -= 1,
+            ',' if depth == 0 => {
+                if let Some(chunk) = segment.get(start..offset) {
+                    chunks.push(chunk);
+                }
+                start = offset + 1;
+            }
+            _ => {}
+        }
+        previous_character = Some(character);
+    }
+    if let Some(chunk) = segment.get(start..) {
+        chunks.push(chunk);
+    }
+    chunks.retain(|chunk| !chunk.trim().is_empty());
+    chunks
 }
 
 fn is_valid_identifier(token: &str) -> bool {
@@ -201,25 +423,21 @@ fn is_valid_identifier(token: &str) -> bool {
     characters.all(|character| character.is_ascii_alphanumeric() || character == '_')
 }
 
-fn parse_method_parameters(segment: &str) -> Vec<VirtualParameter> {
-    if segment.trim().is_empty() {
-        return Vec::new();
-    }
-    segment
-        .split(',')
-        .filter_map(parse_method_parameter)
-        .collect()
-}
-
-/// `[type] $name [= default]`; a `=` anywhere in the chunk marks
-/// `optional`, a `...$` prefix on the name token marks `variadic`.
+/// `[type] $name [= default]`: the type is a dialect prefix taken
+/// verbatim; a `=` after the name marks `optional`, a `...$` prefix
+/// marks `variadic`. A by-reference `&$name` drops, as in 4a.
 fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
-    let optional = chunk.contains('=');
-    let tokens: Vec<&str> = chunk.split_whitespace().collect();
-    let name_index = tokens
-        .iter()
-        .position(|token| token.starts_with("...$") || token.starts_with('$'))?;
-    let name_token = *tokens.get(name_index)?;
+    let trimmed = chunk.trim();
+    let (type_text, rest) = if trimmed.starts_with('$') || trimmed.starts_with("...$") {
+        (None, trimmed)
+    } else {
+        let (_, consumed) = parse_type_expression_prefix(trimmed)?;
+        let text = trimmed.get(..consumed)?.trim();
+        let rest = trimmed.get(consumed..)?.trim_start();
+        (Some(text.to_owned()), rest)
+    };
+    let optional = rest.contains('=');
+    let name_token = rest.split_whitespace().next()?;
     let variadic = name_token.starts_with("...$");
     let name = if variadic {
         name_token.strip_prefix("...$")?
@@ -227,18 +445,11 @@ fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
         name_token.strip_prefix('$')?
     };
     // A space-less default (`$x=5`) rides on the name token: the name
-    // stops at the first `=`. `split_once` has no unreachable arm to
-    // fall back on (unlike `split('=').next().unwrap_or(name)`, which
-    // can never actually take its `unwrap_or` branch).
+    // stops at the first `=`.
     let name = name.split_once('=').map_or(name, |(head, _)| head).trim();
     if name.is_empty() {
         return None;
     }
-    let type_text = if name_index == 0 {
-        None
-    } else {
-        tokens.get(name_index - 1).map(|token| (*token).to_owned())
-    };
     Some(VirtualParameter {
         name: name.to_owned(),
         type_text,
@@ -282,7 +493,7 @@ mod tests {
     fn the_value_slot_takes_the_first_parseable_tag() {
         // An unparseable first @return must not suppress a later
         // parseable one: loss is per construct, never cross construct.
-        let tags = lex_docblock("/**\n * @return array<int>\n * @return string\n */");
+        let tags = lex_docblock("/**\n * @return array{\n * @return string\n */");
         assert_eq!(
             extract_member_docblock(&tags).return_type,
             Some(TypeExpression::Name("string".to_owned())),
@@ -308,7 +519,7 @@ mod tests {
         // The unparseable @param drops; the good one survives; the
         // by-reference and variadic sigils are tolerated.
         let tags = lex_docblock(
-            "/**\n * @param array<int> $broken\n * @param int $good\n * @param string &$reference\n * @param int ...$rest\n * @param $untyped\n */",
+            "/**\n * @param array{ $broken\n * @param int $good\n * @param string &$reference\n * @param int ...$rest\n * @param $untyped\n */",
         );
         let extracted = extract_member_docblock(&tags);
         let names: Vec<&str> = extracted
@@ -317,6 +528,62 @@ mod tests {
             .map(|(name, _)| name.as_str())
             .collect();
         assert_eq!(names, vec!["good", "reference", "rest"]);
+    }
+
+    #[test]
+    fn dialect_types_with_spaces_extract() {
+        let tags = lex_docblock(
+            "/**\n * @param array{id: int, name?: string} $subject\n * @return array<int, string> the rows\n * @var int<1, max>\n * @throws \\RuntimeException\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.parameters.len(), 1);
+        assert_eq!(extracted.parameters[0].0, "subject");
+        assert!(matches!(
+            extracted.parameters[0].1,
+            TypeExpression::Shape { .. }
+        ));
+        assert!(matches!(
+            extracted.return_type,
+            Some(TypeExpression::Generic { .. })
+        ));
+        assert!(matches!(
+            extracted.value_type,
+            Some(TypeExpression::Generic { .. })
+        ));
+        assert_eq!(extracted.throws.len(), 1);
+    }
+
+    #[test]
+    fn method_tags_carry_dialect_types_and_nested_parentheses() {
+        let tags = lex_docblock(
+            "/** @method static Collection<User> map(callable(User): string $mapper, array{limit?: int} $options = []) */",
+        );
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        let map = &members[0];
+        assert!(map.is_static);
+        assert_eq!(map.type_text.as_deref(), Some("Collection<User>"));
+        assert_eq!(map.parameters.len(), 2);
+        assert_eq!(map.parameters[0].name, "mapper");
+        assert_eq!(
+            map.parameters[0].type_text.as_deref(),
+            Some("callable(User): string"),
+        );
+        assert_eq!(map.parameters[1].name, "options");
+        assert!(map.parameters[1].optional);
+        assert_eq!(
+            map.parameters[1].type_text.as_deref(),
+            Some("array{limit?: int}"),
+        );
+    }
+
+    #[test]
+    fn property_tags_carry_dialect_types_verbatim() {
+        let tags = lex_docblock("/** @property array{id: int} $row */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "row");
+        assert_eq!(members[0].type_text.as_deref(), Some("array{id: int}"));
     }
 
     #[test]
@@ -372,5 +639,116 @@ mod tests {
         assert_eq!(create.name, "create");
         assert!(create.is_static);
         assert_eq!(create.type_text.as_deref(), Some("static"));
+    }
+
+    #[test]
+    fn tool_prefixed_tags_win_over_bare_regardless_of_order() {
+        let tags = lex_docblock(
+            "/**\n * @return string\n * @psalm-return bool\n * @phpstan-return int\n */",
+        );
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("int".to_owned())),
+        );
+        // Without a PHPStan-prefixed tag, the Psalm synonym beats bare.
+        let tags = lex_docblock("/**\n * @psalm-return bool\n * @return string\n */");
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("bool".to_owned())),
+        );
+    }
+
+    #[test]
+    fn an_unparseable_prefixed_tag_never_clears_a_parseable_bare_one() {
+        let tags = lex_docblock("/**\n * @phpstan-return array{\n * @return string\n */");
+        assert_eq!(
+            extract_member_docblock(&tags).return_type,
+            Some(TypeExpression::Name("string".to_owned())),
+        );
+    }
+
+    #[test]
+    fn param_precedence_resolves_per_parameter_name() {
+        let tags = lex_docblock(
+            "/**\n * @param string $a\n * @param string $b\n * @phpstan-param int $a\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.parameters.len(), 2);
+        assert_eq!(
+            extracted.parameters[0],
+            ("a".to_owned(), TypeExpression::Name("int".to_owned())),
+        );
+        assert_eq!(
+            extracted.parameters[1],
+            ("b".to_owned(), TypeExpression::Name("string".to_owned())),
+        );
+    }
+
+    #[test]
+    fn psalm_synonyms_and_virtual_member_prefixes_extract() {
+        let tags = lex_docblock("/** @psalm-var non-empty-string */");
+        assert!(extract_member_docblock(&tags).value_type.is_some());
+        let tags = lex_docblock("/** @psalm-property string $title */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "title");
+    }
+
+    #[test]
+    fn the_ignored_divergent_bucket_contributes_nothing_and_disturbs_nothing() {
+        // The enumerated bucket (design section 5): parsed, ignored
+        // without error, siblings survive.
+        let tags = lex_docblock(
+            "/**\n * @psalm-pure\n * @psalm-mutation-free\n * @psalm-taint-sink html $output\n * @psalm-taint-source input\n * @psalm-if-this-is Foo\n * @phpstan-pure\n * @return int\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(
+            extracted.return_type,
+            Some(TypeExpression::Name("int".to_owned())),
+        );
+        assert!(extracted.parameters.is_empty());
+        assert!(extracted.throws.is_empty());
+    }
+
+    #[test]
+    fn arrow_defaults_do_not_break_the_parameter_split() {
+        let tags = lex_docblock("/** @method void go(array $x = ['a' => 1], int $y) */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        let names: Vec<&str> = members[0]
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["x", "y"]);
+    }
+
+    #[test]
+    fn a_this_typed_property_keeps_this_as_its_type() {
+        let tags = lex_docblock("/** @property $this $owner */");
+        let members = extract_virtual_members(&tags);
+        assert_eq!(members.len(), 1);
+        assert_eq!(members[0].name, "owner");
+        assert_eq!(members[0].type_text.as_deref(), Some("$this"));
+    }
+
+    #[test]
+    fn assertion_tags_extract_with_polarity_and_negation() {
+        use celerrate_plugin::AssertionPolarity;
+        let tags = lex_docblock(
+            "/**\n * @psalm-assert string $value\n * @phpstan-assert-if-true !null $user\n * @psalm-assert =string $exact\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.assertions.len(), 2);
+        let first = &extracted.assertions[0];
+        assert_eq!(first.subject, "$value");
+        assert_eq!(first.polarity, AssertionPolarity::Always);
+        assert!(!first.negated);
+        let second = &extracted.assertions[1];
+        assert_eq!(second.subject, "$user");
+        assert_eq!(second.polarity, AssertionPolarity::IfTrue);
+        assert!(second.negated);
+        // The `=`-prefixed exact form is the divergent bucket: ignored.
+        assert!(!extracted.assertions.iter().any(|a| a.subject == "$exact"));
     }
 }

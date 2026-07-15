@@ -32,8 +32,9 @@ pub use celerrate_semantics::{
 // The type-syntax and dynamic-type-provider extension points, and the
 // type vocabulary plugins construct and interrogate through.
 pub use celerrate_types::{
-    AnnotationSite, CallableParameter, DynamicTypeProvider, Invocation, ParsedAnnotations,
-    ShapeField, ShapeKey, SymbolClaim, Trust, TypeId, TypeSyntax,
+    AnnotationSite, AssertionPolarity, CallableParameter, DynamicTypeProvider, Invocation,
+    ParsedAnnotations, ParsedAssertion, ShapeField, ShapeKey, SymbolClaim, Trust, TypeId,
+    TypeSyntax,
 };
 
 // The span and diagnostic vocabulary, and salsa for trait signatures.

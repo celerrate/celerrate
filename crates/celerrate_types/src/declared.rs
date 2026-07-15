@@ -18,6 +18,7 @@ use celerrate_stubs::{
 };
 
 use crate::representation::TypeId;
+use crate::type_syntax::AnnotationContext;
 use crate::written::{WrittenType, parse_written};
 
 /// Where a written name qualifies: a source declaring site (namespace
@@ -173,6 +174,8 @@ pub struct MemberAnnotations<'db> {
     pub parameters: Vec<(String, TypeId<'db>)>,
     /// `@throws`: annotated exception types.
     pub throws: Vec<TypeId<'db>>,
+    /// `@assert` family: carried for plan 5's narrowing.
+    pub assertions: Vec<crate::type_syntax::ParsedAssertion<'db>>,
 }
 
 #[salsa::tracked]
@@ -198,8 +201,16 @@ pub fn member_annotations<'db>(
     // tables, exactly as native signature resolution derives them —
     // reuse `declaring_site` (via `with_declaring_site`) so the two
     // paths can never disagree.
+    let member_key = folded_member_key(member.kind, &member.name);
+    let declaring_scope = format!("{owner}::{member_key}");
+    let enclosing_docblock = owner_class_docblock(db, files, &owner);
     let parsed = with_declaring_site(db, files, &owner, |site| {
-        crate::type_syntax::annotations_for_docblock(db, site, &docblock)
+        let context = AnnotationContext {
+            declaring_scope: &declaring_scope,
+            enclosing_class_scope: Some(&owner),
+            enclosing_class_docblock: enclosing_docblock.as_deref(),
+        };
+        crate::type_syntax::annotations_for_docblock(db, site, &context, &docblock)
     });
     MemberAnnotations {
         value: match member.kind {
@@ -209,6 +220,7 @@ pub fn member_annotations<'db>(
         },
         parameters: parsed.parameters,
         throws: parsed.throws,
+        assertions: parsed.assertions,
     }
 }
 
@@ -268,6 +280,7 @@ fn inherited_annotations<'db>(
     for ancestor in ancestors {
         let value_missing = merged.value.is_none();
         let throws_missing = merged.throws.is_empty();
+        let assertions_missing = merged.assertions.is_empty();
         let missing_parameters: Vec<&String> = parameter_names
             .iter()
             .filter(|name| {
@@ -277,7 +290,8 @@ fn inherited_annotations<'db>(
                     .any(|(merged_name, _)| merged_name == *name)
             })
             .collect();
-        if !value_missing && !throws_missing && missing_parameters.is_empty() {
+        if !value_missing && !throws_missing && !assertions_missing && missing_parameters.is_empty()
+        {
             return merged;
         }
         if !declares(ancestor) {
@@ -289,6 +303,9 @@ fn inherited_annotations<'db>(
         }
         if throws_missing {
             merged.throws = ancestor_annotations.throws;
+        }
+        if assertions_missing {
+            merged.assertions = ancestor_annotations.assertions;
         }
         for name in missing_parameters {
             if let Some((_, annotated)) = ancestor_annotations
@@ -333,11 +350,16 @@ pub fn declared_member_signature<'db>(
         // `(mixed, NativeOnly)`.
         MemberResolution::Virtual { member, owner } => {
             let mixed = TypeId::mixed(db);
+            let enclosing_docblock = owner_class_docblock(db, files, &owner);
             return Some(with_declaring_site(db, files, &owner, |site| {
-                let annotation = member
-                    .type_text
-                    .as_deref()
-                    .and_then(|text| crate::type_syntax::type_of_expression(db, site, text));
+                let context = AnnotationContext {
+                    declaring_scope: &owner,
+                    enclosing_class_scope: Some(&owner),
+                    enclosing_class_docblock: enclosing_docblock.as_deref(),
+                };
+                let annotation = member.type_text.as_deref().and_then(|text| {
+                    crate::type_syntax::type_of_expression(db, site, &context, text)
+                });
                 let (value_type, value_trust) =
                     refine(db, files, stubs, configuration, mixed, annotation);
                 let parameters = member
@@ -345,7 +367,7 @@ pub fn declared_member_signature<'db>(
                     .iter()
                     .map(|parameter| {
                         let annotation = parameter.type_text.as_deref().and_then(|text| {
-                            crate::type_syntax::type_of_expression(db, site, text)
+                            crate::type_syntax::type_of_expression(db, site, &context, text)
                         });
                         let (parameter_type, trust) =
                             refine(db, files, stubs, configuration, mixed, annotation);
@@ -447,6 +469,22 @@ fn declaring_site(
         namespace,
         ast_id,
     })
+}
+
+/// The owner class-like's own docblock text: class-level `@template`
+/// declarations are visible inside member annotations.
+fn owner_class_docblock(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    owner_key: &str,
+) -> Option<String> {
+    let site = declaring_site(db, files, owner_key)?;
+    member_tree(db, site.file)
+        .classes
+        .iter()
+        .find(|group| group.ast_id == site.ast_id)?
+        .docblock
+        .clone()
 }
 
 /// Borrows one owner's declaring `NameSite` across a closure call and
@@ -946,11 +984,18 @@ pub fn function_annotations<'db>(
         namespace: &function.namespace,
         tables: &tables,
     };
-    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &docblock);
+    let function_key = query.key(db).clone();
+    let context = AnnotationContext {
+        declaring_scope: &function_key,
+        enclosing_class_scope: None,
+        enclosing_class_docblock: None,
+    };
+    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &context, &docblock);
     MemberAnnotations {
         value: parsed.return_type,
         parameters: parsed.parameters,
         throws: parsed.throws,
+        assertions: parsed.assertions,
     }
 }
 
@@ -1793,12 +1838,14 @@ mod tests {
                     value: None,
                     parameters: vec![("x".to_owned(), string)],
                     throws: Vec::new(),
+                    assertions: Vec::new(),
                 },
                 // The far ancestor annotates both.
                 "far" => super::MemberAnnotations {
                     value: Some(int),
                     parameters: vec![("x".to_owned(), bool_type)],
                     throws: Vec::new(),
+                    assertions: Vec::new(),
                 },
                 _ => super::MemberAnnotations::default(),
             }
@@ -1826,6 +1873,7 @@ mod tests {
             value: Some(int),
             parameters: vec![],
             throws: Vec::new(),
+            assertions: Vec::new(),
         };
         let merged = super::inherited_annotations(
             own.clone(),
@@ -1836,6 +1884,7 @@ mod tests {
                 value: Some(string),
                 parameters: vec![],
                 throws: Vec::new(),
+                assertions: Vec::new(),
             },
         );
         assert_eq!(merged.value, Some(int), "own annotation shadows");
@@ -1850,6 +1899,7 @@ mod tests {
                 value: Some(string),
                 parameters: vec![],
                 throws: Vec::new(),
+                assertions: Vec::new(),
             },
         );
         assert_eq!(merged.value, None);
