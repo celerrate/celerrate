@@ -26,6 +26,7 @@
 //! | literals | `int_literal`/`float_literal`/`string_literal` (an unparseable float text widens to `float`) |
 //! | `array<K, V>`, `list<V>`, `iterable<K, V>` and the non-empty forms | their builders; wrong arity widens the slots to their defaults |
 //! | `key-of<T>`, `value-of<T>` | their builders |
+//! | a bare `*` generic argument (the bivariant wildcard) | already rewritten to `Name("mixed")` at the parser (`parser::parse_generic_arguments`); it lowers through the "names: native keywords" row above, never through a dedicated construct here |
 //! | sealed shapes | `shape` (keyless tuple fields number sequentially; identifier keys are string keys) |
 //! | unsealed shapes | the general array (`non_empty_array` when a field is required): key `int\|string`, value = the field-and-tail union (`mixed` for a bare `...`) — widening |
 //! | `object{...}` | `object` (widening) |

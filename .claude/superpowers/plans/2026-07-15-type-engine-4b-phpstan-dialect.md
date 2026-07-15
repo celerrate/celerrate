@@ -4927,7 +4927,118 @@ git add crates/celerrate_phpdoc_bridge/src/lib.rs .claude/superpowers/plans/2026
 git commit -m "📝 docs(phpdoc-bridge): the dialect tables, the coverage statement, and the closure ledger"
 ```
 
+---
 
+## Accepted debt at closure
 
+- **The coverage statement**: 226 of 241 pinned `TypeParserTest` inputs
+  parse (93%), against phpstan/phpdoc-parser 2.3.3
+  (`fb19eedd2bb67ff8cf7a5502ad329e701d6398a3`), per
+  `tests/phpstan_corpus/verdicts.txt`. The plan's original "~253"
+  estimate was an over-count: the pinned commit's `provideParseData`
+  carries 241 cases, not ~253. The 15 non-parsing inputs break down as:
+  13 deliberately-invalid upstream inputs (the reference itself expects
+  a `ParserException` on them), 1 full-consumption probe artifact
+  (`MongoCollection <p>...`, prose that a prefix parse consumes into
+  and a full-text parse correctly rejects), and 1 structural gap (the
+  const-fetch shape key below). The docblock-level reference corpus
+  (`PhpDocParserTest.php`) is not measured: debt, as decision 9 already
+  traces.
+- `@extends`/`@implements`/`@use` are not extracted — the
+  linearization threading channel is plan 6's; `@mixin`, `@param-out`:
+  no consumer slot, not extracted.
+- `@template` defaults (`= X`) parse and drop; variance markers
+  declare their variable with the variance dropped.
+- Callable-scoped template names lower to `mixed`; a bound-respecting
+  lowering is debt. Purity prefixes and Closure classness drop at
+  callable lowering (sound widenings).
+- Parameter-subject conditionals lower to the branch union; a lattice
+  form for them is plan 6's call.
+- Const fetches (`Foo::BAR`, `Foo::*`) lower to `mixed` until member
+  facts arrive (plans 6-7). `interface-string`/`enum-string`/
+  `trait-string` lower as `class-string` (kind refinement debt); the
+  string-family and `int-mask` widening rows of the lowering table
+  stand as documented.
+- Object shapes widen to `object`; unsealed shapes widen to their
+  general array.
+- Template names resolve before keywords, case-sensitively: a template
+  literally named `int` would shadow the keyword within its docblock
+  (pathological, accepted).
+- The class docblock re-lexes once per member annotation parse
+  (deterministic; memoized at the `member_annotations` layer).
+- The corpus extractor is layout-coupled to the pinned commit, guarded
+  by `cargo xtask phpdoc-cases --check` in CI.
+- Assertion subjects travel verbatim; interpretation (including
+  `$this->prop` forms) is plan 5's.
+- Unknown `@psalm-*` tags outside the enumerated bucket are simply
+  unrecognized — indistinguishable from typos, by design.
+- The plugin identity version still tracks the workspace version: 4b's
+  behavior change inside 0.0.x relies on plan 9a's schema and version
+  bumps for persistent-cache correctness.
+- **Invalidation pin (Task 9 Step 6)**: no deviation. The honest counts
+  matched the plan's expectation on the first run —
+  `a_class_docblock_prose_edit_backdates_at_the_member_annotations_stage`
+  observed `member_annotations` re-executing exactly once with an
+  unchanged value and the `subtype_of` probe spared at zero executions,
+  exactly as the neighbouring pin predicted. Unlike 4a's Task 7, there
+  was no honest-mechanism surprise to reconcile.
 
+### Additional debt discovered during execution
+
+- `array{Foo::BAR: int}` (a const-fetch expression used as a shape
+  key) does not parse. `parse_shape_key` only recognizes an
+  identifier, a string literal, or an integer literal
+  (`expression/parser.rs`); a const-fetch key would need a new
+  `ShapeKeyExpression` variant plus its lowering. Structural gap,
+  deferred — this is the one structural rejection inside the 15
+  non-parsing corpus cases above.
+- Signed radix integer literals (`-0x7F`, `-0b11`) degrade through the
+  `Float` token path into nonsense written text (the radix strip only
+  removes the `0x`/`0b`/`0o` prefix, not the leading `-`, so
+  `i64::from_str_radix` fails and the literal falls back to a `Float`
+  token whose text is not a valid float either) which lowers to plain
+  `float`. Pre-existing Task 1 behavior, explicitly called out in that
+  task's implementer note; recorded here as accepted debt rather than
+  fixed, since no such form appears in the reference corpus.
+- The `*` wildcard generic argument (the bivariant "unknown, don't
+  care" argument) is rewritten to `Name("mixed")` at the parser
+  (`parser::parse_generic_arguments`), before the lowering table ever
+  sees it — so the lowering table's rustdoc had no row for it. Fixed
+  as a doc-only change: `lowering.rs`'s table now carries a
+  cross-reference row pointing back at the parser rewrite.
+- `parse_constant_name` tolerates whitespace between `::` and the
+  constant name (`Foo:: BAR` parses the same as `Foo::BAR`), contradicting
+  its doc comment's adjacency claim. The adjacency check only guards
+  the gap between successive `Name`/`Asterisk` tokens inside a
+  multi-part constant (`Foo::BAR_*`); it never checks the gap between
+  the `DoubleColon` token and the first constant token. Recorded for
+  final-review triage rather than fixed here, since tightening it has
+  no test pressure from the pinned corpus.
+- A trailing `&` or `&$var` after an otherwise-valid type ends the
+  type prefix instead of failing the whole construct. This is a
+  deliberate consequence of the intersection-parsing stop set (an
+  intersection member that fails to parse simply stops the
+  intersection rather than invalidating what was already parsed) and
+  it is what lets `@param string &$ref` (a type followed by a
+  by-reference parameter marker) parse correctly instead of being
+  swallowed by an attempted-and-failed intersection. Benefit, not a
+  bug; recorded so it reads as intentional.
+- `inherited_annotations` (`crates/celerrate_types/src/declared.rs`)
+  fills a member's `assertions` from an ancestor with the same
+  fill-if-missing rule already used for `throws` and `value`: an
+  ancestor's whole assertions list is taken only while the member's
+  own list is still empty; the first ancestor found with a non-empty
+  list wins and no further ancestor contributes on top of it. This
+  behavior falls out of reusing the existing merge path and goes
+  beyond what the plan's text specified. Cross-ancestor assertion
+  inheritance itself has no dedicated test in this plan; traced as
+  debt alongside the general assertion-consumer gap (plan 5's).
+- Four grammar gaps were found and fixed by the corpus audit (Task 11)
+  rather than left as debt: newline-scoped `*` leading trivia inside a
+  docblock line, a leading `+` on numeric literals, the `*` wildcard
+  generic argument, and a trailing comma in callable parameter lists.
+  These are recorded here as validated-by-harness fixes, not as
+  outstanding debt — the harness (`cargo xtask phpdoc-cases --check`
+  plus the pinned verdict snapshot) is what caught them and now guards
+  against regression.
 
