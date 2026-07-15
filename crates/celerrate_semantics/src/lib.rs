@@ -42,7 +42,7 @@ pub use body::{
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use comment_directives::{
     CommentDirective, CommentDirectiveProvider, CommentDirectiveRegistration,
-    CommentDirectiveRegistry, CommentKind, DirectiveScope,
+    CommentDirectiveRegistry, CommentKind, DirectiveScope, is_suppressed, suppressed_ranges,
 };
 pub use index::{
     StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable,
