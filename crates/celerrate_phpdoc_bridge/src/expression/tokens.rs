@@ -10,7 +10,6 @@
 /// non-ASCII leading bytes, and interior hyphens (`class-string`,
 /// `non-empty-array`); numbers capture an optional leading minus.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) enum TokenKind {
     Name(String),
     /// `$name`, including `$this`. The `$` is not stored.
@@ -43,13 +42,13 @@ pub(crate) enum TokenKind {
 
 /// One token with its byte span in the input.
 #[derive(Debug, Clone, PartialEq, Eq)]
-#[allow(dead_code)]
 pub(crate) struct Token {
     pub(crate) kind: TokenKind,
     pub(crate) start: usize,
     pub(crate) end: usize,
 }
 
+// Temporary: consumed by the token parser of the next task.
 #[allow(dead_code)]
 pub(crate) fn tokenize(text: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
@@ -83,7 +82,6 @@ fn starts_with_at(text: &str, start: usize, prefix: &str) -> bool {
         .is_some_and(|remainder| remainder.starts_with(prefix))
 }
 
-#[allow(dead_code)]
 fn lex_token(
     text: &str,
     cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
@@ -142,7 +140,6 @@ fn lex_token(
 
 /// Advances the cursor by `count` characters; answers `true` so the
 /// caller can chain with `.then()`.
-#[allow(dead_code)]
 fn advance(cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>, count: usize) -> bool {
     for _ in 0..count {
         cursor.next();
@@ -154,7 +151,6 @@ fn is_name_start(character: char) -> bool {
     character.is_alphabetic() || character == '_' || character == '\\' || character >= '\u{80}'
 }
 
-#[allow(dead_code)]
 fn is_name_continue(character: char) -> bool {
     character.is_alphanumeric()
         || character == '_'
@@ -163,7 +159,6 @@ fn is_name_continue(character: char) -> bool {
         || character >= '\u{80}'
 }
 
-#[allow(dead_code)]
 fn lex_name(
     cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     start: usize,
@@ -200,7 +195,6 @@ fn lex_name(
     }
 }
 
-#[allow(dead_code)]
 fn lex_variable(
     cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     start: usize,
@@ -228,7 +222,6 @@ fn lex_variable(
     }
 }
 
-#[allow(dead_code, clippy::question_mark)]
 fn lex_string(
     cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
     start: usize,
@@ -245,9 +238,7 @@ fn lex_string(
             });
         }
         if character == '\\' {
-            let Some((_, escaped)) = cursor.next() else {
-                return None;
-            };
+            let (_, escaped) = cursor.next()?;
             match escaped {
                 '\\' => value.push('\\'),
                 escaped if escaped == quote => value.push(quote),
@@ -268,7 +259,6 @@ fn lex_string(
     None // unterminated: the construct stops here
 }
 
-#[allow(dead_code)]
 fn lex_number(
     text: &str,
     cursor: &mut std::iter::Peekable<std::str::CharIndices<'_>>,
