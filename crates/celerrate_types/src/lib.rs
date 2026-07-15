@@ -89,6 +89,7 @@ mod construction;
 mod declared;
 mod display;
 mod dynamic_type_provider;
+mod inference;
 mod judgments;
 mod ordering;
 mod representation;
@@ -105,6 +106,7 @@ pub use dynamic_type_provider::{
     ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration,
     DynamicTypeProviderRegistry, Invocation, SymbolClaim, validate_claims,
 };
+pub use inference::{InferredBody, InterproceduralEdgeCounts, inferred_body_types};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
