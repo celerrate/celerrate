@@ -173,6 +173,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_plugin"
+version = "0.0.2"
+dependencies = [
+ "celerrate_diagnostics",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_types",
+ "salsa",
+]
+
+[[package]]
 name = "celerrate_project"
 version = "0.0.2"
 dependencies = [
