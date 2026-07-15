@@ -20,7 +20,9 @@ pub use expression::{
 };
 pub use lexer::{Tag, lex_docblock};
 pub use syntax::PhpdocBridge;
-pub use tags::{MemberDocblock, extract_member_docblock, extract_virtual_members};
+pub use tags::{
+    MemberDocblock, TemplateDeclaration, extract_member_docblock, extract_virtual_members,
+};
 
 /// What the composition root registers.
 pub fn descriptor() -> celerrate_plugin::PluginDescriptor {

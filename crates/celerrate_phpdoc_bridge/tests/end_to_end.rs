@@ -474,3 +474,151 @@ fn tool_prefixed_precedence_holds_through_the_seam() {
         celerrate_types::TypeId::int(&fixture.db)
     );
 }
+
+#[test]
+fn template_variables_resolve_through_the_annotation_scope() {
+    let fixture = fixture(&[
+        "<?php /** @template T of \\Entity */ class Repository {\n\
+         /** @return T */ public function find() {}\n\
+         /** @template U\n * @return U\n */ public function pluck() {}\n\
+         }",
+        "<?php class Entity {}",
+    ]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let value = |name: &str| {
+        let query = member_query(&fixture, "Repository", MemberKind::Method, name);
+        celerrate_types::declared_member_signature(
+            db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap()
+        .value_type
+    };
+    let class_scope = folded_symbol_key(SymbolSpace::ClassLike, "Repository");
+    // Class-level templates reach member docblocks, keyed at the
+    // class scope with their bound lowered.
+    assert_eq!(
+        value("find"),
+        celerrate_types::TypeId::template(
+            db,
+            &class_scope,
+            "T",
+            celerrate_types::TypeId::class(db, "Entity", Vec::new()),
+        ),
+    );
+    // Member-level templates key at `<class key>::<member key>` and
+    // default their bound to `mixed`.
+    let member_scope = format!(
+        "{class_scope}::{}",
+        folded_member_key(MemberKind::Method, "pluck"),
+    );
+    assert_eq!(
+        value("pluck"),
+        celerrate_types::TypeId::template(
+            db,
+            &member_scope,
+            "U",
+            celerrate_types::TypeId::mixed(db),
+        ),
+    );
+}
+
+#[test]
+fn member_templates_shadow_class_templates_and_virtual_payloads_see_the_class_scope() {
+    let fixture = fixture(&[
+        "<?php class A {} class B {}\n\
+         /** @template T of A */ class Box {\n\
+         /** @template T of B\n * @return T\n */ public function shadowed() {}\n\
+         }",
+        "<?php /** @template T\n * @property list<T> $items\n */ class Bag {}",
+    ]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let box_scope = folded_symbol_key(SymbolSpace::ClassLike, "Box");
+    let shadowed = member_query(&fixture, "Box", MemberKind::Method, "shadowed");
+    let signature = celerrate_types::declared_member_signature(
+        db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        shadowed,
+    )
+    .unwrap();
+    let member_scope = format!(
+        "{box_scope}::{}",
+        folded_member_key(MemberKind::Method, "shadowed"),
+    );
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::template(
+            db,
+            &member_scope,
+            "T",
+            celerrate_types::TypeId::class(db, "B", Vec::new()),
+        ),
+    );
+    // A virtual member's payload resolves class-level templates.
+    let items = member_query(&fixture, "Bag", MemberKind::Property, "items");
+    let signature = celerrate_types::declared_member_signature(
+        db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        items,
+    )
+    .unwrap();
+    let bag_scope = folded_symbol_key(SymbolSpace::ClassLike, "Bag");
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::list(
+            db,
+            celerrate_types::TypeId::template(
+                db,
+                &bag_scope,
+                "T",
+                celerrate_types::TypeId::mixed(db),
+            ),
+        ),
+    );
+}
+
+#[test]
+fn a_variance_marked_template_still_declares_and_a_template_conditional_lowers() {
+    let fixture = fixture(&["<?php /** @template-covariant T */ class Producer {\n\
+         /** @return T */ public function produce() {}\n\
+         /** @return (T is string ? int : bool) */ public function branch() {}\n\
+         }"]);
+    register_bridge(&fixture.db);
+    let db = &fixture.db;
+    let scope = folded_symbol_key(SymbolSpace::ClassLike, "Producer");
+    let template =
+        celerrate_types::TypeId::template(db, &scope, "T", celerrate_types::TypeId::mixed(db));
+    let value = |name: &str| {
+        let query = member_query(&fixture, "Producer", MemberKind::Method, name);
+        celerrate_types::declared_member_signature(
+            db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap()
+        .value_type
+    };
+    assert_eq!(value("produce"), template);
+    assert_eq!(
+        value("branch"),
+        celerrate_types::TypeId::conditional(
+            db,
+            template,
+            celerrate_types::TypeId::string(db),
+            celerrate_types::TypeId::int(db),
+            celerrate_types::TypeId::bool(db),
+            false,
+        ),
+    );
+}

@@ -12,6 +12,25 @@ use celerrate_semantics::PluginIdentity;
 use crate::declared::NameSite;
 use crate::representation::TypeId;
 
+/// The declaring-scope context one annotation parse needs beyond name
+/// qualification: `@template` resolution needs to know the scope key
+/// its own declarations bind under, and — for member docblocks — the
+/// enclosing class-like's own scope key and docblock text, so
+/// class-level `@template` declarations are visible while parsing a
+/// member's annotations. The scope-key convention (`<class
+/// key>::<member key>` or a function key) is `TypeId::template`'s.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AnnotationContext<'a> {
+    /// The declaring symbol's own scope key.
+    pub declaring_scope: &'a str,
+    /// The enclosing class-like's scope key, when the declaring site
+    /// is a member.
+    pub enclosing_class_scope: Option<&'a str>,
+    /// The enclosing class-like's own docblock text, when the
+    /// declaring site is a member.
+    pub enclosing_class_docblock: Option<&'a str>,
+}
+
 /// A name-resolution and construction context for one annotation
 /// parse, scoped to the declaring site. Handles are call-scoped:
 /// implementations never retain the site, the database, or any
@@ -20,12 +39,17 @@ use crate::representation::TypeId;
 pub struct AnnotationSite<'db, 'site> {
     db: &'db dyn salsa::Database,
     site: &'site NameSite<'site>,
+    context: AnnotationContext<'site>,
 }
 
 impl<'db, 'site> AnnotationSite<'db, 'site> {
     // Constructed only by this module's dispatch functions.
-    pub(crate) fn new(db: &'db dyn salsa::Database, site: &'site NameSite<'site>) -> Self {
-        Self { db, site }
+    pub(crate) fn new(
+        db: &'db dyn salsa::Database,
+        site: &'site NameSite<'site>,
+        context: AnnotationContext<'site>,
+    ) -> Self {
+        Self { db, site, context }
     }
 
     /// The database, for `TypeId` builders. Never retain it.
@@ -45,6 +69,24 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
     /// name — feed it to `TypeId::class`.
     pub fn qualify_class_name(&self, written: &str) -> String {
         crate::declared::qualified_class_name(self.site, written)
+    }
+
+    /// The declaring symbol's own scope key: `TypeId::template`'s
+    /// scope-key convention. Call-scoped, never retained.
+    pub fn declaring_scope(&self) -> &'site str {
+        self.context.declaring_scope
+    }
+
+    /// The enclosing class-like's scope key, when the declaring site
+    /// is a member. Call-scoped, never retained.
+    pub fn enclosing_class_scope(&self) -> Option<&'site str> {
+        self.context.enclosing_class_scope
+    }
+
+    /// The enclosing class-like's own docblock text, when the
+    /// declaring site is a member. Call-scoped, never retained.
+    pub fn enclosing_class_docblock(&self) -> Option<&'site str> {
+        self.context.enclosing_class_docblock
     }
 }
 
@@ -121,12 +163,13 @@ pub struct TypeSyntaxRegistry {
 pub(crate) fn annotations_for_docblock<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
+    context: &AnnotationContext<'_>,
     docblock: &str,
 ) -> ParsedAnnotations<'db> {
     let Some(registry) = TypeSyntaxRegistry::try_get(db) else {
         return ParsedAnnotations::default();
     };
-    let annotation_site = AnnotationSite::new(db, site);
+    let annotation_site = AnnotationSite::new(db, site, *context);
     for registration in registry.registrations(db) {
         if registration.implementation.can_parse(docblock) {
             return registration
@@ -143,10 +186,11 @@ pub(crate) fn annotations_for_docblock<'db>(
 pub(crate) fn type_of_expression<'db>(
     db: &'db dyn salsa::Database,
     site: &NameSite<'_>,
+    context: &AnnotationContext<'_>,
     expression: &str,
 ) -> Option<TypeId<'db>> {
     let registry = TypeSyntaxRegistry::try_get(db)?;
-    let annotation_site = AnnotationSite::new(db, site);
+    let annotation_site = AnnotationSite::new(db, site, *context);
     for registration in registry.registrations(db) {
         if let Some(answer) = registration
             .implementation
@@ -168,7 +212,8 @@ mod tests {
     use celerrate_source::FileId;
 
     use super::{
-        AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
+        AnnotationContext, AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration,
+        TypeSyntaxRegistry,
     };
     use crate::declared::NameSite;
     use crate::representation::TypeId;
@@ -253,13 +298,28 @@ mod tests {
         .new(db);
 
         // Both can parse this: the first registered wins.
-        let parsed = annotations_for_docblock(db, &NameSite::Global, "/** @return int */");
+        let parsed = annotations_for_docblock(
+            db,
+            &NameSite::Global,
+            &AnnotationContext::default(),
+            "/** @return int */",
+        );
         assert_eq!(parsed.return_type, Some(TypeId::int(db)));
         // Only the second can parse this: first win falls through.
-        let parsed = annotations_for_docblock(db, &NameSite::Global, "/** @var string */");
+        let parsed = annotations_for_docblock(
+            db,
+            &NameSite::Global,
+            &AnnotationContext::default(),
+            "/** @var string */",
+        );
         assert_eq!(parsed, ParsedAnnotations::default());
         // No implementation can parse: the default.
-        let parsed = annotations_for_docblock(db, &NameSite::Global, "/** prose */");
+        let parsed = annotations_for_docblock(
+            db,
+            &NameSite::Global,
+            &AnnotationContext::default(),
+            "/** prose */",
+        );
         assert_eq!(parsed, ParsedAnnotations::default());
     }
 
@@ -290,17 +350,32 @@ mod tests {
         .durability(salsa::Durability::HIGH)
         .new(db);
 
-        let parsed = annotations_for_docblock(db, &NameSite::Global, "/** @return int */");
+        let parsed = annotations_for_docblock(
+            db,
+            &NameSite::Global,
+            &AnnotationContext::default(),
+            "/** @return int */",
+        );
         assert_eq!(parsed, ParsedAnnotations::default());
     }
 
     #[test]
     fn an_unset_registry_answers_the_default() {
         let fixture = fixture(&["<?php class C {}"]);
-        let parsed = annotations_for_docblock(&fixture.db, &NameSite::Global, "/** @return int */");
+        let parsed = annotations_for_docblock(
+            &fixture.db,
+            &NameSite::Global,
+            &AnnotationContext::default(),
+            "/** @return int */",
+        );
         assert_eq!(parsed, ParsedAnnotations::default());
         assert_eq!(
-            type_of_expression(&fixture.db, &NameSite::Global, "int"),
+            type_of_expression(
+                &fixture.db,
+                &NameSite::Global,
+                &AnnotationContext::default(),
+                "int",
+            ),
             None,
         );
     }
@@ -319,17 +394,25 @@ mod tests {
         .durability(salsa::Durability::HIGH)
         .new(db);
         assert_eq!(
-            type_of_expression(db, &NameSite::Global, "int"),
+            type_of_expression(db, &NameSite::Global, &AnnotationContext::default(), "int"),
             Some(TypeId::int(db))
         );
-        assert_eq!(type_of_expression(db, &NameSite::Global, "garbage!!"), None);
+        assert_eq!(
+            type_of_expression(
+                db,
+                &NameSite::Global,
+                &AnnotationContext::default(),
+                "garbage!!",
+            ),
+            None,
+        );
     }
 
     #[test]
     fn the_annotation_site_shares_the_native_keyword_table_and_the_site_qualifier() {
         let fixture = fixture(&["<?php class C {}"]);
         let db = &fixture.db;
-        let site = AnnotationSite::new(db, &NameSite::Global);
+        let site = AnnotationSite::new(db, &NameSite::Global, AnnotationContext::default());
         assert_eq!(site.keyword_type("int"), Some(TypeId::int(db)));
         assert_eq!(
             site.keyword_type("static"),
@@ -337,5 +420,19 @@ mod tests {
         );
         assert_eq!(site.keyword_type("NotAKeyword"), None);
         assert_eq!(site.qualify_class_name("\\App\\User"), "App\\User");
+    }
+
+    #[test]
+    fn the_annotation_site_exposes_the_declaring_context() {
+        let fixture = fixture(&["<?php class C {}"]);
+        let context = AnnotationContext {
+            declaring_scope: "c::find",
+            enclosing_class_scope: Some("c"),
+            enclosing_class_docblock: Some("/** @template T */"),
+        };
+        let site = AnnotationSite::new(&fixture.db, &NameSite::Global, context);
+        assert_eq!(site.declaring_scope(), "c::find");
+        assert_eq!(site.enclosing_class_scope(), Some("c"));
+        assert_eq!(site.enclosing_class_docblock(), Some("/** @template T */"));
     }
 }

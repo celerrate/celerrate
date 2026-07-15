@@ -18,6 +18,7 @@ use celerrate_stubs::{
 };
 
 use crate::representation::TypeId;
+use crate::type_syntax::AnnotationContext;
 use crate::written::{WrittenType, parse_written};
 
 /// Where a written name qualifies: a source declaring site (namespace
@@ -198,8 +199,16 @@ pub fn member_annotations<'db>(
     // tables, exactly as native signature resolution derives them —
     // reuse `declaring_site` (via `with_declaring_site`) so the two
     // paths can never disagree.
+    let member_key = folded_member_key(member.kind, &member.name);
+    let declaring_scope = format!("{owner}::{member_key}");
+    let enclosing_docblock = owner_class_docblock(db, files, &owner);
     let parsed = with_declaring_site(db, files, &owner, |site| {
-        crate::type_syntax::annotations_for_docblock(db, site, &docblock)
+        let context = AnnotationContext {
+            declaring_scope: &declaring_scope,
+            enclosing_class_scope: Some(&owner),
+            enclosing_class_docblock: enclosing_docblock.as_deref(),
+        };
+        crate::type_syntax::annotations_for_docblock(db, site, &context, &docblock)
     });
     MemberAnnotations {
         value: match member.kind {
@@ -333,11 +342,16 @@ pub fn declared_member_signature<'db>(
         // `(mixed, NativeOnly)`.
         MemberResolution::Virtual { member, owner } => {
             let mixed = TypeId::mixed(db);
+            let enclosing_docblock = owner_class_docblock(db, files, &owner);
             return Some(with_declaring_site(db, files, &owner, |site| {
-                let annotation = member
-                    .type_text
-                    .as_deref()
-                    .and_then(|text| crate::type_syntax::type_of_expression(db, site, text));
+                let context = AnnotationContext {
+                    declaring_scope: &owner,
+                    enclosing_class_scope: Some(&owner),
+                    enclosing_class_docblock: enclosing_docblock.as_deref(),
+                };
+                let annotation = member.type_text.as_deref().and_then(|text| {
+                    crate::type_syntax::type_of_expression(db, site, &context, text)
+                });
                 let (value_type, value_trust) =
                     refine(db, files, stubs, configuration, mixed, annotation);
                 let parameters = member
@@ -345,7 +359,7 @@ pub fn declared_member_signature<'db>(
                     .iter()
                     .map(|parameter| {
                         let annotation = parameter.type_text.as_deref().and_then(|text| {
-                            crate::type_syntax::type_of_expression(db, site, text)
+                            crate::type_syntax::type_of_expression(db, site, &context, text)
                         });
                         let (parameter_type, trust) =
                             refine(db, files, stubs, configuration, mixed, annotation);
@@ -447,6 +461,22 @@ fn declaring_site(
         namespace,
         ast_id,
     })
+}
+
+/// The owner class-like's own docblock text: class-level `@template`
+/// declarations are visible inside member annotations.
+fn owner_class_docblock(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    owner_key: &str,
+) -> Option<String> {
+    let site = declaring_site(db, files, owner_key)?;
+    member_tree(db, site.file)
+        .classes
+        .iter()
+        .find(|group| group.ast_id == site.ast_id)?
+        .docblock
+        .clone()
 }
 
 /// Borrows one owner's declaring `NameSite` across a closure call and
@@ -946,7 +976,13 @@ pub fn function_annotations<'db>(
         namespace: &function.namespace,
         tables: &tables,
     };
-    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &docblock);
+    let function_key = query.key(db).clone();
+    let context = AnnotationContext {
+        declaring_scope: &function_key,
+        enclosing_class_scope: None,
+        enclosing_class_docblock: None,
+    };
+    let parsed = crate::type_syntax::annotations_for_docblock(db, &site, &context, &docblock);
     MemberAnnotations {
         value: parsed.return_type,
         parameters: parsed.parameters,

@@ -42,6 +42,9 @@ pub(crate) enum TagRole {
     Throws,
     Property,
     Method,
+    /// `@template`, `@template-covariant`, `@template-contravariant`:
+    /// the variance marker is recognized and dropped (decision 6).
+    Template,
     /// The enumerated divergent bucket: parsed, ignored without error.
     Ignored,
 }

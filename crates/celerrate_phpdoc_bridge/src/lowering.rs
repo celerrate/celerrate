@@ -41,17 +41,47 @@ use celerrate_plugin::{AnnotationSite, CallableParameter, ShapeField, ShapeKey, 
 
 use crate::expression::{ConditionalSubject, ShapeKeyExpression, TypeExpression, UnsealedTail};
 
-/// The name-resolution scope one docblock lowers under. Task 9 adds
-/// the docblock template set; today it carries only the
-/// callable-scoped names active while lowering one signature.
+/// The name-resolution scope one docblock lowers under: the docblock's
+/// own declared template set (class-level, then own — task 9) and the
+/// callable-scoped names active while lowering one callable signature.
 #[derive(Debug, Default)]
-pub(crate) struct LoweringScope {
+pub(crate) struct LoweringScope<'db> {
+    /// Declared template variables, resolved at declaration into
+    /// their lattice value — later declarations shadow earlier ones.
+    templates: Vec<(String, TypeId<'db>)>,
     callable_templates: Vec<String>,
+}
+
+impl<'db> LoweringScope<'db> {
+    /// Declares one template variable, resolving it immediately into
+    /// its lattice value (`TypeId::template`'s scope-key convention).
+    /// A later declaration of the same name shadows an earlier one
+    /// (member templates over class templates).
+    pub(crate) fn declare_template(
+        &mut self,
+        db: &'db dyn salsa::Database,
+        scope_key: &str,
+        name: String,
+        bound: TypeId<'db>,
+    ) {
+        let resolved = TypeId::template(db, scope_key, &name, bound);
+        self.templates.push((name, resolved));
+    }
+
+    /// The most recently declared template of this name, or `None`
+    /// when no such template is in scope.
+    fn resolve_template(&self, name: &str) -> Option<TypeId<'db>> {
+        self.templates
+            .iter()
+            .rev()
+            .find(|(candidate, _)| candidate == name)
+            .map(|(_, resolved)| *resolved)
+    }
 }
 
 pub(crate) fn lower<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     expression: &TypeExpression,
 ) -> TypeId<'db> {
     let db = site.database();
@@ -122,7 +152,7 @@ fn array_key<'db>(db: &'db dyn salsa::Database) -> TypeId<'db> {
 
 fn lower_name<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     name: &str,
 ) -> TypeId<'db> {
     let db = site.database();
@@ -133,7 +163,11 @@ fn lower_name<'db>(
     {
         return TypeId::mixed(db);
     }
-    // Task 9 resolves the docblock template set here, before keywords.
+    // The docblock template set resolves here, before keywords: a
+    // template name shadows a same-named keyword.
+    if let Some(resolved) = scope.resolve_template(name) {
+        return resolved;
+    }
     if let Some(keyword) = site.keyword_type(name) {
         return keyword;
     }
@@ -199,7 +233,7 @@ fn lower_dialect_name<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<T
 
 fn lower_generic<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     base: &str,
     arguments: &[TypeExpression],
 ) -> TypeId<'db> {
@@ -248,6 +282,11 @@ fn lower_generic<'db>(
         ("value-of", [subject]) => TypeId::value_of(db, *subject),
         ("key-of" | "value-of", _) => TypeId::mixed(db),
         _ => {
+            // A template base drops its (spurious) argument list too:
+            // a template variable is never itself generic.
+            if let Some(resolved) = scope.resolve_template(base) {
+                return resolved;
+            }
             if site.keyword_type(base).is_some() || lower_dialect_name(db, base).is_some() {
                 // A keyword or dialect atom with a spurious argument
                 // list: the atom stands, the arguments drop.
@@ -276,7 +315,7 @@ fn range_bound(argument: Option<&TypeExpression>) -> Option<Option<i64>> {
 
 fn lower_shape<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     base: &str,
     fields: &[crate::expression::ShapeFieldExpression],
     unsealed: Option<&UnsealedTail>,
@@ -333,7 +372,7 @@ fn lower_shape<'db>(
 
 fn lower_callable<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     templates: &[String],
     parameters: &[crate::expression::CallableParameterExpression],
     return_type: &TypeExpression,
@@ -358,7 +397,7 @@ fn lower_callable<'db>(
 #[allow(clippy::too_many_arguments)]
 fn lower_conditional<'db>(
     site: &AnnotationSite<'db, '_>,
-    scope: &mut LoweringScope,
+    scope: &mut LoweringScope<'db>,
     subject: &ConditionalSubject,
     negated: bool,
     target: &TypeExpression,
@@ -368,10 +407,22 @@ fn lower_conditional<'db>(
     let db = site.database();
     let then_lowered = lower(site, scope, then_branch);
     let otherwise_lowered = lower(site, scope, otherwise_branch);
-    // Task 9 resolves `ConditionalSubject::Template` through the
-    // docblock template scope into `TypeId::conditional`. Until then
-    // (and permanently for parameter subjects — plan 6's debt), the
-    // undecided fallback is the branch union (design section 3).
-    let _ = (subject, negated, target);
+    // An in-scope template subject resolves to `TypeId::conditional`.
+    // Permanently for parameter subjects (plan 6's debt) and for a
+    // template name not currently in scope, the undecided fallback is
+    // the branch union (design section 3).
+    if let ConditionalSubject::Template(name) = subject
+        && let Some(template) = scope.resolve_template(name)
+    {
+        let target_lowered = lower(site, scope, target);
+        return TypeId::conditional(
+            db,
+            template,
+            target_lowered,
+            then_lowered,
+            otherwise_lowered,
+            negated,
+        );
+    }
     TypeId::union(db, [then_lowered, otherwise_lowered])
 }

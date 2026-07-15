@@ -15,6 +15,7 @@ pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
         "throws" => TagRole::Throws,
         "property" | "property-read" | "property-write" => TagRole::Property,
         "method" => TagRole::Method,
+        "template" | "template-covariant" | "template-contravariant" => TagRole::Template,
         // Purity is out of this sub-project's scope end to end
         // (design section 1): ignored without error.
         "pure" | "impure" => TagRole::Ignored,

@@ -868,3 +868,105 @@ fn an_annotation_edit_reaches_the_declared_signature() {
         "a changed declared return must reach the dependent verdict: {log:?}"
     );
 }
+
+/// Pin 8 (task 9): `member_annotations` now ALSO reads the owner
+/// class-like's OWN docblock (`owner_class_docblock`), to expose
+/// class-level `@template` declarations while parsing a member's
+/// annotations — unconditionally, for every registered `TypeSyntax`,
+/// whether or not that implementation ever calls
+/// `AnnotationSite::enclosing_class_docblock`. Before this task, a
+/// CLASS-level docblock edit never reached `member_annotations`: its
+/// only class-docblock-adjacent dependency was the owner's namespace
+/// (via `declaring_site`), unaffected by prose. This pin proves the
+/// new edge is real (`member_annotations` reruns once) yet inert for a
+/// `TypeSyntax` that never reads the class docblock's tags (the fake
+/// here reads only the member's own `@return` word), so the identical
+/// downstream verdict stays memoized: an honest re-execution cost, not
+/// undue churn.
+#[test]
+fn a_class_docblock_prose_edit_backdates_at_the_member_annotations_stage() {
+    let mut fixture =
+        fixture_with_fake_syntax(&["<?php class Entity {} class User extends Entity {} \
+         /** class prose */ class C { /** @return User */ public function f() {} }"]);
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Holds
+        );
+    }
+    fixture.db.take_executed();
+
+    // Only the CLASS docblock's prose changes; the member's own
+    // docblock and signature are untouched.
+    set_source(
+        &mut fixture,
+        0,
+        "<?php class Entity {} class User extends Entity {} \
+         /** class prose, reworded */ class C { /** @return User */ public function f() {} }",
+    );
+    {
+        let query = member_query(&fixture.db, "C", MemberKind::Method, "f");
+        let signature = declared_member_signature(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            query,
+        )
+        .unwrap();
+        // The member's own parsed annotation is untouched by the class
+        // docblock's prose: the refined declared return is the SAME
+        // interned type as before the edit.
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&fixture.db, "User", vec![])
+        );
+        // The identical probe re-derived from the declared return: the
+        // memoized verdict must answer without executing.
+        assert_eq!(
+            subtype_of(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                signature.value_type,
+                TypeId::class(&fixture.db, "Entity", vec![])
+            ),
+            Proof::Holds
+        );
+    }
+
+    let log = fixture.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "member_annotations"),
+        1,
+        "member_annotations now reads the class-like's own docblock \
+         (for `@template` visibility), a new dependency edge a \
+         class-level prose edit exercises: {log:?}"
+    );
+    assert_eq!(
+        executions_of(&log, "subtype_of"),
+        0,
+        "an unaffected member annotation must spare the dependent verdict: {log:?}"
+    );
+}

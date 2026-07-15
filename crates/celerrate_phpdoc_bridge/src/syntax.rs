@@ -5,7 +5,7 @@ use celerrate_plugin::{AnnotationSite, ParsedAnnotations, TypeId, TypeSyntax};
 
 use crate::lexer::lex_docblock;
 use crate::lowering::{LoweringScope, lower};
-use crate::tags::extract_member_docblock;
+use crate::tags::{TemplateDeclaration, extract_member_docblock};
 
 /// The `phpdoc-bridge` plugin. Stateless by design: guest
 /// statelessness is the WASM sketch's first acceptance case, and the
@@ -33,7 +33,7 @@ impl TypeSyntax for PhpdocBridge {
     ) -> ParsedAnnotations<'db> {
         let tags = lex_docblock(docblock);
         let extracted = extract_member_docblock(&tags);
-        let mut scope = LoweringScope::default();
+        let mut scope = docblock_scope(site, &extracted.templates);
         let return_type = extracted
             .return_type
             .as_ref()
@@ -66,7 +66,53 @@ impl TypeSyntax for PhpdocBridge {
         expression: &str,
     ) -> Option<TypeId<'db>> {
         let parsed = crate::expression::parse_type_expression_text(expression)?;
-        let mut scope = LoweringScope::default();
+        // A bare payload (a virtual member's type text) has no
+        // docblock of its own: the enclosing one, if any, IS its
+        // declaring docblock.
+        let mut scope = docblock_scope(site, &[]);
         Some(lower(site, &mut scope, &parsed))
     }
+}
+
+/// Builds the docblock's name-resolution scope: the enclosing
+/// class-like's own `@template` declarations first (when the site
+/// carries one), then this docblock's own declarations — sequential,
+/// so a bound may reference an earlier template and a same-named own
+/// declaration shadows the class one (last declared wins).
+fn docblock_scope<'db>(
+    site: &AnnotationSite<'db, '_>,
+    own_templates: &[TemplateDeclaration],
+) -> LoweringScope<'db> {
+    let mut scope = LoweringScope::default();
+    if let (Some(class_scope), Some(class_docblock)) = (
+        site.enclosing_class_scope(),
+        site.enclosing_class_docblock(),
+    ) {
+        let class_templates = extract_member_docblock(&lex_docblock(class_docblock)).templates;
+        for declaration in &class_templates {
+            declare_into(site, &mut scope, declaration, class_scope);
+        }
+    }
+    let declaring = site.declaring_scope();
+    for declaration in own_templates {
+        declare_into(site, &mut scope, declaration, declaring);
+    }
+    scope
+}
+
+/// Lowers one `@template` declaration's bound (`mixed` when absent)
+/// and declares it into the scope at the given scope key.
+fn declare_into<'db>(
+    site: &AnnotationSite<'db, '_>,
+    scope: &mut LoweringScope<'db>,
+    declaration: &TemplateDeclaration,
+    scope_key: &str,
+) {
+    let db = site.database();
+    let bound = declaration
+        .bound
+        .as_ref()
+        .map(|expression| lower(site, scope, expression))
+        .unwrap_or_else(|| TypeId::mixed(db));
+    scope.declare_template(db, scope_key, declaration.name.clone(), bound);
 }

@@ -15,24 +15,37 @@ use crate::dialect::{self, TagRole, TagTier};
 use crate::{Tag, TypeExpression, parse_type_expression_prefix};
 
 /// The standard tags a single member's docblock contributes:
-/// `@param`, `@return`, `@var`, `@throws`.
+/// `@param`, `@return`, `@var`, `@throws`, `@template`.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemberDocblock {
     pub return_type: Option<TypeExpression>,
     pub value_type: Option<TypeExpression>,
     pub parameters: Vec<(String, TypeExpression)>,
     pub throws: Vec<TypeExpression>,
+    pub templates: Vec<TemplateDeclaration>,
+}
+
+/// One `@template` declaration: `T`, `T of Bound`, `T as Bound`
+/// (the Psalm keyword is a synonym). A `= Default` tail and the
+/// variance of `-covariant`/`-contravariant` variants are dropped
+/// (decision 6; recorded debt).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TemplateDeclaration {
+    pub name: String,
+    pub bound: Option<TypeExpression>,
 }
 
 /// Extracts the member slots under the tier rule (decision 8):
 /// PHPStan-prefixed over Psalm-prefixed over bare; within a tier the
 /// first parseable tag wins; `@param` resolves per parameter name;
-/// `@throws` accumulates across tiers.
+/// `@throws` accumulates across tiers; `@template` resolves per
+/// declared name under the same tier rule.
 pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
     let mut return_slot: Option<(TagTier, TypeExpression)> = None;
     let mut value_slot: Option<(TagTier, TypeExpression)> = None;
     let mut parameters: Vec<(String, TagTier, TypeExpression)> = Vec::new();
     let mut throws = Vec::new();
+    let mut templates: Vec<(String, TagTier, TemplateDeclaration)> = Vec::new();
     for tag in tags {
         let Some(classified) = dialect::classify(&tag.name) else {
             continue;
@@ -46,6 +59,7 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
                     throws.push(expression);
                 }
             }
+            TagRole::Template => offer_template(&mut templates, classified.tier, &tag.content),
             TagRole::Property | TagRole::Method | TagRole::Ignored => {}
         }
     }
@@ -57,6 +71,10 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
             .map(|(name, _, expression)| (name, expression))
             .collect(),
         throws,
+        templates: templates
+            .into_iter()
+            .map(|(_, _, declaration)| declaration)
+            .collect(),
     }
 }
 
@@ -94,6 +112,53 @@ fn offer_parameter(
         }
         None => parameters.push((name, tier, expression)),
     }
+}
+
+/// Per-name slots in first-appearance order (mirrors
+/// `offer_parameter`): a stronger tier replaces, the same or a weaker
+/// tier keeps the first declaration within that tier.
+fn offer_template(
+    templates: &mut Vec<(String, TagTier, TemplateDeclaration)>,
+    tier: TagTier,
+    content: &str,
+) {
+    let Some(declaration) = parse_template_tag(content) else {
+        return;
+    };
+    match templates
+        .iter_mut()
+        .find(|(existing, _, _)| *existing == declaration.name)
+    {
+        Some((_, existing_tier, existing_declaration)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_declaration = declaration;
+            }
+        }
+        None => templates.push((declaration.name.clone(), tier, declaration)),
+    }
+}
+
+/// `@template T [of|as Bound] [= Default]`.
+fn parse_template_tag(content: &str) -> Option<TemplateDeclaration> {
+    let trimmed = content.trim_start();
+    let name_end = trimmed.find(char::is_whitespace).unwrap_or(trimmed.len());
+    let name = trimmed.get(..name_end)?;
+    if !is_valid_identifier(name) {
+        return None;
+    }
+    let rest = trimmed.get(name_end..)?.trim_start();
+    let bound = match rest.strip_prefix("of").or_else(|| rest.strip_prefix("as")) {
+        Some(after_keyword) if after_keyword.starts_with(char::is_whitespace) => {
+            let (expression, _) = parse_type_expression_prefix(after_keyword)?;
+            Some(expression)
+        }
+        _ => None,
+    };
+    Some(TemplateDeclaration {
+        name: name.to_owned(),
+        bound,
+    })
 }
 
 /// Virtual members under the same tier rule, resolved per

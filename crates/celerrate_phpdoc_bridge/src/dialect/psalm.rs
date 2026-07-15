@@ -13,6 +13,7 @@ pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
         "var" => TagRole::Var,
         "property" | "property-read" | "property-write" => TagRole::Property,
         "method" => TagRole::Method,
+        "template" | "template-covariant" | "template-contravariant" => TagRole::Template,
         // The enumerated ignored-divergent bucket: purity, taint, and
         // the Psalm-specific `this` refinements.
         "pure"
