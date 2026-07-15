@@ -176,7 +176,14 @@ dependencies = [
 name = "celerrate_phpdoc_bridge"
 version = "0.0.2"
 dependencies = [
+ "celerrate_db",
  "celerrate_plugin",
+ "celerrate_project",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_stubs",
+ "celerrate_types",
+ "salsa",
 ]
 
 [[package]]

@@ -10,5 +10,18 @@ repository.workspace = true
 [dependencies]
 celerrate_plugin = { path = "../celerrate_plugin" }
 
+# Test-only, exempt from the dependency-shape rule: the end-to-end
+# tests need the whole seam (fixture construction, the type-syntax
+# registry, the declared-signature queries) to prove the bridge lowers
+# annotations through celerrate_types, not just its own unit shapes.
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_project = { path = "../celerrate_project" }
+celerrate_semantics = { path = "../celerrate_semantics" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_stubs = { path = "../celerrate_stubs" }
+celerrate_types = { path = "../celerrate_types" }
+salsa.workspace = true
+
 [lints]
 workspace = true
