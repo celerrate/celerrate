@@ -27,8 +27,12 @@ use crate::representation::TypeId;
 
 /// The interprocedural edge classes one body's inference took, as
 /// pure data: the design's residual instrument ("how many results
-/// depend on *inferred* returns"), aggregated by the first
-/// orchestration-layer consumer (plan 8).
+/// depend on *inferred* returns"). Counters never live inside queries
+/// (the workspace rule); this struct is the query-side data plan 8/9a
+/// aggregate into the `CELERRATE_CACHE_STATS` rendering once the
+/// orchestration layer first demands inference (decision 13) — until
+/// then the field exists and is tested (task 12), but nothing renders
+/// it.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
 pub struct InterproceduralEdgeCounts {
     /// Call results taken from a declared (native or annotated) return.
@@ -1110,6 +1114,40 @@ mod tests {
         .unwrap();
         assert_eq!(inferred.edge_counts.provider_edges, 1);
         assert_eq!(inferred.edge_counts.declared_return_edges, 0);
+    }
+
+    /// The instrument's end-to-end pin (task 12): one body's calls span
+    /// all three tiers at once. `declared_edge` has a native return, so
+    /// it counts as a declared edge; `inferred_edge` has none, so it
+    /// counts as an inferred edge; `maker` has BOTH a declared `: string`
+    /// AND a registered provider claim, and the provider is consulted
+    /// before the declared tier (`provider_return` runs first in
+    /// `function_call_result`'s caller), so it counts once as a
+    /// provider edge and not again as declared. Each tier is counted
+    /// exactly once.
+    #[test]
+    fn the_edge_count_instrument_counts_each_tier_once() {
+        let fixture = fixture(&["<?php
+            function declared_edge(): int { return 1; }
+            function inferred_edge() { return 'x'; }
+            function maker(): string { return 'x'; }
+            function f() { return [declared_edge(), inferred_edge(), maker()]; }"]);
+        register_fake_provider(&fixture);
+        let file = fixture.handles[0];
+        let body = body_query(&fixture, 3);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.edge_counts.declared_return_edges, 1);
+        assert_eq!(inferred.edge_counts.inferred_return_edges, 1);
+        assert_eq!(inferred.edge_counts.provider_edges, 1);
     }
 
     #[test]

@@ -8,6 +8,13 @@
 //! — confirming each either reaches `declared_member_signature` or
 //! spares it, and that a changed declared type reruns dependent
 //! verdicts while an unchanged one spares them.
+//!
+//! The final four pins (task 12) cover the design's harness-2 edit
+//! classes at the inference layer itself, closing the plan: a callee
+//! body edit with an identical inferred return spares the caller, a
+//! prose docblock edit re-runs no typed inference, a default-value
+//! edit invalidates the signature's dependent body, and editing one
+//! member's signature spares a sibling member's body inference.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
@@ -18,13 +25,15 @@ use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key, folded_symbol_key,
+    AstId, BodyQuery, MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key,
+    folded_symbol_key,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    AnnotationSite, ParsedAnnotations, Proof, TypeId, TypeSyntax, TypeSyntaxRegistration,
-    TypeSyntaxRegistry, declared_member_signature, subtype_of,
+    AnnotationSite, FunctionQuery, ParsedAnnotations, Proof, TypeId, TypeSyntax,
+    TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature, inferred_body_types,
+    inferred_function_return, subtype_of,
 };
 use salsa::Setter;
 
@@ -969,4 +978,283 @@ fn a_class_docblock_prose_edit_backdates_at_the_member_annotations_stage() {
         0,
         "an unaffected member annotation must spare the dependent verdict: {log:?}"
     );
+}
+
+/// One project's inputs for the inference-layer pins below, without any
+/// registered `TypeSyntax` plugin: the design's harness-2 edit classes
+/// reach native declared signatures and `inferred_body_types` directly,
+/// not annotation parsing. File handles are kept so a pin can edit any
+/// one of them with `set_bytes` (the same `AnnotationFixture`/
+/// `Harness` shape above, generalized to the inference-layer queries).
+struct InferenceFixture {
+    db: TestDatabase,
+    handles: Vec<SourceFile>,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+}
+
+fn fixture(sources: &[&str]) -> InferenceFixture {
+    let db = TestDatabase::default();
+    let handles: Vec<SourceFile> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+        })
+        .collect();
+    let files = AnalyzedFileSet::new(&db, handles.clone());
+    let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    InferenceFixture {
+        db,
+        handles,
+        files,
+        stubs,
+        configuration,
+    }
+}
+
+/// Overwrites one file's bytes in place (mirrors `set_source` above,
+/// generalized over [`InferenceFixture`]).
+fn set_inference_source(fixture: &mut InferenceFixture, index: usize, source: &str) {
+    fixture.handles[index]
+        .set_bytes(&mut fixture.db)
+        .to(source.as_bytes().to_vec());
+}
+
+/// A folded `FunctionQuery` for a free function written in the
+/// fixture's global namespace.
+fn function_query<'db>(db: &'db TestDatabase, written: &str) -> FunctionQuery<'db> {
+    FunctionQuery::new(db, folded_symbol_key(SymbolSpace::Function, written))
+}
+
+/// Harness-2, pin 1: a callee body edit that leaves the inferred
+/// return identical spares the caller. The callee re-infers (its body
+/// genuinely changed), but the joined return type does not, so
+/// `inferred_function_return`'s early cutoff backdates and the
+/// caller's own inference is never re-demanded transitively (design
+/// section 10, harness 2).
+#[test]
+fn a_body_edit_with_an_identical_inferred_return_spares_callers() {
+    // File 0: the caller. File 1: the callee.
+    let mut fixture = fixture(&[
+        "<?php function caller() { return callee(); }",
+        "<?php function callee() { return 1; }",
+    ]);
+    {
+        let caller = function_query(&fixture.db, "caller");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            caller,
+        );
+    }
+    let _ = fixture.db.take_executed();
+
+    // The callee's body changes; its inferred return does not.
+    set_inference_source(
+        &mut fixture,
+        1,
+        "<?php function callee() { $noise = 'x'; return 1; }",
+    );
+
+    {
+        let caller = function_query(&fixture.db, "caller");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            caller,
+        );
+    }
+    let log = fixture.db.take_executed();
+    // The callee re-infers; the identical return backdates; the
+    // caller's inference never re-runs (design section 10, harness 2).
+    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
+}
+
+/// Harness-2, pin 2: a prose-only docblock edit on the callee re-runs
+/// no typed inference at all. Unlike the declared layer's own prose
+/// pin (which re-runs `declared_member_signature` and stops there),
+/// the inference layer never reads the docblock text, so the body IR
+/// and every input `inferred_body_types` consults are untouched, and
+/// the query is never re-demanded on the caller's account.
+#[test]
+fn a_prose_docblock_edit_re_runs_no_inference() {
+    let mut fixture = fixture(&[
+        "<?php function caller() { return callee(); }",
+        "<?php /** a docblock */ function callee(): int { return 1; }",
+    ]);
+    {
+        let caller = function_query(&fixture.db, "caller");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            caller,
+        );
+    }
+    let _ = fixture.db.take_executed();
+
+    set_inference_source(
+        &mut fixture,
+        1,
+        "<?php /** reworded prose */ function callee(): int { return 1; }",
+    );
+
+    {
+        let caller = function_query(&fixture.db, "caller");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            caller,
+        );
+    }
+    let log = fixture.db.take_executed();
+    // The two-stage cutoff (design section 5): the annotation parse
+    // re-runs and backdates; no typed query above it re-executes.
+    assert_eq!(executions_of(&log, "inferred_body_types"), 0, "{log:?}");
+}
+
+/// Harness-2, pin 3: a default-value edit (`= null` -> `= 'd'`) is
+/// part of the comparable signature (the 1a contract): the seeded
+/// parameter type the body's inference reads from changes, so the
+/// member projection changes and the body genuinely re-infers.
+#[test]
+fn a_default_value_edit_invalidates_the_signatures_dependents() {
+    let mut fixture = fixture(&["<?php function callee(?string $s = null) { return $s; }"]);
+    {
+        let callee = function_query(&fixture.db, "callee");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            callee,
+        );
+    }
+    let _ = fixture.db.take_executed();
+
+    set_inference_source(
+        &mut fixture,
+        0,
+        "<?php function callee(?string $s = 'd') { return $s; }",
+    );
+
+    {
+        let callee = function_query(&fixture.db, "callee");
+        let _ = inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            callee,
+        );
+    }
+    let log = fixture.db.take_executed();
+    // The default value is part of the comparable signature (the 1a
+    // contract): the member projection changed, so the body re-infers.
+    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
+}
+
+/// Harness-2, pin 4: editing one method's signature in a class spares
+/// every sibling member's body inference. `member_tree` changes (the
+/// whole class's member table is one query), but the per-body
+/// `body_owner` projection backdates for every body whose own
+/// declaration did not, so only the edited member's body re-infers
+/// (its parameter seed changed) and the bystander is spared (design
+/// section 10, harness 2).
+#[test]
+fn editing_one_signature_spares_the_other_members_inference() {
+    let source_before = "<?php class A {
+        public function edited(int $n) { return $n; }
+        public function bystander() { return 'x'; }
+    }";
+    let source_after = "<?php class A {
+        public function edited(string $n) { return $n; }
+        public function bystander() { return 'x'; }
+    }";
+    let mut fixture = fixture(&[source_before]);
+    let file = fixture.handles[0];
+    // Numbering: class 0, edited 1, bystander 2. Method-inferred
+    // returns are plan 6, so both bodies' inference is demanded
+    // directly.
+    {
+        let edited = BodyQuery::new(
+            &fixture.db,
+            AstId {
+                file: FileId::new(0),
+                index: 1,
+            },
+        );
+        let bystander = BodyQuery::new(
+            &fixture.db,
+            AstId {
+                file: FileId::new(0),
+                index: 2,
+            },
+        );
+        for body in [edited, bystander] {
+            let _ = inferred_body_types(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                file,
+                body,
+            );
+        }
+    }
+    let _ = fixture.db.take_executed();
+
+    set_inference_source(&mut fixture, 0, source_after);
+
+    {
+        let edited = BodyQuery::new(
+            &fixture.db,
+            AstId {
+                file: FileId::new(0),
+                index: 1,
+            },
+        );
+        let bystander = BodyQuery::new(
+            &fixture.db,
+            AstId {
+                file: FileId::new(0),
+                index: 2,
+            },
+        );
+        for body in [edited, bystander] {
+            let _ = inferred_body_types(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                file,
+                body,
+            );
+        }
+    }
+    let log = fixture.db.take_executed();
+    // `member_tree` changed, but the per-body `body_owner` projection
+    // backdates for every body whose own declaration did not: only
+    // `edited`'s body re-infers (its parameter seed changed);
+    // `bystander` is spared. This is the design's "editing one
+    // signature does not invalidate other members' bodies" contract
+    // (section 10, harness 2).
+    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
 }
