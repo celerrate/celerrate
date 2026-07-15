@@ -163,6 +163,10 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     returns: Vec<TypeId<'db>>,
     saw_yield: bool,
     edge_counts: InterproceduralEdgeCounts,
+    /// Set while typing inside a `NullSafeChain` when a `?->` link's
+    /// receiver was possibly null: the wrapper re-acquires `|null`
+    /// once, at the end (the design's whole-chain rule).
+    null_safe_reacquires: bool,
 }
 
 /// Walks one body from its seeded parameter environment.
@@ -174,6 +178,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         returns: Vec::new(),
         saw_yield: false,
         edge_counts: InterproceduralEdgeCounts::default(),
+        null_safe_reacquires: false,
     };
     let mut environment = Environment::new();
     for (name, seeded) in &context.parameters {
@@ -1141,11 +1146,16 @@ impl<'db> Walker<'db, '_, '_> {
                 null_safe,
             } => {
                 let receiver_type = self.expression(receiver, environment);
-                // Task 7 refines the null_safe receiver; until then
-                // resolve through the non-null part unconditionally —
-                // identical member answers either way.
-                let resolving = receiver_type.without_null(db);
-                let _ = null_safe;
+                let resolving = if null_safe {
+                    if crate::judgments::nullability(db, receiver_type)
+                        != crate::judgments::Nullability::NeverNull
+                    {
+                        self.null_safe_reacquires = true;
+                    }
+                    receiver_type.without_null(db)
+                } else {
+                    receiver_type
+                };
                 match member {
                     MemberReference::Named { name } => self
                         .receiver_parts(resolving)
@@ -1200,8 +1210,20 @@ impl<'db> Walker<'db, '_, '_> {
                 }
             }
             BodyExpression::NullSafeChain { chain } => {
-                // Task 7 implements the whole-chain rule.
-                self.expression(chain, environment)
+                let saved = std::mem::replace(&mut self.null_safe_reacquires, false);
+                let chain_type = self.expression(chain, environment);
+                let reacquires = std::mem::replace(&mut self.null_safe_reacquires, saved);
+                if reacquires {
+                    // `widening::join` would collapse `int` and `null`
+                    // to `mixed` (disjoint kinds hit its `_ => mixed`
+                    // fallback); the re-acquired null is a precise
+                    // alternative outcome, not a widened common
+                    // supertype, so `TypeId::union` preserves it as
+                    // `int|null` instead (display renders null last).
+                    TypeId::union(db, [chain_type, TypeId::null(db)])
+                } else {
+                    chain_type
+                }
             }
             BodyExpression::Call { callee, arguments } => {
                 // The `assert()` special form: its argument is a
@@ -1233,8 +1255,16 @@ impl<'db> Walker<'db, '_, '_> {
                         null_safe,
                     }) => {
                         let receiver_type = self.expression(receiver, environment);
-                        let resolving = receiver_type.without_null(db);
-                        let _ = null_safe;
+                        let resolving = if null_safe {
+                            if crate::judgments::nullability(db, receiver_type)
+                                != crate::judgments::Nullability::NeverNull
+                            {
+                                self.null_safe_reacquires = true;
+                            }
+                            receiver_type.without_null(db)
+                        } else {
+                            receiver_type
+                        };
                         self.record(callee, TypeId::mixed(db));
                         // Task 9's provider tier reads the argument
                         // types; until then they type for the table.

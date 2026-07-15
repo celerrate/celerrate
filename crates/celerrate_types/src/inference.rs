@@ -791,4 +791,33 @@ mod tests {
         // static-method unavailability does not gate the class keyword).
         assert_eq!(return_display(&fixture, 5), "child");
     }
+
+    #[test]
+    fn a_null_safe_chain_reacquires_null_once_at_the_end() {
+        let fixture = fixture(&["<?php class B { public function c(): int { return 1; } }
+            class A { public function b(): B { return new B(); } }
+            function f(?A $a) { return $a?->b()->c(); }"]);
+        // One null receiver short-circuits the whole chain: the inner
+        // ->c() sees B (never B|null), the chain result is int|null.
+        assert_eq!(return_display(&fixture, 4), "int|null");
+    }
+
+    #[test]
+    fn a_narrowed_receiver_reacquires_nothing() {
+        let fixture = fixture(&["<?php class B {}
+            class A { public function b(): B { return new B(); } }
+            function f(?A $a) {
+                if ($a === null) { return 1; }
+                return $a?->b();
+            }"]);
+        assert_eq!(return_display(&fixture, 3), "1|b");
+    }
+
+    #[test]
+    fn every_null_safe_link_strips_before_resolving() {
+        let fixture = fixture(&["<?php class B { public function c(): int { return 1; } }
+            class A { public function b(): ?B { return null; } }
+            function f(?A $a) { return $a?->b()?->c(); }"]);
+        assert_eq!(return_display(&fixture, 4), "int|null");
+    }
 }
