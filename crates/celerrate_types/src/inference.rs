@@ -647,4 +647,148 @@ mod tests {
             function f(mixed $x) { assert($x instanceof Foo); return $x; }"]);
         assert_eq!(return_display(&fixture, 1), "foo");
     }
+
+    #[test]
+    fn this_and_its_property_reads_type_from_the_declaration() {
+        let fixture = fixture(&["<?php class A {
+                public ?string $s = null;
+                public function own() { return $this; }
+                public function read() { return $this->s; }
+            }"]);
+        // Numbering: class 0, property 1, own 2, read 3.
+        assert_eq!(return_display(&fixture, 2), "a");
+        // The brief's original expectation transposed the display's
+        // established null-last convention (`display.rs`'s
+        // `composites_render_with_null_last_in_unions`, already
+        // corrected once for the same reason in
+        // `coalescing_drops_null_from_its_left_operand` above): the
+        // correct rendering of `?string` is "string|null".
+        assert_eq!(return_display(&fixture, 3), "string|null");
+    }
+
+    #[test]
+    fn method_calls_take_declared_returns_and_count_the_edge() {
+        let fixture = fixture(&[
+            "<?php class A { public function name(): string { return 'a'; } }
+            function f(A $a) { return $a->name(); }",
+        ]);
+        assert_eq!(return_display(&fixture, 2), "string");
+        let file = fixture.handles[0];
+        let body = body_query(&fixture, 2);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.edge_counts.declared_return_edges, 1);
+    }
+
+    #[test]
+    fn fluent_static_returns_substitute_the_receiver() {
+        let fixture = fixture(&[
+            "<?php class Builder { public function with(): static { return $this; } }
+            function f(Builder $b) { return $b->with(); }",
+        ]);
+        assert_eq!(return_display(&fixture, 2), "builder");
+    }
+
+    #[test]
+    fn static_calls_and_scoped_reads_resolve() {
+        let fixture = fixture(&["<?php class K {
+                const int N = 1;
+                public static function make(): float { return 1.0; }
+            }
+            function call() { return K::make(); }
+            function constant() { return K::N; }
+            function name() { return K::class; }"]);
+        assert_eq!(return_display(&fixture, 3), "float");
+        assert_eq!(return_display(&fixture, 4), "int");
+        assert_eq!(return_display(&fixture, 5), "class-string<k>");
+    }
+
+    #[test]
+    fn an_enum_case_read_types_as_the_case() {
+        let fixture = fixture(&["<?php enum E { case A; } function f() { return E::A; }"]);
+        let file = fixture.handles[0];
+        let body = body_query(&fixture, 2);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(
+            inferred.return_type.enum_case_parts(&fixture.db),
+            Some(("e".to_owned(), "A".to_owned())),
+        );
+    }
+
+    #[test]
+    fn union_receivers_join_and_opaque_receivers_stay_silent() {
+        let fixture = fixture(&["<?php class A { public function n(): int { return 1; } }
+            class B { public function n(): string { return 'b'; } }
+            function joined(A|B $x) { return $x->n(); }
+            function nullable(?A $x) { return $x->n(); }
+            function opaque(mixed $x) { return $x->n(); }"]);
+        assert_eq!(return_display(&fixture, 4), "int|string");
+        // The null constituent is the nullability family's business
+        // (plan 8); the read types from the non-null part.
+        assert_eq!(return_display(&fixture, 5), "int");
+        assert_eq!(return_display(&fixture, 6), "mixed");
+    }
+
+    #[test]
+    fn parent_and_self_resolve_against_the_defining_class() {
+        let fixture = fixture(&[
+            "<?php class Base { public function root(): int { return 1; } }
+            class Child extends Base {
+                public function up() { return parent::root(); }
+                public function own() { return self::class; }
+            }",
+        ]);
+        // Numbering: Base 0, root 1, Child 2, up 3, own 4.
+        assert_eq!(return_display(&fixture, 3), "int");
+        assert_eq!(return_display(&fixture, 4), "class-string<child>");
+    }
+
+    #[test]
+    fn new_types_as_the_class_and_anonymous_stays_mixed() {
+        let fixture = fixture(&["<?php class A {}
+            function named() { return new A(); }
+            function anonymous() { return new class {}; }"]);
+        assert_eq!(return_display(&fixture, 1), "a");
+        assert_eq!(return_display(&fixture, 2), "mixed");
+    }
+
+    #[test]
+    fn new_self_static_parent_type_as_the_defining_or_parent_class() {
+        let fixture = fixture(&["<?php class Base {}
+            class Child extends Base {
+                public function makeSelf() { return new self(); }
+                public function makeParent() { return new parent(); }
+                public function makeStatic() { return new static(); }
+                public static function makeStaticInStatic() { return new static(); }
+            }"]);
+        // Numbering: Base 0, Child 1, makeSelf 2, makeParent 3,
+        // makeStatic 4, makeStaticInStatic 5.
+        // Decision 5: `self`/`static` are the defining class, `parent`
+        // the first Extends ancestor. The class type renders as its
+        // folded (lowercase) key (decision 16).
+        assert_eq!(return_display(&fixture, 2), "child");
+        assert_eq!(return_display(&fixture, 3), "base");
+        assert_eq!(return_display(&fixture, 4), "child");
+        // The case that was silently `mixed`: `new static()` in a
+        // static method still types as the defining class ($this's
+        // static-method unavailability does not gate the class keyword).
+        assert_eq!(return_display(&fixture, 5), "child");
+    }
 }
