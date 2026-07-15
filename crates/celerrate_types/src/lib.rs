@@ -109,7 +109,10 @@ pub use dynamic_type_provider::{
     ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration,
     DynamicTypeProviderRegistry, Invocation, SymbolClaim, validate_claims,
 };
-pub use inference::{InferredBody, InterproceduralEdgeCounts, inferred_body_types};
+pub use inference::{
+    FIXPOINT_ITERATION_BUDGET, InferredBody, InterproceduralEdgeCounts, inferred_body_types,
+    inferred_function_return,
+};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{

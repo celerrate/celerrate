@@ -15,13 +15,13 @@
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberSignature, SymbolSpace,
-    UseTables, body_ir, folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
-    member_tree,
+    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberSignature, SymbolQuery,
+    SymbolSpace, UseTables, analyzed_file_index, body_ir, folded_member_key, folded_symbol_key,
+    fully_qualified_name, item_tree, lookup_function_declaration, member_tree,
 };
 use celerrate_stubs::StubIndexInput;
 
-use crate::declared::{declared_function_signature, declared_member_signature};
+use crate::declared::{FunctionQuery, declared_function_signature, declared_member_signature};
 use crate::flow::{FlowContext, walk_body};
 use crate::representation::TypeId;
 
@@ -229,9 +229,126 @@ fn seeded_parameters<'db>(
         .collect()
 }
 
+/// The iteration budget of the interprocedural fixpoint: exhaustion
+/// widens deterministically to `mixed`. Far below salsa's own
+/// `MAX_ITERATIONS = 200` panic cap (`salsa-0.27.2/src/cycle.rs`) —
+/// reaching that panic would be a zero-panic breach, so the budget is
+/// the bailout that makes it unreachable.
+pub const FIXPOINT_ITERATION_BUDGET: u32 = 32;
+
+/// One join-ascent step: the computed iterate joins the previous
+/// approximation, and a still-moving value past the budget widens to
+/// `mixed`.
+///
+/// The join operator is [`TypeId::union`], deliberately, not
+/// [`crate::widening::join`] (the decision-2 text names `join`, but its
+/// disjoint-scalar `mixed` fallback would erase precision — `join(int,
+/// string)` collapses to `mixed`, whereas the discipline wants `int|
+/// string`). `union` accumulates precisely; termination is delegated,
+/// exactly as the per-loop join-ascent (`flow.rs`) does, to the
+/// lattice caps ([`crate::widening::UNION_ARITY_CAP`],
+/// [`crate::widening::STRUCTURAL_DEPTH_CAP`]) and to
+/// [`FIXPOINT_ITERATION_BUDGET`]. The ascent is monotone because
+/// `union` only grows: a subsumed iterate absorbs into the previous
+/// approximation, so `ascended == last_provisional` fires at
+/// convergence, oscillation between two values is impossible, and every
+/// entry point converges to the same fixpoint (`union` is deterministic
+/// and entry-point independent).
+pub(crate) fn ascend<'db>(
+    db: &'db dyn salsa::Database,
+    iteration: u32,
+    last_provisional: TypeId<'db>,
+    computed: TypeId<'db>,
+) -> TypeId<'db> {
+    let ascended = TypeId::union(db, [last_provisional, computed]);
+    if ascended == last_provisional {
+        return ascended;
+    }
+    if iteration >= FIXPOINT_ITERATION_BUDGET {
+        return TypeId::mixed(db);
+    }
+    ascended
+}
+
+fn return_cycle_initial<'db>(
+    db: &'db dyn salsa::Database,
+    _id: salsa::Id,
+    _files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    _query: FunctionQuery<'db>,
+) -> TypeId<'db> {
+    // The lattice bottom: ascent starts from nothing.
+    TypeId::never(db)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn return_cycle_recover<'db>(
+    db: &'db dyn salsa::Database,
+    cycle: &salsa::Cycle,
+    last_provisional: &TypeId<'db>,
+    computed: TypeId<'db>,
+    _files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    _query: FunctionQuery<'db>,
+) -> TypeId<'db> {
+    // The macro converges when the returned value equals
+    // `last_provisional` (`salsa-0.27.2/src/function/execute.rs:266`);
+    // `ascend` returns exactly `last_provisional` at convergence, so
+    // returning its answer directly drives the fixpoint to a fixed
+    // point without a separate `CycleRecoveryAction` (absent in 0.27.2).
+    ascend(db, cycle.iteration(), *last_provisional, computed)
+}
+
+/// The inferred return of one free function: the projection of its
+/// body's inference — small, resident (never LRU-evicted), the
+/// fixpoint's currency. Early cutoff is the point: a body edit that
+/// leaves the inferred return identical backdates here, and callers
+/// are spared. Unresolvable functions answer `mixed` (silence).
+#[salsa::tracked(cycle_fn = return_cycle_recover, cycle_initial = return_cycle_initial)]
+pub fn inferred_function_return<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    query: FunctionQuery<'db>,
+) -> TypeId<'db> {
+    let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
+    let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
+        return TypeId::mixed(db);
+    };
+    let index = analyzed_file_index(db, files);
+    let Ok(position) = index.binary_search_by_key(&ast_id.file, |(id, _)| *id) else {
+        return TypeId::mixed(db);
+    };
+    let Some(&(_, file)) = index.get(position) else {
+        return TypeId::mixed(db);
+    };
+    inferred_body_types(
+        db,
+        files,
+        stubs,
+        configuration,
+        file,
+        BodyQuery::new(db, ast_id),
+    )
+    .as_ref()
+    .map(|inferred| inferred.return_type)
+    .unwrap_or_else(|| TypeId::mixed(db))
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::panic,
+        clippy::indexing_slicing,
+        // The budget-below-the-cap assertion compares two constants on
+        // purpose: it pins `FIXPOINT_ITERATION_BUDGET < 200` so the
+        // salsa panic cap stays structurally unreachable.
+        clippy::assertions_on_constants
+    )]
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_db::{AnalyzedFileSet, SourceFile};
@@ -1018,5 +1135,30 @@ mod tests {
         let fixture = fixture(&["<?php function fill(array &$out): void {}
             function f() { $x = null; fill($x); return $x; }"]);
         assert_eq!(return_display(&fixture, 1), "array<int|string, mixed>");
+    }
+
+    #[test]
+    fn ascend_joins_monotonically_and_bails_to_mixed_past_the_budget() {
+        let db = TestDatabase::default();
+        let int = crate::TypeId::int(&db);
+        let string = crate::TypeId::string(&db);
+        let never = crate::TypeId::never(&db);
+        // Ascent from the bottom.
+        assert_eq!(super::ascend(&db, 0, never, int), int);
+        // A widening iterate joins, never replaces.
+        assert_eq!(
+            super::ascend(&db, 1, int, string),
+            crate::TypeId::union(&db, [int, string]),
+        );
+        // Convergence: identical join answers the provisional value.
+        assert_eq!(super::ascend(&db, 5, int, int), int);
+        // Budget exhaustion on a still-moving value: mixed, the
+        // deterministic bailout — never salsa's panic.
+        assert_eq!(
+            super::ascend(&db, super::FIXPOINT_ITERATION_BUDGET, int, string),
+            crate::TypeId::mixed(&db),
+        );
+        // The budget sits far below salsa's cap (MAX_ITERATIONS=200).
+        assert!(super::FIXPOINT_ITERATION_BUDGET < 200);
     }
 }

@@ -680,7 +680,16 @@ impl<'db> Walker<'db, '_, '_> {
             self.edge_counts.declared_return_edges += 1;
             return signature.value_type;
         }
-        let _ = source_exists;
+        if source_exists {
+            self.edge_counts.inferred_return_edges += 1;
+            return crate::inference::inferred_function_return(
+                db,
+                self.context.files,
+                self.context.stubs,
+                self.context.configuration,
+                crate::declared::FunctionQuery::new(db, key.to_owned()),
+            );
+        }
         TypeId::mixed(db)
     }
 
@@ -2205,11 +2214,7 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// A named function's declared signature, projected (`g(...)`).
-    fn projected_callable_of_function(
-        &mut self,
-        key: &str,
-        _source_exists: bool, // Task 10 threads this into the inferred fallback
-    ) -> TypeId<'db> {
+    fn projected_callable_of_function(&mut self, key: &str, source_exists: bool) -> TypeId<'db> {
         let db = self.db();
         let signature = declared_function_signature(
             db,
@@ -2218,7 +2223,27 @@ impl<'db> Walker<'db, '_, '_> {
             self.context.configuration,
             crate::declared::FunctionQuery::new(db, key.to_owned()),
         );
-        self.projected_callable(signature, None, TypeId::mixed(db))
+        // The fallback is consulted only when a signature exists but
+        // carries no usable declared return — `projected_callable`'s own
+        // condition. Compute the inferred return, and count its edge,
+        // exactly then: an eager call would over-count the instrument and
+        // spin the fixpoint for a result the declared tier discards.
+        let uses_fallback = signature
+            .as_ref()
+            .is_some_and(|signature| !self.declared_present(signature));
+        let return_fallback = if uses_fallback && source_exists {
+            self.edge_counts.inferred_return_edges += 1;
+            crate::inference::inferred_function_return(
+                db,
+                self.context.files,
+                self.context.stubs,
+                self.context.configuration,
+                crate::declared::FunctionQuery::new(db, key.to_owned()),
+            )
+        } else {
+            TypeId::mixed(db)
+        };
+        self.projected_callable(signature, None, return_fallback)
     }
 
     /// A method's declared signature on a resolved receiver, projected
