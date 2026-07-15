@@ -89,6 +89,12 @@ impl<'db> Environment<'db> {
         self.bindings.remove(subject);
     }
 
+    /// A keys snapshot for a sweep (the kill rule, `extract`, `eval`):
+    /// deterministic because `bindings` is a `BTreeMap`.
+    pub(crate) fn subjects(&self) -> Vec<NarrowingSubject> {
+        self.bindings.keys().cloned().collect()
+    }
+
     /// Forget everything (a `goto` label: any jump may land here).
     pub(crate) fn clear(&mut self) {
         self.bindings.clear();
@@ -246,16 +252,34 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// The current type of a subject: its binding, or the wide type —
-    /// `mixed` in this task (Task 8 widens property subjects to their
-    /// declared type).
+    /// `mixed` for a local, the declared type for a property subject
+    /// (decision 9's fallback; a dropped or never-narrowed property
+    /// still reads as its declaration).
     fn subject_type(
         &self,
         environment: &Environment<'db>,
         subject: &NarrowingSubject,
     ) -> TypeId<'db> {
-        environment
-            .binding(subject)
-            .unwrap_or_else(|| TypeId::mixed(self.db()))
+        if let Some(bound) = environment.binding(subject) {
+            return bound;
+        }
+        let db = self.db();
+        match subject {
+            NarrowingSubject::Local { .. } => TypeId::mixed(db),
+            NarrowingSubject::ThisProperty { name } | NarrowingSubject::StaticProperty { name } => {
+                self.context
+                    .owner_class_key
+                    .as_ref()
+                    .and_then(|key| {
+                        self.member_value_type(
+                            std::slice::from_ref(key),
+                            MemberKind::Property,
+                            name,
+                        )
+                    })
+                    .unwrap_or_else(|| TypeId::mixed(db))
+            }
+        }
     }
 
     /// `$this`: the defining class in a non-static method; `mixed`
@@ -493,11 +517,73 @@ impl<'db> Walker<'db, '_, '_> {
             .collect()
     }
 
-    /// An instance method call's result on a resolved receiver type.
-    fn method_call_result(&mut self, receiver: TypeId<'db>, name: &str) -> TypeId<'db> {
+    /// Decision 10: any call, instantiation, closure creation,
+    /// `yield`, `eval`, `include`, or shell-exec may run arbitrary
+    /// code that rewrites object state: every property binding dies.
+    /// Over-killing is the conservative direction — a dropped binding
+    /// reads as the declared type (`subject_type`'s fallback). Locals
+    /// survive: they are not addressable through arbitrary aliasing
+    /// the way `$this`/`self::` state is.
+    fn kill_property_bindings(&mut self, environment: &mut Environment<'db>) {
+        for subject in environment.subjects() {
+            if !matches!(subject, NarrowingSubject::Local { .. }) {
+                environment.remove(&subject);
+            }
+        }
+    }
+
+    /// The by-reference rules (design section 6): an argument bound to
+    /// a by-reference parameter takes the parameter's declared type
+    /// after the call (the general write-back; plan 7's stdlib
+    /// provider refines `$matches`), which also invalidates its
+    /// narrowing. Named labels resolve by name; a spread ends the
+    /// positional mapping (conservative).
+    fn apply_by_reference(
+        &mut self,
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        arguments: &[celerrate_semantics::CallArgument],
+        environment: &mut Environment<'db>,
+    ) {
+        let db = self.db();
+        for (index, argument) in arguments.iter().enumerate() {
+            if argument.spread {
+                break;
+            }
+            let parameter = match &argument.label {
+                Some(label) => parameters.iter().find(|parameter| parameter.name == *label),
+                None => parameters
+                    .get(index)
+                    .or_else(|| parameters.last().filter(|parameter| parameter.variadic)),
+            };
+            let Some(parameter) = parameter else {
+                continue;
+            };
+            if !parameter.by_reference {
+                continue;
+            }
+            if let Some(subject) = subject_of(self.context.ir, argument.value) {
+                environment.bind(
+                    subject,
+                    parameter
+                        .parameter_type
+                        .unwrap_or_else(|| TypeId::mixed(db)),
+                );
+            }
+        }
+    }
+
+    /// An instance method call's result on a resolved receiver type,
+    /// with the single resolved signature when exactly one receiver
+    /// key answered (the by-reference write-back channel; `None` for
+    /// an opaque or union receiver — conservative, recorded).
+    fn method_call_result(
+        &mut self,
+        receiver: TypeId<'db>,
+        name: &str,
+    ) -> (TypeId<'db>, Option<DeclaredSignature<'db>>) {
         match self.receiver_parts(receiver) {
             Some(keys) => self.method_call_result_for_keys(&keys, receiver, name),
-            None => TypeId::mixed(self.db()),
+            None => (TypeId::mixed(self.db()), None),
         }
     }
 
@@ -518,11 +604,11 @@ impl<'db> Walker<'db, '_, '_> {
         keys: &[String],
         receiver: TypeId<'db>,
         name: &str,
-    ) -> TypeId<'db> {
+    ) -> (TypeId<'db>, Option<DeclaredSignature<'db>>) {
         let db = self.db();
         let signatures = self.method_signatures(keys, name);
         if signatures.is_empty() {
-            return TypeId::mixed(db);
+            return (TypeId::mixed(db), None);
         }
         let mut result: Option<TypeId<'db>> = None;
         let mut any_declared = false;
@@ -541,7 +627,16 @@ impl<'db> Walker<'db, '_, '_> {
         if any_declared {
             self.edge_counts.declared_return_edges += 1;
         }
-        result.unwrap_or_else(|| TypeId::mixed(db))
+        let of = result.unwrap_or_else(|| TypeId::mixed(db));
+        // Exactly one receiver key: the signature is unambiguous, the
+        // by-reference write-back channel a caller may use. A union
+        // receiver's differing signatures write back nothing.
+        let signature = if keys.len() == 1 {
+            signatures.into_iter().next()
+        } else {
+            None
+        };
+        (of, signature)
     }
 
     fn statements(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
@@ -998,6 +1093,8 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::ShellExec { parts } => {
                 self.string_parts(&parts, environment);
+                // Decision 10: a shell-exec runs arbitrary code.
+                self.kill_property_bindings(environment);
                 TypeId::union(
                     db,
                     [
@@ -1019,16 +1116,14 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::Eval { argument } => {
                 self.expression(argument, environment);
-                // eval can rewrite every local: forget them all.
-                let locals: Vec<NarrowingSubject> = environment
-                    .bindings
-                    .keys()
-                    .filter(|subject| matches!(subject, NarrowingSubject::Local { .. }))
-                    .cloned()
-                    .collect();
-                for subject in locals {
-                    environment.remove(&subject);
+                // eval can rewrite every local and every property
+                // binding: forget them all (decision 10).
+                for subject in environment.subjects() {
+                    if matches!(subject, NarrowingSubject::Local { .. }) {
+                        environment.remove(&subject);
+                    }
                 }
+                self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
             BodyExpression::Exit { argument } => {
@@ -1056,10 +1151,15 @@ impl<'db> Walker<'db, '_, '_> {
                 if let Some(value) = value {
                     self.expression(value, environment);
                 }
+                // A `yield` hands control back to the caller, which may
+                // resume with arbitrary state changes (decision 10).
+                self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
             BodyExpression::Include { operand, .. } => {
                 self.expression(operand, environment);
+                // An include runs arbitrary code (decision 10).
+                self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
             BodyExpression::Match { subject, arms } => {
@@ -1157,10 +1257,23 @@ impl<'db> Walker<'db, '_, '_> {
                     receiver_type
                 };
                 match member {
-                    MemberReference::Named { name } => self
-                        .receiver_parts(resolving)
-                        .and_then(|keys| self.member_value_type(&keys, MemberKind::Property, &name))
-                        .unwrap_or_else(|| TypeId::mixed(db)),
+                    MemberReference::Named { name } => {
+                        // A narrowed (or assigned) stable-base property:
+                        // the environment wins over the declaration.
+                        // The receiver is still typed above (the table
+                        // covers it).
+                        if let Some(subject) = subject_of(self.context.ir, id)
+                            && let Some(bound) = environment.binding(&subject)
+                        {
+                            bound
+                        } else {
+                            self.receiver_parts(resolving)
+                                .and_then(|keys| {
+                                    self.member_value_type(&keys, MemberKind::Property, &name)
+                                })
+                                .unwrap_or_else(|| TypeId::mixed(db))
+                        }
+                    }
                     MemberReference::Computed { expression } => {
                         self.expression(expression, environment);
                         TypeId::mixed(db)
@@ -1198,10 +1311,20 @@ impl<'db> Walker<'db, '_, '_> {
                         }
                     }
                     // `Foo::$prop`: a static property is a Property.
-                    MemberReference::Variable { name } => keys
-                        .as_ref()
-                        .and_then(|keys| self.member_value_type(keys, MemberKind::Property, &name))
-                        .unwrap_or_else(|| TypeId::mixed(db)),
+                    // Same environment-first rule as `MemberAccess`.
+                    MemberReference::Variable { name } => {
+                        if let Some(subject) = subject_of(self.context.ir, id)
+                            && let Some(bound) = environment.binding(&subject)
+                        {
+                            bound
+                        } else {
+                            keys.as_ref()
+                                .and_then(|keys| {
+                                    self.member_value_type(keys, MemberKind::Property, &name)
+                                })
+                                .unwrap_or_else(|| TypeId::mixed(db))
+                        }
+                    }
                     MemberReference::Computed { expression } => {
                         self.expression(expression, environment);
                         TypeId::mixed(db)
@@ -1269,7 +1392,18 @@ impl<'db> Walker<'db, '_, '_> {
                         // Task 9's provider tier reads the argument
                         // types; until then they type for the table.
                         let _argument_types = self.typed_arguments(&arguments, environment);
-                        self.method_call_result(resolving, &name)
+                        let (of, signature) = self.method_call_result(resolving, &name);
+                        // Order is load-bearing: the receiver and
+                        // arguments were typed under the pre-call
+                        // environment above; the kill runs after, and
+                        // the write-back — a known postcondition of
+                        // this same call — is applied after the kill
+                        // so it survives (decision 10, design section 6).
+                        self.kill_property_bindings(environment);
+                        if let Some(signature) = signature {
+                            self.apply_by_reference(&signature.parameters, &arguments, environment);
+                        }
+                        of
                     }
                     Some(BodyExpression::ScopedAccess {
                         subject,
@@ -1278,19 +1412,39 @@ impl<'db> Walker<'db, '_, '_> {
                         let (subject_type, keys) = self.scoped_subject(subject, environment);
                         self.record(callee, TypeId::mixed(db));
                         let _argument_types = self.typed_arguments(&arguments, environment);
-                        match keys {
+                        let (of, signature) = match keys {
                             Some(keys) => {
                                 let receiver = subject_type;
                                 self.method_call_result_for_keys(&keys, receiver, &name)
                             }
-                            None => TypeId::mixed(db),
+                            None => (TypeId::mixed(db), None),
+                        };
+                        self.kill_property_bindings(environment);
+                        if let Some(signature) = signature {
+                            self.apply_by_reference(&signature.parameters, &arguments, environment);
                         }
+                        of
                     }
-                    _ => {
+                    other => {
                         // Task 9: named function calls and callable
                         // values. Until then: walk and stay silent.
                         self.expression(callee, environment);
                         self.typed_arguments(&arguments, environment);
+                        // `extract()` rewrites every local from its
+                        // array argument's keys: an aggressive sweep on
+                        // top of the general kill below (this fall-through
+                        // spot survives Task 9's rewrite of this arm).
+                        if let Some(BodyExpression::NamedReference { text }) = other {
+                            let name = text.strip_prefix('\\').unwrap_or(text.as_str());
+                            if name.eq_ignore_ascii_case("extract") {
+                                for subject in environment.subjects() {
+                                    if matches!(subject, NarrowingSubject::Local { .. }) {
+                                        environment.remove(&subject);
+                                    }
+                                }
+                            }
+                        }
+                        self.kill_property_bindings(environment);
                         TypeId::mixed(db)
                     }
                 }
@@ -1332,6 +1486,9 @@ impl<'db> Walker<'db, '_, '_> {
                 for argument in &arguments {
                     self.expression(argument.value, environment);
                 }
+                // Instantiation may run arbitrary constructor code
+                // (decision 10).
+                self.kill_property_bindings(environment);
                 of
             }
             BodyExpression::Index { subject, index } => {
@@ -1339,16 +1496,33 @@ impl<'db> Walker<'db, '_, '_> {
                 let index_type = index.map(|index| self.expression(index, environment));
                 operators::index_type(db, subject_type, index_type)
             }
-            BodyExpression::Closure { body, .. } => {
+            BodyExpression::Closure { body, uses, .. } => {
                 // Task 9 types closures and seeds captures; the inner
                 // body is walked now so the table covers its arena.
                 let mut inner = Environment::new();
                 self.statements_nested(&body, &mut inner);
+                // `use (&$x)`: the local is aliased into the closure's
+                // scope for as long as the closure lives, unknowable
+                // without alias analysis — degrade it now (decision 10).
+                for capture in &uses {
+                    if capture.by_reference {
+                        environment.bind(
+                            NarrowingSubject::Local {
+                                name: capture.name.clone(),
+                            },
+                            TypeId::mixed(db),
+                        );
+                    }
+                }
+                // Closure creation may run arbitrary code (decision 10).
+                self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
             BodyExpression::ArrowFunction { body, .. } => {
                 let mut inner = environment.clone();
                 let _ = self.expression_nested(body, &mut inner);
+                // Decision 10: closure creation kills property bindings.
+                self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
         };

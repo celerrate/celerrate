@@ -820,4 +820,92 @@ mod tests {
             function f(?A $a) { return $a?->b()?->c(); }"]);
         assert_eq!(return_display(&fixture, 4), "int|null");
     }
+
+    #[test]
+    fn the_lazy_getter_narrows_its_property() {
+        let fixture = fixture(&["<?php class Service {}
+            class Locator {
+                private ?Service $service = null;
+                public function get(): object {
+                    if ($this->service === null) {
+                        $this->service = new Service();
+                    }
+                    return $this->service;
+                }
+            }"]);
+        // Numbering: Service 0, Locator 1, property 2, get 3.
+        assert_eq!(return_display(&fixture, 3), "service");
+    }
+
+    #[test]
+    fn a_method_call_kills_property_narrowings() {
+        let fixture = fixture(&["<?php class Service {}
+            class Holder {
+                private ?Service $service = null;
+                private function log(): void {}
+                public function get() {
+                    if ($this->service === null) { return 1; }
+                    $this->log();
+                    return $this->service;
+                }
+            }"]);
+        // The call re-widens the property to its declared type. The
+        // brief's original expectation ("null|1|service") transposed
+        // the display's established null-last convention (`display.rs`'s
+        // `composites_render_with_null_last_in_unions`, already
+        // corrected for the same reason above): non-null constituents
+        // render in structural rank order (the int literal before the
+        // class), null last.
+        assert_eq!(return_display(&fixture, 4), "1|service|null");
+    }
+
+    #[test]
+    fn by_reference_arguments_take_the_write_back_type() {
+        let fixture = fixture(&[
+            "<?php class W { public function fill(array &$out): void {} }
+            function f(W $w) {
+                $x = null;
+                $w->fill($x);
+                return $x;
+            }",
+        ]);
+        assert_eq!(return_display(&fixture, 2), "array<int|string, mixed>");
+    }
+
+    #[test]
+    fn a_by_reference_closure_use_degrades_the_local() {
+        let fixture = fixture(&["<?php function f() {
+                $x = 'a';
+                $g = function () use (&$x) {};
+                return $x;
+            }"]);
+        assert_eq!(return_display(&fixture, 0), "mixed");
+    }
+
+    #[test]
+    fn extract_forgets_every_local() {
+        let fixture =
+            fixture(&["<?php function f() { $x = 1; extract(['x' => 'a']); return $x; }"]);
+        assert_eq!(return_display(&fixture, 0), "mixed");
+    }
+
+    #[test]
+    fn a_by_reference_property_argument_takes_the_write_back_type() {
+        let fixture = fixture(&["<?php class Holder {
+                private ?int $count = null;
+                private function fill(int &$out): void {}
+                public function run() {
+                    $this->fill($this->count);
+                    return $this->count;
+                }
+            }"]);
+        // Numbering: Holder 0, property 1, fill 2, run 3.
+        // The kill runs first (dropping any property narrowing), then
+        // the by-reference write-back binds `$this->count` to `&$out`'s
+        // declared `int` — so the final read is the write-back type,
+        // NOT the wider declared property type `int|null`. This guards
+        // the kill-then-write-back order against Task 9's rewrite of
+        // this same Call arm (which reuses `apply_by_reference`).
+        assert_eq!(return_display(&fixture, 3), "int");
+    }
 }
