@@ -1,0 +1,248 @@
+//! The suppression-directive recognizer: the bridge's implementation
+//! of the comment-directive extension point.
+//!
+//! # The mapping table (bridge-internal, design section 5)
+//!
+//! | Written form                    | Comment kind | Directive                        |
+//! |---------------------------------|--------------|----------------------------------|
+//! | `@phpstan-ignore-line`          | any          | suppress, current line           |
+//! | `@phpstan-ignore-next-line`     | any          | suppress, next line              |
+//! | `@phpstan-ignore <identifiers>` | any          | suppress, current and next line  |
+//! | `@psalm-suppress <identifiers>` | docblock     | suppress, annotated declaration  |
+//! | `@psalm-suppress <identifiers>` | line, block  | suppress, current and next line  |
+//!
+//! PHPStan 1.11's bare `@phpstan-ignore` targets its own line when the
+//! comment trails code and the next line otherwise; covering both
+//! lines is the superset that under-suppresses neither placement
+//! (design section 5: over-suppression, never under-suppression). A
+//! docblock-attached `@psalm-suppress` maps to the annotated
+//! declaration's whole span — its Psalm scope, not the docblock's own
+//! line where no diagnostic ever fires. Identifiers are carried, never
+//! matched: identifier-level correspondence is the rule framework's.
+//! Malformed content yields fewer identifiers or no directive, never
+//! an error — no docblock diagnostics.
+
+use celerrate_plugin::{CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveScope};
+
+use crate::syntax::PhpdocBridge;
+
+const PHPSTAN_IGNORE: &str = "@phpstan-ignore";
+const PSALM_SUPPRESS: &str = "@psalm-suppress";
+
+impl CommentDirectiveProvider for PhpdocBridge {
+    fn directives(&self, kind: CommentKind, text: &str) -> Vec<CommentDirective> {
+        comment_directives(kind, text)
+    }
+}
+
+/// Every directive one comment carries, in written order. Total over
+/// arbitrary input.
+pub fn comment_directives(kind: CommentKind, text: &str) -> Vec<CommentDirective> {
+    let mut directives = Vec::new();
+    let mut rest = text;
+    while let Some(position) = rest.find('@') {
+        let Some(tail) = rest.get(position..) else {
+            break;
+        };
+        if let Some(after) = tail.strip_prefix(PHPSTAN_IGNORE) {
+            directives.extend(phpstan_directive(after));
+        } else if let Some(after) = tail.strip_prefix(PSALM_SUPPRESS) {
+            directives.extend(psalm_directive(kind, after));
+        }
+        // `@` is ASCII: one past it is always a character boundary.
+        rest = rest.get(position + 1..).unwrap_or("");
+    }
+    directives
+}
+
+/// Classifies what follows `@phpstan-ignore`, longest suffix first —
+/// `-next-line` before `-line` before the bare identifier-bearing form.
+fn phpstan_directive(after_tag: &str) -> Option<CommentDirective> {
+    if let Some(rest) = after_tag.strip_prefix("-next-line") {
+        ends_word(rest).then(|| suppress(DirectiveScope::NextLine, Vec::new()))
+    } else if let Some(rest) = after_tag.strip_prefix("-line") {
+        ends_word(rest).then(|| suppress(DirectiveScope::CurrentLine, Vec::new()))
+    } else if ends_word(after_tag) {
+        Some(suppress(
+            DirectiveScope::CurrentAndNextLine,
+            identifiers_of(after_tag),
+        ))
+    } else {
+        None
+    }
+}
+
+fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirective> {
+    if !ends_word(after_tag) {
+        return None;
+    }
+    let scope = match kind {
+        CommentKind::Docblock => DirectiveScope::AnnotatedDeclaration,
+        CommentKind::Line | CommentKind::Block => DirectiveScope::CurrentAndNextLine,
+    };
+    Some(suppress(scope, identifiers_of(after_tag)))
+}
+
+fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
+    CommentDirective::Suppress { scope, identifiers }
+}
+
+/// A tag ends at a word boundary: the end of the comment, whitespace,
+/// or a closing `*/`. `@phpstan-ignored` is prose, not a directive.
+fn ends_word(after: &str) -> bool {
+    after.is_empty()
+        || after.starts_with(|character: char| character.is_whitespace())
+        || after.starts_with("*/")
+}
+
+/// The identifier list after a bare tag: the rest of that line, a
+/// parenthesized trailer dropped (`@phpstan-ignore method.notFound
+/// (nullable receiver)`), the closing `*/` dropped, comma-separated,
+/// trimmed of whitespace and docblock decoration. Malformed content
+/// yields fewer identifiers, never a lost directive.
+fn identifiers_of(after_tag: &str) -> Vec<String> {
+    let mut line = after_tag.lines().next().unwrap_or("");
+    if let Some((before, _)) = line.split_once("*/") {
+        line = before;
+    }
+    if let Some((before, _)) = line.split_once('(') {
+        line = before;
+    }
+    line.split(',')
+        .map(|identifier| identifier.trim().trim_matches('*').trim())
+        .filter(|identifier| !identifier.is_empty())
+        .map(str::to_owned)
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+
+    use super::*;
+    use celerrate_plugin::{CommentDirective, CommentKind, DirectiveScope};
+
+    fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
+        CommentDirective::Suppress {
+            scope,
+            identifiers: identifiers.iter().map(|s| (*s).to_owned()).collect(),
+        }
+    }
+
+    #[test]
+    fn ignore_line_suppresses_the_current_line_in_any_comment_kind() {
+        for (kind, text) in [
+            (CommentKind::Line, "// @phpstan-ignore-line"),
+            (CommentKind::Line, "# @phpstan-ignore-line"),
+            (CommentKind::Block, "/* @phpstan-ignore-line */"),
+            (CommentKind::Docblock, "/** @phpstan-ignore-line */"),
+        ] {
+            assert_eq!(
+                comment_directives(kind, text),
+                vec![suppress(DirectiveScope::CurrentLine, &[])],
+                "{text}",
+            );
+        }
+    }
+
+    #[test]
+    fn ignore_next_line_suppresses_the_next_line_and_is_not_read_as_the_bare_form() {
+        assert_eq!(
+            comment_directives(CommentKind::Line, "// @phpstan-ignore-next-line"),
+            vec![suppress(DirectiveScope::NextLine, &[])],
+        );
+    }
+
+    #[test]
+    fn the_bare_form_carries_identifiers_and_covers_both_placements() {
+        assert_eq!(
+            comment_directives(
+                CommentKind::Line,
+                "// @phpstan-ignore method.notFound, property.notFound (nullable receiver)",
+            ),
+            vec![suppress(
+                DirectiveScope::CurrentAndNextLine,
+                &["method.notFound", "property.notFound"],
+            )],
+        );
+        assert_eq!(
+            comment_directives(CommentKind::Line, "// @phpstan-ignore"),
+            vec![suppress(DirectiveScope::CurrentAndNextLine, &[])],
+        );
+    }
+
+    #[test]
+    fn psalm_suppress_in_a_docblock_targets_the_annotated_declaration() {
+        assert_eq!(
+            comment_directives(
+                CommentKind::Docblock,
+                "/**\n * @psalm-suppress PossiblyNullReference, InvalidArgument\n */",
+            ),
+            vec![suppress(
+                DirectiveScope::AnnotatedDeclaration,
+                &["PossiblyNullReference", "InvalidArgument"],
+            )],
+        );
+    }
+
+    #[test]
+    fn psalm_suppress_in_an_ordinary_comment_covers_both_lines() {
+        assert_eq!(
+            comment_directives(CommentKind::Block, "/* @psalm-suppress InvalidArgument */"),
+            vec![suppress(
+                DirectiveScope::CurrentAndNextLine,
+                &["InvalidArgument"],
+            )],
+        );
+    }
+
+    #[test]
+    fn a_docblock_may_carry_several_directives() {
+        assert_eq!(
+            comment_directives(
+                CommentKind::Docblock,
+                "/**\n * @psalm-suppress UndefinedClass\n * @phpstan-ignore-next-line\n */",
+            ),
+            vec![
+                suppress(DirectiveScope::AnnotatedDeclaration, &["UndefinedClass"]),
+                suppress(DirectiveScope::NextLine, &[]),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_tag_must_end_at_a_word_boundary() {
+        // Prose that merely embeds the letters is not a directive.
+        assert!(comment_directives(CommentKind::Line, "// @phpstan-ignored").is_empty());
+        assert!(comment_directives(CommentKind::Line, "// @phpstan-ignore-linear").is_empty());
+        assert!(comment_directives(CommentKind::Line, "// @psalm-suppressive").is_empty());
+    }
+
+    #[test]
+    fn plain_prose_carries_nothing() {
+        assert!(comment_directives(CommentKind::Line, "// a plain remark").is_empty());
+        assert!(comment_directives(CommentKind::Docblock, "/** @param int $x */").is_empty());
+    }
+
+    #[test]
+    fn adversarial_inputs_never_panic() {
+        let inputs = [
+            "@phpstan-ignore",
+            "@phpstan-ignore-",
+            "@phpstan-ignore-next-line@phpstan-ignore-line",
+            "@@@@phpstan-ignore@psalm-suppress",
+            "// @phpstan-ignore ((((((",
+            "// @phpstan-ignore ,,,,,",
+            "/* @psalm-suppress */ trailing",
+            "@psalm-suppress \u{0} \u{7f} é漢字",
+            "@",
+            "",
+            "*/ @phpstan-ignore-line /*",
+        ];
+        for input in inputs {
+            for kind in [CommentKind::Line, CommentKind::Block, CommentKind::Docblock] {
+                let _ = comment_directives(kind, input);
+            }
+        }
+    }
+}

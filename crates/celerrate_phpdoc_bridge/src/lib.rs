@@ -12,6 +12,7 @@
 //! construct.
 
 mod dialect;
+mod directives;
 mod expression;
 mod lexer;
 mod lowering;
@@ -19,6 +20,7 @@ mod syntax;
 mod tags;
 mod virtual_members;
 
+pub use directives::comment_directives;
 pub use expression::{
     CallableParameterExpression, ConditionalSubject, ShapeFieldExpression, ShapeKeyExpression,
     TypeExpression, UnsealedTail, parse_type_expression_prefix, parse_type_expression_text,
