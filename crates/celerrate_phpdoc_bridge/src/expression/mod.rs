@@ -17,6 +17,8 @@
 //! No `unwrap`, no indexing: only `chars().peekable()` and owned
 //! strings.
 
+mod tokens;
+
 use std::iter::Peekable;
 use std::str::Chars;
 
