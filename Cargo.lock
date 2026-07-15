@@ -173,6 +173,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_phpdoc_bridge"
+version = "0.0.2"
+dependencies = [
+ "celerrate_plugin",
+]
+
+[[package]]
 name = "celerrate_plugin"
 version = "0.0.2"
 dependencies = [
