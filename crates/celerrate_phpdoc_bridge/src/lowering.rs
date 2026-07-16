@@ -412,9 +412,13 @@ fn lower_conditional<'db>(
     let then_lowered = lower(site, scope, then_branch);
     let otherwise_lowered = lower(site, scope, otherwise_branch);
     // An in-scope template subject resolves to `TypeId::conditional`.
-    // Permanently for parameter subjects (plan 6's debt) and for a
-    // template name not currently in scope, the undecided fallback is
-    // the branch union (design section 3).
+    // For a parameter subject the undecided fallback is the branch
+    // union permanently, not merely until a later plan: no
+    // expression-to-template resolution exists at lowering time for a
+    // parameter subject, and none is planned (decision 9, recorded
+    // debt — the fallback is permanent-until-demanded). The same
+    // fallback covers a template name not currently in scope (design
+    // section 3).
     if let ConditionalSubject::Template(name) = subject
         && let Some(template) = scope.resolve_template(name)
     {

@@ -1241,8 +1241,8 @@ impl<'db> Walker<'db, '_, '_> {
     /// contradicts `union_receivers_join_and_opaque_receivers_stay_silent`'s
     /// expected `"int|string"`). The gate failing on a key drops that
     /// key to the method-inferred tier (decision 3's fourth tier,
-    /// plan 6): the callee's body answers, and `mixed` remains only
-    /// when even that is silent.
+    /// `inferred_method_return`): the callee's body answers, and
+    /// `mixed` remains only when even that is silent.
     /// Placeholders substitute against each signature's *own*
     /// declaring owner and the receiver through `member_boundary_type`
     /// (decision 1) — the owner is resolved per key, not once for the
@@ -2589,7 +2589,17 @@ impl<'db> Walker<'db, '_, '_> {
                             })
                             .unwrap_or_else(|| TypeId::mixed(db))
                     }
-                    // Decision 12: no folded key exists yet.
+                    // Recorded debt (decision 14): anonymous-class
+                    // receivers (`new class { }`) stay `mixed` — no
+                    // folded key exists yet for an anonymous class
+                    // literal, and the expression-to-key path belongs
+                    // with the checks' receiver-resolution surface
+                    // (plan 8), not here: no diagnostic consumes
+                    // receiver types before plan 8, so building the
+                    // path here would ship untested-by-consumer
+                    // machinery. `Missing` (a malformed `new` with no
+                    // class reference at all) shares the same silent
+                    // fallback.
                     ClassReference::Anonymous { .. } | ClassReference::Missing => TypeId::mixed(db),
                 };
                 let of = self.member_boundary_type(

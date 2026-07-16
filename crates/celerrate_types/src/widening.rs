@@ -214,7 +214,7 @@ pub fn join<'db>(
 /// Literal-to-general widening, recursive through unions, intersections,
 /// arrays, and shape field values. Class arguments, callables, templates,
 /// and the symbolic forms keep their structure (invariance; substitution
-/// is plan 6's).
+/// through those forms is `substitution.rs`'s `substitute`).
 pub fn widened_literals<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> TypeId<'db> {
     match of.data(db) {
         TypeData::Bool { literal: Some(_) } => TypeId::bool(db),

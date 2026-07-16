@@ -144,8 +144,11 @@ pub enum TypeData<'db> {
     ValueOf {
         subject: TypeId<'db>,
     },
-    /// A conditional return type, evaluated at the call site (plan 6);
-    /// judgments fall back to the branch union. Rank 18.
+    /// A conditional return type, evaluated at the call site by the
+    /// call-site solver (`solver.rs`, decision 10) and by direct
+    /// substitution (`substitution.rs`'s `substitute`) once the
+    /// subject is decidable; an undecidable or still-symbolic subject
+    /// falls back to the branch union. Rank 18.
     Conditional {
         subject: TypeId<'db>,
         matches: TypeId<'db>,
@@ -154,7 +157,8 @@ pub enum TypeData<'db> {
         negated: bool,
     },
     /// The late-static-binding placeholders, symbolic until call-site
-    /// substitution (plan 6). Ranks 19, 20, 21.
+    /// substitution through `member_boundary_type` (decision 1). Ranks
+    /// 19, 20, 21.
     SelfPlaceholder,
     ParentPlaceholder,
     StaticPlaceholder,

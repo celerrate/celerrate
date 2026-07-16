@@ -4,6 +4,17 @@
 //! This is the delivery path of the Doctrine-on-Symfony repository
 //! pattern: `@extends ServiceEntityRepository<User>` reaches
 //! `$repository->find($id)` through these queries.
+//!
+//! **Recorded debt.** Stub ancestors carry no generic arguments:
+//! [`ancestor_arguments`] skips any ancestry edge whose `resolved` key
+//! is absent (a stub target), so a class extending a stub generic
+//! ancestor (`ArrayIterator`, `ArrayObject`, and the rest of the
+//! SPL/stdlib generics) never threads that ancestor's arguments
+//! through here — a receiver reaching such an ancestor degrades to the
+//! protocol-member fallback (`flow.rs`'s iteration-typing chain,
+//! decision 12) instead of a threaded generic. Curating the
+//! phpstorm-stubs surface to carry its own `@template`/`@extends`
+//! annotations is plan 7's debt, not this plan's.
 
 use std::collections::BTreeMap;
 

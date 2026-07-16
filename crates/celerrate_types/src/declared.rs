@@ -124,7 +124,8 @@ pub(crate) fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String
 
 /// How a declared element's final type was obtained — the trace the
 /// design requires for annotation refinement (tasks 5-6 set the
-/// non-native variants; the ground-truth harness of plan 6 reads it).
+/// non-native variants; the `cargo xtask ground-truth` harness reads
+/// it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Trust {
     /// No annotation: the native declaration (or `mixed`) stands.

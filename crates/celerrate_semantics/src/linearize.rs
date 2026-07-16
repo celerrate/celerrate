@@ -5,8 +5,9 @@
 //! `class A extends B; class B extends A` is a detected, flagged
 //! condition, never a salsa cycle (spec section 2's mechanism).
 //! Ancestry edges are kept for the type engine's generic-argument
-//! threading (plan 6); stub ancestors are a recorded boundary until
-//! the stub signature payload exists (plan 3).
+//! threading (`celerrate_types::inheritance`'s `ancestor_arguments`);
+//! stub ancestors are a recorded boundary until the stub signature
+//! payload exists (plan 3).
 //!
 //! Precedence between two *transitive* sources of one member follows
 //! walk order, which is declaration order per level: traits first (they
@@ -83,7 +84,7 @@ pub enum AncestorRelation {
 }
 
 /// One inheritance edge, kept in walk order for the type engine's
-/// generic-argument threading (plan 6).
+/// generic-argument threading (`ancestor_arguments`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AncestorEdge {
     pub relation: AncestorRelation,
