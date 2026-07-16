@@ -14,6 +14,7 @@ celerrate_project = { path = "../celerrate_project" }
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_source = { path = "../celerrate_source" }
 celerrate_stubs = { path = "../celerrate_stubs" }
+celerrate_syntax = { path = "../celerrate_syntax" }
 
 [lints]
 workspace = true

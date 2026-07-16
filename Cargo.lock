@@ -264,6 +264,7 @@ dependencies = [
  "celerrate_semantics",
  "celerrate_source",
  "celerrate_stubs",
+ "celerrate_syntax",
  "salsa",
 ]
 
