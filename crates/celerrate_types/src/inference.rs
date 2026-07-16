@@ -1784,6 +1784,43 @@ function caller() { return first(1); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "1");
     }
 
+    #[test]
+    fn the_shape_arm_recurses_field_wise_against_a_shape_argument() {
+        // Issue #40: decision 10's prose says "arrays, shapes, and
+        // callables recurse element-wise", but `collect` had no
+        // declared-`Shape` arm — a shape-typed parameter contributed
+        // no constraint and the return fell to `mixed`. The argument
+        // `['id' => 42, 'name' => 'Ada']` infers a genuine `Shape`
+        // through ordinary body inference; a declared `array{id: T}`
+        // must bind `T` field-wise to the int literal `42`, and a
+        // declared `array{name: T}` to `'Ada'`. The two assertions
+        // together kill every near mutant: `mixed` (no arm), a
+        // key/value mix-up (`'id'`/`'name'`), a first- or last-field
+        // binding that ignores the declared key (the shape's sorted
+        // field order puts `id` first and `name` last, so each
+        // assertion catches one direction), and an every-field union
+        // (`42|'Ada'`).
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template T
+ * @param array{id: T} $data
+ * @return T
+ */
+function unwrap_id($data) {}
+/**
+ * @template T
+ * @param array{name: T} $data
+ * @return T
+ */
+function unwrap_name($data) {}
+function caller_id() { return unwrap_id(['id' => 42, 'name' => 'Ada']); }
+function caller_name() { return unwrap_name(['id' => 42, 'name' => 'Ada']); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller_id"), "42");
+        assert_eq!(caller_return_display(&f, "app\\caller_name"), "'Ada'");
+    }
+
     // Debt 3: `solved_call_result` (`flow.rs`) documents the provider
     // tier as needing "no special exemption" from call-site solving
     // because a provider's answer is "already concrete, so
