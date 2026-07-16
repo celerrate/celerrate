@@ -24,12 +24,18 @@
 //! genuine `Shape` on the argument side through ordinary body
 //! inference, which is why task 11 could skip this form. Recorded debt: the
 //! crate has no other shared test-support module, mirroring the
-//! semantic-core crates' own duplicated test fakes.
+//! semantic-core crates' own duplicated test fakes. Issue #36 adds
+//! `minimal_stub_index()`, the default stub surface every module
+//! fixture carries.
 
 use std::sync::Arc;
 
 use celerrate_db::testing::TestDatabase;
 use celerrate_semantics::PluginIdentity;
+use celerrate_stubs::{
+    StubAvailability, StubClassSurface, StubIndex, StubMember, StubMemberKind, StubSignature,
+    StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+};
 
 use crate::representation::{ShapeField, ShapeKey, TypeId};
 use crate::type_syntax::{
@@ -484,4 +490,107 @@ pub(crate) fn register_fake_syntax(db: &TestDatabase) {
     }])
     .durability(salsa::Durability::HIGH)
     .new(db);
+}
+
+/// Issue #36: the minimal, realistic builtin surface every module
+/// `fixture()` carries by default, so stub-dependent shapes (a
+/// transitive protocol implementor, a stub member's declared return)
+/// are expressible without a hand-built index. Minimal and
+/// grow-on-demand: exactly the symbols PR #35's findings needed plus
+/// the commonest builtins in test sources — no functions, no
+/// constants, until a test demands one. A test whose documented
+/// intent requires an unresolvable name uses its module's
+/// `fixture_with_empty_stubs` variant instead; the surface never
+/// shrinks to accommodate one test.
+///
+/// `ArrayObject → IteratorAggregate` is deliberately a surface
+/// parent (the transitive stub frontier `linearize.rs` folds into
+/// `stub_ancestors`), not an edge any test source declares: it is
+/// the exact shape that hid PR #35's iteration-gate bug.
+pub(crate) fn minimal_stub_index() -> StubIndex {
+    fn class_like(name: &str, kind: StubSymbolKind) -> StubSymbol {
+        StubSymbol {
+            name: name.to_owned(),
+            kind,
+            availability: StubAvailability::ALWAYS,
+        }
+    }
+    fn method(name: &str, return_type: &str) -> StubMember {
+        StubMember {
+            kind: StubMemberKind::Method,
+            name: name.to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: Some(StubSignature {
+                parameters: vec![],
+                return_type: VersionedTypeText::from_text(Some(return_type.to_owned())),
+                by_reference: false,
+            }),
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        }
+    }
+    fn parents(names: &[&str]) -> Vec<String> {
+        names.iter().map(|name| (*name).to_owned()).collect()
+    }
+    StubIndex::new(
+        vec![
+            class_like("ArrayAccess", StubSymbolKind::Interface),
+            class_like("ArrayIterator", StubSymbolKind::Class),
+            class_like("ArrayObject", StubSymbolKind::Class),
+            class_like("Countable", StubSymbolKind::Interface),
+            class_like("Exception", StubSymbolKind::Class),
+            class_like("Iterator", StubSymbolKind::Interface),
+            class_like("IteratorAggregate", StubSymbolKind::Interface),
+            class_like("Stringable", StubSymbolKind::Interface),
+            class_like("Throwable", StubSymbolKind::Interface),
+            class_like("Traversable", StubSymbolKind::Interface),
+            class_like("stdClass", StubSymbolKind::Class),
+        ],
+        vec![],
+        vec![
+            (
+                "ArrayIterator".to_owned(),
+                StubClassSurface {
+                    parents: parents(&["Iterator", "ArrayAccess", "Countable"]),
+                    members: vec![
+                        method("current", "mixed"),
+                        method("key", "mixed"),
+                        method("next", "void"),
+                        method("rewind", "void"),
+                        method("valid", "bool"),
+                    ],
+                },
+            ),
+            (
+                "ArrayObject".to_owned(),
+                StubClassSurface {
+                    parents: parents(&["IteratorAggregate", "ArrayAccess", "Countable"]),
+                    members: vec![method("getIterator", "ArrayIterator")],
+                },
+            ),
+            (
+                "Exception".to_owned(),
+                StubClassSurface {
+                    parents: parents(&["Throwable"]),
+                    members: vec![method("getMessage", "string")],
+                },
+            ),
+            (
+                "Iterator".to_owned(),
+                StubClassSurface {
+                    parents: parents(&["Traversable"]),
+                    members: vec![],
+                },
+            ),
+            (
+                "IteratorAggregate".to_owned(),
+                StubClassSurface {
+                    parents: parents(&["Traversable"]),
+                    members: vec![],
+                },
+            ),
+        ],
+    )
 }

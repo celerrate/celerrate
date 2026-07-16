@@ -3503,4 +3503,42 @@ function caller(Users $users) {
         };
         assert_eq!(caller_return_display(&f, "caller"), "element|null");
     }
+
+    /// Issue #36's contract: the crate's default fixture surface can
+    /// express stub-dependent shapes. This pins the builder itself by
+    /// hand-building a `Fixture` around it (the module's own `fixture()`
+    /// switches to the builder in the same task); `getIterator()` through
+    /// a bare `extends \ArrayObject` discriminates — an empty index
+    /// answers `mixed`, the surface answers `arrayiterator`.
+    #[test]
+    fn the_minimal_stub_surface_expresses_the_transitive_protocol_shape() {
+        let db = TestDatabase::default();
+        let source = r#"<?php
+class Users extends \ArrayObject {}
+function caller(Users $users) { return $users->getIterator(); }
+"#;
+        let handles = vec![SourceFile::new(
+            &db,
+            FileId::new(0),
+            source.as_bytes().to_vec(),
+        )];
+        let files = AnalyzedFileSet::new(&db, handles.clone());
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        let f = Fixture {
+            db,
+            handles,
+            files,
+            stubs,
+            configuration,
+        };
+        assert_eq!(caller_return_display(&f, "caller"), "arrayiterator");
+    }
 }
