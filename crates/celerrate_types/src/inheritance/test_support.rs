@@ -20,10 +20,14 @@ use crate::type_syntax::{
 
 /// A deliberately tiny notation for these tests, one tag per docblock
 /// line: `@template NAME`, `@extends NAME<ARG, ...>`, `@implements
-/// NAME<ARG, ...>`, `@return NAME`, `@param NAME $variable`. An `ARG`,
-/// a `@return` target, or a `@param` type that names a template
-/// declared in the same docblock lowers to that template; anything
-/// else lowers to a class qualified at the site and folded.
+/// NAME<ARG, ...>`, `@return NAME`, `@param NAME $variable` or `@param
+/// NAME<ARG, ...> $variable`. An `ARG`, a `@return` target, or a
+/// `@param` type that names a template declared in the same docblock
+/// lowers to that template; anything else lowers to a class qualified
+/// at the site and folded — a `@param` head with `<ARG, ...>` lowers
+/// to that class carrying its arguments (`TypeId::class`'s
+/// `class_arguments`), the one shape in this notation that can hand a
+/// receiver its own class-level arguments.
 pub(crate) struct FakeSyntax;
 
 impl FakeSyntax {
@@ -104,6 +108,34 @@ impl FakeSyntax {
             Self::lower_name(site, own_templates, written)
         }
     }
+
+    /// A `@param` type text, generic-argument aware: `NAME<ARG, ...>`
+    /// reuses the same `split_once('<')` / `strip_suffix('>')` shape
+    /// `@extends`/`@implements` already parse (see
+    /// `parse_docblock`'s `@extends`/`@implements` arm), so a receiver
+    /// carrying `class_arguments` is actually expressible from a
+    /// `@param` tag — otherwise `member_boundary_type`'s
+    /// class-argument-binding branch has no fixture that can drive
+    /// it. A bare name falls through to the ordinary
+    /// class-or-own-template rule.
+    fn lower_param_type<'db>(
+        site: &AnnotationSite<'db, '_>,
+        own_templates: &[String],
+        written: &str,
+    ) -> TypeId<'db> {
+        let db = site.database();
+        if let Some((head, rest)) = written.split_once('<')
+            && let Some(arguments_text) = rest.strip_suffix('>')
+        {
+            let arguments: Vec<TypeId<'db>> = arguments_text
+                .split(',')
+                .map(|argument| Self::lower_member_name(site, own_templates, argument.trim()))
+                .collect();
+            let qualified = site.qualify_class_name(head.trim()).to_lowercase();
+            return TypeId::class(db, &qualified, arguments);
+        }
+        Self::lower_member_name(site, own_templates, written)
+    }
 }
 
 impl TypeSyntax for FakeSyntax {
@@ -168,11 +200,16 @@ impl TypeSyntax for FakeSyntax {
                 ));
             }
             if let Some(rest) = line.strip_prefix("@param ") {
-                // `@param NAME $variable`: the same class-or-own-template
-                // rule as `@return`, keyed by the variable name.
-                let mut parts = rest.split_whitespace();
-                if let (Some(type_name), Some(variable)) = (parts.next(), parts.next()) {
-                    let parameter_type = Self::lower_member_name(site, &template_names, type_name);
+                // `@param NAME $variable` or `@param NAME<ARG, ...>
+                // $variable`: the variable is always the last
+                // whitespace-separated token, so splitting on the
+                // *last* space keeps a comma-separated argument
+                // list's internal spaces intact — plain
+                // `split_whitespace` would tear `Box<int, string>`
+                // apart.
+                if let Some((type_text, variable)) = rest.trim().rsplit_once(' ') {
+                    let parameter_type =
+                        Self::lower_param_type(site, &template_names, type_text.trim());
                     let parameter_name = variable.trim_start_matches('$').to_owned();
                     parsed.parameters.push((parameter_name, parameter_type));
                 }

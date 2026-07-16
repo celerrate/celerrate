@@ -384,9 +384,13 @@ impl<'db> Walker<'db, '_, '_> {
     /// answer applies, the same control-flow-alternative shape as a
     /// branch join (see the module's `join`-vs-`union` convention);
     /// `None` when no key answers. Every resolving key's value funnels
-    /// through `member_boundary_type` against its declaring owner and
-    /// `receiver` (decision 1): a `self`/`static`/`parent`-typed
-    /// property or constant substitutes exactly like a method return.
+    /// through `member_boundary_type` against its *own* declaring
+    /// owner and `receiver` (decision 1): a `self`/`static`/`parent`-
+    /// typed property or constant substitutes exactly like a method
+    /// return. The owner is resolved per key, not once for the whole
+    /// call — a union receiver `A|B` where both declare the member
+    /// answers each key against its own class, never both against
+    /// whichever key happened to resolve first (Finding 3).
     fn member_value_type(
         &self,
         keys: &[String],
@@ -395,7 +399,6 @@ impl<'db> Walker<'db, '_, '_> {
         receiver: TypeId<'db>,
     ) -> Option<TypeId<'db>> {
         let db = self.db();
-        let owner = self.member_owner(keys, kind, name);
         keys.iter()
             .filter_map(|key| {
                 declared_member_signature(
@@ -406,15 +409,24 @@ impl<'db> Walker<'db, '_, '_> {
                     MemberQuery::new(db, key.clone(), kind, folded_member_key(kind, name)),
                 )
                 .map(|signature| {
+                    let owner = self.member_owner(key, kind, name);
                     self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
                 })
             })
             .reduce(|left, right| TypeId::union(db, [left, right]))
     }
 
-    /// The declared method signatures across the receiver keys, in
-    /// key order (empty when none resolves).
-    fn method_signatures(&self, keys: &[String], name: &str) -> Vec<DeclaredSignature<'db>> {
+    /// The declared method signatures across the receiver keys, each
+    /// paired with the key that resolved it (some keys in `keys` may
+    /// not resolve at all, so a plain positional zip against `keys`
+    /// would misalign once that happens — the pairing keeps a
+    /// per-key owner lookup honest), in key order (empty when none
+    /// resolves).
+    fn method_signatures(
+        &self,
+        keys: &[String],
+        name: &str,
+    ) -> Vec<(String, DeclaredSignature<'db>)> {
         let db = self.db();
         keys.iter()
             .filter_map(|key| {
@@ -430,6 +442,7 @@ impl<'db> Walker<'db, '_, '_> {
                         folded_member_key(MemberKind::Method, name),
                     ),
                 )
+                .map(|signature| (key.clone(), signature))
             })
             .collect()
     }
@@ -489,27 +502,31 @@ impl<'db> Walker<'db, '_, '_> {
         )
     }
 
-    /// The declaring owner of the first key that resolves the member —
-    /// `self` and `parent` placeholders substitute against it.
-    fn member_owner(&self, keys: &[String], kind: MemberKind, name: &str) -> Option<String> {
+    /// The declaring owner of `key`'s own member — `self` and `parent`
+    /// placeholders substitute against it. A per-key fact, deliberately
+    /// not a per-call one (Finding 3): a union receiver's keys may
+    /// each declare the member on a different ancestor, so a single
+    /// owner hoisted out of a per-key loop and reused for every key
+    /// would substitute every key's `self`/`parent` against
+    /// whichever key happened to resolve first, a wrong concrete
+    /// answer rather than conservative silence.
+    fn member_owner(&self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
         let db = self.db();
-        keys.iter().find_map(|key| {
-            let query = MemberQuery::new(db, key.clone(), kind, folded_member_key(kind, name));
-            match lookup_member(
-                db,
-                self.context.files,
-                self.context.stubs,
-                self.context.configuration,
-                query,
-            ) {
-                Some(
-                    MemberResolution::Source { owner, .. }
-                    | MemberResolution::Stub { owner, .. }
-                    | MemberResolution::Virtual { owner, .. },
-                ) => Some(owner),
-                None => None,
-            }
-        })
+        let query = MemberQuery::new(db, key.to_owned(), kind, folded_member_key(kind, name));
+        match lookup_member(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            query,
+        ) {
+            Some(
+                MemberResolution::Source { owner, .. }
+                | MemberResolution::Stub { owner, .. }
+                | MemberResolution::Virtual { owner, .. },
+            ) => Some(owner),
+            None => None,
+        }
     }
 
     /// The class a `self`/`static`/`parent` keyword names in the
@@ -904,7 +921,7 @@ impl<'db> Walker<'db, '_, '_> {
                 argument_types,
             ) {
                 let mut signatures = self.method_signatures(keys, name);
-                let signature = (signatures.len() == 1).then(|| signatures.remove(0));
+                let signature = (signatures.len() == 1).then(|| signatures.remove(0).1);
                 return (answer, signature);
             }
         }
@@ -944,8 +961,14 @@ impl<'db> Walker<'db, '_, '_> {
     /// contradicts `union_receivers_join_and_opaque_receivers_stay_silent`'s
     /// expected `"int|string"`). The gate failing on any key answers
     /// mixed for that key (method-inferred returns are plan 6).
-    /// Placeholders substitute against the declaring owner and the
-    /// receiver through `member_boundary_type` (decision 1).
+    /// Placeholders substitute against each signature's *own*
+    /// declaring owner and the receiver through `member_boundary_type`
+    /// (decision 1) — the owner is resolved per key, not once for the
+    /// whole call: for a union receiver `A|B` where both declare the
+    /// member, a hoisted single owner would substitute both keys'
+    /// `self` against whichever key resolved first, e.g. `app\a|app\a`
+    /// instead of `app\a|app\b` — a wrong concrete answer, not the
+    /// conservative silence the design otherwise holds to (Finding 3).
     fn method_call_result_for_keys(
         &mut self,
         keys: &[String],
@@ -957,12 +980,12 @@ impl<'db> Walker<'db, '_, '_> {
         if signatures.is_empty() {
             return (TypeId::mixed(db), None);
         }
-        let owner = self.member_owner(keys, MemberKind::Method, name);
         let mut result: Option<TypeId<'db>> = None;
         let mut any_declared = false;
-        for signature in &signatures {
+        for (key, signature) in &signatures {
             let value = if self.declared_present(signature) {
                 any_declared = true;
+                let owner = self.member_owner(key, MemberKind::Method, name);
                 self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
             } else {
                 TypeId::mixed(db)
@@ -980,7 +1003,10 @@ impl<'db> Walker<'db, '_, '_> {
         // by-reference write-back channel a caller may use. A union
         // receiver's differing signatures write back nothing.
         let signature = if keys.len() == 1 {
-            signatures.into_iter().next()
+            signatures
+                .into_iter()
+                .next()
+                .map(|(_, signature)| signature)
         } else {
             None
         };
@@ -2504,10 +2530,12 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// Task 9(e): a callee's declared signature projected into a
-    /// callable type, shared by every first-class-callable form. A
-    /// `self`/`static` return placeholder substitutes the receiver
-    /// (decision 6); the parameters are never substituted (plan 6
-    /// revisits generic callables).
+    /// callable type, shared by every first-class-callable form. The
+    /// return type funnels through `member_boundary_type` (decision
+    /// 1): a `self`/`static`/`parent` placeholder substitutes against
+    /// the receiver and the receiver's class arguments bind its
+    /// class-level templates; the parameters are never substituted (a
+    /// later task revisits generic callables).
     fn projected_callable(
         &mut self,
         signature: Option<DeclaredSignature<'db>>,
@@ -2603,8 +2631,18 @@ impl<'db> Walker<'db, '_, '_> {
         let db = self.db();
         let mut signatures = self.method_signatures(keys, name);
         // One key, one signature: more is a union receiver, silence.
-        let signature = (signatures.len() == 1).then(|| signatures.remove(0));
-        let owner = self.member_owner(keys, MemberKind::Method, name);
+        // The owner comes from that same one key, never a different
+        // one — there is exactly one candidate here, so there is no
+        // hoisting hazard to begin with (Finding 3 is about the
+        // multi-signature callers above).
+        let resolved = (signatures.len() == 1).then(|| signatures.remove(0));
+        let (signature, owner) = match resolved {
+            Some((key, signature)) => (
+                Some(signature),
+                self.member_owner(&key, MemberKind::Method, name),
+            ),
+            None => (None, None),
+        };
         self.projected_callable(
             signature,
             Some(receiver),

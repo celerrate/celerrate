@@ -403,6 +403,20 @@ mod tests {
         }
     }
 
+    /// `fixture` plus the shared generics-capable docblock fake
+    /// (`inheritance::test_support::FakeSyntax`) registered: task 5's
+    /// class-argument-binding test needs `@template`/`@param
+    /// NAME<ARG>` parsing that `fixture` alone does not provide (no
+    /// `TypeSyntax` is registered there at all). A variant rather than
+    /// a change to `fixture` itself — registering the fake globally
+    /// would give every existing docblock-bearing test in this module
+    /// a different annotation reading.
+    fn fixture_with_generics(sources: &[&str]) -> Fixture {
+        let built = fixture(sources);
+        crate::inheritance::test_support::register_fake_syntax(&built.db);
+        built
+    }
+
     /// The body of the declaration numbered `index` in file 0.
     fn body_query(fixture: &Fixture, index: u32) -> BodyQuery<'_> {
         BodyQuery::new(
@@ -989,6 +1003,15 @@ function rebound() { return Base::create(); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\forwarded"), "app\\child");
         assert_eq!(caller_return_display(&f, "app\\rebound"), "app\\base");
+        // The forwarding receiver itself: `viaSelf`'s body resolves
+        // `self::create()` through the *current* `static` type, which
+        // stays the symbolic placeholder here — never eagerly resolved
+        // to `Base` — so the outer `$c::viaSelf()` call above can still
+        // rebind it to `Child`. An eager `scoped_subject` (answering
+        // the owner's own class instead of forwarding the placeholder)
+        // would make this read `"app\\base"` while the two assertions
+        // above stayed green — the defect Finding 1 identified.
+        assert_eq!(method_return_display(&f, "app\\base", "viaSelf"), "static");
     }
 
     #[test]
@@ -1022,6 +1045,57 @@ class Child extends Base {
             method_return_display(&f, "app\\child", "viaParent"),
             "string"
         );
+    }
+
+    #[test]
+    fn a_union_receiver_resolves_each_key_s_self_against_its_own_owner() {
+        // Both `A` and `B` declare a `self`-returning `m`: `member_owner`
+        // must resolve per key, not once for the whole call, or both
+        // signatures substitute `self` against whichever key resolved
+        // first — a wrong concrete answer (`app\a|app\a`) rather than
+        // conservative silence (Finding 3).
+        let f = fixture(&[r#"<?php
+namespace App;
+class A {
+    public function m(): self { return $this; }
+}
+class B {
+    public function m(): self { return $this; }
+}
+function joined(A|B $x) { return $x->m(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\joined"), "app\\a|app\\b");
+    }
+
+    #[test]
+    fn a_receiver_s_class_arguments_bind_its_class_level_templates() {
+        // `member_boundary_type`'s class-argument-binding branch (the
+        // zip of a receiver's `class_arguments` against its class's
+        // `class_annotations(...).templates`) has no test in this
+        // diff that can drive it: the plain-name `@param` grammar
+        // cannot write `Box<Marker>`, so no receiver anywhere ever
+        // carries `class_arguments`. `fixture_with_generics` plus the
+        // extended `@param NAME<ARG>` grammar (`test_support.rs`)
+        // finally expresses one.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/** @template T */
+class Box {
+    /** @return T */
+    public function get() {}
+}
+class Marker {}
+/**
+ * @param Box<Marker> $b
+ */
+function unwrap($b) { return $b->get(); }
+"#]);
+        // The argument type must come back, not the unresolved
+        // template (`"T"`, the answer if the binding branch never
+        // ran) and not `mixed` (conservative silence) or `Box` (the
+        // bound, ignored once an argument is supplied) — the argument
+        // and the template are different types, so this discriminates.
+        assert_eq!(caller_return_display(&f, "app\\unwrap"), "app\\marker");
     }
 
     #[test]
