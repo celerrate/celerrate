@@ -2641,6 +2641,28 @@ function caller(Sub $subject) { return $subject->build(); }
     // arguments answers them, else its `current`/`key` returns; a
     // union joins its constituents, skipping `null` and `false`; a
     // template recurses through its bound; everything else is `mixed`.
+    // Review fix: the `getIterator`/`current`-`key` arms additionally
+    // gate on the class genuinely implementing an iteration protocol
+    // interface (`Walker::implements_iteration_protocol`), never on
+    // method presence alone.
+
+    /// Minimal source declarations of the iteration protocol
+    /// interfaces (`Traversable`, `Iterator`, `IteratorAggregate`),
+    /// unqualified in the global namespace exactly like the real SPL
+    /// builtins. `fixture`'s stub index is empty
+    /// (`StubIndex::from_symbols(vec![])`), so nothing resolves these
+    /// names as a genuine ancestor unless a fixture's own sources
+    /// declare them: `Walker::implements_iteration_protocol` (the
+    /// review's Finding 1 fix) walks `linearized_class`'s ancestry,
+    /// which only records a resolved edge (`AncestorEdge::resolved`/
+    /// `stub`) when the name actually resolves to a known class-like.
+    /// Every fixture below that exercises a genuine implementor
+    /// prepends this source alongside its own.
+    const PROTOCOL_INTERFACES: &str = r#"<?php
+interface Traversable {}
+interface Iterator extends Traversable {}
+interface IteratorAggregate extends Traversable {}
+"#;
 
     /// Deviation from the brief's illustrative expectations, verified
     /// against this crate's actual, deterministic behavior rather than
@@ -2708,7 +2730,9 @@ function caller() {
 
     #[test]
     fn an_iterator_aggregate_unwraps_get_iterator() {
-        let f = fixture_with_generics(&[r#"<?php
+        let f = fixture_with_generics(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class User {}
 class Users implements \IteratorAggregate {
@@ -2719,13 +2743,16 @@ function caller(Users $users) {
     foreach ($users as $user) { return $user; }
     return null;
 }
-"#]);
+"#,
+        ]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user|null");
     }
 
     #[test]
     fn a_protocol_class_without_threading_falls_to_current_and_key() {
-        let f = fixture(&[r#"<?php
+        let f = fixture(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class Numbers implements \Iterator {
     public function current(): int {}
@@ -2742,7 +2769,8 @@ function keys(Numbers $numbers) {
     foreach ($numbers as $key => $value) { return $key; }
     return '';
 }
-"#]);
+"#,
+        ]);
         assert_eq!(caller_return_display(&f, "app\\values"), "int|0");
         assert_eq!(caller_return_display(&f, "app\\keys"), "string|''");
     }
@@ -2797,7 +2825,9 @@ function caller(bool $flag) {
     /// instead of `"int|0"`.
     #[test]
     fn a_template_recurses_through_its_bound_for_iteration() {
-        let f = fixture_with_generics(&[r#"<?php
+        let f = fixture_with_generics(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class Numbers implements \Iterator {
     public function current(): int {}
@@ -2814,7 +2844,8 @@ function each($items) {
     foreach ($items as $value) { return $value; }
     return 0;
 }
-"#]);
+"#,
+        ]);
         assert_eq!(caller_return_display(&f, "app\\each"), "int|0");
     }
 
@@ -2873,7 +2904,9 @@ function keys(Pairs $pairs) {
     /// answers `"app\\typeb|null"`.
     #[test]
     fn an_iterator_aggregate_precedes_iterator_when_both_are_implemented() {
-        let f = fixture_with_generics(&[r#"<?php
+        let f = fixture_with_generics(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class TypeA {}
 class TypeB {}
@@ -2890,7 +2923,8 @@ function caller(Both $both) {
     foreach ($both as $item) { return $item; }
     return null;
 }
-"#]);
+"#,
+        ]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\typea|null");
     }
 
@@ -2904,7 +2938,9 @@ function caller(Both $both) {
     /// evidence the guard fired rather than the loop hanging.
     #[test]
     fn foreach_over_a_self_returning_get_iterator_terminates_via_the_depth_guard() {
-        let f = fixture(&[r#"<?php
+        let f = fixture(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class Loopy implements \IteratorAggregate {
     public function getIterator(): self {}
@@ -2913,7 +2949,8 @@ function caller(Loopy $loopy) {
     foreach ($loopy as $item) { return $item; }
     return null;
 }
-"#]);
+"#,
+        ]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
@@ -2924,7 +2961,9 @@ function caller(Loopy $loopy) {
     /// bounds this shape too.
     #[test]
     fn foreach_over_mutually_referential_get_iterators_terminates_via_the_depth_guard() {
-        let f = fixture(&[r#"<?php
+        let f = fixture(&[
+            PROTOCOL_INTERFACES,
+            r#"<?php
 namespace App;
 class A implements \IteratorAggregate {
     public function getIterator(): B {}
@@ -2936,7 +2975,157 @@ function caller(A $a) {
     foreach ($a as $item) { return $item; }
     return null;
 }
+"#,
+        ]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    /// Review Finding 1: the `getIterator` unwrap must gate on the
+    /// class genuinely implementing `IteratorAggregate` (or another
+    /// protocol interface), never on the method's mere presence.
+    /// `Duck` declares a `getIterator` but implements nothing at all —
+    /// decision 12's own default (a plain object's property iteration)
+    /// applies, so the correct answer is `mixed`. `Duck::getIterator`
+    /// is deliberately typed `\Generator<int, Wrong>` (via docblock) —
+    /// a docblock override the "protocol interface's own arguments"
+    /// arm always honors regardless of who implements what — so the
+    /// wrong (un-gated) answer is the concrete, guessed
+    /// `"app\\wrong|null"`, not another `mixed`; the two answers
+    /// differ, which is what lets this test discriminate a fixed gate
+    /// from a missing one.
+    #[test]
+    fn a_class_implementing_nothing_does_not_unwrap_its_get_iterator() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Wrong {}
+class Duck {
+    /** @return \Generator<int, Wrong> */
+    public function getIterator(): \Generator {}
+}
+function caller(Duck $duck) {
+    foreach ($duck as $item) { return $item; }
+    return null;
+}
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    /// Review Finding 1's other arm: `current`/`key` must gate the
+    /// same way. `Cursor` declares both but implements nothing —
+    /// `mixed` is correct; the un-gated answer would be the declared
+    /// `current(): int` joined with the trailing `return 0`
+    /// (`"int|0"`, the same string
+    /// `a_protocol_class_without_threading_falls_to_current_and_key`'s
+    /// `values()` answers for a *genuine* `\Iterator` implementor),
+    /// so this test's pass/fail is a real discriminator, not a
+    /// coincidental match.
+    #[test]
+    fn a_class_implementing_nothing_does_not_answer_through_current_and_key() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Cursor {
+    public function current(): int {}
+    public function key(): string {}
+}
+function values(Cursor $cursor) {
+    foreach ($cursor as $value) { return $value; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\values"), "mixed");
+    }
+
+    /// Review Finding 2: decision 12's `mixed`/`mixed` default (the
+    /// match's `_ => mixed` arm in `iteration_types`) is itself a step
+    /// of the chain, not an incidental fallback, and the plan's own
+    /// binding constraint demands a direct-hit test — verified none of
+    /// the other fixtures exercise this arm (every other subject is an
+    /// array, a shape, a union, a template, or a class). `foreach` over
+    /// a plain `int` reaches no other arm at all: not an array/shape,
+    /// not a union, not a template, not a `Class`.
+    #[test]
+    fn foreach_over_a_non_iterable_scalar_answers_mixed_through_the_default_arm() {
+        let f = fixture(&[r#"<?php
+namespace App;
+function caller(int $number) {
+    foreach ($number as $value) { return $value; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    /// Decision 12's depth guard is stated as an exact value ("capped
+    /// at 8"), not merely "some cap exists" — the review verified that
+    /// mutating `depth > 8` to `depth > 100` leaves both existing
+    /// guard tests green, since a self-loop and a mutual pair never
+    /// terminate on their own regardless of the bound. Only a
+    /// boundary pair like this one can tell 8 apart from any other
+    /// value: a chain of exactly 8 `getIterator` hops (`Hop0` through
+    /// `Hop7`) still reaches its terminal `\Iterator` implementor and
+    /// answers concretely (`within`); one hop more (`Deep0` through
+    /// `Deep8`, 9 hops) crosses the guard and answers `mixed`
+    /// (`beyond`). Changing the bound in either direction breaks one
+    /// side of this pair.
+    #[test]
+    fn the_depth_guard_pins_its_bound_at_exactly_eight() {
+        let mut source = String::from(
+            r#"<?php
+interface Traversable {}
+interface Iterator extends Traversable {}
+interface IteratorAggregate extends Traversable {}
+class TerminalValue {}
+class TerminalKey {}
+class Terminal implements Iterator {
+    public function current(): TerminalValue {}
+    public function key(): TerminalKey {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+"#,
+        );
+        // Eight `getIterator` hops: `Hop0` -> `Hop1` -> ... -> `Hop7`
+        // -> `Terminal`, reached at depth 8 — still within the guard
+        // (`depth > 8` is false at 8).
+        for index in 0..8 {
+            let next = if index == 7 {
+                "Terminal".to_owned()
+            } else {
+                format!("Hop{}", index + 1)
+            };
+            source.push_str(&format!(
+                "class Hop{index} implements IteratorAggregate {{ public function getIterator(): {next} {{}} }}\n"
+            ));
+        }
+        source.push_str(
+            r#"function within(Hop0 $subject) {
+    foreach ($subject as $key => $value) { return $value; }
+    return null;
+}
+"#,
+        );
+        // Nine hops: `Deep0` -> ... -> `Deep8` -> `Terminal`, reached
+        // at depth 9 — one past the guard.
+        for index in 0..9 {
+            let next = if index == 8 {
+                "Terminal".to_owned()
+            } else {
+                format!("Deep{}", index + 1)
+            };
+            source.push_str(&format!(
+                "class Deep{index} implements IteratorAggregate {{ public function getIterator(): {next} {{}} }}\n"
+            ));
+        }
+        source.push_str(
+            r#"function beyond(Deep0 $subject) {
+    foreach ($subject as $key => $value) { return $value; }
+    return null;
+}
+"#,
+        );
+        let f = fixture(&[&source]);
+        assert_eq!(caller_return_display(&f, "within"), "terminalvalue|null");
+        assert_eq!(caller_return_display(&f, "beyond"), "mixed");
     }
 }

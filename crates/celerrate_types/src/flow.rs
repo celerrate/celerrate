@@ -1385,20 +1385,69 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
+    /// Whether `name`'s linearized ancestry genuinely resolves an
+    /// `implements`/`extends` edge to one of the iteration protocol
+    /// interfaces (`Iterator`, `IteratorAggregate`, `Traversable`).
+    /// Decision 12 gates the `getIterator` unwrap and the
+    /// `current`/`key` fallback on the class actually implementing the
+    /// protocol — a `getIterator()` helper or a `current()`/`key()`
+    /// pair declared on a class that implements nothing is not
+    /// iterable in PHP; the language falls back to plain property
+    /// iteration, decision 12's `mixed`/`mixed` default. Answering the
+    /// method's element type there would be a guessed concrete answer
+    /// where the spec mandates conservative silence.
+    ///
+    /// `ancestor_arguments` (task 3) is not usable for this check: it
+    /// only records an ancestor when the target's own docblock threads
+    /// at least one fixed argument (`inheritance.rs`'s `if
+    /// !fixed.is_empty()`), so a class implementing `\Iterator` with no
+    /// generic threading at all is silently absent from its answer.
+    /// `linearized_class`'s `ancestry` records every edge the walk
+    /// crosses regardless of whether it carries arguments, so it is
+    /// the only query that can answer "implements", full stop. An edge
+    /// resolves through either `resolved` (a source class-like) or
+    /// `stub` (a compiled one) — exactly one is `Some` on a resolved
+    /// edge (`AncestorEdge`'s own invariant).
+    fn implements_iteration_protocol(&self, name: &str) -> bool {
+        let db = self.db();
+        let Some(linearized) = linearized_class(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            ClassQuery::new(db, name.to_owned()),
+        )
+        .as_ref() else {
+            return false;
+        };
+        linearized.ancestry.iter().any(|edge| {
+            edge.resolved
+                .as_deref()
+                .or(edge.stub.as_deref())
+                .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
+        })
+    }
+
     /// The class arm of [`Self::iteration_types`]: the protocol's own
-    /// two arguments when `name` is itself one of the interfaces; else
-    /// a `getIterator` (declared or inherited) unwraps its
-    /// declared-or-inferred return recursively — the standard method
-    /// result path (`method_call_result_for_keys`), substitution
-    /// included, exactly as any other call answers, so `self`/`static`
-    /// and the receiver's class arguments resolve the same way a
-    /// direct call site would; else the threaded protocol-ancestor
-    /// arguments (task 3's `ancestor_arguments`) when the linearized
-    /// ancestry actually composed one for a protocol interface,
-    /// substituted against `subject` through `member_boundary_type`
-    /// (decision 1) exactly like any other member boundary; else,
-    /// lacking both, `current`/`key` declared or inherited answer
-    /// through the same method result path; else `mixed`.
+    /// two arguments when `name` is itself one of the interfaces; else,
+    /// for a genuine implementor (guarded by
+    /// [`Self::implements_iteration_protocol`]), a `getIterator`
+    /// (declared or inherited) unwraps its declared-or-inferred return
+    /// recursively — the standard method result path
+    /// (`method_call_result_for_keys`), substitution included, exactly
+    /// as any other call answers, so `self`/`static` and the
+    /// receiver's class arguments resolve the same way a direct call
+    /// site would; else the threaded protocol-ancestor arguments (task
+    /// 3's `ancestor_arguments`) when the linearized ancestry actually
+    /// composed one for a protocol interface, substituted against
+    /// `subject` through `member_boundary_type` (decision 1) exactly
+    /// like any other member boundary; else, still gated on genuine
+    /// implementation, lacking both, `current`/`key` declared or
+    /// inherited answer through the same method result path; else
+    /// `mixed` — including a class that merely declares
+    /// `getIterator`/`current`/`key` without implementing any protocol
+    /// interface at all, whose runtime iteration is plain property
+    /// iteration, not this chain.
     fn class_iteration_types(
         &mut self,
         name: &str,
@@ -1416,11 +1465,14 @@ impl<'db> Walker<'db, '_, '_> {
         {
             return (*key, *value);
         }
+        if !self.implements_iteration_protocol(name) {
+            return mixed;
+        }
         let keys = vec![name.to_owned()];
-        // An implementor declaring or inheriting `getIterator`: unwrap
-        // its declared-or-inferred return through the standard method
-        // result path (substitution included), then recurse under the
-        // depth guard.
+        // A genuine implementor declaring or inheriting `getIterator`:
+        // unwrap its declared-or-inferred return through the standard
+        // method result path (substitution included), then recurse
+        // under the depth guard.
         if self
             .member_owner(name, MemberKind::Method, "getIterator")
             .is_some()
@@ -1448,7 +1500,8 @@ impl<'db> Walker<'db, '_, '_> {
             let value = self.member_boundary_type(*value, Some(name), subject);
             return (key, value);
         }
-        // The `current`/`key` protocol members, declared or inferred.
+        // The `current`/`key` protocol members, declared or inherited
+        // by a genuine implementor.
         if self
             .member_owner(name, MemberKind::Method, "current")
             .is_some()
