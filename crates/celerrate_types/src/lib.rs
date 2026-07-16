@@ -94,6 +94,7 @@ mod inference;
 mod inheritance;
 mod judgments;
 mod narrowing;
+mod norm;
 mod operators;
 mod ordering;
 mod representation;
