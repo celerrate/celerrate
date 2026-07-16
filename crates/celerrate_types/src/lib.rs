@@ -97,6 +97,7 @@ mod narrowing;
 mod operators;
 mod ordering;
 mod representation;
+mod solver;
 mod substitution;
 mod type_syntax;
 mod widening;

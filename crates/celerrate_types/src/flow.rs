@@ -720,6 +720,94 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
+    /// The (declared parameter type, argument type) pairs the call-site
+    /// solver (task 8, decision 10) matches constraints against. The
+    /// same alignment `apply_by_reference` and `apply_call_assertions`
+    /// already use: a labeled argument matches the parameter of that
+    /// name; an unlabeled argument matches positionally by its own
+    /// index in `arguments`, falling to the last parameter when it is
+    /// variadic (surplus positional arguments); a spread argument ends
+    /// alignment (conservative — its element-wise contents are
+    /// unknown without evaluating it). A parameter with no declared
+    /// type (`None`, the stub-range degenerate case) contributes no
+    /// pair, silently.
+    fn solver_pairs(
+        &self,
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        arguments: &[celerrate_semantics::CallArgument],
+        types: &[TypeId<'db>],
+    ) -> Vec<(TypeId<'db>, TypeId<'db>)> {
+        let mut pairs = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            if argument.spread {
+                break;
+            }
+            let Some(argument_type) = types.get(index).copied() else {
+                continue;
+            };
+            let parameter = match &argument.label {
+                Some(label) => parameters.iter().find(|parameter| parameter.name == *label),
+                None => parameters
+                    .get(index)
+                    .or_else(|| parameters.last().filter(|parameter| parameter.variadic)),
+            };
+            let Some(parameter) = parameter else {
+                continue;
+            };
+            let Some(declared_type) = parameter.parameter_type else {
+                continue;
+            };
+            pairs.push((declared_type, argument_type));
+        }
+        pairs
+    }
+
+    /// Solves any template still present in `result` from the call's
+    /// (declared parameter, argument) pairs, then finalizes whatever
+    /// the solver left unbound to its bound, then `mixed` (task 8,
+    /// decision 10). The provider tier needs no special exemption here:
+    /// a provider answers a concrete type, already widened at the
+    /// consumption boundary, so `contains_symbolic` is already false
+    /// for it and this is a costless no-op. Skipped entirely when
+    /// `result` carries nothing symbolic, so a call with an ordinary,
+    /// template-free signature never pays for pair alignment.
+    fn solved_call_result(
+        &self,
+        result: TypeId<'db>,
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        arguments: &[celerrate_semantics::CallArgument],
+        argument_types: &[TypeId<'db>],
+    ) -> TypeId<'db> {
+        let db = self.db();
+        if !crate::substitution::contains_symbolic(db, result) {
+            return result;
+        }
+        let pairs = self.solver_pairs(parameters, arguments, argument_types);
+        let solved = crate::solver::solve(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            &pairs,
+        );
+        let result = crate::substitution::substitute(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            result,
+            &solved,
+            None,
+        );
+        crate::solver::finalize_return(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            result,
+        )
+    }
+
     /// Applies a callee's assertion tags at this call site (decision
     /// 17): `$name` subjects map through the declared parameters to
     /// the argument's subject; `$this->name` maps to the caller's
@@ -1878,7 +1966,20 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        of
+                        // Task 8: the call-site solver, applied to
+                        // whichever tier answered `of` (the provider
+                        // tier is exempt without special-casing — its
+                        // answer is already concrete, so
+                        // `contains_symbolic` is already false for it).
+                        match &signature {
+                            Some(signature) => self.solved_call_result(
+                                of,
+                                &signature.parameters,
+                                &arguments,
+                                &argument_types,
+                            ),
+                            None => of,
+                        }
                     }
                     Some(BodyExpression::ScopedAccess {
                         subject,
@@ -1936,7 +2037,18 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        of
+                        // Task 8: the call-site solver (see the sibling
+                        // `MemberAccess` arm above for the provider-tier
+                        // exemption's reasoning).
+                        match &signature {
+                            Some(signature) => self.solved_call_result(
+                                of,
+                                &signature.parameters,
+                                &arguments,
+                                &argument_types,
+                            ),
+                            None => of,
+                        }
                     }
                     Some(BodyExpression::NamedReference { text }) => {
                         self.record(callee, TypeId::mixed(db));
@@ -1995,7 +2107,13 @@ impl<'db> Walker<'db, '_, '_> {
                             &arguments,
                             environment,
                         );
-                        of
+                        // Task 8: the call-site solver (see the
+                        // `MemberAccess` arm above for the
+                        // provider-tier exemption's reasoning); a named
+                        // function has no receiver, so `parameters`
+                        // (already the declared list, empty when
+                        // unresolved) is exactly `solver_pairs`' input.
+                        self.solved_call_result(of, parameters, &arguments, &argument_types)
                     }
                     _ => {
                         // A callable value: a variable, an array

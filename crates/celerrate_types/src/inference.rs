@@ -1277,6 +1277,140 @@ function unwrap($b) { return $b->get(); }
         assert_eq!(caller_return_display(&f, "app\\unwrap"), "app\\marker");
     }
 
+    // Task 8: the call-site template solver (decision 10). Every test
+    // below registers the shared generics-capable fake
+    // (`fixture_with_generics`), the same fixture
+    // `a_receiver_s_class_arguments_bind_its_class_level_templates`
+    // uses above — the brief's own pseudocode calls plain `fixture`,
+    // but this module's docblock-bearing tests only ever get
+    // `@template`/`@param`/`@return` parsed through the registered
+    // fake, and only `fixture_with_generics` registers it.
+
+    #[test]
+    fn a_template_parameter_solves_from_its_argument() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/**
+ * @template T
+ * @param T $value
+ * @return T
+ */
+function identity($value) { return $value; }
+function caller() { return identity(new User()); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn multiple_constraints_take_the_least_upper_bound() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template T
+ * @param T $left
+ * @param T $right
+ * @return T
+ */
+function pick($left, $right) { return $left; }
+function caller() { return pick(1, 'one'); }
+"#]);
+        // `1` and `'one'` conflict: a first-seen-constituent bug would
+        // answer `"1"` alone, not their union.
+        assert_eq!(caller_return_display(&f, "app\\caller"), "1|'one'");
+    }
+
+    #[test]
+    fn class_string_binds_the_template_through_class_constants() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/**
+ * @template T
+ * @param class-string<T> $name
+ * @return T
+ */
+function make(string $name) {}
+function caller() { return make(User::class); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn a_class_constant_types_as_a_class_string_of_its_class() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+function caller() { return User::class; }
+"#]);
+        assert_eq!(
+            caller_return_display(&f, "app\\caller"),
+            "class-string<app\\user>"
+        );
+    }
+
+    #[test]
+    fn an_unconstrained_template_falls_to_its_bound_then_mixed() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Fallback {}
+/**
+ * @template T of Fallback
+ * @return T
+ */
+function bounded() {}
+/**
+ * @template U
+ * @return U
+ */
+function boundless() {}
+function bound_caller() { return bounded(); }
+function mixed_caller() { return boundless(); }
+"#]);
+        assert_eq!(
+            caller_return_display(&f, "app\\bound_caller"),
+            "app\\fallback"
+        );
+        assert_eq!(caller_return_display(&f, "app\\mixed_caller"), "mixed");
+    }
+
+    #[test]
+    fn a_generic_class_parameter_recurses_through_the_ancestry() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @template T */
+class Collection {}
+/** @extends Collection<User> */
+class UserCollection extends Collection {}
+/**
+ * @template T
+ * @param Collection<T> $collection
+ * @return T
+ */
+function first($collection) {}
+function caller(UserCollection $users) { return first($users); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn a_conditional_return_evaluates_at_the_call_site() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template T
+ * @param T $value
+ * @return (T is int ? string : bool)
+ */
+function flip($value) {}
+function on_int() { return flip(1); }
+function on_string() { return flip('text'); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\on_int"), "string");
+        assert_eq!(caller_return_display(&f, "app\\on_string"), "bool");
+    }
+
     #[test]
     fn new_types_as_the_class_and_anonymous_stays_mixed() {
         let fixture = fixture(&["<?php class A {}

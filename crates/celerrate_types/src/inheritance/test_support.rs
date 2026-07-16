@@ -1,11 +1,16 @@
 //! Shared test-only fixture: a deliberately tiny docblock notation
-//! understanding `@template`, `@extends`/`@implements`, `@return`, and
-//! `@param` tags. Originally `inheritance.rs`'s own test fake; lifted
-//! here so `declared.rs`'s task-4 tests (an inherited signature must
-//! see the same template scoping `ancestor_arguments` threads) can
-//! drive the exact same notation without duplicating it. Recorded
-//! debt: the crate has no other shared test-support module, mirroring
-//! the semantic-core crates' own duplicated test fakes.
+//! understanding `@template` (with an optional `of Bound`),
+//! `@extends`/`@implements`, `@return` (including the conditional form
+//! `(NAME is NAME ? NAME : NAME)`), and `@param` tags (including
+//! `class-string<NAME>`). Originally `inheritance.rs`'s own test fake;
+//! lifted here so `declared.rs`'s task-4 tests (an inherited signature
+//! must see the same template scoping `ancestor_arguments` threads) can
+//! drive the exact same notation without duplicating it, and extended
+//! by task 8 for the call-site solver's tests (a class-string binder
+//! and a conditional return, task 8's remaining two grammar arms — the
+//! template bound was already there). Recorded debt: the crate has no
+//! other shared test-support module, mirroring the semantic-core
+//! crates' own duplicated test fakes.
 
 use std::sync::Arc;
 
@@ -48,14 +53,27 @@ impl FakeSyntax {
             .collect()
     }
 
+    /// `templates` carries each declared template's OWN parsed bound
+    /// (task 8): a written name matching one answers a `Template`
+    /// carrying that real bound, not a placeholder `mixed` — otherwise
+    /// `an_unconstrained_template_falls_to_its_bound_then_mixed`'s
+    /// bounded case could never observe anything but `mixed`.
     fn lower_name<'db>(
         site: &AnnotationSite<'db, '_>,
-        templates: &[String],
+        templates: &[ParsedTemplate<'db>],
         written: &str,
     ) -> TypeId<'db> {
         let db = site.database();
-        if templates.iter().any(|name| name == written) {
-            return TypeId::template(db, site.declaring_scope(), written, TypeId::mixed(db));
+        if let Some(template) = templates.iter().find(|template| template.name == written) {
+            let bound = template.bound.unwrap_or_else(|| TypeId::mixed(db));
+            return TypeId::template(db, site.declaring_scope(), written, bound);
+        }
+        // The native keyword table (task 8): a conditional return's
+        // subject and branches are ordinary written names too, and
+        // `int`/`string`/`bool` must lower to the scalar lattice
+        // members, never to a class named `int`.
+        if let Some(keyword) = site.keyword_type(written) {
+            return keyword;
         }
         let qualified = site.qualify_class_name(written).to_lowercase();
         TypeId::class(db, &qualified, vec![])
@@ -93,7 +111,7 @@ impl FakeSyntax {
     /// through the ordinary class-or-own-template rule.
     fn lower_member_name<'db>(
         site: &AnnotationSite<'db, '_>,
-        own_templates: &[String],
+        own_templates: &[ParsedTemplate<'db>],
         written: &str,
     ) -> TypeId<'db> {
         let db = site.database();
@@ -120,10 +138,20 @@ impl FakeSyntax {
     /// class-or-own-template rule.
     fn lower_param_type<'db>(
         site: &AnnotationSite<'db, '_>,
-        own_templates: &[String],
+        own_templates: &[ParsedTemplate<'db>],
         written: &str,
     ) -> TypeId<'db> {
         let db = site.database();
+        // `class-string<NAME>` (task 8): the primary template binder,
+        // never a class literally named `class-string` — checked
+        // before the generic `NAME<ARG, ...>` arm below, which would
+        // otherwise swallow it.
+        if let Some(rest) = written.strip_prefix("class-string<")
+            && let Some(inner) = rest.strip_suffix('>')
+        {
+            let argument = Self::lower_member_name(site, own_templates, inner.trim());
+            return TypeId::class_string(db, Some(argument));
+        }
         if let Some((head, rest)) = written.split_once('<')
             && let Some(arguments_text) = rest.strip_suffix('>')
         {
@@ -135,6 +163,35 @@ impl FakeSyntax {
             return TypeId::class(db, &qualified, arguments);
         }
         Self::lower_member_name(site, own_templates, written)
+    }
+
+    /// The conditional return form `(NAME is NAME ? NAME : NAME)`
+    /// (task 8): `None` when `written` is not shaped like one, so the
+    /// caller falls through to the ordinary class-or-template rule.
+    /// Every position lowers through [`Self::lower_member_name`], so a
+    /// template declared on the same docblock is recognized in any of
+    /// the four slots.
+    fn parse_conditional_return<'db>(
+        site: &AnnotationSite<'db, '_>,
+        own_templates: &[ParsedTemplate<'db>],
+        written: &str,
+    ) -> Option<TypeId<'db>> {
+        let inner = written.strip_prefix('(')?.strip_suffix(')')?;
+        let (subject_text, rest) = inner.split_once(" is ")?;
+        let (matches_text, rest) = rest.split_once(" ? ")?;
+        let (then_text, otherwise_text) = rest.split_once(" : ")?;
+        let subject = Self::lower_member_name(site, own_templates, subject_text.trim());
+        let matches = Self::lower_member_name(site, own_templates, matches_text.trim());
+        let then_branch = Self::lower_member_name(site, own_templates, then_text.trim());
+        let otherwise_branch = Self::lower_member_name(site, own_templates, otherwise_text.trim());
+        Some(TypeId::conditional(
+            site.database(),
+            subject,
+            matches,
+            then_branch,
+            otherwise_branch,
+            false,
+        ))
     }
 }
 
@@ -154,18 +211,21 @@ impl TypeSyntax for FakeSyntax {
             .filter_map(|line| line.strip_prefix("@template "))
             .map(Self::split_template_declaration)
             .collect();
-        let template_names: Vec<String> = template_declarations
-            .iter()
-            .map(|(name, _)| name.clone())
-            .collect();
         let mut parsed = ParsedAnnotations::default();
         for (name, bound_text) in &template_declarations {
-            // A bound is itself an ordinary written name: it lowers
-            // through the same class-or-template rule as any
-            // `@extends`/`@implements` argument or `@return` value.
-            let bound = bound_text
-                .as_deref()
-                .map(|written| Self::lower_name(site, &template_names, written));
+            // A bound is itself an ordinary written name, resolved
+            // through the keyword-or-class rule only: a bound that
+            // named another template declared in the same docblock
+            // would be a self-reference this fake does not support
+            // (unneeded by any test), so it is deliberately not looked
+            // up against `parsed.templates`, still under construction
+            // in this very loop.
+            let bound = bound_text.as_deref().map(|written| {
+                site.keyword_type(written).unwrap_or_else(|| {
+                    let qualified = site.qualify_class_name(written).to_lowercase();
+                    TypeId::class(site.database(), &qualified, vec![])
+                })
+            });
             parsed.templates.push(ParsedTemplate {
                 name: name.clone(),
                 bound,
@@ -182,7 +242,7 @@ impl TypeSyntax for FakeSyntax {
             {
                 let arguments: Vec<TypeId<'db>> = arguments_text
                     .split(',')
-                    .map(|argument| Self::lower_name(site, &template_names, argument.trim()))
+                    .map(|argument| Self::lower_name(site, &parsed.templates, argument.trim()))
                     .collect();
                 let qualified = site.qualify_class_name(head.trim()).to_lowercase();
                 parsed.ancestors.push(ParsedAncestor {
@@ -191,13 +251,18 @@ impl TypeSyntax for FakeSyntax {
                 });
             }
             if let Some(written) = line.strip_prefix("@return ") {
-                // Class templates come into scope through the enclosing
-                // class docblock, like the bridge does.
-                parsed.return_type = Some(Self::lower_member_name(
-                    site,
-                    &template_names,
-                    written.trim(),
-                ));
+                let written = written.trim();
+                // The conditional form is checked first: it is shaped
+                // unlike any ordinary written name, so it can never be
+                // mistaken for one.
+                parsed.return_type = Some(
+                    Self::parse_conditional_return(site, &parsed.templates, written)
+                        .unwrap_or_else(|| {
+                            // Class templates come into scope through the
+                            // enclosing class docblock, like the bridge does.
+                            Self::lower_member_name(site, &parsed.templates, written)
+                        }),
+                );
             }
             if let Some(rest) = line.strip_prefix("@param ") {
                 // `@param NAME $variable` or `@param NAME<ARG, ...>
@@ -209,7 +274,7 @@ impl TypeSyntax for FakeSyntax {
                 // apart.
                 if let Some((type_text, variable)) = rest.trim().rsplit_once(' ') {
                     let parameter_type =
-                        Self::lower_param_type(site, &template_names, type_text.trim());
+                        Self::lower_param_type(site, &parsed.templates, type_text.trim());
                     let parameter_name = variable.trim_start_matches('$').to_owned();
                     parsed.parameters.push((parameter_name, parameter_type));
                 }
