@@ -96,6 +96,7 @@ mod narrowing;
 mod operators;
 mod ordering;
 mod representation;
+mod substitution;
 mod type_syntax;
 mod widening;
 mod written;
