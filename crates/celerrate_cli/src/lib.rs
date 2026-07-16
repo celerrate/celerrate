@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod arguments;
 pub mod cache;
 pub mod database;
+pub mod ground_truth;
 pub mod plugins;
 pub mod render;
 pub mod session;
@@ -104,6 +105,25 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             cache::persist(&mut session, &outcome);
             session.statistics.report();
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
+        }
+        Command::GroundTruth { path } => {
+            if let Some(message) = unusable_root(&path) {
+                let _ = writeln!(output, "{message}");
+                return Outcome::UsageError;
+            }
+            let root = match absolute_root(&path) {
+                Ok(root) => root,
+                Err(message) => {
+                    let _ = writeln!(output, "{message}");
+                    return Outcome::UsageError;
+                }
+            };
+            let session = Session::start(&root);
+            report_excluded_plugins(&session);
+            ground_truth::run(&session, output);
+            // Divergences are data, not failure: the channel's own exit
+            // code is always clean whenever the analysis ran at all.
+            Outcome::Clean
         }
     }
 }
