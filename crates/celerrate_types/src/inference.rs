@@ -357,11 +357,15 @@ mod tests {
     use celerrate_db::testing::TestDatabase;
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-    use celerrate_semantics::{AstId, BodyQuery, body_ir};
+    use celerrate_semantics::{
+        AstId, BodyQuery, SymbolSpace, body_ir, folded_symbol_key, fully_qualified_name,
+        member_tree,
+    };
     use celerrate_source::FileId;
     use celerrate_stubs::{StubIndex, StubIndexInput};
 
-    use super::{BodyOwner, body_owner, inferred_body_types};
+    use super::{BodyOwner, body_owner, inferred_body_types, inferred_function_return};
+    use crate::declared::FunctionQuery;
 
     struct Fixture {
         db: TestDatabase,
@@ -457,6 +461,65 @@ mod tests {
         .unwrap()
         .return_type
         .display(&fixture.db)
+    }
+
+    /// The display of a free function's inferred return, resolved
+    /// straight through `inferred_function_return` by its folded key
+    /// (task 5's receiver-model tests, which call across function
+    /// boundaries rather than reading one numbered declaration).
+    fn caller_return_display(fixture: &Fixture, key: &str) -> String {
+        inferred_function_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            FunctionQuery::new(&fixture.db, key.to_owned()),
+        )
+        .display(&fixture.db)
+    }
+
+    /// The display of one method's own inferred return, found by class
+    /// key and method name through `member_tree` rather than by
+    /// declaration index — task 5's tests read a method body's return
+    /// directly (no external caller) to pin the placeholder that
+    /// survives inside it.
+    fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) -> String {
+        for &file in &fixture.handles {
+            let tree = member_tree(&fixture.db, file);
+            for class in &tree.classes {
+                let Some(name) = &class.name else {
+                    continue;
+                };
+                let key = folded_symbol_key(
+                    SymbolSpace::ClassLike,
+                    &fully_qualified_name(&class.namespace, name),
+                );
+                if key != class_key {
+                    continue;
+                }
+                let Some(member) = class
+                    .members
+                    .iter()
+                    .find(|member| member.name.eq_ignore_ascii_case(method_name))
+                else {
+                    continue;
+                };
+                let body = BodyQuery::new(&fixture.db, member.ast_id);
+                return inferred_body_types(
+                    &fixture.db,
+                    fixture.files,
+                    fixture.stubs,
+                    fixture.configuration,
+                    file,
+                    body,
+                )
+                .as_ref()
+                .unwrap()
+                .return_type
+                .display(&fixture.db);
+            }
+        }
+        panic!("method {method_name} not found on class {class_key}");
     }
 
     #[test]
@@ -777,7 +840,12 @@ mod tests {
                 public function read() { return $this->s; }
             }"]);
         // Numbering: class 0, property 1, own 2, read 3.
-        assert_eq!(return_display(&fixture, 2), "a");
+        // Task 5 (the receiver model, decision 1) supersedes this
+        // expectation: `$this` types as the symbolic `static`
+        // placeholder inside the body — substitution is the call
+        // site's job, not the body's (see
+        // `this_types_as_the_static_placeholder_inside_the_body`).
+        assert_eq!(return_display(&fixture, 2), "static");
         // The brief's original expectation transposed the display's
         // established null-last convention (`display.rs`'s
         // `composites_render_with_null_last_in_unions`, already
@@ -882,6 +950,81 @@ mod tests {
     }
 
     #[test]
+    fn a_native_static_return_substitutes_to_the_receiver() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public static function create(): static { return new static(); }
+}
+class Child extends Base {}
+function caller(Child $c) { return $c::create(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\child");
+    }
+
+    #[test]
+    fn a_native_self_return_stays_the_declaring_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public function make(): self { return $this; }
+}
+class Child extends Base {}
+function caller(Child $c) { return $c->make(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\base");
+    }
+
+    #[test]
+    fn static_forwards_through_self_calls_and_rebinds_on_a_named_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public static function create(): static { return new static(); }
+    public static function viaSelf(): static { return self::create(); }
+}
+class Child extends Base {}
+function forwarded(Child $c) { return $c::viaSelf(); }
+function rebound() { return Base::create(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\forwarded"), "app\\child");
+        assert_eq!(caller_return_display(&f, "app\\rebound"), "app\\base");
+    }
+
+    #[test]
+    fn this_types_as_the_static_placeholder_inside_the_body() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Chainable {
+    public function itself(): static { return $this; }
+}
+"#]);
+        // The method body's return carries the placeholder symbolically:
+        // substitution is the call site's job, not the body's.
+        assert_eq!(
+            method_return_display(&f, "app\\chainable", "itself"),
+            "static"
+        );
+    }
+
+    #[test]
+    fn parent_calls_resolve_members_and_keep_forwarding() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public function name(): string { return 'base'; }
+}
+class Child extends Base {
+    public function viaParent() { return parent::name(); }
+}
+"#]);
+        assert_eq!(
+            method_return_display(&f, "app\\child", "viaParent"),
+            "string"
+        );
+    }
+
+    #[test]
     fn new_types_as_the_class_and_anonymous_stays_mixed() {
         let fixture = fixture(&["<?php class A {}
             function named() { return new A(); }
@@ -901,16 +1044,27 @@ mod tests {
             }"]);
         // Numbering: Base 0, Child 1, makeSelf 2, makeParent 3,
         // makeStatic 4, makeStaticInStatic 5.
-        // Decision 5: `self`/`static` are the defining class, `parent`
-        // the first Extends ancestor. The class type renders as its
-        // folded (lowercase) key (decision 16).
+        // Task 5 (the receiver model, decision 1) supersedes the
+        // original expectations here: `self` and `parent` resolve
+        // immediately in the defining context (both are structurally
+        // known right here, no forwarding needed), so `new self()` and
+        // `new parent()` still answer the defining/parent class. But
+        // `new static()`'s identity depends on whoever eventually calls
+        // in through late static binding — unknowable from inside the
+        // body — so it stays the symbolic `static` placeholder here,
+        // exactly like `$this`
+        // (`this_types_as_the_static_placeholder_inside_the_body`), and
+        // resolves only at the outer call boundary
+        // (`a_native_static_return_substitutes_to_the_receiver`). The
+        // class type renders as its folded (lowercase) key (decision 16).
         assert_eq!(return_display(&fixture, 2), "child");
         assert_eq!(return_display(&fixture, 3), "base");
-        assert_eq!(return_display(&fixture, 4), "child");
-        // The case that was silently `mixed`: `new static()` in a
-        // static method still types as the defining class ($this's
-        // static-method unavailability does not gate the class keyword).
-        assert_eq!(return_display(&fixture, 5), "child");
+        assert_eq!(return_display(&fixture, 4), "static");
+        // No static-method gate on the class keyword ($this's
+        // unavailability in a static method does not gate `static::`):
+        // `new static()` still forwards the same way in
+        // `makeStaticInStatic`.
+        assert_eq!(return_display(&fixture, 5), "static");
     }
 
     #[test]
