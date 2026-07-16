@@ -117,7 +117,7 @@ pub use inference::{
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
-    AnnotationSite, AssertionPolarity, ParsedAnnotations, ParsedAssertion, TypeSyntax,
-    TypeSyntaxRegistration, TypeSyntaxRegistry,
+    AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
+    ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
 };
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};

@@ -69,6 +69,98 @@ fn member_query<'db>(
     )
 }
 
+/// A projection of `ParsedAnnotations`'s new fields (task 2), captured
+/// as owned data so it outlives the `'db`-scoped call that produced
+/// it. `MemberAnnotations` (the tracked wrapper `member_annotations`
+/// returns) does not forward `templates`/`ancestors`/`variables` yet —
+/// that wiring is task 3's — so this recording wrapper is the only way
+/// to observe them, by capturing them as a side effect of triggering
+/// the real seam.
+#[derive(Debug, Default, Clone)]
+struct Captured {
+    /// One entry per lowered ancestor: its qualified, folded class
+    /// name and its fixed generic argument count.
+    ancestors: Vec<(String, usize)>,
+    /// `@template` declaration names, in declaration order.
+    template_names: Vec<String>,
+    /// Named inline `@var` entries' variable names.
+    variable_names: Vec<String>,
+}
+
+/// Wraps the real [`celerrate_phpdoc_bridge::PhpdocBridge`], delegates
+/// every call to it unchanged, and records a projection of what it
+/// returns. Registering this instead of the bare bridge lets a test
+/// observe `ParsedAnnotations`'s new fields through the real
+/// extraction-and-lowering pipeline (dialect classification, tier
+/// resolution, site qualification) and the real production seam
+/// (`celerrate_types::member_annotations`), without needing direct
+/// access to `AnnotationSite`'s private constructor.
+struct RecordingBridge {
+    inner: celerrate_phpdoc_bridge::PhpdocBridge,
+    captured: std::sync::Mutex<Captured>,
+}
+
+impl celerrate_types::TypeSyntax for RecordingBridge {
+    fn can_parse(&self, docblock: &str) -> bool {
+        self.inner.can_parse(docblock)
+    }
+
+    fn parse_docblock<'db>(
+        &self,
+        site: &celerrate_types::AnnotationSite<'db, '_>,
+        docblock: &str,
+    ) -> celerrate_types::ParsedAnnotations<'db> {
+        let parsed = self.inner.parse_docblock(site, docblock);
+        let mut captured = self.captured.lock().unwrap();
+        captured.ancestors = parsed
+            .ancestors
+            .iter()
+            .map(|ancestor| (ancestor.class_name.clone(), ancestor.arguments.len()))
+            .collect();
+        captured.template_names = parsed
+            .templates
+            .iter()
+            .map(|template| template.name.clone())
+            .collect();
+        captured.variable_names = parsed
+            .variables
+            .iter()
+            .map(|(name, _)| name.clone())
+            .collect();
+        parsed
+    }
+
+    fn parse_type_expression<'db>(
+        &self,
+        site: &celerrate_types::AnnotationSite<'db, '_>,
+        expression: &str,
+    ) -> Option<celerrate_types::TypeId<'db>> {
+        self.inner.parse_type_expression(site, expression)
+    }
+}
+
+/// Registers a [`RecordingBridge`] in place of the bare bridge, and
+/// hands back the `Arc` so the test can read `captured` after
+/// triggering the seam.
+fn register_recording_bridge(
+    db: &celerrate_db::testing::TestDatabase,
+) -> std::sync::Arc<RecordingBridge> {
+    let recording = std::sync::Arc::new(RecordingBridge {
+        inner: celerrate_phpdoc_bridge::PhpdocBridge::new(),
+        captured: std::sync::Mutex::new(Captured::default()),
+    });
+    let identity = celerrate_phpdoc_bridge::descriptor().identity;
+    let _ = celerrate_types::TypeSyntaxRegistry::builder(vec![
+        celerrate_types::TypeSyntaxRegistration {
+            identity,
+            implementation: recording.clone(),
+        },
+    ])
+    .durability(salsa::Durability::HIGH)
+    .new(db);
+    recording
+}
+
 fn register_bridge(db: &celerrate_db::testing::TestDatabase) {
     let bridge = std::sync::Arc::new(celerrate_phpdoc_bridge::PhpdocBridge::new());
     let identity = celerrate_phpdoc_bridge::descriptor().identity;
@@ -648,4 +740,67 @@ fn assertions_are_carried_through_the_annotation_seam() {
             negated: false,
         }],
     );
+}
+
+#[test]
+fn ancestors_lower_qualified_with_their_argument_types() {
+    // Namespace `App`, a `use Doctrine\Repo as Base;` import in scope:
+    // `class_name` must arrive fully qualified and folded, and the
+    // fixed generic argument must survive.
+    let fixture = fixture(&[
+        "<?php namespace App;\nuse Doctrine\\Repo as Base;\nclass C { /** @extends Base<User> */ public function noop() {} }",
+    ]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "App\\C", MemberKind::Method, "noop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = recording.captured.lock().unwrap();
+    assert_eq!(
+        captured.ancestors,
+        vec![("doctrine\\repo".to_owned(), 1)],
+        "qualified and folded",
+    );
+}
+
+#[test]
+fn templates_lower_in_declaration_order_with_their_bounds() {
+    let fixture = fixture(&["<?php class C {\n\
+         /**\n\
+          * @template TKey of int\n\
+          * @template TValue\n\
+          */\n\
+         public function noop() {}\n\
+         }"]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Method, "noop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = recording.captured.lock().unwrap();
+    assert_eq!(captured.template_names, vec!["TKey", "TValue"]);
+}
+
+#[test]
+fn named_variables_lower_into_the_variables_field() {
+    let fixture = fixture(&["<?php class C { /** @var Collection<User> $items */ public $prop; }"]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Property, "prop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = recording.captured.lock().unwrap();
+    assert_eq!(captured.variable_names, vec!["items"]);
 }

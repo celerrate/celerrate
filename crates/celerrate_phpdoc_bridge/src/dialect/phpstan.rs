@@ -16,6 +16,9 @@ pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
         "throws" => TagRole::Throws,
         "property" | "property-read" | "property-write" => TagRole::Property,
         "method" => TagRole::Method,
+        "extends" | "template-extends" => TagRole::Extends,
+        "implements" | "template-implements" => TagRole::Implements,
+        "use" | "template-use" => TagRole::UseTrait,
         "template" | "template-covariant" | "template-contravariant" => TagRole::Template,
         "assert" if tier == TagTier::PhpstanPrefixed => TagRole::Assert(AssertionPolarity::Always),
         "assert-if-true" if tier == TagTier::PhpstanPrefixed => {

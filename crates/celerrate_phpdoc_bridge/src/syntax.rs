@@ -4,10 +4,12 @@
 //! extracted expression through the total lowering table
 //! (`lowering::lower`) into the facade's builders.
 
-use celerrate_plugin::{AnnotationSite, ParsedAnnotations, ParsedAssertion, TypeId, TypeSyntax};
+use celerrate_plugin::{
+    AnnotationSite, ParsedAnnotations, ParsedAssertion, ParsedTemplate, TypeId, TypeSyntax,
+};
 
 use crate::lexer::lex_docblock;
-use crate::lowering::{LoweringScope, lower};
+use crate::lowering::{LoweringScope, lower, lower_ancestor};
 use crate::tags::{TemplateDeclaration, extract_member_docblock};
 
 /// The `phpdoc-bridge` plugin. Stateless by design: guest
@@ -65,12 +67,36 @@ impl TypeSyntax for PhpdocBridge {
                 negated: assertion.negated,
             })
             .collect();
+        let templates = extracted
+            .templates
+            .iter()
+            .map(|declaration| ParsedTemplate {
+                name: declaration.name.clone(),
+                bound: declaration
+                    .bound
+                    .as_ref()
+                    .map(|expression| lower(site, &mut scope, expression)),
+            })
+            .collect();
+        let ancestors = extracted
+            .ancestors
+            .iter()
+            .filter_map(|declaration| lower_ancestor(site, &mut scope, declaration))
+            .collect();
+        let variables = extracted
+            .variable_values
+            .iter()
+            .map(|(name, expression)| (name.clone(), lower(site, &mut scope, expression)))
+            .collect();
         ParsedAnnotations {
             return_type,
             value_type,
             parameters,
             throws,
             assertions,
+            templates,
+            ancestors,
+            variables,
         }
     }
 

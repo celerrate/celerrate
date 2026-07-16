@@ -38,9 +38,12 @@
 //! | a keyword or dialect atom with a spurious `<...>` list | the atom, arguments dropped |
 //! | any other name | a class type, qualified at the declaring site |
 
-use celerrate_plugin::{AnnotationSite, CallableParameter, ShapeField, ShapeKey, TypeId, salsa};
+use celerrate_plugin::{
+    AnnotationSite, CallableParameter, ParsedAncestor, ShapeField, ShapeKey, TypeId, salsa,
+};
 
 use crate::expression::{ConditionalSubject, ShapeKeyExpression, TypeExpression, UnsealedTail};
+use crate::tags::AncestorDeclaration;
 
 /// The name-resolution scope one docblock lowers under: the docblock's
 /// own declared template set (class-level, then own — task 9) and the
@@ -426,4 +429,25 @@ fn lower_conditional<'db>(
         );
     }
     TypeId::union(db, [then_lowered, otherwise_lowered])
+}
+
+/// Lowers one inheritance-position declaration through the scope, then
+/// reads the head and fixed arguments back off the lowered `TypeId`
+/// via its `class_name`/`class_arguments` accessors — `class_name`
+/// arrives pre-folded because `lower` already qualified it at the
+/// site. An expression that lowers to something that is not a class
+/// type (a malformed ancestor tag) drops: per-construct loss.
+pub(crate) fn lower_ancestor<'db>(
+    site: &AnnotationSite<'db, '_>,
+    scope: &mut LoweringScope<'db>,
+    declaration: &AncestorDeclaration,
+) -> Option<ParsedAncestor<'db>> {
+    let db = site.database();
+    let lowered = lower(site, scope, &declaration.expression);
+    let class_name = lowered.class_name(db)?;
+    let arguments = lowered.class_arguments(db);
+    Some(ParsedAncestor {
+        class_name,
+        arguments,
+    })
 }
