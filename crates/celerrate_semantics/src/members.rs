@@ -406,7 +406,14 @@ fn lower_member(node: &SyntaxNode, ast_id: AstId, group: &mut ClassMembers) {
                                 .map(|expression| ast::expression_text(&expression)),
                             ..MemberSignature::default()
                         },
-                        docblock: None,
+                        // A promoted parameter can carry its own `@var`
+                        // docblock immediately ahead of it in the
+                        // parameter list (the untyped-array-element
+                        // idiom native syntax cannot express); it is a
+                        // preceding sibling of the parameter node
+                        // itself, exactly what `docblock_token` finds.
+                        docblock: ast::docblock_token(parameter.syntax())
+                            .map(|token| token.text().to_owned()),
                         ast_id,
                     });
                 }
@@ -953,5 +960,30 @@ mod tests {
         assert_eq!(promoted.signature.default_text.as_deref(), Some("null"));
         assert_eq!(promoted.flags.visibility, Visibility::Private);
         assert!(promoted.flags.is_readonly);
+    }
+
+    #[test]
+    fn a_promoted_parameter_s_own_docblock_is_captured() {
+        // A `@var` docblock directly ahead of a promoted parameter is
+        // valid, common PHPDoc (symfony/demo's own AppExtension writes
+        // exactly this to type an untyped-by-native-syntax array
+        // property). Ground-truth harness triage (task 12) found this
+        // dropped silently: the promoted property carried no docblock
+        // at all, so its element type never reached inference.
+        let tree = tree_of(
+            "<?php class Service {\n\
+                 public function __construct(\n\
+                     /** @var string[] */\n\
+                     private readonly array $names,\n\
+                 ) {}\n\
+             }",
+        );
+        let class = &tree.classes[0];
+        let promoted = class
+            .members
+            .iter()
+            .find(|member| member.kind == MemberKind::Property)
+            .unwrap();
+        assert_eq!(promoted.docblock.as_deref(), Some("/** @var string[] */"));
     }
 }
