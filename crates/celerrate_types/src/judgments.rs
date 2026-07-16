@@ -821,7 +821,7 @@ mod tests {
             })
             .collect();
         let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
             .durability(salsa::Durability::HIGH)
             .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
@@ -1037,6 +1037,12 @@ mod tests {
         assert_eq!(judge(&f, TypeId::int(db), nullable_int), Proof::Holds);
         assert_eq!(judge(&f, nullable_int, TypeId::int(db)), Proof::Fails);
         assert_eq!(judge(&f, nullable_int, nullable_int), Proof::Holds);
+        // `Countable` now resolves from the default stub surface, but the
+        // answers are unaffected: `counted <: Foo` holds by intersection
+        // decomposition (no hierarchy walk), and `Foo <: counted` stays
+        // `CannotProve` because the subject `Foo` is neither declared nor
+        // stubbed, so `Foo <: Countable` is undecidable regardless of
+        // whether `Countable` itself is known.
         let counted = TypeId::intersection(
             db,
             [

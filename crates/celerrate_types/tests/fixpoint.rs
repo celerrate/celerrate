@@ -40,6 +40,10 @@ fn fixture(sources: &[&str]) -> Fixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
+    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // fixpoint budgets, where a stub surface adds resolution noise
+    // without observing stub behaviour, and a separate compilation unit
+    // cannot reach `pub(crate)` test support anyway.
     let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
         .durability(salsa::Durability::HIGH)
         .new(&db);

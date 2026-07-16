@@ -274,7 +274,7 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::StubIndexInput;
 
     use super::{PlaceholderResolution, Substitution, contains_symbolic, substitute};
     use crate::representation::{CallableParameter, ShapeField, ShapeKey, TypeId};
@@ -298,7 +298,7 @@ mod tests {
             b"<?php namespace app; class admin {}".to_vec(),
         )];
         let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
             .durability(salsa::Durability::HIGH)
             .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
@@ -526,8 +526,9 @@ mod tests {
         let db = &f.db;
         // Both classes are concrete (no template involved, so the
         // "still symbolic" guard does not fire) but neither is declared
-        // as a source class-like nor present in the (empty) stub index,
-        // so `subtype_of` cannot walk any hierarchy and genuinely
+        // as a source class-like nor present in the default stub surface
+        // (their `app\...` names are absent from it), so `subtype_of`
+        // cannot walk any hierarchy and genuinely
         // answers `Proof::CannotProve` (see `judge_stub_hierarchy`'s
         // "unknown class" arm in judgments.rs).
         let subject = TypeId::class(db, "app\\unregistered_candidate", vec![]);

@@ -61,6 +61,10 @@ fn a_body_edit_does_not_recompute_a_hierarchy_verdict() {
         b"<?php class User extends Entity {}".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![parent, child]);
+    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // salsa execution counts, where a stub surface adds resolution
+    // noise without observing stub behaviour, and a separate
+    // compilation unit cannot reach `pub(crate)` test support anyway.
     let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
         .durability(salsa::Durability::HIGH)
         .new(&db);
@@ -95,10 +99,11 @@ fn a_body_edit_does_not_recompute_a_hierarchy_verdict() {
     );
 }
 
-/// One source file plus the whole-project inputs, in the exact shape the
-/// declared layer's own tests build (an empty stub index at HIGH
-/// durability, a fixed version range at MEDIUM). The file handle is kept
-/// so the pins can edit it with `set_bytes`.
+/// One source file plus the whole-project inputs: an empty stub index
+/// kept at HIGH durability (issue #36's fixed decision 3, this suite
+/// pins salsa execution counts rather than stub behaviour) and a fixed
+/// version range at MEDIUM. The file handle is kept so the pins can
+/// edit it with `set_bytes`.
 struct Harness {
     db: TestDatabase,
     file: SourceFile,
@@ -111,6 +116,10 @@ fn single_file_harness(source: &[u8]) -> Harness {
     let db = TestDatabase::default();
     let file = SourceFile::new(&db, FileId::new(0), source.to_vec());
     let files = AnalyzedFileSet::new(&db, vec![file]);
+    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // salsa execution counts, where a stub surface adds resolution
+    // noise without observing stub behaviour, and a separate
+    // compilation unit cannot reach `pub(crate)` test support anyway.
     let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
         .durability(salsa::Durability::HIGH)
         .new(&db);
@@ -618,6 +627,10 @@ fn fixture_with_fake_syntax(sources: &[&str]) -> AnnotationFixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
+    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // salsa execution counts, where a stub surface adds resolution
+    // noise without observing stub behaviour, and a separate
+    // compilation unit cannot reach `pub(crate)` test support anyway.
     let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
         .durability(salsa::Durability::HIGH)
         .new(&db);
@@ -1003,6 +1016,10 @@ fn fixture(sources: &[&str]) -> InferenceFixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
+    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // salsa execution counts, where a stub surface adds resolution
+    // noise without observing stub behaviour, and a separate
+    // compilation unit cannot reach `pub(crate)` test support anyway.
     let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
         .durability(salsa::Durability::HIGH)
         .new(&db);

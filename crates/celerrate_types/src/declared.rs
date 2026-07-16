@@ -1366,7 +1366,7 @@ mod tests {
             })
             .collect();
         let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
             .durability(salsa::Durability::HIGH)
             .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(

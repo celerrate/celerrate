@@ -211,7 +211,7 @@ mod tests {
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::ClassQuery;
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::StubIndexInput;
 
     use super::test_support::register_fake_syntax;
     use super::{ancestor_arguments, ancestor_substitution};
@@ -234,7 +234,7 @@ mod tests {
             })
             .collect();
         let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
             .durability(salsa::Durability::HIGH)
             .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
