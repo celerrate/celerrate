@@ -794,12 +794,23 @@ impl<'db> Walker<'db, '_, '_> {
     /// Solves any template still present in `result` from the call's
     /// (declared parameter, argument) pairs, then finalizes whatever
     /// the solver left unbound to its bound, then `mixed` (task 8,
-    /// decision 10). The provider tier needs no special exemption here:
-    /// a provider answers a concrete type, already widened at the
-    /// consumption boundary, so `contains_symbolic` is already false
-    /// for it and this is a costless no-op. Skipped entirely when
-    /// `result` carries nothing symbolic, so a call with an ordinary,
-    /// template-free signature never pays for pair alignment.
+    /// decision 10). The provider tier needs no special-cased exemption
+    /// here: by convention every `DynamicTypeProvider` answers a
+    /// concrete type, already widened at the consumption boundary, so
+    /// `contains_symbolic` is already false for it and this is a
+    /// costless no-op in the ordinary case. That convention is not
+    /// enforced at the trait boundary, though — nothing stops an
+    /// implementation from answering something symbolic. Task 11 pins
+    /// what happens if one ever does
+    /// (`a_symbolic_provider_answer_still_finalizes_to_its_bound_then_mixed`
+    /// in `inference.rs`): the same solve/substitute/finalize pipeline
+    /// below runs over it exactly as it would an ordinary symbolic
+    /// declared return, and an unconstrained template still falls to
+    /// its bound then `mixed` — conservative, never a guess, so a
+    /// misbehaving provider degrades gracefully rather than leaking a
+    /// raw template or crashing. Skipped entirely when `result` carries
+    /// nothing symbolic, so a call with an ordinary, template-free
+    /// signature never pays for pair alignment.
     fn solved_call_result(
         &self,
         result: TypeId<'db>,

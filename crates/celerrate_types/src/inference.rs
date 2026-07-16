@@ -1784,6 +1784,71 @@ function caller() { return first(1); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "1");
     }
 
+    // Debt 3: `solved_call_result` (`flow.rs`) documents the provider
+    // tier as needing "no special exemption" from call-site solving
+    // because a provider's answer is "already concrete, so
+    // `contains_symbolic` is already false for it" — an assertion
+    // about every `DynamicTypeProvider` implementation, never
+    // enforced by the call-site solver itself. This pins what actually
+    // happens if that assertion is ever wrong: a provider that answers
+    // a raw, symbolic template is neither a guess nor a panic — the
+    // ordinary `solve`/`substitute`/`finalize_return` pipeline any
+    // symbolic declared return already goes through runs over it
+    // unchanged, and the unconstrained template falls to its bound
+    // then `mixed`, the same conservative fallback everywhere else.
+
+    #[test]
+    fn a_symbolic_provider_answer_still_finalizes_to_its_bound_then_mixed() {
+        use crate::dynamic_type_provider::{
+            DynamicTypeProvider, DynamicTypeProviderRegistration, DynamicTypeProviderRegistry,
+            Invocation, SymbolClaim,
+        };
+        use celerrate_semantics::PluginIdentity;
+
+        #[derive(Debug)]
+        struct SymbolicProvider;
+
+        impl DynamicTypeProvider for SymbolicProvider {
+            fn claims(&self) -> Vec<SymbolClaim> {
+                vec![SymbolClaim::Function {
+                    key: "app\\make".to_owned(),
+                }]
+            }
+            fn return_type<'db>(
+                &self,
+                db: &'db dyn salsa::Database,
+                _invocation: &Invocation<'db>,
+            ) -> Option<crate::TypeId<'db>> {
+                // A boundless template under a scope no declared
+                // signature could ever share — exactly the leak the
+                // doc says never happens today.
+                Some(crate::TypeId::template(
+                    db,
+                    "provider-scope",
+                    "T",
+                    crate::TypeId::mixed(db),
+                ))
+            }
+        }
+
+        let f = fixture(&["<?php
+namespace App;
+function make() { return 1; }
+function caller() { return make(); }
+"]);
+        let _ = DynamicTypeProviderRegistry::builder(vec![DynamicTypeProviderRegistration {
+            identity: PluginIdentity {
+                name: "symbolic".to_owned(),
+                version: "0.0.0".to_owned(),
+                configuration: String::new(),
+            },
+            provider: std::sync::Arc::new(SymbolicProvider),
+        }])
+        .durability(salsa::Durability::HIGH)
+        .new(&f.db);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
     #[test]
     fn new_types_as_the_class_and_anonymous_stays_mixed() {
         let fixture = fixture(&["<?php class A {}
