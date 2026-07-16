@@ -60,6 +60,35 @@ pub fn class_annotations<'db>(
     })
 }
 
+/// Zips `arguments` positionally against `templates` (declaration
+/// order), binding each into a `Substitution` scoped to `scope`: a
+/// missing argument falls to the template's own bound, then `mixed`
+/// (decision 7's conservative-silence rule). The single home for that
+/// two-step fallback — both `ancestor_arguments` (composing a target's
+/// substitution while walking the ancestry) and `ancestor_substitution`
+/// (re-deriving the same map for a single owner, on demand) zip through
+/// here, so a future change to the fallback rule cannot drift between
+/// two copies. Returns the substitution alongside the fixed argument
+/// list in declaration order, since `ancestor_arguments` needs both.
+fn zip_templates<'db>(
+    db: &'db dyn salsa::Database,
+    scope: &str,
+    templates: &[ParsedTemplate<'db>],
+    arguments: &[TypeId<'db>],
+) -> (Substitution<'db>, Vec<TypeId<'db>>) {
+    let mut substitution = Substitution::default();
+    let mut fixed = Vec::with_capacity(templates.len());
+    for (position, template) in templates.iter().enumerate() {
+        let argument = arguments
+            .get(position)
+            .copied()
+            .unwrap_or_else(|| template.bound.unwrap_or_else(|| TypeId::mixed(db)));
+        substitution.bind(scope, &template.name, argument);
+        fixed.push(argument);
+    }
+    (substitution, fixed)
+}
+
 /// The fixed generic arguments of every ancestor of `class`, composed
 /// transitively along linearization's ancestry, in walk order.
 /// Diamond inheritance resolves first-edge-wins; a stub or otherwise
@@ -115,16 +144,7 @@ pub fn ancestor_arguments<'db>(
             .collect();
         let target_query = ClassQuery::new(db, target.clone());
         let templates = &class_annotations(db, files, stubs, configuration, target_query).templates;
-        let mut composed = Substitution::default();
-        let mut fixed = Vec::new();
-        for (position, template) in templates.iter().enumerate() {
-            let argument = substituted
-                .get(position)
-                .copied()
-                .unwrap_or_else(|| template.bound.unwrap_or_else(|| TypeId::mixed(db)));
-            composed.bind(&target, &template.name, argument);
-            fixed.push(argument);
-        }
+        let (composed, fixed) = zip_templates(db, &target, templates, &substituted);
         substitutions.insert(target.clone(), composed);
         if !fixed.is_empty() {
             answers.push((target, fixed));
@@ -154,20 +174,19 @@ pub(crate) fn ancestor_substitution<'db>(
         return None;
     }
     let class = ClassQuery::new(db, class_key.to_owned());
-    let fixed = ancestor_arguments(db, files, stubs, configuration, class)
+    // `ancestor_arguments` already zips every template of `owner_key`
+    // against its written arguments (falling back to bound-then-`mixed`
+    // as needed) before it ever records an entry, so `arguments` here
+    // always carries exactly `templates.len()` entries: the zip below
+    // can never take its fallback arm, but goes through the shared
+    // helper anyway so the rule has one home.
+    let arguments = ancestor_arguments(db, files, stubs, configuration, class)
         .iter()
         .find(|(ancestor, _)| ancestor == owner_key)
         .map(|(_, arguments)| arguments.clone())?;
     let owner = ClassQuery::new(db, owner_key.to_owned());
     let templates = &class_annotations(db, files, stubs, configuration, owner).templates;
-    let mut map = Substitution::default();
-    for (position, template) in templates.iter().enumerate() {
-        let argument = fixed
-            .get(position)
-            .copied()
-            .unwrap_or_else(|| template.bound.unwrap_or_else(|| TypeId::mixed(db)));
-        map.bind(owner_key, &template.name, argument);
-    }
+    let (map, _fixed) = zip_templates(db, owner_key, templates, &arguments);
     if map.is_empty() { None } else { Some(map) }
 }
 
@@ -229,6 +248,31 @@ mod tests {
             let qualified = site.qualify_class_name(written).to_lowercase();
             TypeId::class(db, &qualified, vec![])
         }
+
+        /// Splits one `@template` tag's content into its declared name
+        /// and, when present, its bound: `T of Bound` (the form the
+        /// bridge's own `TemplateDeclaration` recognizes, see
+        /// `celerrate_phpdoc_bridge::tags::TemplateDeclaration`) becomes
+        /// `("T", Some("Bound"))`; a boundless `T` becomes `("T", None)`.
+        fn split_template_declaration(rest: &str) -> (String, Option<String>) {
+            let rest = rest.trim();
+            match rest.split_once(" of ") {
+                Some((name, bound)) => (name.trim().to_owned(), Some(bound.trim().to_owned())),
+                None => (rest.to_owned(), None),
+            }
+        }
+
+        /// The declared names only (bound stripped) of every
+        /// `@template` tag in `docblock`, in declaration order — the
+        /// scope tests need to decide whether a written name refers to
+        /// a template rather than a class.
+        fn template_names_in(docblock: &str) -> Vec<String> {
+            Self::docblock_lines(docblock)
+                .iter()
+                .filter_map(|line| line.strip_prefix("@template "))
+                .map(|rest| Self::split_template_declaration(rest).0)
+                .collect()
+        }
     }
 
     impl TypeSyntax for FakeSyntax {
@@ -243,16 +287,26 @@ mod tests {
         ) -> ParsedAnnotations<'db> {
             let db = site.database();
             let lines = Self::docblock_lines(docblock);
-            let template_names: Vec<String> = lines
+            let template_declarations: Vec<(String, Option<String>)> = lines
                 .iter()
                 .filter_map(|line| line.strip_prefix("@template "))
-                .map(|rest| rest.trim().to_owned())
+                .map(Self::split_template_declaration)
+                .collect();
+            let template_names: Vec<String> = template_declarations
+                .iter()
+                .map(|(name, _)| name.clone())
                 .collect();
             let mut parsed = ParsedAnnotations::default();
-            for name in &template_names {
+            for (name, bound_text) in &template_declarations {
+                // A bound is itself an ordinary written name: it lowers
+                // through the same class-or-template rule as any
+                // `@extends`/`@implements` argument or `@return` value.
+                let bound = bound_text
+                    .as_deref()
+                    .map(|written| Self::lower_name(site, &template_names, written));
                 parsed.templates.push(ParsedTemplate {
                     name: name.clone(),
-                    bound: None,
+                    bound,
                 });
             }
             for line in &lines {
@@ -279,13 +333,7 @@ mod tests {
                     // enclosing class docblock, like the bridge does.
                     let enclosing: Vec<String> = site
                         .enclosing_class_docblock()
-                        .map(|docblock| {
-                            Self::docblock_lines(docblock)
-                                .iter()
-                                .filter_map(|line| line.strip_prefix("@template "))
-                                .map(|rest| rest.trim().to_owned())
-                                .collect()
-                        })
+                        .map(Self::template_names_in)
                         .unwrap_or_default();
                     let scope = site.enclosing_class_scope().unwrap_or("");
                     let written = written.trim();
@@ -412,7 +460,7 @@ class User {}
     }
 
     #[test]
-    fn a_missing_argument_falls_to_the_bound_then_mixed() {
+    fn a_missing_argument_falls_to_mixed_when_the_template_is_boundless() {
         let f = fixture(&[r#"<?php
 namespace App;
 /** @template T */
@@ -420,11 +468,29 @@ class Base {}
 class Child extends Base {}
 "#]);
         // No `@extends` tag at all: the template zips against nothing
-        // and falls to its bound (`mixed` here — the fake declares
-        // boundless templates).
+        // and, having no bound of its own, falls straight to `mixed`.
         assert_eq!(
             arguments_of(&f, "app\\child"),
             &vec![("app\\base".to_owned(), vec![TypeId::mixed(&f.db)])],
+        );
+    }
+
+    #[test]
+    fn a_missing_argument_falls_to_the_templates_bound_when_it_has_one() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T of Bound */
+class Base {}
+class Child extends Base {}
+class Bound {}
+"#]);
+        // No `@extends` tag at all: the template zips against nothing,
+        // but this time it declares its own bound, so the fallback must
+        // stop there instead of falling through to `mixed`.
+        let bound = TypeId::class(&f.db, "app\\bound", vec![]);
+        assert_eq!(
+            arguments_of(&f, "app\\child"),
+            &vec![("app\\base".to_owned(), vec![bound])],
         );
     }
 
