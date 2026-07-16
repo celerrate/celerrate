@@ -25,7 +25,7 @@ use crate::declared::{
 use crate::inference::InterproceduralEdgeCounts;
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
-use crate::representation::TypeId;
+use crate::representation::{TypeData, TypeId};
 use crate::widening::{join, widened_literals};
 
 /// Join-ascent passes a loop may take before the still-moving
@@ -1317,6 +1317,150 @@ impl<'db> Walker<'db, '_, '_> {
         (of, signature)
     }
 
+    /// The protocol interfaces the iteration chain recognizes by
+    /// their folded, unqualified name: `Generator`, `Iterator`,
+    /// `IteratorAggregate`, `Traversable`. Every name in this crate's
+    /// class-key convention is folded lowercase with no leading
+    /// separator (`construction.rs`'s `class_names_fold_at_construction`),
+    /// so a root-namespace `\Iterator` folds to exactly `"iterator"`.
+    const ITERATION_PROTOCOL: [&'static str; 4] =
+        ["generator", "iterator", "iteratoraggregate", "traversable"];
+
+    /// Element and key types through the iteration protocol chain
+    /// (decision 12). Precedence per subject constituent: array forms
+    /// answer directly (a shape's key/value are eager over
+    /// `TypeId::key_of`/`value_of`, an array carries them already); a
+    /// class carrying two or more arguments whose own name is one of
+    /// the protocol interfaces answers them directly (`Generator<K,
+    /// V>`, `Iterator<K, V>`, ...); otherwise a class funnels through
+    /// `class_iteration_types` (the `getIterator` unwrap, the
+    /// threaded-ancestor-arguments-else-`current`/`key` split); a
+    /// union joins its constituents, skipping `null` and `false`
+    /// (iterating them yields nothing, so they contribute no
+    /// alternative); a template recurses through its bound. Everything
+    /// else — including a plain object, whose property iteration is a
+    /// recorded stance — answers `mixed`. `depth` is the recursion
+    /// guard (capped at 8, decision 12): the `IteratorAggregate`
+    /// unwrap is the only arm that can recurse on a *different*
+    /// subject through a class's own declared return, so it is the one
+    /// the guard exists to bound — a `getIterator` returning `$this`,
+    /// or two classes whose `getIterator`s return each other, would
+    /// otherwise recurse forever.
+    fn iteration_types(&mut self, subject: TypeId<'db>, depth: u32) -> (TypeId<'db>, TypeId<'db>) {
+        let db = self.db();
+        let mixed = (TypeId::mixed(db), TypeId::mixed(db));
+        if depth > 8 {
+            return mixed;
+        }
+        match subject.data(db) {
+            TypeData::Array { key, value, .. } => (*key, *value),
+            TypeData::Shape { .. } => (TypeId::key_of(db, subject), TypeId::value_of(db, subject)),
+            TypeData::Union { constituents } => {
+                let mut keys = Vec::new();
+                let mut values = Vec::new();
+                for constituent in constituents {
+                    if matches!(
+                        constituent.data(db),
+                        TypeData::Null
+                            | TypeData::Bool {
+                                literal: Some(false)
+                            }
+                    ) {
+                        continue;
+                    }
+                    let (key, value) = self.iteration_types(*constituent, depth + 1);
+                    keys.push(key);
+                    values.push(value);
+                }
+                if values.is_empty() {
+                    return mixed;
+                }
+                (TypeId::union(db, keys), TypeId::union(db, values))
+            }
+            TypeData::Template { bound, .. } => self.iteration_types(*bound, depth + 1),
+            TypeData::Class { name, arguments } => {
+                self.class_iteration_types(name, arguments, subject, depth)
+            }
+            _ => mixed,
+        }
+    }
+
+    /// The class arm of [`Self::iteration_types`]: the protocol's own
+    /// two arguments when `name` is itself one of the interfaces; else
+    /// a `getIterator` (declared or inherited) unwraps its
+    /// declared-or-inferred return recursively — the standard method
+    /// result path (`method_call_result_for_keys`), substitution
+    /// included, exactly as any other call answers, so `self`/`static`
+    /// and the receiver's class arguments resolve the same way a
+    /// direct call site would; else the threaded protocol-ancestor
+    /// arguments (task 3's `ancestor_arguments`) when the linearized
+    /// ancestry actually composed one for a protocol interface,
+    /// substituted against `subject` through `member_boundary_type`
+    /// (decision 1) exactly like any other member boundary; else,
+    /// lacking both, `current`/`key` declared or inherited answer
+    /// through the same method result path; else `mixed`.
+    fn class_iteration_types(
+        &mut self,
+        name: &str,
+        arguments: &[TypeId<'db>],
+        subject: TypeId<'db>,
+        depth: u32,
+    ) -> (TypeId<'db>, TypeId<'db>) {
+        let db = self.db();
+        let mixed = (TypeId::mixed(db), TypeId::mixed(db));
+        // The protocol interfaces themselves, carrying their
+        // arguments: `Generator<int, User>`, `Iterator<string, User>`,
+        // ...
+        if Self::ITERATION_PROTOCOL.contains(&name)
+            && let (Some(key), Some(value)) = (arguments.first(), arguments.get(1))
+        {
+            return (*key, *value);
+        }
+        let keys = vec![name.to_owned()];
+        // An implementor declaring or inheriting `getIterator`: unwrap
+        // its declared-or-inferred return through the standard method
+        // result path (substitution included), then recurse under the
+        // depth guard.
+        if self
+            .member_owner(name, MemberKind::Method, "getIterator")
+            .is_some()
+        {
+            let (inner, _) = self.method_call_result_for_keys(&keys, subject, "getIterator");
+            return self.iteration_types(inner, depth + 1);
+        }
+        // Threaded protocol-ancestor arguments:
+        // `@implements Iterator<string, User>` composed by task 3.
+        let class = ClassQuery::new(db, name.to_owned());
+        let threaded = crate::inheritance::ancestor_arguments(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            class,
+        )
+        .iter()
+        .find(|(ancestor, _)| Self::ITERATION_PROTOCOL.contains(&ancestor.as_str()))
+        .map(|(_, fixed)| fixed.clone());
+        if let Some(fixed) = threaded
+            && let (Some(key), Some(value)) = (fixed.first(), fixed.get(1))
+        {
+            let key = self.member_boundary_type(*key, Some(name), subject);
+            let value = self.member_boundary_type(*value, Some(name), subject);
+            return (key, value);
+        }
+        // The `current`/`key` protocol members, declared or inferred.
+        if self
+            .member_owner(name, MemberKind::Method, "current")
+            .is_some()
+            && self.member_owner(name, MemberKind::Method, "key").is_some()
+        {
+            let (value, _) = self.method_call_result_for_keys(&keys, subject, "current");
+            let (key, _) = self.method_call_result_for_keys(&keys, subject, "key");
+            return (key, value);
+        }
+        mixed
+    }
+
     fn statements(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
         for &statement in list {
             if !environment.is_reachable() {
@@ -1460,19 +1604,24 @@ impl<'db> Walker<'db, '_, '_> {
                 by_reference: _,
                 body,
             } => {
-                self.expression(subject, environment);
+                let subject_type = self.expression(subject, environment);
+                let (key_type, value_type) = self.iteration_types(subject_type, 0);
                 self.looped(environment, |walker, env| {
-                    // Iteration typing is plan 6: key and value are
-                    // mixed, honestly.
+                    // Iteration typing follows the protocol chain
+                    // (decision 12): `iteration_types` resolved the
+                    // key and value once, above, from the subject's
+                    // type before the loop. A by-reference value
+                    // binds exactly like a plain value here — no
+                    // write-back (decision 12's recorded stance).
                     if let Some(key) = key
                         && let Some(subject) = subject_of(walker.context.ir, key)
                     {
                         walker.expression(key, env);
-                        env.bind(subject, TypeId::mixed(walker.db()));
+                        env.bind(subject, key_type);
                     }
                     walker.expression(value, env);
                     if let Some(subject) = subject_of(walker.context.ir, value) {
-                        env.bind(subject, TypeId::mixed(walker.db()));
+                        env.bind(subject, value_type);
                     }
                     walker.statements(&body, env);
                     env.clone()

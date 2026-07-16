@@ -278,9 +278,20 @@ impl TypeSyntax for FakeSyntax {
                 parsed.return_type = Some(
                     Self::parse_conditional_return(site, &parsed.templates, written)
                         .unwrap_or_else(|| {
-                            // Class templates come into scope through the
-                            // enclosing class docblock, like the bridge does.
-                            Self::lower_member_name(site, &parsed.templates, written)
+                            // Task 10: `@return` reuses the same
+                            // generic-argument-aware lowering `@param`
+                            // and `@var` already share
+                            // (`lower_generic_type`), so a protocol
+                            // return like `\Generator<int, User>`
+                            // carries its arguments rather than
+                            // collapsing to a garbled bare-name class
+                            // (`lower_member_name` alone cannot split
+                            // `NAME<ARG, ...>`). Class templates still
+                            // come into scope through the enclosing
+                            // class docblock, like the bridge does,
+                            // since `lower_generic_type` falls through
+                            // to `lower_member_name` for a bare name.
+                            Self::lower_generic_type(site, &parsed.templates, written)
                         }),
                 );
             }

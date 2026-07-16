@@ -2630,4 +2630,313 @@ function caller(Sub $subject) { return $subject->build(); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "42");
     }
+
+    // Task 10: iteration typing through the protocol chain (decision
+    // 12). `foreach` resolves key and value through
+    // `Walker::iteration_types`: array forms answer directly; the
+    // protocol interfaces (`Generator`, `Iterator`, `IteratorAggregate`,
+    // `Traversable`) carrying two or more arguments answer them
+    // directly; an implementor's `getIterator` unwraps recursively
+    // under a depth guard of 8; a class with threaded ancestor
+    // arguments answers them, else its `current`/`key` returns; a
+    // union joins its constituents, skipping `null` and `false`; a
+    // template recurses through its bound; everything else is `mixed`.
+
+    /// Deviation from the brief's illustrative expectations, verified
+    /// against this crate's actual, deterministic behavior rather than
+    /// taken on faith: a bare literal `[1, 2]` (`flow.rs`'s
+    /// `array_literal`) types as a `Shape` with literal integer keys
+    /// `0`/`1`, not a widened `Array`/list — decision 12's "a list
+    /// answers `int` keys" rule is for the already-widened `Array`
+    /// form (`representation.rs`: "a list always stores the general
+    /// int key"), which this literal never becomes before the
+    /// `foreach` on the very same expression reads it. So `keys()`
+    /// answers the shape's own literal key union (`"0|1"`, decision
+    /// 12's other clause: "a shape answers its key union"), not
+    /// `"int|0"` as the brief's pseudocode assumed. `values()`
+    /// similarly answers `"0|1|2"` — the sorted literal union, not the
+    /// brief's insertion-ordered `"1|2|0"` (`ordering.rs`'s
+    /// `structural_order` sorts `Int` literals by value, the same
+    /// deterministic rule every other union in this crate already
+    /// follows).
+    #[test]
+    fn foreach_over_an_array_literal_types_key_and_value() {
+        let f = fixture(&[r#"<?php
+namespace App;
+function values() {
+    foreach ([1, 2] as $key => $value) { return $value; }
+    return 0;
+}
+function keys() {
+    foreach ([1, 2] as $key => $value) { return $key; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\values"), "0|1|2");
+        assert_eq!(caller_return_display(&f, "app\\keys"), "0|1");
+    }
+
+    #[test]
+    fn a_declared_generator_return_drives_foreach() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @return \Generator<int, User> */
+function stream() {}
+function caller() {
+    foreach (stream() as $user) { return $user; }
+    return null;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user|null");
+    }
+
+    #[test]
+    fn the_protocol_interfaces_carry_their_own_arguments() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @return \Iterator<string, User> */
+function iterate() {}
+function caller() {
+    foreach (iterate() as $key => $user) { return $key; }
+    return '';
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "string|''");
+    }
+
+    #[test]
+    fn an_iterator_aggregate_unwraps_get_iterator() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+class Users implements \IteratorAggregate {
+    /** @return \Generator<int, User> */
+    public function getIterator(): \Generator {}
+}
+function caller(Users $users) {
+    foreach ($users as $user) { return $user; }
+    return null;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user|null");
+    }
+
+    #[test]
+    fn a_protocol_class_without_threading_falls_to_current_and_key() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Numbers implements \Iterator {
+    public function current(): int {}
+    public function key(): string {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+function values(Numbers $numbers) {
+    foreach ($numbers as $value) { return $value; }
+    return 0;
+}
+function keys(Numbers $numbers) {
+    foreach ($numbers as $key => $value) { return $key; }
+    return '';
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\values"), "int|0");
+        assert_eq!(caller_return_display(&f, "app\\keys"), "string|''");
+    }
+
+    /// Same ordering deviation as
+    /// `foreach_over_an_array_literal_types_key_and_value` above: the
+    /// brief's illustrative `"1|2|0"` is insertion-ordered, but
+    /// `TypeId::union`'s canonical sort places `Int` literals by value
+    /// (`ordering.rs`), so the verified, deterministic answer is
+    /// `"0|1|2"`.
+    #[test]
+    fn a_union_subject_joins_and_skips_its_null_constituent() {
+        let f = fixture(&[r#"<?php
+namespace App;
+function caller(bool $flag) {
+    $subject = $flag ? [1, 2] : null;
+    foreach ($subject as $value) { return $value; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "0|1|2");
+    }
+
+    /// The other half of decision 12's skip rule: `false` contributes
+    /// no alternative either (a falsy subject iterates nothing). Not
+    /// exercised by `a_union_subject_joins_and_skips_its_null_constituent`
+    /// above (which only ever puts `null` through the union arm) — this
+    /// discriminates the two literals separately. Without the skip, the
+    /// `false` constituent falls to `_ => mixed`, and `TypeId::union`
+    /// collapses the whole join to `mixed` the moment it sees it
+    /// (`construction.rs`'s cap-point rule), so the wrong answer is
+    /// `"mixed"`, not `"0|1|2"`.
+    #[test]
+    fn a_union_subject_also_skips_its_false_constituent() {
+        let f = fixture(&[r#"<?php
+namespace App;
+function caller(bool $flag) {
+    $subject = $flag ? [1, 2] : false;
+    foreach ($subject as $value) { return $value; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "0|1|2");
+    }
+
+    /// Decision 12's template arm, untested by the brief: a generic
+    /// parameter's own `foreach` (no call site involved — the solver
+    /// never runs, so `$items` stays a raw, unresolved `Template`
+    /// inside `each`'s own body) recurses through its bound, a class
+    /// answering through `current`/`key`. Without the `Template` arm,
+    /// the match's `_ => mixed` fallback would answer `"mixed|0"`
+    /// instead of `"int|0"`.
+    #[test]
+    fn a_template_recurses_through_its_bound_for_iteration() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Numbers implements \Iterator {
+    public function current(): int {}
+    public function key(): string {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+/**
+ * @template T of Numbers
+ * @param T $items
+ */
+function each($items) {
+    foreach ($items as $value) { return $value; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\each"), "int|0");
+    }
+
+    /// Precedence pinning, not just presence: a class threading
+    /// `@implements Iterator<TKey, TValue>` arguments must answer
+    /// *those*, not fall through to `current`/`key` — the two-branch
+    /// rule's "when present" side, which
+    /// `a_protocol_class_without_threading_falls_to_current_and_key`
+    /// (only ever exercising the absent side) cannot pin. `current`
+    /// and `key` are declared with a deliberately different type
+    /// (`int`) from the threaded `TKey` (`string`): if the fallback
+    /// wrongly ran first (or the threading were ignored), the answer
+    /// would be `"0|int"`, not `"0|string"`. `Iterator` is declared
+    /// here, unqualified, in the global namespace (no `namespace`
+    /// statement in this fixture) so its folded key is exactly
+    /// `"iterator"` — the bare name `class_iteration_types` checks
+    /// `ancestor_arguments` against — mirroring the real built-in's own
+    /// unqualified name; the fake's `class_annotations` needs an actual
+    /// declaration with its own `@template` tags to compose a non-empty
+    /// threaded argument list at all (`ancestor_arguments`'s
+    /// `zip_templates` zips against the *target's own* declared
+    /// templates).
+    #[test]
+    fn threaded_ancestor_arguments_precede_the_current_key_fallback() {
+        let f = fixture_with_generics(&[r#"<?php
+class User {}
+/**
+ * @template TKey
+ * @template TValue
+ */
+interface Iterator {}
+/** @implements Iterator<string, User> */
+class Pairs implements Iterator {
+    public function current(): int {}
+    public function key(): int {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+function keys(Pairs $pairs) {
+    foreach ($pairs as $key => $value) { return $key; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "keys"), "0|string");
+    }
+
+    /// Precedence pinning between the `getIterator` unwrap and the
+    /// threaded/`current`-`key` arms: a class implementing both
+    /// `IteratorAggregate` and `Iterator` at once must answer through
+    /// `getIterator`, never `current`/`key` — no single-interface
+    /// fixture (like the two tests above) can discriminate the two
+    /// arms' relative order, only a class carrying both at once can.
+    /// `getIterator`'s declared return (`TypeA`) and `current`'s
+    /// (`TypeB`) are different classes on purpose: the wrong order
+    /// answers `"app\\typeb|null"`.
+    #[test]
+    fn an_iterator_aggregate_precedes_iterator_when_both_are_implemented() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class TypeA {}
+class TypeB {}
+class Both implements \IteratorAggregate, \Iterator {
+    /** @return \Generator<int, TypeA> */
+    public function getIterator(): \Generator {}
+    public function current(): TypeB {}
+    public function key(): int {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+function caller(Both $both) {
+    foreach ($both as $item) { return $item; }
+    return null;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\typea|null");
+    }
+
+    /// The depth guard (decision 12: capped at 8) is load-bearing, not
+    /// decorative: a `getIterator` returning `$this` recurses on the
+    /// exact same subject forever without it. The guard makes the walk
+    /// terminate deterministically, answering `mixed` — the reachable
+    /// end of body still returns `null`, but `TypeId::union` collapses
+    /// any join touching `mixed` to `mixed` outright
+    /// (`construction.rs`'s cap-point rule), so `"mixed"` is itself
+    /// evidence the guard fired rather than the loop hanging.
+    #[test]
+    fn foreach_over_a_self_returning_get_iterator_terminates_via_the_depth_guard() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Loopy implements \IteratorAggregate {
+    public function getIterator(): self {}
+}
+function caller(Loopy $loopy) {
+    foreach ($loopy as $item) { return $item; }
+    return null;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    /// The guard's other shape (decision 12's own wording): two classes
+    /// whose `getIterator`s return each other. Not a self-loop, so it
+    /// would not terminate even if the guard only ever checked for the
+    /// exact same `TypeId` recurring; the guard's plain depth count
+    /// bounds this shape too.
+    #[test]
+    fn foreach_over_mutually_referential_get_iterators_terminates_via_the_depth_guard() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class A implements \IteratorAggregate {
+    public function getIterator(): B {}
+}
+class B implements \IteratorAggregate {
+    public function getIterator(): A {}
+}
+function caller(A $a) {
+    foreach ($a as $item) { return $item; }
+    return null;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
 }
