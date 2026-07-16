@@ -207,6 +207,14 @@ pub fn inferred_body_types<'db>(
     // resolve against the class that uses it, not the trait. Without
     // one, the body's own declaration answers, exactly as before.
     let owner_class_key = context.using_class_key(db).clone().or(owner_class_key);
+    // `method_is_static` and `parameters` still come from `body_owner`
+    // above, the trait's own syntactic member, even for a trait body —
+    // only `owner_class_key` is overridden to the using class here.
+    // That split is deliberate, not an oversight: the *signature* (is
+    // this a static method, what are its parameters) is a fact about
+    // the trait method's own declaration, unaffected by which class
+    // uses it; only the *receiver* facts (`self`, `static`, `$this`,
+    // `parent`) are the using class's business (decision 5).
     let flow = FlowContext {
         db,
         files,
@@ -461,6 +469,12 @@ pub fn inferred_method_return<'db>(
         MemberOrigin::Own => InferenceContext::new(db, None),
         MemberOrigin::Trait => InferenceContext::new(db, Some(query.class_key(db).clone())),
     };
+    // `member.ast_id.file` is always the *declaring* file — the
+    // trait's, for a `Trait`-origin member — never the using class's;
+    // that is correct by construction, since a body can only be walked
+    // from the file that actually contains its syntax tree. `context`
+    // (the using-class key, threaded above) is what makes the same
+    // trait body's *analysis* per using class, not this lookup.
     let index = analyzed_file_index(db, files);
     let Ok(position) = index.binary_search_by_key(&member.ast_id.file, |(id, _)| *id) else {
         return TypeId::mixed(db);
@@ -1964,5 +1978,150 @@ function using_class(Talker $t) { return $t->make(); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "'hi'");
         assert_eq!(caller_return_display(&f, "app\\using_class"), "app\\talker");
+    }
+
+    #[test]
+    fn a_trait_body_types_against_each_using_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Reader {
+    public function read() { return $this->value; }
+}
+class IntBox {
+    use Reader;
+    public int $value = 0;
+}
+class StringBox {
+    use Reader;
+    public string $value = '';
+}
+function ints(IntBox $box) { return $box->read(); }
+function strings(StringBox $box) { return $box->read(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\ints"), "int");
+        assert_eq!(caller_return_display(&f, "app\\strings"), "string");
+    }
+
+    #[test]
+    fn two_using_classes_mean_two_memos_for_one_trait_body() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Reader {
+    public function read() { return $this->value; }
+}
+class IntBox { use Reader; public int $value = 0; }
+class StringBox { use Reader; public string $value = ''; }
+"#]);
+        f.db.take_executed();
+        let _ = inferred_method_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            MethodQuery::new(&f.db, "app\\intbox".to_owned(), "read".to_owned()),
+        );
+        let _ = inferred_method_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            MethodQuery::new(&f.db, "app\\stringbox".to_owned(), "read".to_owned()),
+        );
+        let log = f.db.take_executed();
+        assert_eq!(
+            executions_of(&log, "inferred_body_types"),
+            2,
+            "the per-receiver key exists exactly where substitution is impossible: {log:?}",
+        );
+    }
+
+    #[test]
+    fn an_aliased_trait_method_still_finds_its_body() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Maker {
+    public function make() { return 42; }
+}
+class Factory {
+    use Maker { make as build; }
+}
+function caller(Factory $factory) { return $factory->build(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "42");
+    }
+
+    #[test]
+    fn insteadof_routes_to_the_chosen_trait_body() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Ints {
+    public function pick() { return 1; }
+}
+trait Strings {
+    public function pick() { return 'one'; }
+}
+class Chooser {
+    use Ints, Strings {
+        Ints::pick insteadof Strings;
+    }
+}
+function caller(Chooser $chooser) { return $chooser->pick(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "1");
+    }
+
+    #[test]
+    fn a_trait_body_calling_the_users_helper_resolves_against_the_user() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Delegating {
+    public function invoke() { return $this->helper(); }
+}
+class WithHelper {
+    use Delegating;
+    public function helper() { return 'helped'; }
+}
+function caller(WithHelper $subject) { return $subject->invoke(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "'helped'");
+    }
+
+    /// The trait boundary owner mismatch (task 7's flagged latent
+    /// defect): `member_owner` (`flow.rs`) answers `lookup_member`'s
+    /// `owner`, which for a `Trait`-origin resolution names the trait
+    /// itself, not the using class — even though decision 5 already
+    /// analyzes the trait body *for* the using class. None of the
+    /// brief's five pinning tests exercises this: they all reach the
+    /// trait body through `$this` (a `StaticPlaceholder`, substituted
+    /// against the *receiver*, never the owner) or through members the
+    /// using class declares itself (`Own` origin, no trait involved).
+    /// A `self`-typed *declared* return annotation on a trait method is
+    /// the one shape that crosses the boundary through `member_owner`:
+    /// its `SelfPlaceholder` substitutes unconditionally against
+    /// whatever `owner` names (`substitution.rs`'s `SelfPlaceholder`
+    /// arm has no scope key to fall back through, unlike `Template`),
+    /// so a wrong owner is a wrong concrete answer, not silence. Two
+    /// using classes of the same trait, asked through two different
+    /// callers, must answer *their own* class, not the trait and not
+    /// each other's — mutation-checked: reverting `member_owner`'s
+    /// `Trait` arm makes both calls answer `app\maker` instead.
+    #[test]
+    fn a_trait_method_s_self_return_resolves_against_the_using_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Maker {
+    public function make(): self { return $this; }
+}
+class Factory {
+    use Maker;
+}
+class OtherFactory {
+    use Maker;
+}
+function caller(Factory $f) { return $f->make(); }
+function other(OtherFactory $o) { return $o->make(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\factory");
+        assert_eq!(caller_return_display(&f, "app\\other"), "app\\otherfactory");
     }
 }

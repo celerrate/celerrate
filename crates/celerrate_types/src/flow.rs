@@ -12,8 +12,9 @@ use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
-    ClassReference, ExpressionId, MemberKind, MemberQuery, MemberReference, MemberResolution,
-    StatementId, StringPart, UseTables, folded_member_key, linearized_class, lookup_member,
+    ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
+    MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
+    lookup_member,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -510,6 +511,18 @@ impl<'db> Walker<'db, '_, '_> {
     /// would substitute every key's `self`/`parent` against
     /// whichever key happened to resolve first, a wrong concrete
     /// answer rather than conservative silence.
+    ///
+    /// Task 7's trait boundary fix: a `Trait`-origin resolution's
+    /// `owner` (from `lookup_member`) names the trait itself — the
+    /// class that lexically declares the method — but decision 5
+    /// analyzes a trait body *for the using class*, so PHP's `self` and
+    /// `parent` inside it are bound to `key`, the class that uses the
+    /// trait directly, not the trait. Substituting against the trait
+    /// here would silently answer the wrong concrete class (the trait)
+    /// for every using class alike, rather than conservative silence:
+    /// `SelfPlaceholder`/`ParentPlaceholder` substitution
+    /// (`substitution.rs`) has no scope key to fall back through the
+    /// way `Template` does, so an untrue owner is not a safe default.
     fn member_owner(&self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
         let db = self.db();
         let query = MemberQuery::new(db, key.to_owned(), kind, folded_member_key(kind, name));
@@ -520,6 +533,10 @@ impl<'db> Walker<'db, '_, '_> {
             self.context.configuration,
             query,
         ) {
+            Some(MemberResolution::Source {
+                origin: MemberOrigin::Trait,
+                ..
+            }) => Some(key.to_owned()),
             Some(
                 MemberResolution::Source { owner, .. }
                 | MemberResolution::Stub { owner, .. }
