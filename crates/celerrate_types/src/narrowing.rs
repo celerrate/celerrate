@@ -299,7 +299,7 @@ mod tests {
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{AstId, BodyQuery, BodyStatement, body_ir};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::StubIndexInput;
 
     use super::{NarrowingSubject, subject_of};
 
@@ -389,7 +389,7 @@ mod tests {
             })
             .collect();
         let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
+        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
             .durability(salsa::Durability::HIGH)
             .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
