@@ -12,8 +12,30 @@
 //! xtask ground-truth` (task 12) pins the exact record format below
 //! against a committed baseline, so nothing here may change it
 //! casually.
+//!
+//! **Record format**: one line per divergence,
+//! `<symbol>\t<inferred display>\t<annotated display>`, sorted by the
+//! full line, followed by exactly one summary line
+//! `checked <N>, divergences <M>`. `<symbol>` is `<class key>::
+//! <member key>` for methods, the folded function key for functions.
+//!
+//! **Escaping**: `display.rs`'s literal-string rendering
+//! (`StringConstraint::Literal`) is unescaped by design — it is shared
+//! rendering used elsewhere, and this channel may not change it (no
+//! rendering change). A literal like `'a<TAB>b<LF>c'` would otherwise
+//! inject a raw tab or newline straight into a tab-separated,
+//! one-record-per-line stream, breaking both invariants. So the
+//! inferred and annotated display fields (never the symbol, which
+//! cannot contain these bytes) are escaped at the record boundary,
+//! here, before being joined: backslash first (`\` becomes `\\`, so
+//! the scheme round-trips unambiguously), then tab (`\t`), newline
+//! (`\n`) and carriage return (`\r`) become their familiar
+//! two-character escapes. This guarantees one record is always
+//! exactly one line and every field always splits cleanly on a
+//! literal tab, deterministically and stably, since task 12 commits
+//! the output to a baseline file and diffs against it.
 
-use std::io::Write;
+use std::io::{self, Write};
 
 use celerrate_semantics::{
     BodyQuery, FreeFunction, Member, MemberKind, MemberQuery, SymbolSpace, body_ir,
@@ -32,10 +54,12 @@ use crate::session::Session;
 /// Runs the channel over an already-started session: every reported
 /// file's `member_tree`, its free functions and its classes' own
 /// methods, each either a silent pass or a divergence record. Prints
-/// the sorted records, then exactly one summary line. Never fails:
-/// there is no analyzable input this walks that can panic, so there is
-/// no error path to report.
-pub fn run(session: &Session, output: &mut dyn Write) {
+/// the sorted records, then exactly one summary line. There is no
+/// analyzable input this walks that can panic, but the output stream
+/// itself can fail (a truncated pipe, a full disk): that failure is
+/// propagated, mirroring `render_check`'s precedent, rather than
+/// swallowed into a false `Outcome::Clean`.
+pub fn run(session: &Session, output: &mut dyn Write) -> io::Result<()> {
     let inputs = session.inputs();
     let database = &inputs.database;
 
@@ -87,9 +111,28 @@ pub fn run(session: &Session, output: &mut dyn Write) {
     records.sort();
     let divergences = records.len();
     for record in &records {
-        let _ = writeln!(output, "{record}");
+        writeln!(output, "{record}")?;
     }
-    let _ = writeln!(output, "checked {checked}, divergences {divergences}");
+    writeln!(output, "checked {checked}, divergences {divergences}")
+}
+
+/// Neutralizes the control characters that would otherwise break the
+/// record's own invariants: backslash first, so the scheme round-trips
+/// unambiguously, then tab, newline and carriage return. See the
+/// module doc's "Escaping" section for why this exists and why
+/// `display.rs` itself is not the place to fix it.
+fn escape_field(value: &str) -> String {
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        match character {
+            '\\' => escaped.push_str("\\\\"),
+            '\t' => escaped.push_str("\\t"),
+            '\n' => escaped.push_str("\\n"),
+            '\r' => escaped.push_str("\\r"),
+            other => escaped.push(other),
+        }
+    }
+    escaped
 }
 
 /// One free function: annotation and body presence gate whether it is
@@ -123,7 +166,6 @@ fn check_function(
     if !has_body {
         return;
     }
-    *checked += 1;
 
     let Some(declared) = declared_function_signature(
         database,
@@ -134,6 +176,8 @@ fn check_function(
     ) else {
         return;
     };
+    *checked += 1;
+
     let inferred = inferred_function_return(
         database,
         inputs.files,
@@ -155,8 +199,8 @@ fn check_function(
     ) {
         records.push(format!(
             "{key}\t{}\t{}",
-            inferred.display(database),
-            annotated.display(database),
+            escape_field(&inferred.display(database)),
+            escape_field(&annotated.display(database)),
         ));
     }
 }
@@ -194,7 +238,6 @@ fn check_method(
     if !has_body {
         return;
     }
-    *checked += 1;
 
     let Some(declared) = declared_member_signature(
         database,
@@ -210,6 +253,8 @@ fn check_method(
     ) else {
         return;
     };
+    *checked += 1;
+
     let inferred = inferred_method_return(
         database,
         inputs.files,
@@ -231,8 +276,70 @@ fn check_method(
     ) {
         records.push(format!(
             "{class_key}::{member_key}\t{}\t{}",
-            inferred.display(database),
-            annotated.display(database),
+            escape_field(&inferred.display(database)),
+            escape_field(&annotated.display(database)),
         ));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic)]
+
+    use std::io;
+
+    use super::{escape_field, run};
+    use crate::session::Session;
+
+    /// Pinned directly (rather than only indirectly through a fixture
+    /// whose display happens to contain one): backslash escapes first,
+    /// so `\t` in the output can only ever mean an escaped tab, never
+    /// an escaped-then-literal-`t` ambiguity, and the three control
+    /// characters the record format forbids all round-trip through a
+    /// recognizable two-character form.
+    #[test]
+    fn escape_field_neutralizes_backslash_and_the_three_control_characters() {
+        assert_eq!(escape_field("plain"), "plain");
+        assert_eq!(escape_field("a\tb\nc\rd"), "a\\tb\\nc\\rd");
+        assert_eq!(escape_field("back\\slash"), "back\\\\slash");
+        // The escaping character itself must not be re-escaped by a
+        // later pass, and a backslash immediately followed by a
+        // control character must stay unambiguous.
+        assert_eq!(escape_field("\\\t"), "\\\\\\t");
+    }
+
+    /// A writer that fails on its very first byte, so a truncated
+    /// stream is observable without depending on real I/O exhaustion.
+    struct FailingWriter;
+
+    impl io::Write for FailingWriter {
+        fn write(&mut self, _buffer: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("simulated write failure"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    /// `render_check` escalates a render failure to `Outcome::
+    /// InternalError` rather than reporting a clean run over a
+    /// truncated stream; this channel must follow the same precedent
+    /// instead of swallowing the error behind `let _ = writeln!(...)`.
+    #[test]
+    fn a_write_failure_is_propagated_rather_than_swallowed() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::write(
+            project.path().join("code.php"),
+            "<?php\nnamespace App;\nfunction f() {}\n",
+        )
+        .unwrap();
+        let session = Session::start(project.path());
+        let mut writer = FailingWriter;
+
+        assert!(
+            run(&session, &mut writer).is_err(),
+            "a truncated record stream must surface as an error, not a silent success",
+        );
     }
 }

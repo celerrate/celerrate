@@ -120,7 +120,9 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             };
             let session = Session::start(&root);
             report_excluded_plugins(&session);
-            ground_truth::run(&session, output);
+            if ground_truth::run(&session, output).is_err() {
+                return Outcome::InternalError;
+            }
             // Divergences are data, not failure: the channel's own exit
             // code is always clean whenever the analysis ran at all.
             Outcome::Clean

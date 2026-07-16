@@ -116,6 +116,51 @@ class Box {
     );
 }
 
+/// `display.rs` renders a literal string with no escaping
+/// (`format!("'{value}'")`), so a divergent function whose inferred
+/// return is a string literal containing a raw tab and a raw newline
+/// must still yield exactly one record line with exactly three
+/// tab-separated fields: the escaping has to happen at the record
+/// boundary in `ground_truth.rs`, since `display.rs` is shared
+/// rendering this plan may not change.
+///
+/// The single-quoted PHP literal below embeds a genuine tab byte and a
+/// genuine newline byte between its quotes (PHP does not interpret
+/// `\t`/`\n` escapes in single-quoted strings, so the only way to get
+/// real control characters into a literal-string type is to place the
+/// real bytes in the source, which this non-raw Rust string literal
+/// does via its own `\t`/`\n` escapes).
+#[test]
+fn a_literal_containing_a_tab_and_a_newline_stays_one_record_one_line() {
+    let project = tempfile::tempdir().unwrap();
+    fs::write(
+        project.path().join("code.php"),
+        "<?php\nnamespace App;\n/** @return int */\nfunction withControlCharacters() { return 'a\tb\nc'; }\n",
+    )
+    .unwrap();
+    let mut output = Vec::new();
+    let outcome = celerrate_cli::run(
+        vec![
+            "celerrate".into(),
+            "ground-truth".into(),
+            project.path().as_os_str().to_owned(),
+        ],
+        &mut output,
+    );
+    let printed = String::from_utf8(output).unwrap();
+    let lines: Vec<&str> = printed.lines().collect();
+    assert_eq!(
+        lines,
+        [
+            "app\\withcontrolcharacters\t'a\\tb\\nc'\tint",
+            "checked 1, divergences 1",
+        ],
+        "the raw tab and newline in the literal must be escaped, not left \
+         to split the record across lines or fields: {printed:?}",
+    );
+    assert_eq!(outcome, celerrate_cli::Outcome::Clean);
+}
+
 #[test]
 fn the_subcommand_is_hidden_from_help() {
     let mut output = Vec::new();
