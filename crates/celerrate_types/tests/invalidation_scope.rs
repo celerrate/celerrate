@@ -25,15 +25,14 @@ use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    AstId, BodyQuery, MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key,
-    folded_symbol_key,
+    MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key, folded_symbol_key,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    AnnotationSite, FunctionQuery, ParsedAnnotations, Proof, TypeId, TypeSyntax,
-    TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature, inferred_body_types,
-    inferred_function_return, subtype_of,
+    AnnotationSite, FunctionQuery, MethodQuery, ParsedAnnotations, Proof, TypeId, TypeSyntax,
+    TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature,
+    inferred_function_return, inferred_method_return, subtype_of,
 };
 use salsa::Setter;
 
@@ -1171,6 +1170,21 @@ fn a_default_value_edit_invalidates_the_signatures_dependents() {
     assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
 }
 
+/// Demands the inferred return of both of class `A`'s methods through
+/// the method-inferred tier (plan 6's `inferred_method_return`), the
+/// path a real caller takes.
+fn demand_method_returns(fixture: &InferenceFixture) {
+    for name in ["edited", "bystander"] {
+        let _ = inferred_method_return(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            MethodQuery::new(&fixture.db, "a".to_owned(), name.to_owned()),
+        );
+    }
+}
+
 /// Harness-2, pin 4: editing one method's signature in a class spares
 /// every sibling member's body inference. `member_tree` changes (the
 /// whole class's member table is one query), but the per-body
@@ -1189,66 +1203,16 @@ fn editing_one_signature_spares_the_other_members_inference() {
         public function bystander() { return 'x'; }
     }";
     let mut fixture = fixture(&[source_before]);
-    let file = fixture.handles[0];
-    // Numbering: class 0, edited 1, bystander 2. Method-inferred
-    // returns are plan 6, so both bodies' inference is demanded
-    // directly.
-    {
-        let edited = BodyQuery::new(
-            &fixture.db,
-            AstId {
-                file: FileId::new(0),
-                index: 1,
-            },
-        );
-        let bystander = BodyQuery::new(
-            &fixture.db,
-            AstId {
-                file: FileId::new(0),
-                index: 2,
-            },
-        );
-        for body in [edited, bystander] {
-            let _ = inferred_body_types(
-                &fixture.db,
-                fixture.files,
-                fixture.stubs,
-                fixture.configuration,
-                file,
-                body,
-            );
-        }
-    }
+    // Plan 6 landed the method-inferred tier, so the demand runs
+    // through `inferred_method_return` — the path a caller actually
+    // takes — rather than reaching for each body identity directly.
+    // The scenario and its contract are unchanged.
+    demand_method_returns(&fixture);
     let _ = fixture.db.take_executed();
 
     set_inference_source(&mut fixture, 0, source_after);
 
-    {
-        let edited = BodyQuery::new(
-            &fixture.db,
-            AstId {
-                file: FileId::new(0),
-                index: 1,
-            },
-        );
-        let bystander = BodyQuery::new(
-            &fixture.db,
-            AstId {
-                file: FileId::new(0),
-                index: 2,
-            },
-        );
-        for body in [edited, bystander] {
-            let _ = inferred_body_types(
-                &fixture.db,
-                fixture.files,
-                fixture.stubs,
-                fixture.configuration,
-                file,
-                body,
-            );
-        }
-    }
+    demand_method_returns(&fixture);
     let log = fixture.db.take_executed();
     // `member_tree` changed, but the per-body `body_owner` projection
     // backdates for every body whose own declaration did not: only

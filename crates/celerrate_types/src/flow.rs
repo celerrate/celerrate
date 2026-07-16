@@ -959,8 +959,10 @@ impl<'db> Walker<'db, '_, '_> {
     /// (the brief's own pseudocode reduces with `join`, but that
     /// collapses e.g. `int` and `string` straight to `mixed`, which
     /// contradicts `union_receivers_join_and_opaque_receivers_stay_silent`'s
-    /// expected `"int|string"`). The gate failing on any key answers
-    /// mixed for that key (method-inferred returns are plan 6).
+    /// expected `"int|string"`). The gate failing on a key drops that
+    /// key to the method-inferred tier (decision 3's fourth tier,
+    /// plan 6): the callee's body answers, and `mixed` remains only
+    /// when even that is silent.
     /// Placeholders substitute against each signature's *own*
     /// declaring owner and the receiver through `member_boundary_type`
     /// (decision 1) — the owner is resolved per key, not once for the
@@ -988,7 +990,29 @@ impl<'db> Walker<'db, '_, '_> {
                 let owner = self.member_owner(key, MemberKind::Method, name);
                 self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
             } else {
-                TypeId::mixed(db)
+                // Decision 3's fourth tier: no usable declared return,
+                // so the callee's own body answers, through the
+                // fixpoint. The result is a *body-relative* type — its
+                // `self`/`static` placeholders and the owner's class
+                // templates are unresolved — so it funnels through the
+                // one member boundary exactly like a declared return
+                // does (decision 1), against this key's own declaring
+                // owner and the call's receiver.
+                self.edge_counts.inferred_return_edges += 1;
+                let method = crate::inference::MethodQuery::new(
+                    db,
+                    key.clone(),
+                    folded_member_key(MemberKind::Method, name),
+                );
+                let inferred = crate::inference::inferred_method_return(
+                    db,
+                    self.context.files,
+                    self.context.stubs,
+                    self.context.configuration,
+                    method,
+                );
+                let owner = self.member_owner(key, MemberKind::Method, name);
+                self.member_boundary_type(inferred, owner.as_deref(), receiver)
             };
             result = Some(match result {
                 Some(previous) => TypeId::union(db, [previous, value]),

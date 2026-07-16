@@ -15,9 +15,10 @@
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberSignature, SymbolQuery,
-    SymbolSpace, UseTables, analyzed_file_index, body_ir, folded_member_key, folded_symbol_key,
-    fully_qualified_name, item_tree, lookup_function_declaration, member_tree,
+    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberOrigin, MemberResolution,
+    MemberSignature, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, body_ir,
+    folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
+    lookup_function_declaration, lookup_member, member_tree,
 };
 use celerrate_stubs::StubIndexInput;
 
@@ -119,10 +120,28 @@ pub(crate) fn body_owner<'db>(
     None
 }
 
+/// The class context one body is analyzed *for* (decision 5): the
+/// using class of a trait body, and `None` everywhere else — so the
+/// memo space of every non-trait body stays exactly one entry wide.
+/// An explicit query parameter rather than ambient state, because
+/// salsa memoizes on the parameter list: the same trait body analyzed
+/// for two using classes must be two memos, not one overwriting the
+/// other. `inferred_method_return`'s trait arm is the only source of a
+/// `Some` value today (task 6 threads the parameter; task 7 owns trait
+/// behavior proper).
+#[salsa::interned(debug)]
+pub struct InferenceContext<'db> {
+    /// The **pre-folded** ClassLike key of the using class, when this
+    /// body is a trait body analyzed for one.
+    #[returns(ref)]
+    pub using_class_key: Option<String>,
+}
+
 /// The inference of one body: `None` when the identity carries no
 /// body in `file` (mirroring `body_ir`). Task 3 replaces the
 /// all-`mixed` table with the flow walk.
 #[salsa::tracked(returns(ref))]
+#[allow(clippy::too_many_arguments)]
 pub fn inferred_body_types<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -130,6 +149,7 @@ pub fn inferred_body_types<'db>(
     configuration: ProjectConfiguration,
     file: SourceFile,
     body: BodyQuery<'db>,
+    context: InferenceContext<'db>,
 ) -> Option<InferredBody<'db>> {
     let ir = body_ir(db, file, body).as_ref()?;
     let owner = body_owner(db, file, body);
@@ -182,7 +202,12 @@ pub fn inferred_body_types<'db>(
         None => (String::new(), None, false, Vec::new()),
     };
     let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
-    let context = FlowContext {
+    // Decision 5: with a using-class context the walker's owner class
+    // key *is* the using class — `self`/`static` inside a trait body
+    // resolve against the class that uses it, not the trait. Without
+    // one, the body's own declaration answers, exactly as before.
+    let owner_class_key = context.using_class_key(db).clone().or(owner_class_key);
+    let flow = FlowContext {
         db,
         files,
         stubs,
@@ -194,7 +219,7 @@ pub fn inferred_body_types<'db>(
         method_is_static,
         parameters,
     };
-    let result = walk_body(&context);
+    let result = walk_body(&flow);
     Some(InferredBody {
         expression_types: result.expression_types,
         return_type: result.return_type,
@@ -336,10 +361,118 @@ pub fn inferred_function_return<'db>(
         configuration,
         file,
         BodyQuery::new(db, ast_id),
+        InferenceContext::new(db, None),
     )
     .as_ref()
     .map(|inferred| inferred.return_type)
     .unwrap_or_else(|| TypeId::mixed(db))
+}
+
+/// One method to infer the return of: the receiver-resolution class
+/// and the method, both **pre-folded**. `class_key` is a class
+/// *definition* identity — never a type carrying generic arguments —
+/// so the memo space stays pinned to the finite set of class-likes
+/// (decision 4); the receiver's arguments bind at the call boundary
+/// (`member_boundary_type`), not here.
+#[salsa::interned(debug)]
+pub struct MethodQuery<'db> {
+    /// Pre-folded ClassLike key: the receiver-resolution class.
+    #[returns(ref)]
+    pub class_key: String,
+    /// Pre-folded method key (`folded_member_key(Method, name)`).
+    #[returns(ref)]
+    pub member_key: String,
+}
+
+fn method_return_cycle_initial<'db>(
+    db: &'db dyn salsa::Database,
+    _id: salsa::Id,
+    _files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    _query: MethodQuery<'db>,
+) -> TypeId<'db> {
+    // The lattice bottom: ascent starts from nothing.
+    TypeId::never(db)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn method_return_cycle_recover<'db>(
+    db: &'db dyn salsa::Database,
+    cycle: &salsa::Cycle,
+    last_provisional: &TypeId<'db>,
+    computed: TypeId<'db>,
+    _files: AnalyzedFileSet,
+    _stubs: StubIndexInput,
+    _configuration: ProjectConfiguration,
+    _query: MethodQuery<'db>,
+) -> TypeId<'db> {
+    // The same contract `return_cycle_recover` above documents and the
+    // same shared `ascend`: convergence is "the returned value equals
+    // `last_provisional`", which `ascend` reports exactly, and the
+    // shared budget bails to `mixed` far below salsa's panic cap.
+    ascend(db, cycle.iteration(), *last_provisional, computed)
+}
+
+/// The inferred return of one method, keyed per defining class
+/// (decision 4): an inherited member re-keys to its owner so every
+/// subclass shares one memo; a trait member analyzes per using class
+/// (the query's `class_key`, PHPStan's model); stub and virtual
+/// members answer `mixed` — their types are declared, consulted at the
+/// earlier tier. The second cycle-recovered query in the workspace;
+/// the discipline (join ascent, shared budget, deterministic bailout)
+/// is plan 5's, unchanged, so termination is inherited rather than
+/// re-argued: the participant set is the finite set of (class-like,
+/// member) pairs, the ascent is monotone, and the budget bounds it.
+#[salsa::tracked(cycle_fn = method_return_cycle_recover, cycle_initial = method_return_cycle_initial)]
+pub fn inferred_method_return<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    query: MethodQuery<'db>,
+) -> TypeId<'db> {
+    let member_query = celerrate_semantics::MemberQuery::new(
+        db,
+        query.class_key(db).clone(),
+        MemberKind::Method,
+        query.member_key(db).clone(),
+    );
+    // Stub and virtual resolutions (and an unresolvable member) fall
+    // through to silence here on purpose: neither carries a body to
+    // infer, and both already answered at the declared tier.
+    let Some(MemberResolution::Source {
+        member,
+        owner,
+        origin,
+    }) = lookup_member(db, files, stubs, configuration, member_query)
+    else {
+        return TypeId::mixed(db);
+    };
+    let context = match origin {
+        MemberOrigin::Inherited => {
+            // Re-key to the defining class: one memo, shared by every
+            // subclass, rather than one per subclass of an identical
+            // body. `owner` is a strictly higher ancestor, so the
+            // re-key descends the finite ancestry and terminates.
+            let owner_query = MethodQuery::new(db, owner, query.member_key(db).clone());
+            return inferred_method_return(db, files, stubs, configuration, owner_query);
+        }
+        MemberOrigin::Own => InferenceContext::new(db, None),
+        MemberOrigin::Trait => InferenceContext::new(db, Some(query.class_key(db).clone())),
+    };
+    let index = analyzed_file_index(db, files);
+    let Ok(position) = index.binary_search_by_key(&member.ast_id.file, |(id, _)| *id) else {
+        return TypeId::mixed(db);
+    };
+    let Some(&(_, file)) = index.get(position) else {
+        return TypeId::mixed(db);
+    };
+    let body = BodyQuery::new(db, member.ast_id);
+    inferred_body_types(db, files, stubs, configuration, file, body, context)
+        .as_ref()
+        .map(|inferred| inferred.return_type)
+        .unwrap_or_else(|| TypeId::mixed(db))
 }
 
 #[cfg(test)]
@@ -364,7 +497,10 @@ mod tests {
     use celerrate_source::FileId;
     use celerrate_stubs::{StubIndex, StubIndexInput};
 
-    use super::{BodyOwner, body_owner, inferred_body_types, inferred_function_return};
+    use super::{
+        BodyOwner, InferenceContext, MethodQuery, body_owner, inferred_body_types,
+        inferred_function_return, inferred_method_return,
+    };
     use crate::declared::FunctionQuery;
 
     struct Fixture {
@@ -440,6 +576,7 @@ mod tests {
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -470,6 +607,7 @@ mod tests {
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap()
@@ -526,6 +664,7 @@ mod tests {
                     fixture.configuration,
                     file,
                     body,
+                    InferenceContext::new(&fixture.db, None),
                 )
                 .as_ref()
                 .unwrap()
@@ -638,6 +777,7 @@ mod tests {
                 fixture.configuration,
                 file,
                 class,
+                InferenceContext::new(&fixture.db, None),
             )
             .is_none()
         );
@@ -885,6 +1025,7 @@ mod tests {
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -926,6 +1067,7 @@ mod tests {
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -1276,6 +1418,7 @@ function unwrap($b) { return $b->get(); }
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -1337,6 +1480,7 @@ function unwrap($b) { return $b->get(); }
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -1370,6 +1514,7 @@ function unwrap($b) { return $b->get(); }
             fixture.configuration,
             file,
             body,
+            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -1542,5 +1687,282 @@ function unwrap($b) { return $b->get(); }
         register_fake_assertions(&fixture);
         // Numbering: class 0, property 1, check 2, read 3.
         assert_eq!(return_display(&fixture, 3), "string");
+    }
+
+    /// Counts how many times a query appears in an executed-query log
+    /// (the `celerrate_semantics` invalidation-scope tests'
+    /// `executions_of` pattern, duplicated here exactly as
+    /// `tests/invalidation_scope.rs` duplicates it: no shared
+    /// test-support module exists per the design).
+    fn executions_of(log: &[String], query: &str) -> usize {
+        let prefix = format!("{query}(");
+        log.iter()
+            .filter(|entry| entry.contains(prefix.as_str()))
+            .count()
+    }
+
+    #[test]
+    fn a_method_call_takes_the_inferred_return_when_no_declaration_exists() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Greeter {
+    public function greeting() { return 'hello'; }
+}
+function caller(Greeter $g) { return $g->greeting(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "'hello'");
+    }
+
+    #[test]
+    fn a_declared_return_still_wins_over_the_body() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Greeter {
+    public function greeting(): string { return 'hello'; }
+}
+function caller(Greeter $g) { return $g->greeting(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "string");
+    }
+
+    #[test]
+    fn mutual_method_recursion_converges_to_the_joined_union() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Pair {
+    public function left(bool $flip) {
+        if ($flip) { return 1; }
+        return $this->right($flip);
+    }
+    public function right(bool $flip) {
+        if ($flip) { return 'one'; }
+        return $this->left($flip);
+    }
+}
+function caller(Pair $p) { return $p->left(true); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "1|'one'");
+    }
+
+    /// Determinism, the salsa requirement the fixpoint must not break:
+    /// a mutual cluster converges to one answer whatever member is
+    /// asked first. Same source as the test above, entered from
+    /// `right` instead of through `caller` — `left` must still answer
+    /// `1|'one'`.
+    #[test]
+    fn a_mutual_method_cluster_converges_the_same_from_either_entry_point() {
+        let source = r#"<?php
+namespace App;
+class Pair {
+    public function left(bool $flip) {
+        if ($flip) { return 1; }
+        return $this->right($flip);
+    }
+    public function right(bool $flip) {
+        if ($flip) { return 'one'; }
+        return $this->left($flip);
+    }
+}
+"#;
+        let method_return = |f: &Fixture, name: &str| {
+            inferred_method_return(
+                &f.db,
+                f.files,
+                f.stubs,
+                f.configuration,
+                MethodQuery::new(&f.db, "app\\pair".to_owned(), name.to_owned()),
+            )
+            .display(&f.db)
+        };
+
+        let from_left = fixture(&[source]);
+        let left_first = method_return(&from_left, "left");
+        assert_eq!(left_first, "1|'one'");
+
+        let from_right = fixture(&[source]);
+        // Enter the cluster from the other member first. Both members
+        // of this cluster share the one joined answer (`left` is
+        // `1 | right`, `right` is `'one' | left`), so the entry point
+        // changes nothing — neither which member is asked, nor which
+        // is asked first.
+        assert_eq!(method_return(&from_right, "right"), left_first);
+        assert_eq!(method_return(&from_right, "left"), left_first);
+    }
+
+    #[test]
+    fn an_inherited_method_infers_once_per_defining_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public function answer() { return 42; }
+}
+class LeftChild extends Base {}
+class RightChild extends Base {}
+"#]);
+        let left = MethodQuery::new(&f.db, "app\\leftchild".to_owned(), "answer".to_owned());
+        let right = MethodQuery::new(&f.db, "app\\rightchild".to_owned(), "answer".to_owned());
+        f.db.take_executed();
+        let left_return = inferred_method_return(&f.db, f.files, f.stubs, f.configuration, left);
+        let right_return = inferred_method_return(&f.db, f.files, f.stubs, f.configuration, right);
+        assert_eq!(left_return, right_return);
+        assert_eq!(left_return.display(&f.db), "42");
+        let log = f.db.take_executed();
+        assert_eq!(
+            executions_of(&log, "inferred_body_types"),
+            1,
+            "one body, inferred once: {log:?}",
+        );
+
+        // The re-key itself (decision 4), pinned so that removing it
+        // fails *this* assertion: both subclasses answered *through*
+        // the defining class's query, so the defining class's own memo
+        // is already populated and demanding it now executes nothing.
+        // The body-execution count above cannot pin this — the body
+        // memo is keyed by the member's AST identity, which is the
+        // defining class's either way — so without this assertion the
+        // test would pass whether or not the re-key fires.
+        let base = MethodQuery::new(&f.db, "app\\base".to_owned(), "answer".to_owned());
+        let base_return = inferred_method_return(&f.db, f.files, f.stubs, f.configuration, base);
+        assert_eq!(base_return, left_return);
+        let log = f.db.take_executed();
+        assert_eq!(
+            executions_of(&log, "inferred_method_return"),
+            0,
+            "every subclass re-keys into the defining class's one memo: {log:?}",
+        );
+    }
+
+    #[test]
+    fn a_growing_method_recursion_bails_to_mixed_within_the_budget() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Nest {
+    public function deeper() { return [$this->deeper()]; }
+}
+function caller(Nest $n) { return $n->deeper(); }
+"#]);
+        // The array constructor grows the type every iterate; the
+        // ascent widens deterministically to mixed — never salsa's
+        // panic. Which guard fires first is deliberately not the
+        // contract: in this fixture the lattice caps
+        // (`UNION_ARITY_CAP`, `STRUCTURAL_DEPTH_CAP`) converge the
+        // ascent before the budget ever reaches its bail (raising
+        // `FIXPOINT_ITERATION_BUDGET` to 250 leaves this answer
+        // `mixed`), and the budget's own bail is pinned directly by
+        // `ascend_joins_monotonically_and_bails_to_mixed_past_the_budget`.
+        // What this test pins is the property both guards exist for: a
+        // growing *method* cycle terminates, at mixed, without
+        // reaching salsa's `MAX_ITERATIONS` panic.
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    #[test]
+    fn an_inferred_this_return_substitutes_to_the_receiver() {
+        let f = fixture(&[r#"<?php
+namespace App;
+class Base {
+    public function itself() { return $this; }
+}
+class Child extends Base {}
+function caller(Child $c) { return $c->itself(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\child");
+    }
+
+    #[test]
+    fn a_stub_or_unknown_receiver_method_stays_mixed() {
+        let f = fixture(&[r#"<?php
+namespace App;
+function caller($anything) { return $anything->whatever(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
+    }
+
+    /// The Stub arm of decision 4 — the one origin the test above does
+    /// *not* reach (an opaque receiver resolves to no key at all, so
+    /// the query is never asked). A stub method with no declared
+    /// return fails the declared gate and does reach the tier; it has
+    /// no body, so the answer is silence. Reachability is the point,
+    /// and it is mutation-checked: making this arm answer a concrete
+    /// type fails this test and no other.
+    #[test]
+    fn a_stub_method_without_a_declared_return_answers_mixed() {
+        use celerrate_stubs::{
+            StubAvailability, StubClassSurface, StubMember, StubMemberKind, StubSignature,
+            StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+        };
+
+        let db = TestDatabase::default();
+        let files = AnalyzedFileSet::new(
+            &db,
+            vec![SourceFile::new(&db, FileId::new(0), b"<?php".to_vec())],
+        );
+        let untyped_method = StubMember {
+            kind: StubMemberKind::Method,
+            name: "compute".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            // No declared return: the gate fails, the tier is reached.
+            signature: Some(StubSignature {
+                parameters: vec![],
+                return_type: VersionedTypeText::from_text(None),
+                by_reference: false,
+            }),
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        };
+        let stubs = StubIndexInput::builder(StubIndex::new(
+            vec![StubSymbol {
+                name: "Legacy".to_owned(),
+                kind: StubSymbolKind::Class,
+                availability: StubAvailability::ALWAYS,
+            }],
+            vec![],
+            vec![(
+                "Legacy".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![untyped_method],
+                },
+            )],
+        ))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+
+        let query = MethodQuery::new(&db, "legacy".to_owned(), "compute".to_owned());
+        let answer = inferred_method_return(&db, files, stubs, configuration, query);
+        assert_eq!(answer.display(&db), "mixed");
+    }
+
+    /// The Trait arm of decision 4 and the context of decision 5,
+    /// together: a trait member analyzes *per using class* — the
+    /// query's own `class_key` — so `self` inside the trait body is
+    /// the using class, which is what PHP means by `self` in a trait
+    /// (PHPStan's model). Mutation-checked: threading `None` here
+    /// instead of the using class answers `app\speaks`, the trait
+    /// itself, and fails this test alone. Task 7 owns trait behavior
+    /// proper; this pins what task 6's mechanical threading already
+    /// decides.
+    #[test]
+    fn a_trait_method_infers_for_the_using_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Speaks {
+    public function speak() { return 'hi'; }
+    public function make() { $x = new self(); return $x; }
+}
+class Talker { use Speaks; }
+function caller(Talker $t) { return $t->speak(); }
+function using_class(Talker $t) { return $t->make(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "'hi'");
+        assert_eq!(caller_return_display(&f, "app\\using_class"), "app\\talker");
     }
 }
