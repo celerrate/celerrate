@@ -512,17 +512,25 @@ impl<'db> Walker<'db, '_, '_> {
     /// whichever key happened to resolve first, a wrong concrete
     /// answer rather than conservative silence.
     ///
-    /// Task 7's trait boundary fix: a `Trait`-origin resolution's
-    /// `owner` (from `lookup_member`) names the trait itself — the
-    /// class that lexically declares the method — but decision 5
-    /// analyzes a trait body *for the using class*, so PHP's `self` and
-    /// `parent` inside it are bound to `key`, the class that uses the
-    /// trait directly, not the trait. Substituting against the trait
-    /// here would silently answer the wrong concrete class (the trait)
-    /// for every using class alike, rather than conservative silence:
+    /// Task 7's trait boundary fix, anchored by task 7b: a
+    /// `Trait`-origin resolution's `owner` (from `lookup_member`) names
+    /// the trait itself — the class that lexically declares the method —
+    /// but decision 5 analyzes a trait body *for the using class*, so
+    /// PHP's `self` and `parent` inside it are bound to the class that
+    /// wrote `use`, not the trait. Substituting against the trait here
+    /// would silently answer the wrong concrete class (the trait) for
+    /// every using class alike, rather than conservative silence:
     /// `SelfPlaceholder`/`ParentPlaceholder` substitution
     /// (`substitution.rs`) has no scope key to fall back through the
     /// way `Template` does, so an untrue owner is not a safe default.
+    ///
+    /// The using class is the origin's `anchor`, not `key`: they
+    /// coincide only for a direct use. Queried through a subclass of the
+    /// user, or through a chain of traits using traits, `key` is the
+    /// subclass — answering it would trade the trait's wrong concrete
+    /// class for the receiver's, since `self` in a trait does not follow
+    /// late static binding. Only the linearization knows which class the
+    /// trait was pasted into, so it carries the answer here.
     fn member_owner(&self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
         let db = self.db();
         let query = MemberQuery::new(db, key.to_owned(), kind, folded_member_key(kind, name));
@@ -534,9 +542,9 @@ impl<'db> Walker<'db, '_, '_> {
             query,
         ) {
             Some(MemberResolution::Source {
-                origin: MemberOrigin::Trait,
+                origin: MemberOrigin::Trait { anchor },
                 ..
-            }) => Some(key.to_owned()),
+            }) => Some(anchor),
             Some(
                 MemberResolution::Source { owner, .. }
                 | MemberResolution::Stub { owner, .. }

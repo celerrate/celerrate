@@ -89,7 +89,7 @@ pub fn lookup_member<'db>(
                 return Some(MemberResolution::Source {
                     member: entry.member.clone(),
                     owner: entry.owner.clone(),
-                    origin: entry.origin,
+                    origin: entry.origin.clone(),
                 });
             }
             // Fall through to the stub graph behind each stub edge, in

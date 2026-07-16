@@ -55,11 +55,22 @@ pub struct ClassQuery<'db> {
 }
 
 /// Where one linearized member came from, relative to the queried
-/// class: its own body, a trait it uses directly, or an ancestor.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// class: its own body, a trait, or an ancestor.
+///
+/// `Trait` carries its **anchor**: the folded key of the class that
+/// wrote the `use` clause the member arrived through — reached from the
+/// queried class by `extends` edges alone, then trait-use edges the rest
+/// of the way. PHP pastes a trait's body into its user at compile time,
+/// so `self`, `parent` and the member table a trait body sees are the
+/// *user's*, and `self` does not follow late static binding: queried
+/// through a subclass of the user, the anchor is still the user, not the
+/// queried class. The anchor is carried as data rather than inferred
+/// from the tag, because the tag alone cannot tell the direct-use case
+/// (where the queried class *is* the user) from a deeper one.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum MemberOrigin {
     Own,
-    Trait,
+    Trait { anchor: String },
     Inherited,
 }
 
@@ -210,7 +221,9 @@ pub fn linearized_class<'db>(
     // The queue carries, alongside the folded key and origin, the
     // resolved trait adaptations that the using class attached to this
     // trait edge. Only trait entries carry `Some`; the context filters
-    // to this trait's key at push time.
+    // to this trait's key at push time. The origin's anchor rides along
+    // inside the tag itself, fixed at the first trait-use edge and
+    // carried forward from there (see `next_origin`).
     let mut queue: VecDeque<(String, MemberOrigin, Option<ResolvedAdaptations>)> = VecDeque::new();
     queue.push_back((root_key, MemberOrigin::Own, None));
 
@@ -236,7 +249,7 @@ pub fn linearized_class<'db>(
         }
 
         for member in &found.group.members {
-            push_member(member, &key, origin, adaptations.as_ref(), &mut members);
+            push_member(member, &key, &origin, adaptations.as_ref(), &mut members);
         }
 
         // Virtual members: annotation-declared, contributed by the
@@ -290,11 +303,11 @@ pub fn linearized_class<'db>(
             });
             match answer {
                 AncestorAnswer::Source { folded_key } => {
-                    let next_origin = match (origin, relation) {
-                        (MemberOrigin::Own, AncestorRelation::UsesTrait) => MemberOrigin::Trait,
-                        _ => MemberOrigin::Inherited,
-                    };
-                    let next_adaptations = if next_origin == MemberOrigin::Trait {
+                    let next_origin = next_origin(&origin, relation, &key);
+                    let next_adaptations = if matches!(next_origin, MemberOrigin::Trait { .. }) {
+                        // The clause was written on `key`, the class-like
+                        // dequeued here, so its adaptations are exactly
+                        // this trait edge's — at any depth.
                         clause_context.get(&folded_key).cloned()
                     } else {
                         None
@@ -379,6 +392,38 @@ pub fn linearized_class<'db>(
     })
 }
 
+/// The origin one ancestry edge hands its target, given the origin the
+/// edge's owner was walked with and the folded key of that owner.
+///
+/// A trait-use edge crosses into a trait: its target's members are
+/// `Trait`-origin, anchored to the class the trait was pasted into.
+/// Walking from a class-like — `Own` (the queried class itself) or
+/// `Inherited` (an ancestor reached by `extends`) — that class *is* the
+/// user, so the edge's owner becomes the anchor. Walking from a trait
+/// that itself uses a trait, the anchor is already fixed: PHP flattens
+/// the whole trait chain into the same user, so it is carried forward
+/// unchanged rather than re-taken at the intermediate trait.
+///
+/// Everything else inherits. That includes the shapes PHP cannot write —
+/// a trait with an `extends` or `implements` edge — which drop the
+/// anchor rather than invent one, the conservative direction.
+fn next_origin(origin: &MemberOrigin, relation: AncestorRelation, owner: &str) -> MemberOrigin {
+    match (origin, relation) {
+        (MemberOrigin::Own | MemberOrigin::Inherited, AncestorRelation::UsesTrait) => {
+            MemberOrigin::Trait {
+                anchor: owner.to_owned(),
+            }
+        }
+        (MemberOrigin::Trait { anchor }, AncestorRelation::UsesTrait) => MemberOrigin::Trait {
+            anchor: anchor.clone(),
+        },
+        (
+            MemberOrigin::Own | MemberOrigin::Inherited | MemberOrigin::Trait { .. },
+            AncestorRelation::Extends | AncestorRelation::Implements,
+        ) => MemberOrigin::Inherited,
+    }
+}
+
 /// Folds a stub ancestor's magic method into the accumulator: `__get`,
 /// `__set`, `__call`, `__callStatic` suppress otherwise-unknown members.
 /// Method names fold ASCII case, matching source magic detection.
@@ -457,27 +502,32 @@ fn is_excluded(
 }
 
 /// Pushes one class member into the table, applying trait adaptations
-/// when the member came from a directly-used trait. Plain own or
-/// inherited members (and trait members with no adaptations) push once,
-/// verbatim. PHP's `insteadof`/`as` adapt METHODS only: a property,
-/// class constant, or enum case never consults the adaptation context,
-/// even when its name coincides with an adapted method's.
+/// when the member came from a trait. Plain own or inherited members
+/// (and trait members with no adaptations) push once, verbatim. PHP's
+/// `insteadof`/`as` adapt METHODS only: a property, class constant, or
+/// enum case never consults the adaptation context, even when its name
+/// coincides with an adapted method's.
+///
+/// The adaptations handed here are always the ones written on the very
+/// clause this member's trait edge came from — `linearized_class`
+/// resolves them against the class-like that declared the edge, so they
+/// stay the using site's at any depth and never leak across a `use`.
 fn push_member(
     member: &Member,
     owner: &str,
-    origin: MemberOrigin,
+    origin: &MemberOrigin,
     adaptations: Option<&ResolvedAdaptations>,
     members: &mut Vec<LinearizedMember>,
 ) {
     let member_key = folded_member_key(member.kind, &member.name);
     let context = match (origin, adaptations) {
-        (MemberOrigin::Trait, Some(context)) if member.kind == MemberKind::Method => context,
+        (MemberOrigin::Trait { .. }, Some(context)) if member.kind == MemberKind::Method => context,
         _ => {
             members.push(LinearizedMember {
                 key: member_key,
                 member: member.clone(),
                 owner: owner.to_owned(),
-                origin,
+                origin: origin.clone(),
             });
             return;
         }
@@ -502,7 +552,7 @@ fn push_member(
                     key: folded_member_key(member.kind, new_name),
                     member: renamed,
                     owner: owner.to_owned(),
-                    origin,
+                    origin: origin.clone(),
                 });
             }
             None => {
@@ -525,7 +575,7 @@ fn push_member(
         key: member_key,
         member: original,
         owner: owner.to_owned(),
-        origin,
+        origin: origin.clone(),
     });
 }
 
@@ -1018,7 +1068,7 @@ mod tests {
             .members
             .iter()
             .find(|entry| entry.member.kind == kind && entry.key == key)
-            .map(|entry| (entry.owner.clone(), entry.origin))
+            .map(|entry| (entry.owner.clone(), entry.origin.clone()))
     }
 
     #[test]
@@ -1053,11 +1103,104 @@ mod tests {
         );
         assert_eq!(
             member_owner(&child, MemberKind::Method, "bye"),
-            Some(("greets".to_owned(), MemberOrigin::Trait)),
+            Some((
+                "greets".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "child".to_owned(),
+                },
+            )),
         );
         assert_eq!(
             member_owner(&child, MemberKind::Method, "stays").unwrap().1,
             MemberOrigin::Inherited,
+        );
+    }
+
+    /// The anchor of a trait member is the class that wrote `use`, seen
+    /// from any query root: the direct user answers itself, and a
+    /// subclass of it answers the user, not itself and not the trait.
+    /// The `owner` stays the trait throughout — the anchor is a second,
+    /// independent fact, not a rename of the first.
+    #[test]
+    fn a_trait_member_anchors_to_the_class_that_used_the_trait() {
+        let fixture = fixture(&[
+            "<?php trait Maker { public function make() {} }",
+            "<?php class Factory { use Maker; }",
+            "<?php class Sub extends Factory {}",
+        ]);
+        let factory = linearize(&fixture, "Factory").unwrap();
+        assert_eq!(
+            member_owner(&factory, MemberKind::Method, "make"),
+            Some((
+                "maker".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "factory".to_owned(),
+                },
+            )),
+        );
+        // One `extends` step out: still the trait's member, still
+        // anchored to Factory — the class whose body PHP pasted it into.
+        let sub = linearize(&fixture, "Sub").unwrap();
+        assert_eq!(
+            member_owner(&sub, MemberKind::Method, "make"),
+            Some((
+                "maker".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "factory".to_owned(),
+                },
+            )),
+        );
+    }
+
+    /// A trait using a trait: the anchor is fixed at the class boundary
+    /// and carried forward across every further trait-use step, so the
+    /// innermost trait's members anchor to the class, never to the
+    /// intermediate trait.
+    #[test]
+    fn a_nested_trait_member_keeps_the_using_class_as_its_anchor() {
+        let fixture = fixture(&[
+            "<?php trait Inner { public function make() {} }",
+            "<?php trait Outer { use Inner; }",
+            "<?php class C { use Outer; }",
+            "<?php class D extends C {}",
+        ]);
+        for (root, expected) in [("C", "c"), ("D", "c")] {
+            let table = linearize(&fixture, root).unwrap();
+            assert_eq!(
+                member_owner(&table, MemberKind::Method, "make"),
+                Some((
+                    "inner".to_owned(),
+                    MemberOrigin::Trait {
+                        anchor: expected.to_owned(),
+                    },
+                )),
+                "root {root}",
+            );
+        }
+    }
+
+    /// An adaptation is written at the using site, so a trait-use clause
+    /// on a class reached through `extends` still adapts: `Sub` inherits
+    /// `Factory`'s adapted table, not `Maker`'s raw one. Before the
+    /// anchor, `(Inherited, UsesTrait)` fell into the catch-all and
+    /// dropped the clause context entirely, so `build` did not exist on
+    /// `Sub` at all.
+    #[test]
+    fn a_using_classes_adaptations_survive_one_extends_step_out() {
+        let fixture = fixture(&[
+            "<?php trait Maker { public function make() {} }",
+            "<?php class Factory { use Maker { make as build; } }",
+            "<?php class Sub extends Factory {}",
+        ]);
+        let sub = linearize(&fixture, "Sub").unwrap();
+        assert_eq!(
+            member_owner(&sub, MemberKind::Method, "build"),
+            Some((
+                "maker".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "factory".to_owned(),
+                },
+            )),
         );
     }
 
@@ -1248,7 +1391,12 @@ mod tests {
         // B::hello won; C::hello is excluded under its own name…
         assert_eq!(
             member_owner(&a, MemberKind::Method, "hello"),
-            Some(("b".to_owned(), MemberOrigin::Trait)),
+            Some((
+                "b".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "a".to_owned(),
+                },
+            )),
         );
         // …but re-enters under the alias, with the adapted visibility.
         let aliased = a
@@ -1279,12 +1427,22 @@ mod tests {
         // verbatim key, owned by C.
         assert_eq!(
             member_owner(&a, MemberKind::Property, "hello"),
-            Some(("c".to_owned(), MemberOrigin::Trait)),
+            Some((
+                "c".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "a".to_owned(),
+                },
+            )),
         );
         // The method exclusion still applies: B wins.
         assert_eq!(
             member_owner(&a, MemberKind::Method, "hello"),
-            Some(("b".to_owned(), MemberOrigin::Trait)),
+            Some((
+                "b".to_owned(),
+                MemberOrigin::Trait {
+                    anchor: "a".to_owned(),
+                },
+            )),
         );
         // The method alias still applies.
         assert!(

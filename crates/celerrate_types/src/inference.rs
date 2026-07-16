@@ -463,11 +463,34 @@ pub fn inferred_method_return<'db>(
             // subclass, rather than one per subclass of an identical
             // body. `owner` is a strictly higher ancestor, so the
             // re-key descends the finite ancestry and terminates.
+            //
+            // This arm never sees a trait-provided member: a member
+            // arrives here only across an `extends`/`implements` edge,
+            // so `owner` genuinely declares it and its body needs no
+            // using-class context (which is also what keeps decision 5's
+            // memo space for non-trait bodies exactly one entry wide).
+            // Task 7b is what makes that true — before the anchor, a
+            // trait member reached one `extends` step out was classified
+            // `Inherited`, so this arm re-keyed to the *trait* and
+            // analyzed its body with no context at all, resolving `$this`
+            // against the trait: `mixed` when the trait declared no such
+            // member, and a wrong concrete answer when it did.
             let owner_query = MethodQuery::new(db, owner, query.member_key(db).clone());
             return inferred_method_return(db, files, stubs, configuration, owner_query);
         }
         MemberOrigin::Own => InferenceContext::new(db, None),
-        MemberOrigin::Trait => InferenceContext::new(db, Some(query.class_key(db).clone())),
+        // Decision 4's "per using class" key is the origin's anchor, not
+        // the queried class: they coincide only for a direct use.
+        // Queried through a subclass of the user, or through traits
+        // using traits, the anchor still names the class the trait was
+        // pasted into, which is the one PHP binds `self`, `parent` and
+        // `$this`'s member table to. No re-key to the anchor's own
+        // `MethodQuery` is needed for either economy or agreement: the
+        // memo below is keyed by `(body, context)`, so every subclass of
+        // one using class already shares that using class's single body
+        // memo, and `member_owner` (`flow.rs`) reads the same anchor
+        // from the same resolution.
+        MemberOrigin::Trait { anchor } => InferenceContext::new(db, Some(anchor)),
     };
     // `member.ast_id.file` is always the *declaring* file — the
     // trait's, for a `Trait`-origin member — never the using class's;
@@ -2123,5 +2146,140 @@ function other(OtherFactory $o) { return $o->make(); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\factory");
         assert_eq!(caller_return_display(&f, "app\\other"), "app\\otherfactory");
+    }
+
+    /// Task 7b, shape 1: the trait boundary survives one `extends` step
+    /// out of the using class. Task 7's fix answered `key` — the class
+    /// the lookup was queried against — which is the using class only
+    /// for a *direct* use. Queried through a subclass, `self` in the
+    /// trait method still means the class that wrote `use`, because PHP
+    /// pastes a trait into its user at compile time and `self` does not
+    /// follow late static binding: the answer is `app\factory`, never
+    /// `app\maker` (the trait, the pre-fix answer) and never `app\sub`
+    /// (the receiver, what a bare `key.to_owned()` would say). Two
+    /// independent trait users, each with their own subclass, answer
+    /// their own using class — one fixture cannot tell "per using
+    /// class" apart from "one hard-coded class".
+    #[test]
+    fn a_trait_method_s_self_return_anchors_to_the_using_class_not_the_subclass() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Maker {
+    public function make(): self { return $this; }
+}
+class Factory { use Maker; }
+class OtherFactory { use Maker; }
+class Sub extends Factory {}
+class OtherSub extends OtherFactory {}
+function caller(Sub $s) { return $s->make(); }
+function other(OtherSub $o) { return $o->make(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\factory");
+        assert_eq!(caller_return_display(&f, "app\\other"), "app\\otherfactory");
+    }
+
+    /// Task 7b, shape 2: a trait using a trait. The anchor is carried
+    /// forward across every trait-use step, so the innermost trait's
+    /// `self` still names the class that used the outermost trait —
+    /// `app\c`, never `app\inner` (the innermost trait, the pre-fix
+    /// answer) and never `app\outer`. Two using classes of one nested
+    /// trait pair answer differently.
+    #[test]
+    fn a_nested_trait_method_s_self_return_anchors_to_the_using_class() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Inner {
+    public function make(): self { return $this; }
+}
+trait Outer { use Inner; }
+class C { use Outer; }
+class D { use Outer; }
+function c_caller(C $c) { return $c->make(); }
+function d_caller(D $d) { return $d->make(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\c_caller"), "app\\c");
+        assert_eq!(caller_return_display(&f, "app\\d_caller"), "app\\d");
+    }
+
+    /// Task 7b's residual-risk probe, and the anchored `InferenceContext`
+    /// it justifies. The investigation left `$this->helper()` inside a
+    /// trait body degrading to `mixed` one `extends` step out, because
+    /// the `Inherited` re-key threaded no context and the trait body
+    /// resolved `$this` against the trait itself. That is conservative
+    /// only while the trait declares no same-named member — the flagged
+    /// residual. With the anchor, the trait body is analyzed for its
+    /// using class in both shapes, so the *user's* `helper()` answers,
+    /// exactly as it already does for a direct use. Two using classes
+    /// with different helper types, each reached through a subclass.
+    #[test]
+    fn a_trait_body_calling_the_users_helper_resolves_against_the_user_through_a_subclass() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Delegating {
+    public function invoke() { return $this->helper(); }
+}
+class WithHelper {
+    use Delegating;
+    public function helper() { return 'helped'; }
+}
+class OtherWithHelper {
+    use Delegating;
+    public function helper() { return 7; }
+}
+class Sub extends WithHelper {}
+class OtherSub extends OtherWithHelper {}
+function caller(Sub $subject) { return $subject->invoke(); }
+function other(OtherSub $subject) { return $subject->invoke(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "'helped'");
+        assert_eq!(caller_return_display(&f, "app\\other"), "7");
+    }
+
+    /// The residual risk the investigation flagged, isolated: the trait
+    /// declares a member of the same name as the one its body calls, so
+    /// resolving `$this` against the trait would find a *real* member
+    /// and answer a wrong concrete type (`'trait'`) instead of failing
+    /// to `mixed`. The using class's own `helper()` shadows the trait's
+    /// (own beats trait, PHP's rule), and the trait body analyzed for
+    /// that using class must see the shadowing member — through a
+    /// subclass just as through a direct use.
+    #[test]
+    fn a_trait_declaring_the_same_helper_does_not_shadow_the_users_own() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Delegating {
+    public function invoke() { return $this->helper(); }
+    public function helper() { return 'trait'; }
+}
+class WithHelper {
+    use Delegating;
+    public function helper() { return 'user'; }
+}
+class Sub extends WithHelper {}
+function direct(WithHelper $subject) { return $subject->invoke(); }
+function through_subclass(Sub $subject) { return $subject->invoke(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\direct"), "'user'");
+        assert_eq!(caller_return_display(&f, "app\\through_subclass"), "'user'");
+    }
+
+    /// A trait-use adaptation is written at the using site, so it must
+    /// keep applying when the member is reached one `extends` step out:
+    /// the alias `make as build` belongs to `Factory`'s clause, and
+    /// `Sub` inherits the adapted table, not the raw trait.
+    #[test]
+    fn an_aliased_trait_method_still_finds_its_body_through_a_subclass() {
+        let f = fixture(&[r#"<?php
+namespace App;
+trait Maker {
+    public function make() { return 42; }
+}
+class Factory {
+    use Maker { make as build; }
+}
+class Sub extends Factory {}
+function caller(Sub $subject) { return $subject->build(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "42");
     }
 }
