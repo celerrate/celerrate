@@ -13,8 +13,15 @@
 //! (e.g. `@template TKey of Collection<TValue>`), and by task 9 for the
 //! named inline `@var NAME $variable` / `@var NAME<ARG, ...> $variable`
 //! form (constructor inference and inline `@var`'s tests), reusing
-//! `@param`'s own generic-argument-aware type lowering. Recorded debt:
-//! the crate has no other shared test-support module, mirroring the
+//! `@param`'s own generic-argument-aware type lowering, and further
+//! extended by task 11 for the call-site solver's five remaining
+//! structural forms: `array<K, V>`, a callable's empty-parameter-list
+//! return (`callable(): R`), a union (`A|B`), and an intersection
+//! (`A&B`) — deliberately no shape literal syntax, since a real PHP
+//! array literal already infers a genuine `Shape` through ordinary
+//! body inference, so no fixture grammar is needed to drive `collect`'s
+//! `Array`-declared-against-`Shape`-argument arm. Recorded debt: the
+//! crate has no other shared test-support module, mirroring the
 //! semantic-core crates' own duplicated test fakes.
 
 use std::sync::Arc;
@@ -132,6 +139,41 @@ impl FakeSyntax {
         }
     }
 
+    /// Splits `text` at every top-level occurrence of `delimiter`: a
+    /// `<`/`(` opens a nesting level, a `>`/`)` closes one, and
+    /// `delimiter` only counts as a split point at depth zero — so a
+    /// `|` or `&` inside a nested generic argument list or a
+    /// callable's parameter list is never mistaken for the outer
+    /// connective it is being split on. `None` when `delimiter` never
+    /// occurs at depth zero (the overwhelmingly common case: an
+    /// ordinary bare name, or a name with no top-level connective at
+    /// all), so callers can fall through unchanged rather than
+    /// wrapping every written text in a one-element union.
+    fn split_top_level(text: &str, delimiter: char) -> Option<Vec<String>> {
+        let mut depth = 0i32;
+        let mut parts: Vec<String> = Vec::new();
+        let mut current = String::new();
+        for character in text.chars() {
+            match character {
+                '<' | '(' => {
+                    depth += 1;
+                    current.push(character);
+                }
+                '>' | ')' => {
+                    depth -= 1;
+                    current.push(character);
+                }
+                found if found == delimiter && depth == 0 => {
+                    parts.push(current.trim().to_owned());
+                    current = String::new();
+                }
+                _ => current.push(character),
+            }
+        }
+        parts.push(current.trim().to_owned());
+        if parts.len() > 1 { Some(parts) } else { None }
+    }
+
     /// A generic-argument-aware type text — shared by the `@param` and
     /// `@var` arms below (task 9 extends this fake's original
     /// `@param`-only helper to the named inline `@var` form, the same
@@ -143,12 +185,44 @@ impl FakeSyntax {
     /// tag — otherwise `member_boundary_type`'s class-argument-binding
     /// branch has no fixture that can drive it. A bare name falls
     /// through to the ordinary class-or-own-template rule.
+    ///
+    /// Task 11 extends this further with three forms decision 10's
+    /// solver needs and nothing before it exercised: a top-level union
+    /// (`A|B`) or intersection (`A&B`), checked first via
+    /// `split_top_level` so either recurses back into this same
+    /// lowering for each part (letting a constituent itself be a
+    /// template, a class, or another connective); `array<K, V>`,
+    /// the two-argument form only, since nothing here needs the list
+    /// shorthand `array<V>`; and a callable's empty-parameter-list
+    /// return `callable(): R`, since decision 10's `Callable` collect
+    /// arm recurses on `return_type` alone and never touches
+    /// parameters, so a parameter-list grammar would be effort this
+    /// fixture has no test to spend. None of these four prefixes
+    /// (`|`, `&`, `array<`, `callable(`) can appear at the head of a
+    /// plain written name, so every existing bare-name or
+    /// `NAME<ARG, ...>` call site is untouched.
     fn lower_generic_type<'db>(
         site: &AnnotationSite<'db, '_>,
         own_templates: &[ParsedTemplate<'db>],
         written: &str,
     ) -> TypeId<'db> {
         let db = site.database();
+        if let Some(parts) = Self::split_top_level(written, '|') {
+            return TypeId::union(
+                db,
+                parts
+                    .iter()
+                    .map(|part| Self::lower_generic_type(site, own_templates, part)),
+            );
+        }
+        if let Some(parts) = Self::split_top_level(written, '&') {
+            return TypeId::intersection(
+                db,
+                parts
+                    .iter()
+                    .map(|part| Self::lower_generic_type(site, own_templates, part)),
+            );
+        }
         // `class-string<NAME>` (task 8): the primary template binder,
         // never a class literally named `class-string` — checked
         // before the generic `NAME<ARG, ...>` arm below, which would
@@ -158,6 +232,30 @@ impl FakeSyntax {
         {
             let argument = Self::lower_member_name(site, own_templates, inner.trim());
             return TypeId::class_string(db, Some(argument));
+        }
+        // `array<K, V>` (task 11): checked before the generic
+        // `NAME<ARG, ...>` arm below, which would otherwise lower it
+        // to a class literally named `array` carrying two arguments.
+        if let Some(rest) = written.strip_prefix("array<")
+            && let Some(arguments_text) = rest.strip_suffix('>')
+        {
+            let arguments: Vec<&str> = arguments_text.split(',').map(str::trim).collect();
+            if let [key_text, value_text] = arguments.as_slice() {
+                let key = Self::lower_generic_type(site, own_templates, key_text);
+                let value = Self::lower_generic_type(site, own_templates, value_text);
+                return TypeId::array(db, key, value);
+            }
+        }
+        // `callable(): RETURN` (task 11): an empty parameter list only.
+        if let Some(rest) = written.strip_prefix("callable(")
+            && let Some(after_parameters) = rest.strip_prefix(')')
+        {
+            let return_type = after_parameters
+                .trim()
+                .strip_prefix(':')
+                .map(|text| Self::lower_generic_type(site, own_templates, text.trim()))
+                .unwrap_or_else(|| TypeId::mixed(db));
+            return TypeId::callable(db, vec![], return_type);
         }
         if let Some((head, rest)) = written.split_once('<')
             && let Some(arguments_text) = rest.strip_suffix('>')

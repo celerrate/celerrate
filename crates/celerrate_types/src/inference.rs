@@ -1646,6 +1646,144 @@ function caller($input) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "int");
     }
 
+    // Task 11: decision 10's five structural collect arms
+    // (`Array`, `Shape`, `Callable`, `Union`, `Intersection`) were
+    // production code with no test since task 8 first wrote them —
+    // the shared fake docblock syntax (`test_support::FakeSyntax`)
+    // parsed none of `array<K, V>`, `|`, `&`, or `callable(...)`. Task
+    // 11 extends that fake (additively — every existing form still
+    // lowers exactly as before) and pins each arm here.
+
+    #[test]
+    fn the_array_arm_recurses_into_key_and_value_against_an_array_argument() {
+        // Decision 10's `Array` rule, argument side `Array`: both `K`
+        // and `V` bind from the argument array's own key and value,
+        // not from each other or from the whole array — the two
+        // assertions below (`int` and `string`) are different types
+        // from each other and from the `mixed` an unconstrained
+        // template would fall to, so either binding failing alone
+        // discriminates.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template K
+ * @template V
+ * @param array<K, V> $items
+ * @return K
+ */
+function first_key($items) {}
+/**
+ * @template K
+ * @template V
+ * @param array<K, V> $items
+ * @return V
+ */
+function first_value($items) {}
+/** @param array<int, string> $items */
+function caller_key($items) { return first_key($items); }
+/** @param array<int, string> $items */
+function caller_value($items) { return first_value($items); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller_key"), "int");
+        assert_eq!(caller_return_display(&f, "app\\caller_value"), "string");
+    }
+
+    #[test]
+    fn the_array_arm_evaluates_key_of_and_value_of_against_a_shape_argument() {
+        // Decision 10's `Array` rule, argument side `Shape`: an actual
+        // PHP array literal infers a `Shape` through ordinary body
+        // inference (no fixture grammar needed for the argument), and
+        // the declared `array<K, V>` recurses against `key-of`/`value-of`
+        // of that shape, evaluated eagerly since the shape is concrete.
+        // The single field `'id' => 42` makes `K` the string literal
+        // `'id'` and `V` the int literal `42` — distinct from each
+        // other and from the `mixed` fallback.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template K
+ * @template V
+ * @param array<K, V> $items
+ * @return K
+ */
+function first_key($items) {}
+/**
+ * @template K
+ * @template V
+ * @param array<K, V> $items
+ * @return V
+ */
+function first_value($items) {}
+function caller_key() { return first_key(['id' => 42]); }
+function caller_value() { return first_value(['id' => 42]); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller_key"), "'id'");
+        assert_eq!(caller_return_display(&f, "app\\caller_value"), "42");
+    }
+
+    #[test]
+    fn the_callable_arm_recurses_into_the_return_type() {
+        // Decision 10's `Callable` rule: `T` binds from the argument
+        // closure's own inferred return type (a native `: int` return
+        // hint, no fixture grammar needed on the argument side), never
+        // from the closure's parameters (the arm does not look at
+        // them). `int` differs from the `mixed` fallback.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/**
+ * @template T
+ * @param callable(): T $callback
+ * @return T
+ */
+function invoke($callback) {}
+function caller() { return invoke(function (): int { return 1; }); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "int");
+    }
+
+    #[test]
+    fn the_union_arm_collects_from_every_constituent() {
+        // Decision 10's `Union` rule: a declared `T|Fallback` recurses
+        // the SAME argument into every constituent — `T` binds to the
+        // argument's own type (the int literal `1`, displayed `"1"`),
+        // while `Fallback` (an unrelated class) matches nothing against
+        // an int argument and contributes silently. `"1"` differs from
+        // the `mixed` fallback an unconstrained `T` would produce.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Fallback {}
+/**
+ * @template T
+ * @param T|Fallback $value
+ * @return T
+ */
+function first($value) {}
+function caller() { return first(1); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "1");
+    }
+
+    #[test]
+    fn the_intersection_arm_collects_from_every_constituent() {
+        // Decision 10's `Intersection` rule: the dual of the `Union`
+        // test above — a declared `T&Constraint` recurses the same
+        // argument into every intersectand, `T` binds to the int
+        // literal `1` (displayed `"1"`), and `Constraint` contributes
+        // nothing against an int argument.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Constraint {}
+/**
+ * @template T
+ * @param T&Constraint $value
+ * @return T
+ */
+function first($value) {}
+function caller() { return first(1); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "1");
+    }
+
     #[test]
     fn new_types_as_the_class_and_anonymous_stays_mixed() {
         let fixture = fixture(&["<?php class A {}
