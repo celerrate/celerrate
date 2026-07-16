@@ -170,11 +170,28 @@ pub(crate) fn substitute<'db>(
             let matches = recurse(*matches);
             let then_branch = recurse(*then_branch);
             let otherwise_branch = recurse(*otherwise_branch);
-            // No separate "still symbolic" guard: `subtype_of` already
-            // answers `CannotProve` for a Template (or other symbolic)
-            // subject through its own rules, which falls straight
-            // through to the branch union below — the same answer a
-            // guard would have produced, without the redundant check.
+            // Substitution runs in stages: class-level templates first
+            // (through `ancestor_arguments`), then method-level templates
+            // at the call site. A conditional whose subject is still
+            // symbolic after this pass has not yet been fully bound, so
+            // it must survive unevaluated for a later, better-informed
+            // pass to decide — rebuilding it here, rather than asking
+            // `subtype_of` a question it cannot yet answer meaningfully.
+            // At the call site, an unconstrained variable falls back to
+            // its bound and then to `mixed`, which makes the subject
+            // concrete and lets the `CannotProve` arm below deliver the
+            // design's "falling back to the branch union when the
+            // condition is undecided".
+            if contains_symbolic(db, subject) {
+                return TypeId::conditional(
+                    db,
+                    subject,
+                    matches,
+                    then_branch,
+                    otherwise_branch,
+                    *negated,
+                );
+            }
             let (on_holds, on_fails) = if *negated {
                 (otherwise_branch, then_branch)
             } else {
@@ -265,7 +282,7 @@ mod tests {
     use celerrate_stubs::{StubIndex, StubIndexInput};
 
     use super::{PlaceholderResolution, Substitution, contains_symbolic, substitute};
-    use crate::representation::TypeId;
+    use crate::representation::{CallableParameter, ShapeField, ShapeKey, TypeId};
 
     struct Fixture {
         db: TestDatabase,
@@ -478,7 +495,7 @@ mod tests {
     }
 
     #[test]
-    fn an_undecided_conditional_answers_the_branch_union() {
+    fn a_still_symbolic_conditional_survives_for_a_later_pass() {
         let f = fixture();
         let db = &f.db;
         let bound = TypeId::mixed(db);
@@ -487,10 +504,44 @@ mod tests {
         let then_branch = TypeId::class(db, "app\\then", vec![]);
         let otherwise_branch = TypeId::class(db, "app\\otherwise", vec![]);
         let conditional = TypeId::conditional(db, t, user, then_branch, otherwise_branch, false);
-        // T bound to another template: still symbolic — branch union.
+        // T bound to another template: the subject is still symbolic
+        // after substitution, so the conditional must be rebuilt
+        // unevaluated for a later, better-informed pass to decide.
         let other = TypeId::template(db, "other", "U", bound);
         let mut map = Substitution::default();
         map.bind("s", "T", other);
+        let answer = substitute(
+            db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            conditional,
+            &map,
+            None,
+        );
+        assert_eq!(
+            answer,
+            TypeId::conditional(db, other, user, then_branch, otherwise_branch, false)
+        );
+    }
+
+    #[test]
+    fn a_concrete_but_undecidable_conditional_answers_the_branch_union() {
+        let f = fixture();
+        let db = &f.db;
+        // Both classes are concrete (no template involved, so the
+        // "still symbolic" guard does not fire) but neither is declared
+        // as a source class-like nor present in the (empty) stub index,
+        // so `subtype_of` cannot walk any hierarchy and genuinely
+        // answers `Proof::CannotProve` (see `judge_stub_hierarchy`'s
+        // "unknown class" arm in judgments.rs).
+        let subject = TypeId::class(db, "app\\unregistered_candidate", vec![]);
+        let matches = TypeId::class(db, "app\\unregistered_target", vec![]);
+        let then_branch = TypeId::class(db, "app\\then", vec![]);
+        let otherwise_branch = TypeId::class(db, "app\\otherwise", vec![]);
+        let conditional =
+            TypeId::conditional(db, subject, matches, then_branch, otherwise_branch, false);
+        let map = Substitution::default();
         let answer = substitute(
             db,
             f.files,
@@ -515,5 +566,215 @@ mod tests {
             db,
             TypeId::class(db, "app\\user", vec![])
         ));
+    }
+
+    #[test]
+    fn substitution_dispatches_the_four_array_forms_correctly() {
+        let f = fixture();
+        let db = &f.db;
+        let bound = TypeId::mixed(db);
+        let t = TypeId::template(db, "s", "T", bound);
+        let key_template = TypeId::template(db, "s", "K", bound);
+        let value_template = TypeId::template(db, "s", "V", bound);
+        let user = TypeId::class(db, "app\\user", vec![]);
+        let admin = TypeId::class(db, "app\\admin", vec![]);
+        let mut map = Substitution::default();
+        map.bind("s", "T", user);
+        // Key and value bind to two DIFFERENT classes so a transposed
+        // key/value would be caught by asserting each position.
+        map.bind("s", "K", admin);
+        map.bind("s", "V", user);
+
+        let list = TypeId::list(db, t);
+        let non_empty_list = TypeId::non_empty_list(db, t);
+        let array = TypeId::array(db, key_template, value_template);
+        let non_empty_array = TypeId::non_empty_array(db, key_template, value_template);
+
+        let substituted_list = substitute(db, f.files, f.stubs, f.configuration, list, &map, None);
+        let substituted_non_empty_list = substitute(
+            db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            non_empty_list,
+            &map,
+            None,
+        );
+        let substituted_array =
+            substitute(db, f.files, f.stubs, f.configuration, array, &map, None);
+        let substituted_non_empty_array = substitute(
+            db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            non_empty_array,
+            &map,
+            None,
+        );
+
+        assert_eq!(substituted_list, TypeId::list(db, user), "(true, false)");
+        assert_eq!(
+            substituted_non_empty_list,
+            TypeId::non_empty_list(db, user),
+            "(true, true)"
+        );
+        assert_eq!(
+            substituted_array,
+            TypeId::array(db, admin, user),
+            "(false, false), key and value in the right position"
+        );
+        assert_eq!(
+            substituted_non_empty_array,
+            TypeId::non_empty_array(db, admin, user),
+            "(false, true), key and value in the right position"
+        );
+    }
+
+    #[test]
+    fn substitution_recurses_through_an_intersection() {
+        let f = fixture();
+        let db = &f.db;
+        let bound = TypeId::mixed(db);
+        let t = TypeId::template(db, "s", "T", bound);
+        let user = TypeId::class(db, "app\\user", vec![]);
+        let mut map = Substitution::default();
+        map.bind("s", "T", user);
+        let composite = TypeId::intersection(
+            db,
+            [
+                TypeId::class(db, "app\\collection", vec![t]),
+                TypeId::class(db, "app\\countable", vec![]),
+            ],
+        );
+        let expected = TypeId::intersection(
+            db,
+            [
+                TypeId::class(db, "app\\collection", vec![user]),
+                TypeId::class(db, "app\\countable", vec![]),
+            ],
+        );
+        let answer = substitute(db, f.files, f.stubs, f.configuration, composite, &map, None);
+        assert_eq!(answer, expected);
+    }
+
+    #[test]
+    fn substitution_copies_shape_field_flags_while_recursing_into_values() {
+        let f = fixture();
+        let db = &f.db;
+        let bound = TypeId::mixed(db);
+        let t = TypeId::template(db, "s", "T", bound);
+        let user = TypeId::class(db, "app\\user", vec![]);
+        let mut map = Substitution::default();
+        map.bind("s", "T", user);
+        let shape = TypeId::shape(
+            db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("optional_field".to_owned()),
+                    optional: true,
+                    value: t,
+                },
+                ShapeField {
+                    key: ShapeKey::String("required_field".to_owned()),
+                    optional: false,
+                    value: TypeId::string(db),
+                },
+            ],
+        );
+        let expected = TypeId::shape(
+            db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("optional_field".to_owned()),
+                    optional: true,
+                    value: user,
+                },
+                ShapeField {
+                    key: ShapeKey::String("required_field".to_owned()),
+                    optional: false,
+                    value: TypeId::string(db),
+                },
+            ],
+        );
+        let answer = substitute(db, f.files, f.stubs, f.configuration, shape, &map, None);
+        assert_eq!(
+            answer, expected,
+            "each field's optional flag survives substitution"
+        );
+    }
+
+    #[test]
+    fn substitution_copies_callable_parameter_flags_while_recursing() {
+        let f = fixture();
+        let db = &f.db;
+        let bound = TypeId::mixed(db);
+        let t = TypeId::template(db, "s", "T", bound);
+        let u = TypeId::template(db, "s", "U", bound);
+        let user = TypeId::class(db, "app\\user", vec![]);
+        let admin = TypeId::class(db, "app\\admin", vec![]);
+        let mut map = Substitution::default();
+        map.bind("s", "T", user);
+        map.bind("s", "U", admin);
+        let callable = TypeId::callable(
+            db,
+            vec![CallableParameter {
+                parameter_type: t,
+                optional: true,
+                variadic: false,
+                by_reference: true,
+            }],
+            u,
+        );
+        let expected = TypeId::callable(
+            db,
+            vec![CallableParameter {
+                parameter_type: user,
+                optional: true,
+                variadic: false,
+                by_reference: true,
+            }],
+            admin,
+        );
+        let answer = substitute(db, f.files, f.stubs, f.configuration, callable, &map, None);
+        assert_eq!(
+            answer, expected,
+            "the parameter's optional, variadic and by_reference flags survive"
+        );
+    }
+
+    #[test]
+    fn substitution_recurses_through_class_string_key_of_and_value_of() {
+        let f = fixture();
+        let db = &f.db;
+        let bound = TypeId::mixed(db);
+        let t = TypeId::template(db, "s", "T", bound);
+        let user = TypeId::class(db, "app\\user", vec![]);
+        let mut map = Substitution::default();
+        map.bind("s", "T", user);
+
+        let class_string = TypeId::class_string(db, Some(t));
+        let key_of = TypeId::key_of(db, t);
+        let value_of = TypeId::value_of(db, t);
+
+        let substituted_class_string = substitute(
+            db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            class_string,
+            &map,
+            None,
+        );
+        let substituted_key_of =
+            substitute(db, f.files, f.stubs, f.configuration, key_of, &map, None);
+        let substituted_value_of =
+            substitute(db, f.files, f.stubs, f.configuration, value_of, &map, None);
+
+        assert_eq!(
+            substituted_class_string,
+            TypeId::class_string(db, Some(user))
+        );
+        assert_eq!(substituted_key_of, TypeId::key_of(db, user));
+        assert_eq!(substituted_value_of, TypeId::value_of(db, user));
     }
 }
