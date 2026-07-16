@@ -153,7 +153,7 @@ pub fn inferred_body_types<'db>(
 ) -> Option<InferredBody<'db>> {
     let ir = body_ir(db, file, body).as_ref()?;
     let owner = body_owner(db, file, body);
-    let (namespace, owner_class_key, method_is_static, parameters) = match owner {
+    let (namespace, owner_class_key, method_is_static, parameters, scope_key) = match owner {
         Some(BodyOwner::Function(function)) => {
             let key = folded_symbol_key(
                 SymbolSpace::Function,
@@ -164,13 +164,14 @@ pub fn inferred_body_types<'db>(
                 files,
                 stubs,
                 configuration,
-                crate::declared::FunctionQuery::new(db, key),
+                crate::declared::FunctionQuery::new(db, key.clone()),
             );
             (
                 function.namespace.clone(),
                 None,
                 false,
                 seeded_parameters(db, declared.as_ref(), &function.signature),
+                key,
             )
         }
         Some(BodyOwner::Method {
@@ -192,14 +193,29 @@ pub fn inferred_body_types<'db>(
                     ),
                 )
             });
+            // The body's *own* scope key — `class_key` here, before the
+            // using-class override just below — matching
+            // `declared.rs`'s `<class key>::<member key>` convention.
+            // A trait method analyzed for a using class (decision 5)
+            // still binds its own class-level templates under the
+            // trait's key: which class or trait wrote the `@template`
+            // is unaffected by who later `use`s the method, unlike the
+            // receiver facts (`self`, `static`, `$this`) the override
+            // just below governs.
+            let member_key = folded_member_key(MemberKind::Method, &member.name);
+            let scope_key = class_key
+                .as_ref()
+                .map(|key| format!("{key}::{member_key}"))
+                .unwrap_or(member_key);
             (
                 namespace.clone(),
                 class_key.clone(),
                 member.flags.is_static,
                 seeded_parameters(db, declared.as_ref(), &member.signature),
+                scope_key,
             )
         }
-        None => (String::new(), None, false, Vec::new()),
+        None => (String::new(), None, false, Vec::new(), String::new()),
     };
     let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
     // Decision 5: with a using-class context the walker's owner class
@@ -226,6 +242,7 @@ pub fn inferred_body_types<'db>(
         owner_class_key,
         method_is_static,
         parameters,
+        scope_key,
     };
     let result = walk_body(&flow);
     Some(InferredBody {
@@ -1502,6 +1519,110 @@ function make(string $name) {}
 function caller() { return make('\App\User'); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    // Task 9: constructor inference and inline `@var` deliver class
+    // generics (decision 11). Docblock-bearing, so these use
+    // `fixture_with_generics` for the same reason every task 8 test
+    // above does — the brief's own pseudocode calls plain `fixture`,
+    // but plain `fixture` registers no `TypeSyntax` at all, so
+    // `@template`/`@param`/`@var` would all silently parse to nothing.
+
+    #[test]
+    fn constructor_arguments_solve_the_class_templates() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @template T */
+class Box {
+    /** @param T $item */
+    public function __construct($item) {}
+    /** @return T */
+    public function get() {}
+}
+function caller() {
+    $box = new Box(new User());
+    return $box->get();
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn a_constructorless_generic_new_stays_a_plain_class() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/** @template T */
+class Box {
+    /** @return T */
+    public function get() {}
+}
+function build() { return new Box(); }
+function read() { return (new Box())->get(); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\build"), "app\\box");
+        assert_eq!(
+            caller_return_display(&f, "app\\read"),
+            "mixed",
+            "an unconstrained template falls to its bound then mixed",
+        );
+    }
+
+    #[test]
+    fn a_constructor_argument_that_binds_nothing_stays_the_plain_class() {
+        // The brief's own four tests never drive the `any_bound`
+        // guard's `false` branch with an argument actually present:
+        // `a_constructorless_generic_new_stays_a_plain_class`'s
+        // `new Box()` has none at all (an earlier, cheaper guard
+        // returns first), so a mutation deleting `any_bound` entirely
+        // — always minting `TypeId::class(db, &key, arguments)` — left
+        // every other test in this module green. Here `__construct`
+        // takes an argument but declares no type for it (no `@param`,
+        // no native hint), so `solver_pairs` contributes no pair and
+        // nothing binds `T`: the guard must still answer the plain
+        // `app\box`, not a `Box<mixed>` spelling of the same thing.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+/** @template T */
+class Box {
+    public function __construct($item) {}
+    /** @return T */
+    public function get() {}
+}
+function build() { return new Box(1); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\build"), "app\\box");
+    }
+
+    #[test]
+    fn an_inline_var_declares_the_local_through_its_assignment() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @template T */
+class Collection {
+    /** @return T */
+    public function first() {}
+}
+function caller($opaque) {
+    /** @var Collection<User> $items */
+    $items = $opaque;
+    return $items->first();
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn an_inline_var_binds_before_its_anchored_statement_too() {
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+function caller($input) {
+    /** @var int $input */
+    return $input;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "int");
     }
 
     #[test]

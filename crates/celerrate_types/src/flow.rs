@@ -48,6 +48,16 @@ pub(crate) struct FlowContext<'db, 'body> {
     pub method_is_static: bool,
     /// Parameter names with their seeded (declared) types.
     pub parameters: Vec<(String, TypeId<'db>)>,
+    /// The declaring-scope key this body's own annotations bind under
+    /// (`TypeId::template`'s scope convention, `declared.rs`'s own
+    /// `<class key>::<member key>` for a method or the bare function
+    /// key for a free function): the body's *own* declaration, never
+    /// the using-class override decision 5 applies to
+    /// `owner_class_key` for a trait body — a class-level template's
+    /// scope is a fact about which class or trait actually wrote the
+    /// `@template`, not about which class later borrows the method
+    /// through `use`.
+    pub scope_key: String,
 }
 
 pub(crate) struct FlowResult<'db> {
@@ -185,11 +195,26 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     /// The most recently typed call's conditional assertions, drained
     /// by `branch_environments`' default arm.
     pending_condition_facts: Vec<PendingAssertion<'db>>,
+    /// Inline `@var` docblock texts (task 9, decision 11), grouped by
+    /// anchor once at entry: `None` for a comment trailing every
+    /// statement of the body (bound once, at body entry), `Some(id)`
+    /// for one anchored to statement `id` (bound immediately before
+    /// the walker processes it and re-bound immediately after — the
+    /// declaration survives the statement's own assignment). Each
+    /// text parses on demand, at bind time.
+    inline_variable_texts: BTreeMap<Option<StatementId>, Vec<&'body str>>,
 }
 
 /// Walks one body from its seeded parameter environment.
 pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> {
     let db = context.db;
+    let mut inline_variable_texts: BTreeMap<Option<StatementId>, Vec<&str>> = BTreeMap::new();
+    for annotation in &context.ir.annotations {
+        inline_variable_texts
+            .entry(annotation.anchor)
+            .or_default()
+            .push(annotation.text.as_str());
+    }
     let mut walker = Walker {
         context,
         types: vec![TypeId::mixed(db); context.ir.expressions.len()],
@@ -198,11 +223,15 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         edge_counts: InterproceduralEdgeCounts::default(),
         null_safe_reacquires: false,
         pending_condition_facts: Vec::new(),
+        inline_variable_texts,
     };
     let mut environment = Environment::new();
     for (name, seeded) in &context.parameters {
         environment.bind(NarrowingSubject::Local { name: name.clone() }, *seeded);
     }
+    // A comment trailing every statement of the body (no anchor) binds
+    // once, before anything runs.
+    walker.bind_inline_variables(None, &mut environment);
     walker.statements(&context.ir.root.clone(), &mut environment);
     let return_type = if walker.saw_yield {
         TypeId::class(db, "Generator", vec![])
@@ -808,6 +837,144 @@ impl<'db> Walker<'db, '_, '_> {
         )
     }
 
+    /// Constructor inference (decision 11, task 9): `new Foo(...)`
+    /// solves `Foo`'s class-level templates from its `__construct`
+    /// parameters, reusing `solver_pairs`/`solve` exactly as an
+    /// ordinary call does — the constructor is simply the call whose
+    /// result is the class itself rather than a declared return.
+    /// `of` is the plain class already resolved for `class` (a
+    /// concrete class name, not a placeholder — `new self()`/`new
+    /// static()` resolved to their owner before this runs); returned
+    /// unchanged when it names no class, `class_annotations` finds no
+    /// `@template`, or the call passes no arguments.
+    ///
+    /// Bound under the class's *own* scope key — `class_annotations`'s
+    /// own convention (the bare class key, no member suffix) — because
+    /// that is exactly the scope `member_boundary_type`'s
+    /// receiver-argument zip binds a receiver's `class_arguments`
+    /// against later (it keys on the receiver's class name alone);
+    /// solving under any other scope (the constructor's own
+    /// `<class>::__construct` member scope, say) would silently never
+    /// match there, and every solved argument would fall through to
+    /// its bound then `mixed`.
+    ///
+    /// The `any_bound` guard keeps an unconstrained `new Box()` the
+    /// plain class `of` already is, rather than minting a `Box<mixed>`
+    /// spelling of the same thing — the canonical receiver everywhere
+    /// else in the corpus.
+    fn constructor_solved_class(
+        &self,
+        of: TypeId<'db>,
+        arguments: &[celerrate_semantics::CallArgument],
+        argument_types: &[TypeId<'db>],
+    ) -> TypeId<'db> {
+        let db = self.db();
+        if arguments.is_empty() {
+            return of;
+        }
+        let Some(key) = of.class_name(db) else {
+            return of;
+        };
+        let templates = &crate::inheritance::class_annotations(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            ClassQuery::new(db, key.clone()),
+        )
+        .templates;
+        if templates.is_empty() {
+            return of;
+        }
+        let Some(signature) = declared_member_signature(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            MemberQuery::new(
+                db,
+                key.clone(),
+                MemberKind::Method,
+                folded_member_key(MemberKind::Method, "__construct"),
+            ),
+        ) else {
+            return of;
+        };
+        let pairs = self.solver_pairs(&signature.parameters, arguments, argument_types);
+        let solved = crate::solver::solve(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            &pairs,
+        );
+        let mut any_bound = false;
+        let arguments: Vec<TypeId<'db>> = templates
+            .iter()
+            .map(|template| match solved.binding(&key, &template.name) {
+                Some(argument) => {
+                    any_bound = true;
+                    argument
+                }
+                None => template.bound.unwrap_or_else(|| TypeId::mixed(db)),
+            })
+            .collect();
+        if any_bound {
+            TypeId::class(db, &key, arguments)
+        } else {
+            of
+        }
+    }
+
+    /// The named inline `@var` entries (decision 11) one docblock text
+    /// parses to, at the body's own declaring scope: `Collection<User>
+    /// $c` and the like, read straight from `ParsedAnnotations.variables`
+    /// — never from trivia or a syntax tree, `text` already came from
+    /// `BodyIr.annotations`. Mirrors `member_annotations`'s own site
+    /// construction (`declared.rs`), except the declaring scope is the
+    /// body's own (`FlowContext::scope_key`), not a member looked up
+    /// fresh by key.
+    fn inline_variables(&self, text: &str) -> Vec<(String, TypeId<'db>)> {
+        let db = self.db();
+        let tables = &self.context.tables;
+        let site = crate::declared::NameSite::Source {
+            namespace: &self.context.namespace,
+            tables,
+        };
+        let owner_docblock =
+            self.context.owner_class_key.as_deref().and_then(|owner| {
+                crate::declared::owner_class_docblock(db, self.context.files, owner)
+            });
+        let context = crate::type_syntax::AnnotationContext {
+            declaring_scope: &self.context.scope_key,
+            enclosing_class_scope: self.context.owner_class_key.as_deref(),
+            enclosing_class_docblock: owner_docblock.as_deref(),
+        };
+        crate::type_syntax::annotations_for_docblock(db, &site, &context, text).variables
+    }
+
+    /// Binds every named inline `@var` entry anchored at `anchor` into
+    /// `environment` (decision 11): `None` for a body-entry
+    /// declaration (bound once, before any statement), `Some(id)` for
+    /// one anchored to statement `id` — the caller applies this both
+    /// immediately before and immediately after walking that
+    /// statement, so the declaration survives the statement's own
+    /// assignment.
+    fn bind_inline_variables(
+        &self,
+        anchor: Option<StatementId>,
+        environment: &mut Environment<'db>,
+    ) {
+        let Some(texts) = self.inline_variable_texts.get(&anchor).cloned() else {
+            return;
+        };
+        for text in texts {
+            for (name, of) in self.inline_variables(text) {
+                environment.bind(NarrowingSubject::Local { name }, of);
+            }
+        }
+    }
+
     /// Applies a callee's assertion tags at this call site (decision
     /// 17): `$name` subjects map through the declared parameters to
     /// the argument's subject; `$this->name` maps to the caller's
@@ -1159,10 +1326,19 @@ impl<'db> Walker<'db, '_, '_> {
                 // joins behave, discarded so it cannot resurrect the
                 // real path.
                 let mut scratch = Environment::new();
+                self.bind_inline_variables(Some(statement), &mut scratch);
                 self.statement(statement, &mut scratch);
+                self.bind_inline_variables(Some(statement), &mut scratch);
                 continue;
             }
+            // Decision 11: an inline `@var` anchored to this statement
+            // binds immediately before it runs and re-binds immediately
+            // after — the declaration survives the statement's own
+            // assignment (the same bracketing idiom `looped` uses
+            // around a pass).
+            self.bind_inline_variables(Some(statement), environment);
             self.statement(statement, environment);
+            self.bind_inline_variables(Some(statement), environment);
         }
     }
 
@@ -2203,9 +2379,12 @@ impl<'db> Walker<'db, '_, '_> {
                     self.context.owner_class_key.as_deref(),
                     self.current_static_type(),
                 );
-                for argument in &arguments {
-                    self.expression(argument.value, environment);
-                }
+                let argument_types = self.typed_arguments(&arguments, environment);
+                // Decision 11 (task 9): `Foo`'s own class-level
+                // templates, when it declares any, solve from the
+                // `__construct` arguments — the same call-site solver
+                // task 8 built for an ordinary call.
+                let of = self.constructor_solved_class(of, &arguments, &argument_types);
                 // Instantiation may run arbitrary constructor code
                 // (decision 10).
                 self.kill_property_bindings(environment);

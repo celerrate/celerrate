@@ -10,8 +10,11 @@
 //! and a conditional return, task 8's remaining two grammar arms — the
 //! template bound was already there), and further extended by task 8's
 //! review fix for a bound naming another template, `NAME<ARG, ...>`
-//! (e.g. `@template TKey of Collection<TValue>`). Recorded debt: the
-//! crate has no other shared test-support module, mirroring the
+//! (e.g. `@template TKey of Collection<TValue>`), and by task 9 for the
+//! named inline `@var NAME $variable` / `@var NAME<ARG, ...> $variable`
+//! form (constructor inference and inline `@var`'s tests), reusing
+//! `@param`'s own generic-argument-aware type lowering. Recorded debt:
+//! the crate has no other shared test-support module, mirroring the
 //! semantic-core crates' own duplicated test fakes.
 
 use std::sync::Arc;
@@ -129,16 +132,18 @@ impl FakeSyntax {
         }
     }
 
-    /// A `@param` type text, generic-argument aware: `NAME<ARG, ...>`
-    /// reuses the same `split_once('<')` / `strip_suffix('>')` shape
+    /// A generic-argument-aware type text — shared by the `@param` and
+    /// `@var` arms below (task 9 extends this fake's original
+    /// `@param`-only helper to the named inline `@var` form, the same
+    /// notation either tag writes): `NAME<ARG, ...>` reuses the same
+    /// `split_once('<')` / `strip_suffix('>')` shape
     /// `@extends`/`@implements` already parse (see
     /// `parse_docblock`'s `@extends`/`@implements` arm), so a receiver
-    /// carrying `class_arguments` is actually expressible from a
-    /// `@param` tag — otherwise `member_boundary_type`'s
-    /// class-argument-binding branch has no fixture that can drive
-    /// it. A bare name falls through to the ordinary
-    /// class-or-own-template rule.
-    fn lower_param_type<'db>(
+    /// carrying `class_arguments` is actually expressible from either
+    /// tag — otherwise `member_boundary_type`'s class-argument-binding
+    /// branch has no fixture that can drive it. A bare name falls
+    /// through to the ordinary class-or-own-template rule.
+    fn lower_generic_type<'db>(
         site: &AnnotationSite<'db, '_>,
         own_templates: &[ParsedTemplate<'db>],
         written: &str,
@@ -289,9 +294,27 @@ impl TypeSyntax for FakeSyntax {
                 // apart.
                 if let Some((type_text, variable)) = rest.trim().rsplit_once(' ') {
                     let parameter_type =
-                        Self::lower_param_type(site, &parsed.templates, type_text.trim());
+                        Self::lower_generic_type(site, &parsed.templates, type_text.trim());
                     let parameter_name = variable.trim_start_matches('$').to_owned();
                     parsed.parameters.push((parameter_name, parameter_type));
+                }
+            }
+            if let Some(rest) = line.strip_prefix("@var ") {
+                // Task 9: the named inline `@var NAME $variable` or
+                // `@var NAME<ARG, ...> $variable` form, feeding
+                // `parsed.variables` — same last-space split as
+                // `@param` (a comma-separated argument list may itself
+                // contain spaces). A bare `@var NAME` with no `$name`
+                // (a property- or unnamed-level `@var`) never matches
+                // `rsplit_once`'s one-space requirement, or the `$`
+                // check just below, so it contributes nothing here —
+                // this fake has no other consumer for it.
+                if let Some((type_text, variable)) = rest.trim().rsplit_once(' ')
+                    && let Some(name) = variable.trim().strip_prefix('$')
+                {
+                    let variable_type =
+                        Self::lower_generic_type(site, &parsed.templates, type_text.trim());
+                    parsed.variables.push((name.to_owned(), variable_type));
                 }
             }
         }
