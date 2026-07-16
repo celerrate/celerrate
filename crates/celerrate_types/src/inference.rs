@@ -575,9 +575,10 @@ mod tests {
             })
             .collect();
         let files = AnalyzedFileSet::new(&db, handles.clone());
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![]))
-            .durability(salsa::Durability::HIGH)
-            .new(&db);
+        let stubs =
+            StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
+                .durability(salsa::Durability::HIGH)
+                .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
             PhpVersion::new(8, 1),
             PhpVersion::new(8, 5),
@@ -2910,10 +2911,14 @@ function caller(Sub $subject) { return $subject->build(); }
     /// Minimal source declarations of the iteration protocol
     /// interfaces (`Traversable`, `Iterator`, `IteratorAggregate`),
     /// unqualified in the global namespace exactly like the real SPL
-    /// builtins. `fixture`'s stub index is empty
-    /// (`StubIndex::from_symbols(vec![])`), so nothing resolves these
-    /// names as a genuine ancestor unless a fixture's own sources
-    /// declare them: `Walker::implements_iteration_protocol` (the
+    /// builtins. `fixture`'s default surface (issue #36) already
+    /// carries these three as stub interfaces, but a source
+    /// declaration of the same folded key beats the stub
+    /// (`resolve_ancestor` in `linearize.rs` consults
+    /// `lookup_class_declaration` before the stub lookup), so a
+    /// fixture that prepends this source pins its implementors
+    /// against these source-declared interfaces rather than the
+    /// default surface: `Walker::implements_iteration_protocol` (the
     /// review's Finding 1 fix) walks `linearized_class`'s ancestry,
     /// which only records a resolved edge (`AncestorEdge::resolved`/
     /// `stub`) when the name actually resolves to a known class-like.
@@ -3406,10 +3411,12 @@ class Terminal implements Iterator {
     /// as a parent, which the transitive stub-frontier walk
     /// (`linearize.rs:347-376`) folds into `stub_ancestors` alone,
     /// mirroring the walk `stub_ancestry_walks_transitively_through_the_blob`
-    /// pins in `celerrate_semantics`. `fixture`'s own stub index is
-    /// empty, so this crate needs its own isolated stub index (this
-    /// test builds its own `Fixture` by hand rather than widening
-    /// `fixture`'s shared, empty one, following
+    /// pins in `celerrate_semantics`. `fixture`'s default surface
+    /// (issue #36) already carries `ArrayObject`, but this test pins
+    /// a *particular* transitive payload (`getIterator(): Cursor`
+    /// against source-declared protocol interfaces), so it keeps
+    /// building its own index by hand (rather than widening the
+    /// shared surface, following
     /// `a_stub_method_without_a_declared_return_answers_mixed`'s idiom
     /// above) — no other test in this module is affected.
     ///
@@ -3507,9 +3514,10 @@ function caller(Users $users) {
     /// Issue #36's contract: the crate's default fixture surface can
     /// express stub-dependent shapes. This pins the builder itself by
     /// hand-building a `Fixture` around it (the module's own `fixture()`
-    /// switches to the builder in the same task); `getIterator()` through
-    /// a bare `extends \ArrayObject` discriminates — an empty index
-    /// answers `mixed`, the surface answers `arrayiterator`.
+    /// carries this same builder since this issue-#36 change);
+    /// `getIterator()` through a bare `extends \ArrayObject`
+    /// discriminates — an empty index answers `mixed`, the surface
+    /// answers `arrayiterator`.
     #[test]
     fn the_minimal_stub_surface_expresses_the_transitive_protocol_shape() {
         let db = TestDatabase::default();
