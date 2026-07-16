@@ -95,6 +95,21 @@ fn baseline_path() -> Result<PathBuf> {
     Ok(crate::workspace_root()?.join("xtask/ground-truth-baseline.txt"))
 }
 
+/// Splits the trailing `checked N, divergences M` summary line from
+/// the produced divergence records. The summary is recognized by its
+/// `checked ` prefix, never taken on faith by position alone
+/// (Finding 2, final review): a stream that stopped emitting a
+/// summary must fail loudly here rather than have its last divergence
+/// record silently swallowed and reported as merely stale.
+fn split_summary(stdout: &str) -> Result<(&str, Vec<&str>)> {
+    let mut lines: Vec<&str> = stdout.lines().collect();
+    let summary = match lines.last() {
+        Some(line) if line.starts_with("checked ") => lines.remove(lines.len() - 1),
+        _ => return Err("the ground-truth stream printed no summary line".into()),
+    };
+    Ok((summary, lines))
+}
+
 /// Runs the built binary's hidden `ground-truth` channel over the
 /// pinned corpus, splits its trailing `checked N, divergences M`
 /// summary line from the produced divergence records, and either
@@ -119,10 +134,7 @@ pub fn run(bless: bool) -> Result<()> {
     let stdout = String::from_utf8(output.stdout)
         .map_err(|error| format!("the ground-truth stream is not valid UTF-8: {error}"))?;
 
-    let mut lines: Vec<&str> = stdout.lines().collect();
-    let summary = lines
-        .pop()
-        .ok_or("the ground-truth stream printed no summary line")?;
+    let (summary, lines) = split_summary(&stdout)?;
     let produced: Vec<String> = lines.into_iter().map(str::to_owned).collect();
     println!("{summary}");
 
@@ -207,7 +219,31 @@ fn bless_baseline(produced: &[String]) -> Result<()> {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
-    use super::{merge_baseline, parse_baseline};
+    use super::{merge_baseline, parse_baseline, split_summary};
+
+    #[test]
+    fn the_summary_line_splits_from_the_produced_records() {
+        let stdout = "app\\a\tmixed\tstring\ncheck ed\nchecked 18, divergences 2";
+        let (summary, lines) = split_summary(stdout).unwrap();
+        assert_eq!(summary, "checked 18, divergences 2");
+        assert_eq!(lines, ["app\\a\tmixed\tstring", "check ed"]);
+    }
+
+    #[test]
+    fn a_stream_missing_its_summary_line_fails_loudly() {
+        // Finding 2 (final review): a stream that stopped emitting the
+        // summary must never be mistaken for one whose last
+        // divergence record simply looks like a summary — the last
+        // line has to actually start with "checked " or the whole run
+        // errors, rather than eating that record silently.
+        let stdout = "app\\a\tmixed\tstring\napp\\b\tmixed\tint";
+        assert!(split_summary(stdout).is_err());
+    }
+
+    #[test]
+    fn an_empty_stream_fails_loudly() {
+        assert!(split_summary("").is_err());
+    }
 
     #[test]
     fn blessing_preserves_classifications_for_persisting_records() {

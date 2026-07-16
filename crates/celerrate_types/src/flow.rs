@@ -2199,10 +2199,17 @@ impl<'db> Walker<'db, '_, '_> {
                     MemberReference::Named { name } => {
                         if name.eq_ignore_ascii_case("class") {
                             // `Foo::class`, `self::class`, `static::class`.
-                            let argument = keys
-                                .as_ref()
-                                .and_then(|keys| keys.first())
-                                .map(|key| TypeId::class(db, key, vec![]));
+                            // A union receiver's keys are exclusive
+                            // control-flow alternatives, so every key
+                            // contributes through `TypeId::union` —
+                            // never a first-seen constituent (Finding
+                            // 1, mirroring `member_value_type`'s
+                            // per-key reduce).
+                            let argument = keys.as_ref().and_then(|keys| {
+                                keys.iter()
+                                    .map(|key| TypeId::class(db, key, vec![]))
+                                    .reduce(|left, right| TypeId::union(db, [left, right]))
+                            });
                             TypeId::class_string(db, argument)
                         } else {
                             keys.as_ref()

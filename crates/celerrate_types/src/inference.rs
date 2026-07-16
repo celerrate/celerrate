@@ -442,7 +442,7 @@ fn method_return_cycle_recover<'db>(
 /// The inferred return of one method, keyed per defining class
 /// (decision 4): an inherited member re-keys to its owner so every
 /// subclass shares one memo; a trait member analyzes per using class
-/// (the query's `class_key`, PHPStan's model); stub and virtual
+/// (the origin's anchor, PHPStan's model); stub and virtual
 /// members answer `mixed` — their types are declared, consulted at the
 /// earlier tier. The second cycle-recovered query in the workspace;
 /// the discipline (join ascent, shared budget, deterministic bailout)
@@ -1351,6 +1351,27 @@ function make(string $name) {}
 function caller() { return make(User::class); }
 "#]);
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn a_union_receiver_s_class_constant_binds_the_template_as_a_union() {
+        // Finding 1 (final review, type-engine-6): `$obj::class` on a
+        // union receiver must answer every constituent, never a
+        // first-seen one. A first-seen-constituent bug would answer
+        // `"app\\a"` alone, not the union.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class A {}
+class B {}
+/**
+ * @template T
+ * @param class-string<T> $c
+ * @return T
+ */
+function make(string $c) {}
+function caller(A|B $obj) { return make($obj::class); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\a|app\\b");
     }
 
     #[test]
