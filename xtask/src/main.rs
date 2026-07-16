@@ -13,13 +13,15 @@ fn main() -> ExitCode {
         (Some("fetch-corpus"), None) => xtask::corpus::prepare().map(|_| ()),
         (Some("corpus"), None) => xtask::corpus::check_snapshot(false),
         (Some("corpus"), Some("--bless")) => xtask::corpus::check_snapshot(true),
+        (Some("ground-truth"), None) => xtask::ground_truth::run(false),
+        (Some("ground-truth"), Some("--bless")) => xtask::ground_truth::run(true),
         (Some("fetch-phpdoc-parser"), None) => xtask::phpdoc_corpus::fetch().map(|_| ()),
         (Some("phpdoc-cases"), None) => xtask::phpdoc_corpus::extract(false),
         (Some("phpdoc-cases"), Some("--check")) => xtask::phpdoc_corpus::extract(true),
         (Some("release-notes"), Some(version)) => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | release-notes <version>>"
+                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }
