@@ -17,10 +17,12 @@
 //! extended by task 11 for the call-site solver's five remaining
 //! structural forms: `array<K, V>`, a callable's empty-parameter-list
 //! return (`callable(): R`), a union (`A|B`), and an intersection
-//! (`A&B`) — deliberately no shape literal syntax, since a real PHP
-//! array literal already infers a genuine `Shape` through ordinary
-//! body inference, so no fixture grammar is needed to drive `collect`'s
-//! `Array`-declared-against-`Shape`-argument arm. Recorded debt: the
+//! (`A&B`) — and by issue #40 for the declared shape form
+//! `array{key: TYPE, ...}` (string keys only): the declared-`Shape`
+//! collect arm needs a shape on the *declared* side, which no PHP
+//! value can produce — a real PHP array literal already infers a
+//! genuine `Shape` on the argument side through ordinary body
+//! inference, which is why task 11 could skip this form. Recorded debt: the
 //! crate has no other shared test-support module, mirroring the
 //! semantic-core crates' own duplicated test fakes.
 
@@ -29,7 +31,7 @@ use std::sync::Arc;
 use celerrate_db::testing::TestDatabase;
 use celerrate_semantics::PluginIdentity;
 
-use crate::representation::TypeId;
+use crate::representation::{ShapeField, ShapeKey, TypeId};
 use crate::type_syntax::{
     AnnotationSite, ParsedAncestor, ParsedAnnotations, ParsedTemplate, TypeSyntax,
     TypeSyntaxRegistration, TypeSyntaxRegistry,
@@ -197,10 +199,15 @@ impl FakeSyntax {
     /// return `callable(): R`, since decision 10's `Callable` collect
     /// arm recurses on `return_type` alone and never touches
     /// parameters, so a parameter-list grammar would be effort this
-    /// fixture has no test to spend. None of these four prefixes
-    /// (`|`, `&`, `array<`, `callable(`) can appear at the head of a
-    /// plain written name, so every existing bare-name or
-    /// `NAME<ARG, ...>` call site is untouched.
+    /// fixture has no test to spend.
+    ///
+    /// Issue #40 adds the declared shape form `array{key: TYPE, ...}`
+    /// (string keys only, no optional markers), since the declared-
+    /// `Shape` collect arm can only be driven by a shape on the
+    /// declared side. None of these five prefixes (`|`, `&`, `array<`,
+    /// `array{`, `callable(`) can appear at the head of a plain
+    /// written name, so every existing bare-name or `NAME<ARG, ...>`
+    /// call site is untouched.
     fn lower_generic_type<'db>(
         site: &AnnotationSite<'db, '_>,
         own_templates: &[ParsedTemplate<'db>],
@@ -245,6 +252,26 @@ impl FakeSyntax {
                 let value = Self::lower_generic_type(site, own_templates, value_text);
                 return TypeId::array(db, key, value);
             }
+        }
+        // `array{key: TYPE, ...}` (issue #40): string keys only. Each
+        // field's type recurses through this same lowering, so a field
+        // can carry a template. A field without a `:` contributes
+        // nothing — silence, matching the fake's other partial forms.
+        if let Some(rest) = written.strip_prefix("array{")
+            && let Some(fields_text) = rest.strip_suffix('}')
+        {
+            let fields = fields_text
+                .split(',')
+                .filter_map(|field_text| {
+                    let (key_text, value_text) = field_text.split_once(':')?;
+                    Some(ShapeField {
+                        key: ShapeKey::String(key_text.trim().to_owned()),
+                        optional: false,
+                        value: Self::lower_generic_type(site, own_templates, value_text.trim()),
+                    })
+                })
+                .collect();
+            return TypeId::shape(db, fields);
         }
         // `callable(): RETURN` (task 11): an empty parameter list only.
         if let Some(rest) = written.strip_prefix("callable(")

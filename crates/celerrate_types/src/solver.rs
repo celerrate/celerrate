@@ -57,14 +57,19 @@ pub(crate) fn solve<'db>(
 /// (or an argument that does not match the declared shape) simply
 /// contributes nothing: silence, never a guess.
 ///
-/// Every arm is pinned in `inference.rs`'s test module (task 11): the
-/// `Array`, `Shape`, `Callable`, `Union`, and `Intersection` arms were
-/// production code with no test since task 8 first wrote them, because
-/// the shared fake type syntax (`test_support::FakeSyntax`) parsed
-/// none of `array<K, V>`, `|`, `&`, or `callable(...)`. Task 11
-/// extended that fake's grammar (additively — every previously
-/// supported form still lowers exactly as before) and mutation-verified
-/// each arm.
+/// Every arm is pinned in `inference.rs`'s test module: the `Array`
+/// arm (against both an `Array` and a `Shape` argument), `Callable`,
+/// `Union`, and `Intersection` arms were production code with no test
+/// since task 8 first wrote them, because the shared fake type syntax
+/// (`test_support::FakeSyntax`) parsed none of `array<K, V>`, `|`,
+/// `&`, or `callable(...)`. Task 11 extended that fake's grammar
+/// (additively — every previously supported form still lowers exactly
+/// as before) and mutation-verified each arm. The declared-`Shape` arm
+/// arrived later (issue #40): task 11's wording, "the `Shape` arm",
+/// named only the `Array` arm's shape-argument side, and decision 10's
+/// "shapes recurse element-wise" clause was half-implemented until the
+/// declared side landed with its own fake form (`array{key: TYPE}`)
+/// and pin.
 fn collect<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -158,6 +163,25 @@ fn collect<'db>(
             }
             _ => {}
         },
+        TypeData::Shape { fields } => {
+            // Decision 10's shape clause (issue #40): field-wise, each
+            // declared field matching the argument field with the same
+            // key. A key the argument lacks, or a non-shape argument,
+            // contributes nothing.
+            if let TypeData::Shape {
+                fields: argument_fields,
+            } = argument.data(db)
+            {
+                for field in fields {
+                    let matching = argument_fields
+                        .iter()
+                        .find(|candidate| candidate.key == field.key);
+                    if let Some(matching) = matching {
+                        recurse(field.value, matching.value, constraints);
+                    }
+                }
+            }
+        }
         TypeData::Callable { return_type, .. } => {
             if let TypeData::Callable {
                 return_type: argument_return,
