@@ -7,11 +7,6 @@
 //! through the capped constructors, so the structural depth cap
 //! bounds every value this module can produce (decision 15).
 
-// TEMPORARY: nothing in production code calls this module's items yet —
-// Task 3 (the generic ancestry) is this plan's first consumer. Remove
-// this allow once that task wires `substitute` in.
-#![allow(dead_code)]
-
 use std::collections::BTreeMap;
 
 use celerrate_db::AnalyzedFileSet;

@@ -440,13 +440,13 @@ pub fn declared_member_signature<'db>(
 /// The declaring site of one source class-like: its file handle,
 /// namespace, and declaration AST id, found through the same
 /// firewalls linearization uses.
-struct DeclaringSite {
+pub(crate) struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
     ast_id: AstId,
 }
 
-fn declaring_site(
+pub(crate) fn declaring_site(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,
@@ -473,7 +473,7 @@ fn declaring_site(
 
 /// The owner class-like's own docblock text: class-level `@template`
 /// declarations are visible inside member annotations.
-fn owner_class_docblock(
+pub(crate) fn owner_class_docblock(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,
@@ -494,7 +494,7 @@ fn owner_class_docblock(
 /// resolvable source class-like, the closure still runs, against
 /// `NameSite::Global` — an unresolvable owner degrades the name
 /// qualification, it does not abort the parse.
-fn with_declaring_site<T>(
+pub(crate) fn with_declaring_site<T>(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,

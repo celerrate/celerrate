@@ -91,6 +91,7 @@ mod display;
 mod dynamic_type_provider;
 mod flow;
 mod inference;
+mod inheritance;
 mod judgments;
 mod narrowing;
 mod operators;
@@ -114,6 +115,7 @@ pub use inference::{
     FIXPOINT_ITERATION_BUDGET, InferredBody, InterproceduralEdgeCounts, inferred_body_types,
     inferred_function_return,
 };
+pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
