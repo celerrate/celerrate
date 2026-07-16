@@ -30,8 +30,12 @@ pub struct MemberDocblock {
     /// forms, slot-resolved per written head name.
     pub ancestors: Vec<AncestorDeclaration>,
     /// Named inline `@var Type $name` entries, slot-resolved per
-    /// variable name. The unnamed `@var` form keeps feeding
-    /// `value_type` instead.
+    /// variable name. Tag extraction is context-free — it cannot know
+    /// whether the docblock sits above a property or above a local
+    /// statement — so a named entry ALSO fills `value_type` under the
+    /// tier rule, exactly as the unnamed `@var` form does; a property's
+    /// declaring site (`declared.rs`) reads `value_type`, while the
+    /// later inline-narrowing consumer reads `variables`.
     pub variable_values: Vec<(String, TypeExpression)>,
 }
 
@@ -144,8 +148,24 @@ fn offer_value(slot: &mut Option<(TagTier, TypeExpression)>, tier: TagTier, cont
     }
 }
 
-/// Per-name slots in first-appearance order, so the output stays
-/// deterministic without a map.
+/// Per-key slots in first-appearance order, so the output stays
+/// deterministic without a map: a stronger tier replaces the holder;
+/// the same or a weaker tier keeps the first declaration within that
+/// tier. Shared by every extraction slot resolved per key —
+/// `offer_parameter`, `offer_template`, `offer_named_variable`
+/// (per name), `offer_ancestor` (per written head name).
+fn offer_keyed<T>(slots: &mut Vec<(String, TagTier, T)>, tier: TagTier, key: String, value: T) {
+    match slots.iter_mut().find(|(existing, _, _)| *existing == key) {
+        Some((_, existing_tier, existing_value)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_value = value;
+            }
+        }
+        None => slots.push((key, tier, value)),
+    }
+}
+
 fn offer_parameter(
     parameters: &mut Vec<(String, TagTier, TypeExpression)>,
     tier: TagTier,
@@ -154,23 +174,9 @@ fn offer_parameter(
     let Some((name, expression)) = parse_param_tag(content) else {
         return;
     };
-    match parameters
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == name)
-    {
-        Some((_, existing_tier, existing_expression)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_expression = expression;
-            }
-        }
-        None => parameters.push((name, tier, expression)),
-    }
+    offer_keyed(parameters, tier, name, expression);
 }
 
-/// Per-name slots in first-appearance order (mirrors
-/// `offer_parameter`): a stronger tier replaces, the same or a weaker
-/// tier keeps the first declaration within that tier.
 fn offer_template(
     templates: &mut Vec<(String, TagTier, TemplateDeclaration)>,
     tier: TagTier,
@@ -179,34 +185,27 @@ fn offer_template(
     let Some(declaration) = parse_template_tag(content) else {
         return;
     };
-    match templates
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == declaration.name)
-    {
-        Some((_, existing_tier, existing_declaration)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_declaration = declaration;
-            }
-        }
-        None => templates.push((declaration.name.clone(), tier, declaration)),
-    }
+    offer_keyed(templates, tier, declaration.name.clone(), declaration);
 }
 
-/// `@var Type [$name]`: an unnamed tag feeds the `value_type` slot
-/// under the tier rule (`offer_value`); a named tag routes to
-/// `variable_values`, slot-resolved per variable name under the same
-/// tier rule.
+/// `@var Type [$name]`: every tag feeds the `value_type` slot under
+/// the tier rule (`offer_value`), same as an unnamed `@var` always
+/// has; a named tag ADDITIONALLY routes to `variable_values`,
+/// slot-resolved per variable name under the same tier rule. Tag
+/// extraction cannot see whether its docblock sits above a property or
+/// a local statement, so both slots are populated and the consuming
+/// site picks (adjudicated: a named `@var` above a property must keep
+/// typing the property).
 fn offer_var(
     value_slot: &mut Option<(TagTier, TypeExpression)>,
     variable_values: &mut Vec<(String, TagTier, TypeExpression)>,
     tier: TagTier,
     content: &str,
 ) {
-    match parse_named_var(content) {
-        Some((name, expression)) => offer_named_variable(variable_values, tier, name, expression),
-        None => offer_value(value_slot, tier, content),
+    if let Some((name, expression)) = parse_named_var(content) {
+        offer_named_variable(variable_values, tier, name, expression);
     }
+    offer_value(value_slot, tier, content);
 }
 
 /// `Type $name`: `None` when the tag has no trailing variable (the
@@ -223,35 +222,19 @@ fn parse_named_var(content: &str) -> Option<(String, TypeExpression)> {
     }
 }
 
-/// Per-name slots in first-appearance order (mirrors `offer_parameter`):
-/// a stronger tier replaces, the same or a weaker tier keeps the first
-/// declaration within that tier.
 fn offer_named_variable(
     variable_values: &mut Vec<(String, TagTier, TypeExpression)>,
     tier: TagTier,
     name: String,
     expression: TypeExpression,
 ) {
-    match variable_values
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == name)
-    {
-        Some((_, existing_tier, existing_expression)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_expression = expression;
-            }
-        }
-        None => variable_values.push((name, tier, expression)),
-    }
+    offer_keyed(variable_values, tier, name, expression);
 }
 
-/// Per-head-name slots in first-appearance order (mirrors
-/// `offer_template`): a stronger tier replaces, the same or a weaker
-/// tier keeps the first declaration within that tier. The written head
-/// name is the first identifier token of the parsed expression; a
-/// parsed shape with no such identifier (never produced by the
-/// ancestor grammar in practice) drops, same as an unparseable tag.
+/// The written head name is the first identifier token of the parsed
+/// expression; a parsed shape with no such identifier (never produced
+/// by the ancestor grammar in practice) drops, same as an unparseable
+/// tag.
 fn offer_ancestor(
     ancestors: &mut Vec<(String, TagTier, AncestorDeclaration)>,
     tier: TagTier,
@@ -263,18 +246,7 @@ fn offer_ancestor(
     let Some(head) = ancestor_head_name(&declaration.expression) else {
         return;
     };
-    match ancestors
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == head)
-    {
-        Some((_, existing_tier, existing_declaration)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_declaration = declaration;
-            }
-        }
-        None => ancestors.push((head, tier, declaration)),
-    }
+    offer_keyed(ancestors, tier, head, declaration);
 }
 
 /// `Ancestor[<Arguments>]`: a maximal type-expression prefix; trailing
@@ -911,13 +883,20 @@ mod tests {
     }
 
     #[test]
-    fn a_named_inline_var_lands_in_variable_values_and_unnamed_var_stays() {
+    fn a_named_inline_var_fills_both_variable_values_and_value_type() {
+        // Adjudicated (task 2 review, finding 1): tag extraction cannot
+        // know whether its docblock sits above a property or a local
+        // statement, so a named `@var Type $name` must fill BOTH slots
+        // — `variable_values` for the later inline-narrowing consumer,
+        // and `value_type` so a property's declaring site
+        // (`declared.rs`) keeps its declared type instead of falling
+        // back to `mixed`.
         let named = extract_member_docblock(&lex_docblock("/** @var Collection<User> $items */"));
         assert_eq!(named.variable_values.len(), 1);
         assert_eq!(named.variable_values[0].0, "items");
         assert!(
-            named.value_type.is_none(),
-            "the named form never fills the slot"
+            named.value_type.is_some(),
+            "the named form also fills the value_type slot"
         );
 
         let unnamed = extract_member_docblock(&lex_docblock("/** @var Collection<User> */"));

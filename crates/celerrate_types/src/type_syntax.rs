@@ -35,7 +35,7 @@ pub struct ParsedAssertion<'db> {
 }
 
 /// One `@template` declaration of the parsed docblock, in declaration
-/// order (the order `ancestor_arguments` zips against).
+/// order (task 3's ancestor-argument zip relies on this order).
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 pub struct ParsedTemplate<'db> {
     pub name: String,
