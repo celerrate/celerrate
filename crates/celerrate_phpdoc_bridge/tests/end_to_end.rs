@@ -11,7 +11,7 @@
 //! at MEDIUM. This crate has no shared test-support module across
 //! crates (recorded debt, consistent with the rest of the workspace).
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
@@ -67,6 +67,135 @@ fn member_query<'db>(
         kind,
         folded_member_key(kind, member_written),
     )
+}
+
+/// A projection of `ParsedAnnotations`'s new fields (task 2), captured
+/// as owned data so it outlives the `'db`-scoped call that produced
+/// it. `MemberAnnotations` (the tracked wrapper `member_annotations`
+/// returns) does not forward `templates`/`ancestors`/`variables` yet —
+/// that wiring is task 3's — so this recording wrapper is the only way
+/// to observe them, by capturing them as a side effect of triggering
+/// the real seam.
+#[derive(Debug, Default, Clone)]
+struct Captured {
+    /// One entry per lowered ancestor: its qualified, folded class
+    /// name and its fixed generic argument count.
+    ancestors: Vec<(String, usize)>,
+    /// `@template` declaration names, in declaration order.
+    template_names: Vec<String>,
+    /// Each `@template`'s lowered bound, `display`-rendered, in the
+    /// same order as `template_names`; `None` when the template
+    /// declares no bound (task 2 review, finding 2 — the bound
+    /// lowering was otherwise unpinned by any test).
+    template_bounds: Vec<Option<String>>,
+    /// Named inline `@var` entries' variable names.
+    variable_names: Vec<String>,
+}
+
+/// Wraps the real [`celerrate_phpdoc_bridge::PhpdocBridge`], delegates
+/// every call to it unchanged, and records a projection of what it
+/// returns for EVERY `parse_docblock` call, keyed by the call's raw
+/// docblock text (task 2 review, finding 3): a single overwritten slot
+/// would silently read whichever docblock parsed last if a fixture
+/// ever carried both a class-level and a member-level docblock.
+/// Registering this instead of the bare bridge lets a test observe
+/// `ParsedAnnotations`'s new fields through the real
+/// extraction-and-lowering pipeline (dialect classification, tier
+/// resolution, site qualification) and the real production seam
+/// (`celerrate_types::member_annotations`), without needing direct
+/// access to `AnnotationSite`'s private constructor.
+struct RecordingBridge {
+    inner: celerrate_phpdoc_bridge::PhpdocBridge,
+    parses: std::sync::Mutex<Vec<(String, Captured)>>,
+}
+
+impl celerrate_types::TypeSyntax for RecordingBridge {
+    fn can_parse(&self, docblock: &str) -> bool {
+        self.inner.can_parse(docblock)
+    }
+
+    fn parse_docblock<'db>(
+        &self,
+        site: &celerrate_types::AnnotationSite<'db, '_>,
+        docblock: &str,
+    ) -> celerrate_types::ParsedAnnotations<'db> {
+        let parsed = self.inner.parse_docblock(site, docblock);
+        let db = site.database();
+        let captured = Captured {
+            ancestors: parsed
+                .ancestors
+                .iter()
+                .map(|ancestor| (ancestor.class_name.clone(), ancestor.arguments.len()))
+                .collect(),
+            template_names: parsed
+                .templates
+                .iter()
+                .map(|template| template.name.clone())
+                .collect(),
+            template_bounds: parsed
+                .templates
+                .iter()
+                .map(|template| template.bound.map(|bound| bound.display(db)))
+                .collect(),
+            variable_names: parsed
+                .variables
+                .iter()
+                .map(|(name, _)| name.clone())
+                .collect(),
+        };
+        self.parses
+            .lock()
+            .unwrap()
+            .push((docblock.to_owned(), captured));
+        parsed
+    }
+
+    fn parse_type_expression<'db>(
+        &self,
+        site: &celerrate_types::AnnotationSite<'db, '_>,
+        expression: &str,
+    ) -> Option<celerrate_types::TypeId<'db>> {
+        self.inner.parse_type_expression(site, expression)
+    }
+}
+
+/// Registers a [`RecordingBridge`] in place of the bare bridge, and
+/// hands back the `Arc` so the test can read its recorded parses after
+/// triggering the seam.
+fn register_recording_bridge(
+    db: &celerrate_db::testing::TestDatabase,
+) -> std::sync::Arc<RecordingBridge> {
+    let recording = std::sync::Arc::new(RecordingBridge {
+        inner: celerrate_phpdoc_bridge::PhpdocBridge::new(),
+        parses: std::sync::Mutex::new(Vec::new()),
+    });
+    let identity = celerrate_phpdoc_bridge::descriptor().identity;
+    let _ = celerrate_types::TypeSyntaxRegistry::builder(vec![
+        celerrate_types::TypeSyntaxRegistration {
+            identity,
+            implementation: recording.clone(),
+        },
+    ])
+    .durability(salsa::Durability::HIGH)
+    .new(db);
+    recording
+}
+
+/// Finds the captured projection for the one recorded parse whose raw
+/// docblock text contains `needle` (task 2 review, finding 3): lets a
+/// test select the parse it means by content instead of assuming
+/// there is exactly one `parse_docblock` call, or that it is the last
+/// one.
+fn captured_containing(recording: &RecordingBridge, needle: &str) -> Captured {
+    recording
+        .parses
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|(docblock, _)| docblock.contains(needle))
+        .unwrap_or_else(|| panic!("no recorded parse contains {needle:?}"))
+        .1
+        .clone()
 }
 
 fn register_bridge(db: &celerrate_db::testing::TestDatabase) {
@@ -647,5 +776,108 @@ fn assertions_are_carried_through_the_annotation_seam() {
             polarity: celerrate_types::AssertionPolarity::Always,
             negated: false,
         }],
+    );
+}
+
+#[test]
+fn ancestors_lower_qualified_with_their_argument_types() {
+    // Namespace `App`, a `use Doctrine\Repo as Base;` import in scope:
+    // `class_name` must arrive fully qualified and folded, and the
+    // fixed generic argument must survive.
+    let fixture = fixture(&[
+        "<?php namespace App;\nuse Doctrine\\Repo as Base;\nclass C { /** @extends Base<User> */ public function noop() {} }",
+    ]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "App\\C", MemberKind::Method, "noop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = captured_containing(&recording, "@extends");
+    assert_eq!(
+        captured.ancestors,
+        vec![("doctrine\\repo".to_owned(), 1)],
+        "qualified and folded",
+    );
+}
+
+#[test]
+fn templates_lower_in_declaration_order_with_their_bounds() {
+    let fixture = fixture(&["<?php class C {\n\
+         /**\n\
+          * @template TKey of int\n\
+          * @template TValue\n\
+          */\n\
+         public function noop() {}\n\
+         }"]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Method, "noop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = captured_containing(&recording, "@template");
+    assert_eq!(captured.template_names, vec!["TKey", "TValue"]);
+    // Finding 2: the bound lowering (`syntax.rs`'s `declare_into`) was
+    // otherwise unpinned by any test — a dropped bound (Task 3 zips
+    // missing arguments against "the template's bound then mixed") is
+    // a real future bug.
+    assert_eq!(
+        captured.template_bounds,
+        vec![
+            Some(celerrate_types::TypeId::int(&fixture.db).display(&fixture.db)),
+            None,
+        ],
+    );
+}
+
+#[test]
+fn named_variables_lower_into_the_variables_field() {
+    let fixture = fixture(&["<?php class C { /** @var Collection<User> $items */ public $prop; }"]);
+    let recording = register_recording_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Property, "prop");
+    let _ = celerrate_types::member_annotations(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    );
+    let captured = captured_containing(&recording, "@var");
+    assert_eq!(captured.variable_names, vec!["items"]);
+}
+
+#[test]
+fn a_named_var_on_a_property_still_types_the_property() {
+    // Regression (task 2 review, finding 1, human-adjudicated): the
+    // named `@var Type $name` form is a standard property idiom (both
+    // PHPStan and Psalm accept it). Tag extraction cannot know whether
+    // the docblock sits above a property or above a statement, so the
+    // named form must fill BOTH `variable_values` (for the later
+    // inline-narrowing consumer) AND `value_type` (for `declared.rs`,
+    // which reads `value_type` for `MemberKind::Property`). Before the
+    // fix, the named form only filled `variable_values`, so this
+    // untyped-native property silently fell back to `mixed`.
+    let fixture = fixture(&["<?php class C { /** @var string $name */ private $name; }"]);
+    register_bridge(&fixture.db);
+    let query = member_query(&fixture, "C", MemberKind::Property, "name");
+    let signature = celerrate_types::declared_member_signature(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        query,
+    )
+    .unwrap();
+    assert_eq!(
+        signature.value_type,
+        celerrate_types::TypeId::string(&fixture.db),
+        "a named @var must still type the property, not fall back to mixed",
     );
 }

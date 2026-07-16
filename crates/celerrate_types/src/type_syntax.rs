@@ -34,6 +34,22 @@ pub struct ParsedAssertion<'db> {
     pub negated: bool,
 }
 
+/// One `@template` declaration of the parsed docblock, in declaration
+/// order (task 3's ancestor-argument zip relies on this order).
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct ParsedTemplate<'db> {
+    pub name: String,
+    pub bound: Option<TypeId<'db>>,
+}
+
+/// One inheritance-position declaration: the ancestor's fully
+/// qualified, pre-folded class name and its fixed generic arguments.
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct ParsedAncestor<'db> {
+    pub class_name: String,
+    pub arguments: Vec<TypeId<'db>>,
+}
+
 /// The declaring-scope context one annotation parse needs beyond name
 /// qualification: `@template` resolution needs to know the scope key
 /// its own declarations bind under, and — for member docblocks — the
@@ -127,6 +143,15 @@ pub struct ParsedAnnotations<'db> {
     pub throws: Vec<TypeId<'db>>,
     /// `@assert` family, accumulated across tags and carried for plan 5's narrowing.
     pub assertions: Vec<ParsedAssertion<'db>>,
+    /// `@template` declarations, in declaration order.
+    pub templates: Vec<ParsedTemplate<'db>>,
+    /// `@extends`/`@implements`/`@use` (and their `@template-*` long
+    /// forms): each ancestor's fully qualified name and fixed generic
+    /// arguments.
+    pub ancestors: Vec<ParsedAncestor<'db>>,
+    /// Named inline `@var Type $name` entries, by variable name
+    /// (without the `$`).
+    pub variables: Vec<(String, TypeId<'db>)>,
 }
 
 /// An implementation understands one annotation notation. Must be a

@@ -18,7 +18,9 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndex, StubIndexInput};
-use celerrate_types::{FunctionQuery, inferred_function_return};
+use celerrate_types::{
+    FunctionQuery, MethodQuery, inferred_function_return, inferred_method_return,
+};
 
 struct Fixture {
     db: TestDatabase,
@@ -88,6 +90,21 @@ fn return_of(fixture: &Fixture, key: &str) -> String {
     .display(&fixture.db)
 }
 
+/// The display of one method's inferred return, resolved through
+/// `inferred_method_return` — the method-cycle analog of [`return_of`]
+/// (task 6's second cycle-recovered query, extended here to the same
+/// determinism harness the free-function fixpoint already pins).
+fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) -> String {
+    inferred_method_return(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        MethodQuery::new(&fixture.db, class_key.to_owned(), method_name.to_owned()),
+    )
+    .display(&fixture.db)
+}
+
 const MUTUAL: &str = "<?php
 function a(bool $c) { if ($c) { return b($c); } return 1; }
 function b(bool $c) { if ($c) { return a($c); } return 'x'; }";
@@ -121,6 +138,52 @@ fn every_entry_point_converges_to_the_same_fixpoint() {
     assert_eq!(a_first.0, a_first.1, "the cluster shares one fixpoint");
 }
 
+/// The method-cycle counterpart of
+/// `every_entry_point_converges_to_the_same_fixpoint` (design section
+/// 10, harness 3, extended to method cycles per decision 15): the same
+/// two-class mutual-recursion cluster, queried in two orders -- ping
+/// then pong, and pong then ping, both method-first -- over fresh
+/// databases answers identically regardless of entry order.
+/// Entry-point independence for the method fixpoint is already pinned
+/// at the unit level (task 6's
+/// `a_mutual_method_cluster_converges_the_same_from_either_entry_point`,
+/// a single-class cluster asking `left`/`right` on the same class);
+/// this fixture is a genuine two-class cluster. The comparison is
+/// pairwise by key, mirroring `every_entry_point_converges_to_the_same_fixpoint`
+/// above, not sorted: a sorted comparison would still pass under an
+/// entry-order-dependent swap between `ping` and `pong`, since the two
+/// orders would then carry the same multiset of values, only relabeled.
+#[test]
+fn a_method_cycle_answers_identically_from_every_entry_point() {
+    // The same two-class mutual-recursion cluster, queried in two
+    // orders -- ping then pong, and pong then ping, both method-first
+    // -- over fresh databases: identical answers regardless of order.
+    let source = r#"<?php
+namespace App;
+class Left {
+    public function ping(Right $right, bool $stop) {
+        if ($stop) { return 1; }
+        return $right->pong($this, $stop);
+    }
+}
+class Right {
+    public function pong(Left $left, bool $stop) {
+        if ($stop) { return 'one'; }
+        return $left->ping($this, $stop);
+    }
+}
+"#;
+    let first = fixture(&[source]);
+    let first_ping = method_return_display(&first, "app\\left", "ping");
+    let first_pong = method_return_display(&first, "app\\right", "pong");
+    let second = fixture(&[source]);
+    let second_pong = method_return_display(&second, "app\\right", "pong");
+    let second_ping = method_return_display(&second, "app\\left", "ping");
+    assert_eq!(first_ping, second_ping);
+    assert_eq!(first_pong, second_pong);
+    assert_eq!(first_ping, first_pong, "the cluster shares one fixpoint");
+}
+
 #[test]
 fn thread_fan_out_answers_identically() {
     let fixture = fixture(&[MUTUAL]);
@@ -145,6 +208,65 @@ fn thread_fan_out_answers_identically() {
                         .display(&db)
                     };
                     (of("a"), of("b"))
+                })
+            })
+            .collect::<Vec<_>>()
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect()
+    });
+    for result in results {
+        assert_eq!(result, expected);
+    }
+}
+
+/// The method-cycle counterpart of `thread_fan_out_answers_identically`
+/// (design section 10, harness 3, extended to method cycles per
+/// decision 15): the same two-class mutual-recursion cluster, warmed
+/// once, answers identically to every one of several threads fanning
+/// out over snapshots of the warmed database.
+#[test]
+fn thread_fan_out_answers_identically_for_a_method_cluster() {
+    let source = r#"<?php
+namespace App;
+class Left {
+    public function ping(Right $right, bool $stop) {
+        if ($stop) { return 1; }
+        return $right->pong($this, $stop);
+    }
+}
+class Right {
+    public function pong(Left $left, bool $stop) {
+        if ($stop) { return 'one'; }
+        return $left->ping($this, $stop);
+    }
+}
+"#;
+    let fixture = fixture(&[source]);
+    // Warm the fixpoint once, then fan out over snapshots.
+    let expected = (
+        method_return_display(&fixture, "app\\left", "ping"),
+        method_return_display(&fixture, "app\\right", "pong"),
+    );
+    let results: Vec<(String, String)> = std::thread::scope(|scope| {
+        (0..4)
+            .map(|_| {
+                let db = fixture.db.clone();
+                let files = fixture.files;
+                let stubs = fixture.stubs;
+                let configuration = fixture.configuration;
+                scope.spawn(move || {
+                    let of = |class: &str, method: &str| {
+                        inferred_method_return(
+                            &db,
+                            files,
+                            stubs,
+                            configuration,
+                            MethodQuery::new(&db, class.to_owned(), method.to_owned()),
+                        )
+                        .display(&db)
+                    };
+                    (of("app\\left", "ping"), of("app\\right", "pong"))
                 })
             })
             .collect::<Vec<_>>()
@@ -331,4 +453,113 @@ fn an_edit_mid_fixpoint_unwinds_cleanly_and_serves_no_provisional_value() {
     .display(&setter_db);
     let fresh = fixture_with(&[edited]);
     assert_eq!(after, return_of(&fresh, "entry"));
+}
+
+/// The method-cycle counterpart of
+/// `an_edit_mid_fixpoint_unwinds_cleanly_and_serves_no_provisional_value`
+/// (design section 10, harness 3, extended to method cycles per
+/// decision 15): identical scaffolding, only the queried cluster
+/// changes — a self-recursive method reaching the same blocking
+/// provider instead of a self-recursive function.
+#[test]
+fn an_edit_mid_method_fixpoint_unwinds_cleanly_and_serves_no_provisional_value() {
+    let source = "<?php
+    namespace App;
+    class Entry {
+        public function run(int $n) {
+            if ($n > 0) { return $this->run($n - 1); }
+            return block();
+        }
+    }";
+    let edited = "<?php
+    namespace App;
+    class Entry {
+        public function run(int $n) {
+            if ($n > 0) { return $this->run($n - 1); }
+            return block() ?? 'edited';
+        }
+    }";
+
+    // Same rationale as the free-function version above: the fixture's
+    // own handle is dropped before the edit lands, so the setter handle
+    // reaches sole ownership and carries the post-edit demand.
+    let Fixture {
+        db,
+        files,
+        stubs,
+        configuration,
+        handles,
+    } = fixture(&[source]);
+    let file = handles[0];
+
+    let entered = Arc::new(Barrier::new(2));
+    let released = Arc::new(Barrier::new(2));
+    let _ = celerrate_types::DynamicTypeProviderRegistry::builder(vec![
+        celerrate_types::DynamicTypeProviderRegistration {
+            identity: celerrate_semantics::PluginIdentity {
+                name: "blocking".to_owned(),
+                version: "0.0.0".to_owned(),
+                configuration: String::new(),
+            },
+            provider: Arc::new(BlockingProvider::armed(entered.clone(), released.clone())),
+        },
+    ])
+    .durability(salsa::Durability::HIGH)
+    .new(&db);
+
+    let worker_db = db.clone();
+    let probe_db = db.clone();
+    let mut setter_db = db.clone();
+    drop(db);
+
+    let worker = std::thread::spawn(move || {
+        salsa::Cancelled::catch(std::panic::AssertUnwindSafe(|| {
+            inferred_method_return(
+                &worker_db,
+                files,
+                stubs,
+                configuration,
+                MethodQuery::new(&worker_db, "app\\entry".to_owned(), "run".to_owned()),
+            )
+            .display(&worker_db)
+        }))
+    });
+
+    // The worker is inside the provider, mid-fixpoint.
+    entered.wait();
+    let setter = std::thread::spawn(move || {
+        use salsa::Setter as _;
+        file.set_bytes(&mut setter_db)
+            .to(edited.as_bytes().to_vec());
+        setter_db
+    });
+    loop {
+        let probed = salsa::Cancelled::catch(std::panic::AssertUnwindSafe(|| {
+            let _ = celerrate_db::parse(&probe_db, file);
+        }));
+        if probed.is_err() {
+            break;
+        }
+        std::thread::yield_now();
+    }
+    drop(probe_db);
+    released.wait();
+
+    let unwound = worker.join().unwrap();
+    assert!(unwound.is_err(), "the fixpoint unwound with Cancelled");
+    let setter_db = setter.join().unwrap();
+
+    // No provisional value: a fresh demand on the post-edit database
+    // answers the post-edit fixpoint, byte-identical to a from-scratch
+    // database that resolves `block()` through an equivalent claim.
+    let after = inferred_method_return(
+        &setter_db,
+        files,
+        stubs,
+        configuration,
+        MethodQuery::new(&setter_db, "app\\entry".to_owned(), "run".to_owned()),
+    )
+    .display(&setter_db);
+    let fresh = fixture_with(&[edited]);
+    assert_eq!(after, method_return_display(&fresh, "app\\entry", "run"));
 }

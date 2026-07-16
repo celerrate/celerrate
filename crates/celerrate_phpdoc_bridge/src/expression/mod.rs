@@ -97,7 +97,10 @@ pub enum ConditionalSubject {
     /// A bare name — a template variable if one is in scope at
     /// lowering time, otherwise undecided.
     Template(String),
-    /// `$param` — undecided until plan 6 evaluates call sites.
+    /// `$param` — permanently undecided at lowering time: no
+    /// expression-to-template resolution exists for a parameter
+    /// subject (decision 9's recorded debt; see `lowering.rs`'s
+    /// `lower_conditional`), so it always falls to the branch union.
     Parameter(String),
 }
 

@@ -124,7 +124,8 @@ pub(crate) fn qualified_class_name(site: &NameSite<'_>, written: &str) -> String
 
 /// How a declared element's final type was obtained — the trace the
 /// design requires for annotation refinement (tasks 5-6 set the
-/// non-native variants; the ground-truth harness of plan 6 reads it).
+/// non-native variants; the `cargo xtask ground-truth` harness reads
+/// it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum Trust {
     /// No annotation: the native declaration (or `mixed`) stands.
@@ -264,19 +265,67 @@ fn ancestors_in_walk_order(root_key: &str, linearized: &LinearizedClass) -> Vec<
     seen
 }
 
+/// Which class's docblock supplied each substitutable annotation
+/// field. An annotation's templates are scoped to the class that wrote
+/// it, so the substitution hook keys its map on this owner rather than
+/// on the member's structural owner: a subclass that overrides a method
+/// natively, without repeating the docblock, still answers the
+/// ancestor's annotation and must fix it in the ancestor's scope. The
+/// merge fills every field independently, so `@return` and each
+/// `@param` may each come from a different ancestor. Only the fields
+/// the hook substitutes are traced; `@throws` and the assertions carry
+/// no provenance because nothing substitutes them yet.
+struct AnnotationOrigins {
+    /// The member's structural owner: what supplied every field the
+    /// merge did not have to inherit (the member's own docblock is that
+    /// owner's docblock).
+    structural_owner: String,
+    /// The ancestor that supplied `@return` / `@var`, when inherited.
+    value: Option<String>,
+    /// The ancestor that supplied each inherited `@param`, by parameter
+    /// name.
+    parameters: Vec<(String, String)>,
+}
+
+impl AnnotationOrigins {
+    fn of_owner(structural_owner: &str) -> Self {
+        Self {
+            structural_owner: structural_owner.to_owned(),
+            value: None,
+            parameters: Vec::new(),
+        }
+    }
+
+    fn value_owner(&self) -> &str {
+        self.value.as_deref().unwrap_or(&self.structural_owner)
+    }
+
+    fn parameter_owner(&self, name: &str) -> &str {
+        self.parameters
+            .iter()
+            .find(|(parameter_name, _)| parameter_name == name)
+            .map(|(_, owner)| owner.as_str())
+            .unwrap_or(&self.structural_owner)
+    }
+}
+
 /// Element-wise nearest-ancestor merge: own annotations first, then
 /// each declaring ancestor in walk order fills only what is still
 /// missing. `declares` gates on the ancestor's OWN member table (an
 /// ancestor that merely inherits the member is not its annotation
-/// site); `read` supplies the ancestor's parsed annotations.
+/// site); `read` supplies the ancestor's parsed annotations. Answers
+/// the merged annotations alongside the per-field provenance the
+/// substitution hook needs.
 fn inherited_annotations<'db>(
     own: MemberAnnotations<'db>,
+    structural_owner: &str,
     parameter_names: &[String],
     ancestors: &[String],
     declares: impl Fn(&str) -> bool,
     read: impl Fn(&str) -> MemberAnnotations<'db>,
-) -> MemberAnnotations<'db> {
+) -> (MemberAnnotations<'db>, AnnotationOrigins) {
     let mut merged = own;
+    let mut origins = AnnotationOrigins::of_owner(structural_owner);
     for ancestor in ancestors {
         let value_missing = merged.value.is_none();
         let throws_missing = merged.throws.is_empty();
@@ -292,14 +341,15 @@ fn inherited_annotations<'db>(
             .collect();
         if !value_missing && !throws_missing && !assertions_missing && missing_parameters.is_empty()
         {
-            return merged;
+            return (merged, origins);
         }
         if !declares(ancestor) {
             continue;
         }
         let ancestor_annotations = read(ancestor);
-        if value_missing {
+        if value_missing && ancestor_annotations.value.is_some() {
             merged.value = ancestor_annotations.value;
+            origins.value = Some(ancestor.clone());
         }
         if throws_missing {
             merged.throws = ancestor_annotations.throws;
@@ -314,10 +364,11 @@ fn inherited_annotations<'db>(
                 .find(|(ancestor_name, _)| ancestor_name == name)
             {
                 merged.parameters.push((name.clone(), *annotated));
+                origins.parameters.push((name.clone(), ancestor.clone()));
             }
         }
     }
-    merged
+    (merged, origins)
 }
 
 #[salsa::tracked]
@@ -390,6 +441,15 @@ pub fn declared_member_signature<'db>(
             }));
         }
     };
+    // Recorded debt: `declaring_site` (below `owner_class_docblock` at
+    // the `Virtual` arm above) is a plain, non-tracked function that
+    // reads the file-granular `member_tree` directly, with no memo
+    // boundary in between. So this query re-executes on ANY docblock
+    // edit anywhere in the owner's file, not only the queried member's
+    // own or its declaring ancestor's (pinned by
+    // `invalidation_scope.rs`'s
+    // `a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict`).
+    // An honest, already-documented cost, not fixed here.
     let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {
@@ -406,13 +466,14 @@ pub fn declared_member_signature<'db>(
         .iter()
         .map(|parameter| parameter.name.clone())
         .collect();
-    let annotations = match linearized.as_ref() {
+    let (annotations, origins) = match linearized.as_ref() {
         Some(linearized) => {
             let ancestors = ancestors_in_walk_order(root_key, linearized);
             let kind = query.kind(db);
             let member_key = query.member_key(db);
             inherited_annotations(
                 own,
+                &owner,
                 &parameter_names,
                 &ancestors,
                 |ancestor| declares_member(db, files, ancestor, kind, member_key),
@@ -423,9 +484,9 @@ pub fn declared_member_signature<'db>(
                 },
             )
         }
-        None => own,
+        None => (own, AnnotationOrigins::of_owner(&owner)),
     };
-    Some(resolve_member_signature(
+    let mut signature = resolve_member_signature(
         db,
         files,
         stubs,
@@ -434,19 +495,65 @@ pub fn declared_member_signature<'db>(
         &owner,
         &member,
         &annotations,
-    ))
+    );
+    // Design section 3, "declared types inherit", completed by the
+    // threading of task 3: a member declared on a generic ancestor is
+    // answered with the receiver class's fixed arguments applied. Each
+    // field substitutes through the map of the class whose docblock
+    // supplied it (`AnnotationOrigins`), so the map's scope always
+    // matches the template's scope; a field the receiver itself declared
+    // gets no map and stays as written.
+    let map_for = |annotation_owner: &str| {
+        crate::inheritance::ancestor_substitution(
+            db,
+            files,
+            stubs,
+            configuration,
+            root_key,
+            annotation_owner,
+        )
+    };
+    if let Some(map) = map_for(origins.value_owner()) {
+        signature.value_type = crate::substitution::substitute(
+            db,
+            files,
+            stubs,
+            configuration,
+            signature.value_type,
+            &map,
+            None,
+        );
+    }
+    for parameter in &mut signature.parameters {
+        let Some(parameter_type) = parameter.parameter_type else {
+            continue;
+        };
+        let Some(map) = map_for(origins.parameter_owner(&parameter.name)) else {
+            continue;
+        };
+        parameter.parameter_type = Some(crate::substitution::substitute(
+            db,
+            files,
+            stubs,
+            configuration,
+            parameter_type,
+            &map,
+            None,
+        ));
+    }
+    Some(signature)
 }
 
 /// The declaring site of one source class-like: its file handle,
 /// namespace, and declaration AST id, found through the same
 /// firewalls linearization uses.
-struct DeclaringSite {
+pub(crate) struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
     ast_id: AstId,
 }
 
-fn declaring_site(
+pub(crate) fn declaring_site(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,
@@ -473,7 +580,7 @@ fn declaring_site(
 
 /// The owner class-like's own docblock text: class-level `@template`
 /// declarations are visible inside member annotations.
-fn owner_class_docblock(
+pub(crate) fn owner_class_docblock(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,
@@ -494,7 +601,7 @@ fn owner_class_docblock(
 /// resolvable source class-like, the closure still runs, against
 /// `NameSite::Global` — an unresolvable owner degrades the name
 /// qualification, it does not abort the parse.
-fn with_declaring_site<T>(
+pub(crate) fn with_declaring_site<T>(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
     owner_key: &str,
@@ -1851,8 +1958,9 @@ mod tests {
             }
         };
         let ancestors = vec!["near".to_owned(), "far".to_owned()];
-        let merged = super::inherited_annotations(
+        let (merged, origins) = super::inherited_annotations(
             super::MemberAnnotations::default(),
+            "root",
             &["x".to_owned()],
             &ancestors,
             |_| true,
@@ -1862,6 +1970,10 @@ mod tests {
         assert_eq!(merged.value, Some(int));
         // Parameter: the near ancestor wins over the far one.
         assert_eq!(merged.parameters, vec![("x".to_owned(), string)]);
+        // Each field traces back to the ancestor that supplied it, and
+        // the two differ: the substitution hook needs one map per field.
+        assert_eq!(origins.value_owner(), "far");
+        assert_eq!(origins.parameter_owner("x"), "near");
     }
 
     #[test]
@@ -1875,8 +1987,9 @@ mod tests {
             throws: Vec::new(),
             assertions: Vec::new(),
         };
-        let merged = super::inherited_annotations(
+        let (merged, origins) = super::inherited_annotations(
             own.clone(),
+            "root",
             &[],
             &["ancestor".to_owned()],
             |_| true,
@@ -1888,10 +2001,16 @@ mod tests {
             },
         );
         assert_eq!(merged.value, Some(int), "own annotation shadows");
+        assert_eq!(
+            origins.value_owner(),
+            "root",
+            "an own annotation traces to the structural owner, not an ancestor",
+        );
 
         // An ancestor that does not declare the member supplies nothing.
-        let merged = super::inherited_annotations(
+        let (merged, origins) = super::inherited_annotations(
             super::MemberAnnotations::default(),
+            "root",
             &[],
             &["silent".to_owned()],
             |_| false,
@@ -1903,6 +2022,7 @@ mod tests {
             },
         );
         assert_eq!(merged.value, None);
+        assert_eq!(origins.value_owner(), "root");
     }
 
     #[test]
@@ -2494,5 +2614,194 @@ mod tests {
         .unwrap();
         assert_eq!(signature.value_type, TypeId::mixed(&fixture.db));
         assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn an_inherited_signature_substitutes_the_threaded_arguments() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\userrepository".to_owned(),
+            MemberKind::Method,
+            "find".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&f.db, "app\\user", vec![]),
+            "the ancestor's template return arrives fixed to User",
+        );
+    }
+
+    #[test]
+    fn an_inherited_parameter_substitutes_too() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Collection {
+    /** @param T $item */
+    public function add($item) {}
+}
+/** @extends Collection<User> */
+class UserCollection extends Collection {}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\usercollection".to_owned(),
+            MemberKind::Method,
+            "add".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        let parameter = signature
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "item")
+            .unwrap();
+        assert_eq!(
+            parameter.parameter_type,
+            Some(TypeId::class(&f.db, "app\\user", vec![])),
+        );
+    }
+
+    #[test]
+    fn a_native_override_without_a_docblock_still_substitutes_the_ancestor_annotation() {
+        // The ordinary override shape: the child re-declares the method
+        // natively and does not repeat the docblock, so the structural
+        // owner is the child while the annotation still comes from the
+        // generic ancestor. The substitution must key on the class whose
+        // docblock supplied the annotation, not on that structural owner.
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+abstract class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {
+    public function find(int $identifier) {}
+}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\userrepository".to_owned(),
+            MemberKind::Method,
+            "find".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&f.db, "app\\user", vec![]),
+            "the inherited annotation's template fixes to User despite the native override",
+        );
+    }
+
+    #[test]
+    fn each_inherited_field_substitutes_in_the_scope_that_declared_it() {
+        // The merge fills every field independently, so `@return` and
+        // `@param` can arrive from two different ancestors, each scoping
+        // its templates to its own class. Each field must be substituted
+        // through its own declaring owner's map.
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Store {
+    /** @return T */
+    public function exchange($item) {}
+}
+/**
+ * @template U
+ * @extends Store<Item>
+ */
+class TypedStore extends Store {
+    /** @param U $item */
+    public function exchange($item) {}
+}
+/** @extends TypedStore<Slot> */
+class SlotStore extends TypedStore {
+    public function exchange($item) {}
+}
+class Item {}
+class Slot {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\slotstore".to_owned(),
+            MemberKind::Method,
+            "exchange".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&f.db, "app\\item", vec![]),
+            "`@return T` came from Store, so it fixes through Store's arguments",
+        );
+        let parameter = signature
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "item")
+            .unwrap();
+        assert_eq!(
+            parameter.parameter_type,
+            Some(TypeId::class(&f.db, "app\\slot", vec![])),
+            "`@param U` came from TypedStore, so it fixes through TypedStore's arguments",
+        );
+    }
+
+    #[test]
+    fn the_owner_consulted_directly_keeps_its_template() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let value_type_of = |class_key: &str| {
+            let query = MemberQuery::new(
+                &f.db,
+                class_key.to_owned(),
+                MemberKind::Method,
+                "find".to_owned(),
+            );
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query)
+                .unwrap()
+                .value_type
+        };
+        assert_eq!(
+            value_type_of("app\\repository"),
+            TypeId::template(&f.db, "app\\repository", "T", TypeId::mixed(&f.db)),
+            "no threading applies at the declaring class itself",
+        );
+        assert_eq!(
+            value_type_of("app\\userrepository"),
+            TypeId::class(&f.db, "app\\user", vec![]),
+            "the same fixture consulted through the child does thread",
+        );
     }
 }

@@ -12,6 +12,7 @@
 //! | param (per name) | `@phpstan-param` | `@psalm-param` | `@param` |
 //! | var | `@phpstan-var` | `@psalm-var` | `@var` |
 //! | property / method | `@phpstan-` form | `@psalm-` form | bare form |
+//! | ancestor (per written head name) | `@phpstan-` form | `@psalm-` form | bare form |
 //!
 //! Within one tier the first *parseable* tag wins; an unparseable tag
 //! never consumes a slot (the 4a rule, preserved). `@throws`
@@ -42,6 +43,12 @@ pub(crate) enum TagRole {
     Throws,
     Property,
     Method,
+    /// `@extends` and its `@template-extends` long form.
+    Extends,
+    /// `@implements` and its `@template-implements` long form.
+    Implements,
+    /// `@use` and its `@template-use` long form.
+    UseTrait,
     /// `@template`, `@template-covariant`, `@template-contravariant`:
     /// the variance marker is recognized and dropped (decision 6).
     Template,

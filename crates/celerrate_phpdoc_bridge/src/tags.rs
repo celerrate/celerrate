@@ -15,7 +15,9 @@ use crate::dialect::{self, TagRole, TagTier};
 use crate::{Tag, TypeExpression, parse_type_expression_prefix};
 
 /// The standard tags a single member's docblock contributes:
-/// `@param`, `@return`, `@var`, `@throws`, `@template`, `@assert` family.
+/// `@param`, `@return`, `@var`, `@throws`, `@template`, `@assert` family,
+/// plus the inheritance-position tags (`@extends`, `@implements`,
+/// `@use`) and named inline `@var` entries.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct MemberDocblock {
     pub return_type: Option<TypeExpression>,
@@ -24,6 +26,26 @@ pub struct MemberDocblock {
     pub throws: Vec<TypeExpression>,
     pub templates: Vec<TemplateDeclaration>,
     pub assertions: Vec<AssertionDeclaration>,
+    /// `@extends`, `@implements`, `@use` and their `@template-*` long
+    /// forms, slot-resolved per written head name.
+    pub ancestors: Vec<AncestorDeclaration>,
+    /// Named inline `@var Type $name` entries, slot-resolved per
+    /// variable name. Tag extraction is context-free — it cannot know
+    /// whether the docblock sits above a property or above a local
+    /// statement — so a named entry ALSO fills `value_type` under the
+    /// tier rule, exactly as the unnamed `@var` form does; a property's
+    /// declaring site (`declared.rs`) reads `value_type`, while the
+    /// later inline-narrowing consumer reads `variables`.
+    pub variable_values: Vec<(String, TypeExpression)>,
+}
+
+/// One inheritance-position tag (`@extends`, `@implements`, `@use`
+/// and their `@template-*` long forms): the written ancestor with its
+/// fixed generic arguments, an unresolved type expression until the
+/// declaring site qualifies it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AncestorDeclaration {
+    pub expression: TypeExpression,
 }
 
 /// One `@template` declaration: `T`, `T of Bound`, `T as Bound`
@@ -58,13 +80,20 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
     let mut throws = Vec::new();
     let mut templates: Vec<(String, TagTier, TemplateDeclaration)> = Vec::new();
     let mut extracted_assertions = Vec::new();
+    let mut ancestors: Vec<(String, TagTier, AncestorDeclaration)> = Vec::new();
+    let mut variable_values: Vec<(String, TagTier, TypeExpression)> = Vec::new();
     for tag in tags {
         let Some(classified) = dialect::classify(&tag.name) else {
             continue;
         };
         match classified.role {
             TagRole::Return => offer_value(&mut return_slot, classified.tier, &tag.content),
-            TagRole::Var => offer_value(&mut value_slot, classified.tier, &tag.content),
+            TagRole::Var => offer_var(
+                &mut value_slot,
+                &mut variable_values,
+                classified.tier,
+                &tag.content,
+            ),
             TagRole::Param => offer_parameter(&mut parameters, classified.tier, &tag.content),
             TagRole::Throws => {
                 if let Some(expression) = value_type(&tag.content) {
@@ -76,6 +105,9 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
                 if let Some(assertion) = parse_assert_tag(&tag.content, polarity) {
                     extracted_assertions.push(assertion);
                 }
+            }
+            TagRole::Extends | TagRole::Implements | TagRole::UseTrait => {
+                offer_ancestor(&mut ancestors, classified.tier, &tag.content)
             }
             TagRole::Property | TagRole::Method | TagRole::Ignored => {}
         }
@@ -93,6 +125,14 @@ pub fn extract_member_docblock(tags: &[Tag]) -> MemberDocblock {
             .map(|(_, _, declaration)| declaration)
             .collect(),
         assertions: extracted_assertions,
+        ancestors: ancestors
+            .into_iter()
+            .map(|(_, _, declaration)| declaration)
+            .collect(),
+        variable_values: variable_values
+            .into_iter()
+            .map(|(name, _, expression)| (name, expression))
+            .collect(),
     }
 }
 
@@ -108,8 +148,24 @@ fn offer_value(slot: &mut Option<(TagTier, TypeExpression)>, tier: TagTier, cont
     }
 }
 
-/// Per-name slots in first-appearance order, so the output stays
-/// deterministic without a map.
+/// Per-key slots in first-appearance order, so the output stays
+/// deterministic without a map: a stronger tier replaces the holder;
+/// the same or a weaker tier keeps the first declaration within that
+/// tier. Shared by every extraction slot resolved per key —
+/// `offer_parameter`, `offer_template`, `offer_named_variable`
+/// (per name), `offer_ancestor` (per written head name).
+fn offer_keyed<T>(slots: &mut Vec<(String, TagTier, T)>, tier: TagTier, key: String, value: T) {
+    match slots.iter_mut().find(|(existing, _, _)| *existing == key) {
+        Some((_, existing_tier, existing_value)) => {
+            if tier < *existing_tier {
+                *existing_tier = tier;
+                *existing_value = value;
+            }
+        }
+        None => slots.push((key, tier, value)),
+    }
+}
+
 fn offer_parameter(
     parameters: &mut Vec<(String, TagTier, TypeExpression)>,
     tier: TagTier,
@@ -118,23 +174,9 @@ fn offer_parameter(
     let Some((name, expression)) = parse_param_tag(content) else {
         return;
     };
-    match parameters
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == name)
-    {
-        Some((_, existing_tier, existing_expression)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_expression = expression;
-            }
-        }
-        None => parameters.push((name, tier, expression)),
-    }
+    offer_keyed(parameters, tier, name, expression);
 }
 
-/// Per-name slots in first-appearance order (mirrors
-/// `offer_parameter`): a stronger tier replaces, the same or a weaker
-/// tier keeps the first declaration within that tier.
 fn offer_template(
     templates: &mut Vec<(String, TagTier, TemplateDeclaration)>,
     tier: TagTier,
@@ -143,17 +185,84 @@ fn offer_template(
     let Some(declaration) = parse_template_tag(content) else {
         return;
     };
-    match templates
-        .iter_mut()
-        .find(|(existing, _, _)| *existing == declaration.name)
-    {
-        Some((_, existing_tier, existing_declaration)) => {
-            if tier < *existing_tier {
-                *existing_tier = tier;
-                *existing_declaration = declaration;
-            }
-        }
-        None => templates.push((declaration.name.clone(), tier, declaration)),
+    offer_keyed(templates, tier, declaration.name.clone(), declaration);
+}
+
+/// `@var Type [$name]`: every tag feeds the `value_type` slot under
+/// the tier rule (`offer_value`), same as an unnamed `@var` always
+/// has; a named tag ADDITIONALLY routes to `variable_values`,
+/// slot-resolved per variable name under the same tier rule. Tag
+/// extraction cannot see whether its docblock sits above a property or
+/// a local statement, so both slots are populated and the consuming
+/// site picks (adjudicated: a named `@var` above a property must keep
+/// typing the property).
+fn offer_var(
+    value_slot: &mut Option<(TagTier, TypeExpression)>,
+    variable_values: &mut Vec<(String, TagTier, TypeExpression)>,
+    tier: TagTier,
+    content: &str,
+) {
+    if let Some((name, expression)) = parse_named_var(content) {
+        offer_named_variable(variable_values, tier, name, expression);
+    }
+    offer_value(value_slot, tier, content);
+}
+
+/// `Type $name`: `None` when the tag has no trailing variable (the
+/// unnamed `@var` form, which stays as `value_type`).
+fn parse_named_var(content: &str) -> Option<(String, TypeExpression)> {
+    let (expression, consumed) = parse_type_expression_prefix(content)?;
+    let remainder = content.get(consumed..)?;
+    let token = remainder.split_whitespace().next()?;
+    let name = token.strip_prefix('$')?;
+    if name.is_empty() {
+        None
+    } else {
+        Some((name.to_owned(), expression))
+    }
+}
+
+fn offer_named_variable(
+    variable_values: &mut Vec<(String, TagTier, TypeExpression)>,
+    tier: TagTier,
+    name: String,
+    expression: TypeExpression,
+) {
+    offer_keyed(variable_values, tier, name, expression);
+}
+
+/// The written head name is the first identifier token of the parsed
+/// expression; a parsed shape with no such identifier (never produced
+/// by the ancestor grammar in practice) drops, same as an unparseable
+/// tag.
+fn offer_ancestor(
+    ancestors: &mut Vec<(String, TagTier, AncestorDeclaration)>,
+    tier: TagTier,
+    content: &str,
+) {
+    let Some(declaration) = parse_ancestor_tag(content) else {
+        return;
+    };
+    let Some(head) = ancestor_head_name(&declaration.expression) else {
+        return;
+    };
+    offer_keyed(ancestors, tier, head, declaration);
+}
+
+/// `Ancestor[<Arguments>]`: a maximal type-expression prefix; trailing
+/// prose (rare for this tag family) is free text.
+fn parse_ancestor_tag(content: &str) -> Option<AncestorDeclaration> {
+    let (expression, _) = parse_type_expression_prefix(content)?;
+    Some(AncestorDeclaration { expression })
+}
+
+/// The written head name of an ancestor declaration: the base
+/// identifier of a plain name or a generic expression.
+fn ancestor_head_name(expression: &TypeExpression) -> Option<String> {
+    match expression {
+        TypeExpression::Name(name) => Some(name.clone()),
+        TypeExpression::Generic { base, .. } => Some(base.clone()),
+        _ => None,
     }
 }
 
@@ -459,7 +568,7 @@ fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
 }
 
 #[cfg(test)]
-#[allow(clippy::indexing_slicing)]
+#[allow(clippy::indexing_slicing, clippy::panic)]
 mod tests {
     use super::*;
     use crate::lex_docblock;
@@ -730,6 +839,76 @@ mod tests {
         assert_eq!(members.len(), 1);
         assert_eq!(members[0].name, "owner");
         assert_eq!(members[0].type_text.as_deref(), Some("$this"));
+    }
+
+    #[test]
+    fn extends_implements_and_use_extract_with_their_long_forms() {
+        let tags = lex_docblock(
+            "/**\n * @extends Base<User>\n * @implements Countable<int>\n * @template-use Loggable<string>\n */",
+        );
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.ancestors.len(), 3);
+        let heads: Vec<&str> = extracted
+            .ancestors
+            .iter()
+            .map(|ancestor| match &ancestor.expression {
+                TypeExpression::Generic { base, .. } => base.as_str(),
+                other => panic!("expected a generic ancestor, got {other:?}"),
+            })
+            .collect();
+        assert_eq!(heads, vec!["Base", "Countable", "Loggable"]);
+        assert!(extracted.ancestors.iter().all(|ancestor| matches!(
+            &ancestor.expression,
+            TypeExpression::Generic { arguments, .. } if arguments.len() == 1
+        )));
+    }
+
+    #[test]
+    fn a_tool_prefixed_ancestor_tag_wins_its_bare_sibling() {
+        let tags =
+            lex_docblock("/**\n * @extends Base<User>\n * @phpstan-extends Base<Admin>\n */");
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(
+            extracted.ancestors.len(),
+            1,
+            "PHPStan tier wins per head name"
+        );
+        match &extracted.ancestors[0].expression {
+            TypeExpression::Generic { base, arguments } => {
+                assert_eq!(base, "Base");
+                assert_eq!(arguments, &vec![TypeExpression::Name("Admin".to_owned())]);
+            }
+            other => panic!("expected a generic ancestor, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_named_inline_var_fills_both_variable_values_and_value_type() {
+        // Adjudicated (task 2 review, finding 1): tag extraction cannot
+        // know whether its docblock sits above a property or a local
+        // statement, so a named `@var Type $name` must fill BOTH slots
+        // — `variable_values` for the later inline-narrowing consumer,
+        // and `value_type` so a property's declaring site
+        // (`declared.rs`) keeps its declared type instead of falling
+        // back to `mixed`.
+        let named = extract_member_docblock(&lex_docblock("/** @var Collection<User> $items */"));
+        assert_eq!(named.variable_values.len(), 1);
+        assert_eq!(named.variable_values[0].0, "items");
+        assert!(
+            named.value_type.is_some(),
+            "the named form also fills the value_type slot"
+        );
+
+        let unnamed = extract_member_docblock(&lex_docblock("/** @var Collection<User> */"));
+        assert!(unnamed.value_type.is_some());
+        assert!(unnamed.variable_values.is_empty());
+    }
+
+    #[test]
+    fn an_unparseable_ancestor_drops_and_its_siblings_survive() {
+        let tags = lex_docblock("/**\n * @extends <<<broken\n * @implements Countable<int>\n */");
+        let extracted = extract_member_docblock(&tags);
+        assert_eq!(extracted.ancestors.len(), 1, "loss is per construct");
     }
 
     #[test]

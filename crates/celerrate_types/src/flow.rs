@@ -12,8 +12,9 @@ use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
-    ClassReference, ExpressionId, MemberKind, MemberQuery, MemberReference, StatementId,
-    StringPart, UseTables, folded_member_key, linearized_class,
+    ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
+    MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
+    lookup_member,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -24,7 +25,7 @@ use crate::declared::{
 use crate::inference::InterproceduralEdgeCounts;
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
-use crate::representation::TypeId;
+use crate::representation::{TypeData, TypeId};
 use crate::widening::{join, widened_literals};
 
 /// Join-ascent passes a loop may take before the still-moving
@@ -47,6 +48,16 @@ pub(crate) struct FlowContext<'db, 'body> {
     pub method_is_static: bool,
     /// Parameter names with their seeded (declared) types.
     pub parameters: Vec<(String, TypeId<'db>)>,
+    /// The declaring-scope key this body's own annotations bind under
+    /// (`TypeId::template`'s scope convention, `declared.rs`'s own
+    /// `<class key>::<member key>` for a method or the bare function
+    /// key for a free function): the body's *own* declaration, never
+    /// the using-class override decision 5 applies to
+    /// `owner_class_key` for a trait body — a class-level template's
+    /// scope is a fact about which class or trait actually wrote the
+    /// `@template`, not about which class later borrows the method
+    /// through `use`.
+    pub scope_key: String,
 }
 
 pub(crate) struct FlowResult<'db> {
@@ -184,11 +195,26 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     /// The most recently typed call's conditional assertions, drained
     /// by `branch_environments`' default arm.
     pending_condition_facts: Vec<PendingAssertion<'db>>,
+    /// Inline `@var` docblock texts (task 9, decision 11), grouped by
+    /// anchor once at entry: `None` for a comment trailing every
+    /// statement of the body (bound once, at body entry), `Some(id)`
+    /// for one anchored to statement `id` (bound immediately before
+    /// the walker processes it and re-bound immediately after — the
+    /// declaration survives the statement's own assignment). Each
+    /// text parses on demand, at bind time.
+    inline_variable_texts: BTreeMap<Option<StatementId>, Vec<&'body str>>,
 }
 
 /// Walks one body from its seeded parameter environment.
 pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> {
     let db = context.db;
+    let mut inline_variable_texts: BTreeMap<Option<StatementId>, Vec<&str>> = BTreeMap::new();
+    for annotation in &context.ir.annotations {
+        inline_variable_texts
+            .entry(annotation.anchor)
+            .or_default()
+            .push(annotation.text.as_str());
+    }
     let mut walker = Walker {
         context,
         types: vec![TypeId::mixed(db); context.ir.expressions.len()],
@@ -197,11 +223,15 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         edge_counts: InterproceduralEdgeCounts::default(),
         null_safe_reacquires: false,
         pending_condition_facts: Vec::new(),
+        inline_variable_texts,
     };
     let mut environment = Environment::new();
     for (name, seeded) in &context.parameters {
         environment.bind(NarrowingSubject::Local { name: name.clone() }, *seeded);
     }
+    // A comment trailing every statement of the body (no anchor) binds
+    // once, before anything runs.
+    walker.bind_inline_variables(None, &mut environment);
     walker.statements(&context.ir.root.clone(), &mut environment);
     let return_type = if walker.saw_yield {
         TypeId::class(db, "Generator", vec![])
@@ -279,6 +309,11 @@ impl<'db> Walker<'db, '_, '_> {
         match subject {
             NarrowingSubject::Local { .. } => TypeId::mixed(db),
             NarrowingSubject::ThisProperty { name } | NarrowingSubject::StaticProperty { name } => {
+                // `current_static_type`, not `this_type`: this fallback
+                // also covers `self::$prop`/`static::$prop`
+                // (`StaticProperty`), available in a static method where
+                // `this_type`'s `$this`-value gate would wrongly answer
+                // `mixed`.
                 self.context
                     .owner_class_key
                     .as_ref()
@@ -287,6 +322,7 @@ impl<'db> Walker<'db, '_, '_> {
                             std::slice::from_ref(key),
                             MemberKind::Property,
                             name,
+                            self.current_static_type(),
                         )
                     })
                     .unwrap_or_else(|| TypeId::mixed(db))
@@ -294,13 +330,29 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// `$this`: the defining class in a non-static method; `mixed`
-    /// (silence) everywhere else. Plan 6 replaces this with the
-    /// symbolic late-static-binding placeholder (decision 5).
+    /// `$this`: the symbolic late-static-binding placeholder in a
+    /// non-static method (decision 1); `mixed` (silence) everywhere
+    /// else — a free function, an anonymous-class method (decision
+    /// 12), or a static method (no `$this` value there). Substitution
+    /// happens only at a member boundary the placeholder later
+    /// crosses (`member_boundary_type`), never here.
     fn this_type(&self) -> TypeId<'db> {
         match (&self.context.owner_class_key, self.context.method_is_static) {
-            (Some(key), false) => TypeId::class(self.db(), key, vec![]),
+            (Some(_), false) => TypeId::static_placeholder(self.db()),
             _ => TypeId::mixed(self.db()),
+        }
+    }
+
+    /// The current `static` type in the defining context (decision 2):
+    /// the forwarding placeholder when an owner class exists, `mixed`
+    /// otherwise. Unlike [`Self::this_type`] this carries no
+    /// static-method gate: the `self`/`static` *class keyword* is
+    /// available in a static method, only the `$this` *value* is not.
+    fn current_static_type(&self) -> TypeId<'db> {
+        if self.context.owner_class_key.is_some() {
+            TypeId::static_placeholder(self.db())
+        } else {
+            TypeId::mixed(self.db())
         }
     }
 
@@ -313,6 +365,14 @@ impl<'db> Walker<'db, '_, '_> {
         let db = self.db();
         if of == TypeId::self_placeholder(db) || of == TypeId::static_placeholder(db) {
             return self.context.owner_class_key.clone().map(|key| vec![key]);
+        }
+        if of == TypeId::parent_placeholder(db) {
+            return self
+                .context
+                .owner_class_key
+                .as_ref()
+                .and_then(|key| self.parent_class_key_of(key))
+                .map(|key| vec![key]);
         }
         if let Some(name) = of.class_name(db) {
             return Some(vec![name]);
@@ -353,12 +413,20 @@ impl<'db> Walker<'db, '_, '_> {
     /// constituent the receiver actually is at runtime decides which
     /// answer applies, the same control-flow-alternative shape as a
     /// branch join (see the module's `join`-vs-`union` convention);
-    /// `None` when no key answers.
+    /// `None` when no key answers. Every resolving key's value funnels
+    /// through `member_boundary_type` against its *own* declaring
+    /// owner and `receiver` (decision 1): a `self`/`static`/`parent`-
+    /// typed property or constant substitutes exactly like a method
+    /// return. The owner is resolved per key, not once for the whole
+    /// call — a union receiver `A|B` where both declare the member
+    /// answers each key against its own class, never both against
+    /// whichever key happened to resolve first (Finding 3).
     fn member_value_type(
         &self,
         keys: &[String],
         kind: MemberKind,
         name: &str,
+        receiver: TypeId<'db>,
     ) -> Option<TypeId<'db>> {
         let db = self.db();
         keys.iter()
@@ -370,14 +438,25 @@ impl<'db> Walker<'db, '_, '_> {
                     self.context.configuration,
                     MemberQuery::new(db, key.clone(), kind, folded_member_key(kind, name)),
                 )
-                .map(|signature| signature.value_type)
+                .map(|signature| {
+                    let owner = self.member_owner(key, kind, name);
+                    self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
+                })
             })
             .reduce(|left, right| TypeId::union(db, [left, right]))
     }
 
-    /// The declared method signatures across the receiver keys, in
-    /// key order (empty when none resolves).
-    fn method_signatures(&self, keys: &[String], name: &str) -> Vec<DeclaredSignature<'db>> {
+    /// The declared method signatures across the receiver keys, each
+    /// paired with the key that resolved it (some keys in `keys` may
+    /// not resolve at all, so a plain positional zip against `keys`
+    /// would misalign once that happens — the pairing keeps a
+    /// per-key owner lookup honest), in key order (empty when none
+    /// resolves).
+    fn method_signatures(
+        &self,
+        keys: &[String],
+        name: &str,
+    ) -> Vec<(String, DeclaredSignature<'db>)> {
         let db = self.db();
         keys.iter()
             .filter_map(|key| {
@@ -393,6 +472,7 @@ impl<'db> Walker<'db, '_, '_> {
                         folded_member_key(MemberKind::Method, name),
                     ),
                 )
+                .map(|signature| (key.clone(), signature))
             })
             .collect()
     }
@@ -402,73 +482,155 @@ impl<'db> Walker<'db, '_, '_> {
         signature.value_trust != Trust::NativeOnly || !signature.value_type.is_mixed(self.db())
     }
 
-    /// Decision 6: `self`/`static` placeholders in a declared return
-    /// substitute the receiver's type, top level and one level into
-    /// unions; `parent` answers mixed. Plan 6 replaces this with the
-    /// forwarding model.
-    fn substitute_receiver(&self, of: TypeId<'db>, receiver: TypeId<'db>) -> TypeId<'db> {
+    /// Every member boundary funnels through here (decision 1): the
+    /// declared or inferred member type is resolved against the
+    /// declaring `owner` and the `receiver` — late-static-binding
+    /// placeholders substitute (`self` → owner, `parent` → the owner's
+    /// first `Extends` ancestor, `static` → the receiver, which may
+    /// itself be a placeholder and forward, decision 2) — and the
+    /// receiver's class arguments bind its class-level templates.
+    fn member_boundary_type(
+        &self,
+        of: TypeId<'db>,
+        owner: Option<&str>,
+        receiver: TypeId<'db>,
+    ) -> TypeId<'db> {
         let db = self.db();
-        if of == TypeId::self_placeholder(db) || of == TypeId::static_placeholder(db) {
-            return receiver;
+        let mut map = crate::substitution::Substitution::default();
+        if let Some(name) = receiver.class_name(db) {
+            let arguments = receiver.class_arguments(db);
+            if !arguments.is_empty() {
+                let class = ClassQuery::new(db, name.clone());
+                let templates = &crate::inheritance::class_annotations(
+                    db,
+                    self.context.files,
+                    self.context.stubs,
+                    self.context.configuration,
+                    class,
+                )
+                .templates;
+                for (position, template) in templates.iter().enumerate() {
+                    if let Some(argument) = arguments.get(position) {
+                        map.bind(&name, &template.name, *argument);
+                    }
+                }
+            }
         }
-        if of == TypeId::parent_placeholder(db) {
-            return TypeId::mixed(db);
-        }
-        let constituents = of.constituents(db);
-        if constituents.len() > 1 {
-            return TypeId::union(
-                db,
-                constituents
-                    .into_iter()
-                    .map(|part| self.substitute_receiver(part, receiver)),
-            );
-        }
-        of
+        let resolution = crate::substitution::PlaceholderResolution {
+            owner: owner.map(str::to_owned),
+            parent: owner.and_then(|key| self.parent_class_key_of(key)),
+            receiver: Some(receiver),
+        };
+        crate::substitution::substitute(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            of,
+            &map,
+            Some(&resolution),
+        )
     }
 
-    /// The defining class as a type (decision 5): built from
-    /// `owner_class_key`, `mixed` when there is no owner (a free
-    /// function or an anonymous-class method, decision 12). Unlike
-    /// [`Self::this_type`] this carries no static-method gate: the
-    /// `self`/`static` *class keyword* is available in a static method,
-    /// only the `$this` *value* is not.
-    fn defining_class_type(&self) -> TypeId<'db> {
+    /// The declaring owner of `key`'s own member — `self` and `parent`
+    /// placeholders substitute against it. A per-key fact, deliberately
+    /// not a per-call one (Finding 3): a union receiver's keys may
+    /// each declare the member on a different ancestor, so a single
+    /// owner hoisted out of a per-key loop and reused for every key
+    /// would substitute every key's `self`/`parent` against
+    /// whichever key happened to resolve first, a wrong concrete
+    /// answer rather than conservative silence.
+    ///
+    /// Task 7's trait boundary fix, anchored by task 7b: a
+    /// `Trait`-origin resolution's `owner` (from `lookup_member`) names
+    /// the trait itself — the class that lexically declares the method —
+    /// but decision 5 analyzes a trait body *for the using class*, so
+    /// PHP's `self` and `parent` inside it are bound to the class that
+    /// wrote `use`, not the trait. Substituting against the trait here
+    /// would silently answer the wrong concrete class (the trait) for
+    /// every using class alike, rather than conservative silence:
+    /// `SelfPlaceholder`/`ParentPlaceholder` substitution
+    /// (`substitution.rs`) has no scope key to fall back through the
+    /// way `Template` does, so an untrue owner is not a safe default.
+    ///
+    /// The using class is the origin's `anchor`, not `key`: they
+    /// coincide only for a direct use. Queried through a subclass of the
+    /// user, or through a chain of traits using traits, `key` is the
+    /// subclass — answering it would trade the trait's wrong concrete
+    /// class for the receiver's, since `self` in a trait does not follow
+    /// late static binding. Only the linearization knows which class the
+    /// trait was pasted into, so it carries the answer here.
+    fn member_owner(&self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
         let db = self.db();
-        self.context
-            .owner_class_key
-            .as_ref()
-            .map(|key| TypeId::class(db, key, vec![]))
-            .unwrap_or_else(|| TypeId::mixed(db))
+        let query = MemberQuery::new(db, key.to_owned(), kind, folded_member_key(kind, name));
+        match lookup_member(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            query,
+        ) {
+            Some(MemberResolution::Source {
+                origin: MemberOrigin::Trait { anchor },
+                ..
+            }) => Some(anchor),
+            Some(
+                MemberResolution::Source { owner, .. }
+                | MemberResolution::Stub { owner, .. }
+                | MemberResolution::Virtual { owner, .. },
+            ) => Some(owner),
+            None => None,
+        }
     }
 
     /// The class a `self`/`static`/`parent` keyword names in the
-    /// defining context (decision 5); `None` for any other name (an
-    /// ordinary class, which the caller resolves through
-    /// `class_type_of_written`). An absent owner or parent answers
-    /// `mixed`, never a bogus qualified `self`/`parent` class.
+    /// defining context (decision 1): each carries its own
+    /// late-static-binding placeholder rather than an immediately
+    /// resolved class — `None` for any other name (an ordinary class,
+    /// which the caller resolves through `class_type_of_written`). An
+    /// absent owner answers `mixed`, never a bogus qualified
+    /// `self`/`parent` class. No static-method gate: the
+    /// `self`/`static`/`parent` *class keyword* is available in a
+    /// static method, only the `$this` *value* is not
+    /// ([`Self::this_type`]'s gate).
     fn scope_keyword_class(&self, name: &str) -> Option<TypeId<'db>> {
         let db = self.db();
+        let has_owner = self.context.owner_class_key.is_some();
         match name.to_ascii_lowercase().as_str() {
-            "self" | "static" => Some(self.defining_class_type()),
-            "parent" => Some(
-                self.parent_class_key()
-                    .map(|key| TypeId::class(db, &key, vec![]))
-                    .unwrap_or_else(|| TypeId::mixed(db)),
-            ),
+            "self" => Some(if has_owner {
+                TypeId::self_placeholder(db)
+            } else {
+                TypeId::mixed(db)
+            }),
+            "static" => Some(self.current_static_type()),
+            "parent" => Some(if has_owner {
+                TypeId::parent_placeholder(db)
+            } else {
+                TypeId::mixed(db)
+            }),
             _ => None,
         }
     }
 
     /// The first `extends` edge of the defining class's ancestry.
     fn parent_class_key(&self) -> Option<String> {
-        let db = self.db();
         let owner = self.context.owner_class_key.as_ref()?;
+        self.parent_class_key_of(owner)
+    }
+
+    /// The first `extends` edge of `class_key`'s own ancestry — the
+    /// same walk [`Self::parent_class_key`] runs for the defining
+    /// class, generalized so `member_boundary_type` can resolve a
+    /// `parent` placeholder against any declaring owner, not only the
+    /// body's own.
+    fn parent_class_key_of(&self, class_key: &str) -> Option<String> {
+        let db = self.db();
         let linearized = linearized_class(
             db,
             self.context.files,
             self.context.stubs,
             self.context.configuration,
-            ClassQuery::new(db, owner.clone()),
+            ClassQuery::new(db, class_key.to_owned()),
         )
         .as_ref()?;
         linearized
@@ -502,12 +664,15 @@ impl<'db> Walker<'db, '_, '_> {
                     }
                 };
                 self.record(subject, TypeId::mixed(db));
-                let of = keys
-                    .as_ref()
-                    .and_then(|keys| keys.first())
-                    .map(|key| TypeId::class(db, key, vec![]))
-                    .unwrap_or_else(|| TypeId::mixed(db));
-                (of, keys)
+                // Decision 2 (forwarding): the receiver for
+                // substitution at a `self::`/`static::`/`parent::` call
+                // subject is the *current* `static` type — the
+                // placeholder itself — so a `static` return stays
+                // symbolic here and resolves only at the outer caller.
+                // `keys` (the concrete owner or parent key, used for
+                // member lookup) is unaffected — member resolution
+                // inside the body stays exactly as it was.
+                (self.current_static_type(), keys)
             }
             _ => {
                 let of = self.expression(subject, environment);
@@ -580,6 +745,243 @@ impl<'db> Walker<'db, '_, '_> {
                         .parameter_type
                         .unwrap_or_else(|| TypeId::mixed(db)),
                 );
+            }
+        }
+    }
+
+    /// The (declared parameter type, argument type) pairs the call-site
+    /// solver (task 8, decision 10) matches constraints against. The
+    /// same alignment `apply_by_reference` and `apply_call_assertions`
+    /// already use: a labeled argument matches the parameter of that
+    /// name; an unlabeled argument matches positionally by its own
+    /// index in `arguments`, falling to the last parameter when it is
+    /// variadic (surplus positional arguments); a spread argument ends
+    /// alignment (conservative — its element-wise contents are
+    /// unknown without evaluating it). A parameter with no declared
+    /// type (`None`, the stub-range degenerate case) contributes no
+    /// pair, silently.
+    fn solver_pairs(
+        &self,
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        arguments: &[celerrate_semantics::CallArgument],
+        types: &[TypeId<'db>],
+    ) -> Vec<(TypeId<'db>, TypeId<'db>)> {
+        let mut pairs = Vec::new();
+        for (index, argument) in arguments.iter().enumerate() {
+            if argument.spread {
+                break;
+            }
+            let Some(argument_type) = types.get(index).copied() else {
+                continue;
+            };
+            let parameter = match &argument.label {
+                Some(label) => parameters.iter().find(|parameter| parameter.name == *label),
+                None => parameters
+                    .get(index)
+                    .or_else(|| parameters.last().filter(|parameter| parameter.variadic)),
+            };
+            let Some(parameter) = parameter else {
+                continue;
+            };
+            let Some(declared_type) = parameter.parameter_type else {
+                continue;
+            };
+            pairs.push((declared_type, argument_type));
+        }
+        pairs
+    }
+
+    /// Solves any template still present in `result` from the call's
+    /// (declared parameter, argument) pairs, then finalizes whatever
+    /// the solver left unbound to its bound, then `mixed` (task 8,
+    /// decision 10). The provider tier needs no special-cased exemption
+    /// here: by convention every `DynamicTypeProvider` answers a
+    /// concrete type, already widened at the consumption boundary, so
+    /// `contains_symbolic` is already false for it and this is a
+    /// costless no-op in the ordinary case. That convention is not
+    /// enforced at the trait boundary, though — nothing stops an
+    /// implementation from answering something symbolic. Task 11 pins
+    /// what happens if one ever does
+    /// (`a_symbolic_provider_answer_still_finalizes_to_its_bound_then_mixed`
+    /// in `inference.rs`): the same solve/substitute/finalize pipeline
+    /// below runs over it exactly as it would an ordinary symbolic
+    /// declared return, and an unconstrained template still falls to
+    /// its bound then `mixed` — conservative, never a guess, so a
+    /// misbehaving provider degrades gracefully rather than leaking a
+    /// raw template or crashing. Skipped entirely when `result` carries
+    /// nothing symbolic, so a call with an ordinary, template-free
+    /// signature never pays for pair alignment.
+    fn solved_call_result(
+        &self,
+        result: TypeId<'db>,
+        parameters: &[crate::declared::DeclaredParameter<'db>],
+        arguments: &[celerrate_semantics::CallArgument],
+        argument_types: &[TypeId<'db>],
+    ) -> TypeId<'db> {
+        let db = self.db();
+        if !crate::substitution::contains_symbolic(db, result) {
+            return result;
+        }
+        let pairs = self.solver_pairs(parameters, arguments, argument_types);
+        let solved = crate::solver::solve(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            &pairs,
+        );
+        let result = crate::substitution::substitute(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            result,
+            &solved,
+            None,
+        );
+        crate::solver::finalize_return(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            result,
+        )
+    }
+
+    /// Constructor inference (decision 11, task 9): `new Foo(...)`
+    /// solves `Foo`'s class-level templates from its `__construct`
+    /// parameters, reusing `solver_pairs`/`solve` exactly as an
+    /// ordinary call does — the constructor is simply the call whose
+    /// result is the class itself rather than a declared return.
+    /// `of` is the plain class already resolved for `class` (a
+    /// concrete class name, not a placeholder — `new self()`/`new
+    /// static()` resolved to their owner before this runs); returned
+    /// unchanged when it names no class, `class_annotations` finds no
+    /// `@template`, or the call passes no arguments.
+    ///
+    /// Bound under the class's *own* scope key — `class_annotations`'s
+    /// own convention (the bare class key, no member suffix) — because
+    /// that is exactly the scope `member_boundary_type`'s
+    /// receiver-argument zip binds a receiver's `class_arguments`
+    /// against later (it keys on the receiver's class name alone);
+    /// solving under any other scope (the constructor's own
+    /// `<class>::__construct` member scope, say) would silently never
+    /// match there, and every solved argument would fall through to
+    /// its bound then `mixed`.
+    ///
+    /// The `any_bound` guard keeps an unconstrained `new Box()` the
+    /// plain class `of` already is, rather than minting a `Box<mixed>`
+    /// spelling of the same thing — the canonical receiver everywhere
+    /// else in the corpus.
+    fn constructor_solved_class(
+        &self,
+        of: TypeId<'db>,
+        arguments: &[celerrate_semantics::CallArgument],
+        argument_types: &[TypeId<'db>],
+    ) -> TypeId<'db> {
+        let db = self.db();
+        if arguments.is_empty() {
+            return of;
+        }
+        let Some(key) = of.class_name(db) else {
+            return of;
+        };
+        let templates = &crate::inheritance::class_annotations(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            ClassQuery::new(db, key.clone()),
+        )
+        .templates;
+        if templates.is_empty() {
+            return of;
+        }
+        let Some(signature) = declared_member_signature(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            MemberQuery::new(
+                db,
+                key.clone(),
+                MemberKind::Method,
+                folded_member_key(MemberKind::Method, "__construct"),
+            ),
+        ) else {
+            return of;
+        };
+        let pairs = self.solver_pairs(&signature.parameters, arguments, argument_types);
+        let solved = crate::solver::solve(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            &pairs,
+        );
+        let mut any_bound = false;
+        let arguments: Vec<TypeId<'db>> = templates
+            .iter()
+            .map(|template| match solved.binding(&key, &template.name) {
+                Some(argument) => {
+                    any_bound = true;
+                    argument
+                }
+                None => template.bound.unwrap_or_else(|| TypeId::mixed(db)),
+            })
+            .collect();
+        if any_bound {
+            TypeId::class(db, &key, arguments)
+        } else {
+            of
+        }
+    }
+
+    /// The named inline `@var` entries (decision 11) one docblock text
+    /// parses to, at the body's own declaring scope: `Collection<User>
+    /// $c` and the like, read straight from `ParsedAnnotations.variables`
+    /// — never from trivia or a syntax tree, `text` already came from
+    /// `BodyIr.annotations`. Mirrors `member_annotations`'s own site
+    /// construction (`declared.rs`), except the declaring scope is the
+    /// body's own (`FlowContext::scope_key`), not a member looked up
+    /// fresh by key.
+    fn inline_variables(&self, text: &str) -> Vec<(String, TypeId<'db>)> {
+        let db = self.db();
+        let tables = &self.context.tables;
+        let site = crate::declared::NameSite::Source {
+            namespace: &self.context.namespace,
+            tables,
+        };
+        let owner_docblock =
+            self.context.owner_class_key.as_deref().and_then(|owner| {
+                crate::declared::owner_class_docblock(db, self.context.files, owner)
+            });
+        let context = crate::type_syntax::AnnotationContext {
+            declaring_scope: &self.context.scope_key,
+            enclosing_class_scope: self.context.owner_class_key.as_deref(),
+            enclosing_class_docblock: owner_docblock.as_deref(),
+        };
+        crate::type_syntax::annotations_for_docblock(db, &site, &context, text).variables
+    }
+
+    /// Binds every named inline `@var` entry anchored at `anchor` into
+    /// `environment` (decision 11): `None` for a body-entry
+    /// declaration (bound once, before any statement), `Some(id)` for
+    /// one anchored to statement `id` — the caller applies this both
+    /// immediately before and immediately after walking that
+    /// statement, so the declaration survives the statement's own
+    /// assignment.
+    fn bind_inline_variables(
+        &self,
+        anchor: Option<StatementId>,
+        environment: &mut Environment<'db>,
+    ) {
+        let Some(texts) = self.inline_variable_texts.get(&anchor).cloned() else {
+            return;
+        };
+        for text in texts {
+            for (name, of) in self.inline_variables(text) {
+                environment.bind(NarrowingSubject::Local { name }, of);
             }
         }
     }
@@ -810,7 +1212,7 @@ impl<'db> Walker<'db, '_, '_> {
                 argument_types,
             ) {
                 let mut signatures = self.method_signatures(keys, name);
-                let signature = (signatures.len() == 1).then(|| signatures.remove(0));
+                let signature = (signatures.len() == 1).then(|| signatures.remove(0).1);
                 return (answer, signature);
             }
         }
@@ -848,9 +1250,18 @@ impl<'db> Walker<'db, '_, '_> {
     /// (the brief's own pseudocode reduces with `join`, but that
     /// collapses e.g. `int` and `string` straight to `mixed`, which
     /// contradicts `union_receivers_join_and_opaque_receivers_stay_silent`'s
-    /// expected `"int|string"`). The gate failing on any key answers
-    /// mixed for that key (method-inferred returns are plan 6).
-    /// Placeholders substitute the receiver (decision 6).
+    /// expected `"int|string"`). The gate failing on a key drops that
+    /// key to the method-inferred tier (decision 3's fourth tier,
+    /// `inferred_method_return`): the callee's body answers, and
+    /// `mixed` remains only when even that is silent.
+    /// Placeholders substitute against each signature's *own*
+    /// declaring owner and the receiver through `member_boundary_type`
+    /// (decision 1) — the owner is resolved per key, not once for the
+    /// whole call: for a union receiver `A|B` where both declare the
+    /// member, a hoisted single owner would substitute both keys'
+    /// `self` against whichever key resolved first, e.g. `app\a|app\a`
+    /// instead of `app\a|app\b` — a wrong concrete answer, not the
+    /// conservative silence the design otherwise holds to (Finding 3).
     fn method_call_result_for_keys(
         &mut self,
         keys: &[String],
@@ -864,12 +1275,35 @@ impl<'db> Walker<'db, '_, '_> {
         }
         let mut result: Option<TypeId<'db>> = None;
         let mut any_declared = false;
-        for signature in &signatures {
+        for (key, signature) in &signatures {
             let value = if self.declared_present(signature) {
                 any_declared = true;
-                self.substitute_receiver(signature.value_type, receiver)
+                let owner = self.member_owner(key, MemberKind::Method, name);
+                self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
             } else {
-                TypeId::mixed(db)
+                // Decision 3's fourth tier: no usable declared return,
+                // so the callee's own body answers, through the
+                // fixpoint. The result is a *body-relative* type — its
+                // `self`/`static` placeholders and the owner's class
+                // templates are unresolved — so it funnels through the
+                // one member boundary exactly like a declared return
+                // does (decision 1), against this key's own declaring
+                // owner and the call's receiver.
+                self.edge_counts.inferred_return_edges += 1;
+                let method = crate::inference::MethodQuery::new(
+                    db,
+                    key.clone(),
+                    folded_member_key(MemberKind::Method, name),
+                );
+                let inferred = crate::inference::inferred_method_return(
+                    db,
+                    self.context.files,
+                    self.context.stubs,
+                    self.context.configuration,
+                    method,
+                );
+                let owner = self.member_owner(key, MemberKind::Method, name);
+                self.member_boundary_type(inferred, owner.as_deref(), receiver)
             };
             result = Some(match result {
                 Some(previous) => TypeId::union(db, [previous, value]),
@@ -884,11 +1318,227 @@ impl<'db> Walker<'db, '_, '_> {
         // by-reference write-back channel a caller may use. A union
         // receiver's differing signatures write back nothing.
         let signature = if keys.len() == 1 {
-            signatures.into_iter().next()
+            signatures
+                .into_iter()
+                .next()
+                .map(|(_, signature)| signature)
         } else {
             None
         };
         (of, signature)
+    }
+
+    /// The protocol interfaces the iteration chain recognizes by
+    /// their folded, unqualified name: `Generator`, `Iterator`,
+    /// `IteratorAggregate`, `Traversable`. Every name in this crate's
+    /// class-key convention is folded lowercase with no leading
+    /// separator (`construction.rs`'s `class_names_fold_at_construction`),
+    /// so a root-namespace `\Iterator` folds to exactly `"iterator"`.
+    const ITERATION_PROTOCOL: [&'static str; 4] =
+        ["generator", "iterator", "iteratoraggregate", "traversable"];
+
+    /// Element and key types through the iteration protocol chain
+    /// (decision 12). Precedence per subject constituent: array forms
+    /// answer directly (a shape's key/value are eager over
+    /// `TypeId::key_of`/`value_of`, an array carries them already); a
+    /// class carrying two or more arguments whose own name is one of
+    /// the protocol interfaces answers them directly (`Generator<K,
+    /// V>`, `Iterator<K, V>`, ...); otherwise a class funnels through
+    /// `class_iteration_types` (the `getIterator` unwrap, the
+    /// threaded-ancestor-arguments-else-`current`/`key` split); a
+    /// union joins its constituents, skipping `null` and `false`
+    /// (iterating them yields nothing, so they contribute no
+    /// alternative); a template recurses through its bound. Everything
+    /// else — including a plain object, whose property iteration is a
+    /// recorded stance — answers `mixed`. `depth` is the recursion
+    /// guard (capped at 8, decision 12): the `IteratorAggregate`
+    /// unwrap is the only arm that can recurse on a *different*
+    /// subject through a class's own declared return, so it is the one
+    /// the guard exists to bound — a `getIterator` returning `$this`,
+    /// or two classes whose `getIterator`s return each other, would
+    /// otherwise recurse forever.
+    fn iteration_types(&mut self, subject: TypeId<'db>, depth: u32) -> (TypeId<'db>, TypeId<'db>) {
+        let db = self.db();
+        let mixed = (TypeId::mixed(db), TypeId::mixed(db));
+        if depth > 8 {
+            return mixed;
+        }
+        match subject.data(db) {
+            TypeData::Array { key, value, .. } => (*key, *value),
+            TypeData::Shape { .. } => (TypeId::key_of(db, subject), TypeId::value_of(db, subject)),
+            TypeData::Union { constituents } => {
+                let mut keys = Vec::new();
+                let mut values = Vec::new();
+                for constituent in constituents {
+                    if matches!(
+                        constituent.data(db),
+                        TypeData::Null
+                            | TypeData::Bool {
+                                literal: Some(false)
+                            }
+                    ) {
+                        continue;
+                    }
+                    let (key, value) = self.iteration_types(*constituent, depth + 1);
+                    keys.push(key);
+                    values.push(value);
+                }
+                if values.is_empty() {
+                    return mixed;
+                }
+                (TypeId::union(db, keys), TypeId::union(db, values))
+            }
+            TypeData::Template { bound, .. } => self.iteration_types(*bound, depth + 1),
+            TypeData::Class { name, arguments } => {
+                self.class_iteration_types(name, arguments, subject, depth)
+            }
+            _ => mixed,
+        }
+    }
+
+    /// Whether `name`'s linearized ancestry genuinely resolves an
+    /// `implements`/`extends` edge to one of the iteration protocol
+    /// interfaces (`Iterator`, `IteratorAggregate`, `Traversable`).
+    /// Decision 12 gates the `getIterator` unwrap and the
+    /// `current`/`key` fallback on the class actually implementing the
+    /// protocol — a `getIterator()` helper or a `current()`/`key()`
+    /// pair declared on a class that implements nothing is not
+    /// iterable in PHP; the language falls back to plain property
+    /// iteration, decision 12's `mixed`/`mixed` default. Answering the
+    /// method's element type there would be a guessed concrete answer
+    /// where the spec mandates conservative silence.
+    ///
+    /// `ancestor_arguments` (task 3) is not usable for this check: it
+    /// only records an ancestor when the target's own docblock threads
+    /// at least one fixed argument (`inheritance.rs`'s `if
+    /// !fixed.is_empty()`), so a class implementing `\Iterator` with no
+    /// generic threading at all is silently absent from its answer.
+    /// `linearized_class`'s `ancestry` records every edge the walk
+    /// crosses regardless of whether it carries arguments, so it is
+    /// the only query that can answer "implements", full stop. An edge
+    /// resolves through either `resolved` (a source class-like) or
+    /// `stub` (a compiled one) — exactly one is `Some` on a resolved
+    /// edge (`AncestorEdge`'s own invariant).
+    ///
+    /// `ancestry` alone still misses a whole class of real implementors,
+    /// though: the linearization walk only ever pushes a stub ancestor's
+    /// *direct* edge there (`linearize.rs`'s `AncestorAnswer::Stub` arm),
+    /// then expands the transitive stub frontier — the compiled parents
+    /// a stub class-like's own surface names — into the separate
+    /// `stub_ancestors` field. A class that `extends \ArrayObject`
+    /// records only `ancestry = [edge{stub: "arrayobject"}]`; the fact
+    /// that `ArrayObject` itself implements `IteratorAggregate` lives
+    /// only in `stub_ancestors`, already folded, sorted, and deduped by
+    /// the same walk. Checking both fields is what makes this query
+    /// answer "implements" for a stub-inherited protocol, not just a
+    /// directly-named one.
+    fn implements_iteration_protocol(&self, name: &str) -> bool {
+        let db = self.db();
+        let Some(linearized) = linearized_class(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            ClassQuery::new(db, name.to_owned()),
+        )
+        .as_ref() else {
+            return false;
+        };
+        linearized.ancestry.iter().any(|edge| {
+            edge.resolved
+                .as_deref()
+                .or(edge.stub.as_deref())
+                .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
+        }) || linearized
+            .stub_ancestors
+            .iter()
+            .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
+    }
+
+    /// The class arm of [`Self::iteration_types`]: the protocol's own
+    /// two arguments when `name` is itself one of the interfaces; else,
+    /// for a genuine implementor (guarded by
+    /// [`Self::implements_iteration_protocol`]), a `getIterator`
+    /// (declared or inherited) unwraps its declared-or-inferred return
+    /// recursively — the standard method result path
+    /// (`method_call_result_for_keys`), substitution included, exactly
+    /// as any other call answers, so `self`/`static` and the
+    /// receiver's class arguments resolve the same way a direct call
+    /// site would; else the threaded protocol-ancestor arguments (task
+    /// 3's `ancestor_arguments`) when the linearized ancestry actually
+    /// composed one for a protocol interface, substituted against
+    /// `subject` through `member_boundary_type` (decision 1) exactly
+    /// like any other member boundary; else, still gated on genuine
+    /// implementation, lacking both, `current`/`key` declared or
+    /// inherited answer through the same method result path; else
+    /// `mixed` — including a class that merely declares
+    /// `getIterator`/`current`/`key` without implementing any protocol
+    /// interface at all, whose runtime iteration is plain property
+    /// iteration, not this chain.
+    fn class_iteration_types(
+        &mut self,
+        name: &str,
+        arguments: &[TypeId<'db>],
+        subject: TypeId<'db>,
+        depth: u32,
+    ) -> (TypeId<'db>, TypeId<'db>) {
+        let db = self.db();
+        let mixed = (TypeId::mixed(db), TypeId::mixed(db));
+        // The protocol interfaces themselves, carrying their
+        // arguments: `Generator<int, User>`, `Iterator<string, User>`,
+        // ...
+        if Self::ITERATION_PROTOCOL.contains(&name)
+            && let (Some(key), Some(value)) = (arguments.first(), arguments.get(1))
+        {
+            return (*key, *value);
+        }
+        if !self.implements_iteration_protocol(name) {
+            return mixed;
+        }
+        let keys = vec![name.to_owned()];
+        // A genuine implementor declaring or inheriting `getIterator`:
+        // unwrap its declared-or-inferred return through the standard
+        // method result path (substitution included), then recurse
+        // under the depth guard.
+        if self
+            .member_owner(name, MemberKind::Method, "getIterator")
+            .is_some()
+        {
+            let (inner, _) = self.method_call_result_for_keys(&keys, subject, "getIterator");
+            return self.iteration_types(inner, depth + 1);
+        }
+        // Threaded protocol-ancestor arguments:
+        // `@implements Iterator<string, User>` composed by task 3.
+        let class = ClassQuery::new(db, name.to_owned());
+        let threaded = crate::inheritance::ancestor_arguments(
+            db,
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
+            class,
+        )
+        .iter()
+        .find(|(ancestor, _)| Self::ITERATION_PROTOCOL.contains(&ancestor.as_str()))
+        .map(|(_, fixed)| fixed.clone());
+        if let Some(fixed) = threaded
+            && let (Some(key), Some(value)) = (fixed.first(), fixed.get(1))
+        {
+            let key = self.member_boundary_type(*key, Some(name), subject);
+            let value = self.member_boundary_type(*value, Some(name), subject);
+            return (key, value);
+        }
+        // The `current`/`key` protocol members, declared or inherited
+        // by a genuine implementor.
+        if self
+            .member_owner(name, MemberKind::Method, "current")
+            .is_some()
+            && self.member_owner(name, MemberKind::Method, "key").is_some()
+        {
+            let (value, _) = self.method_call_result_for_keys(&keys, subject, "current");
+            let (key, _) = self.method_call_result_for_keys(&keys, subject, "key");
+            return (key, value);
+        }
+        mixed
     }
 
     fn statements(&mut self, list: &[StatementId], environment: &mut Environment<'db>) {
@@ -900,10 +1550,19 @@ impl<'db> Walker<'db, '_, '_> {
                 // joins behave, discarded so it cannot resurrect the
                 // real path.
                 let mut scratch = Environment::new();
+                self.bind_inline_variables(Some(statement), &mut scratch);
                 self.statement(statement, &mut scratch);
+                self.bind_inline_variables(Some(statement), &mut scratch);
                 continue;
             }
+            // Decision 11: an inline `@var` anchored to this statement
+            // binds immediately before it runs and re-binds immediately
+            // after — the declaration survives the statement's own
+            // assignment (the same bracketing idiom `looped` uses
+            // around a pass).
+            self.bind_inline_variables(Some(statement), environment);
             self.statement(statement, environment);
+            self.bind_inline_variables(Some(statement), environment);
         }
     }
 
@@ -1025,19 +1684,24 @@ impl<'db> Walker<'db, '_, '_> {
                 by_reference: _,
                 body,
             } => {
-                self.expression(subject, environment);
+                let subject_type = self.expression(subject, environment);
+                let (key_type, value_type) = self.iteration_types(subject_type, 0);
                 self.looped(environment, |walker, env| {
-                    // Iteration typing is plan 6: key and value are
-                    // mixed, honestly.
+                    // Iteration typing follows the protocol chain
+                    // (decision 12): `iteration_types` resolved the
+                    // key and value once, above, from the subject's
+                    // type before the loop. A by-reference value
+                    // binds exactly like a plain value here — no
+                    // write-back (decision 12's recorded stance).
                     if let Some(key) = key
                         && let Some(subject) = subject_of(walker.context.ir, key)
                     {
                         walker.expression(key, env);
-                        env.bind(subject, TypeId::mixed(walker.db()));
+                        env.bind(subject, key_type);
                     }
                     walker.expression(value, env);
                     if let Some(subject) = subject_of(walker.context.ir, value) {
-                        env.bind(subject, TypeId::mixed(walker.db()));
+                        env.bind(subject, value_type);
                     }
                     walker.statements(&body, env);
                     env.clone()
@@ -1521,7 +2185,12 @@ impl<'db> Walker<'db, '_, '_> {
                         } else {
                             self.receiver_parts(resolving)
                                 .and_then(|keys| {
-                                    self.member_value_type(&keys, MemberKind::Property, &name)
+                                    self.member_value_type(
+                                        &keys,
+                                        MemberKind::Property,
+                                        &name,
+                                        resolving,
+                                    )
                                 })
                                 .unwrap_or_else(|| TypeId::mixed(db))
                         }
@@ -1537,27 +2206,39 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::ScopedAccess { subject, member } => {
                 let (subject_type, keys) = self.scoped_subject(subject, environment);
-                let _ = subject_type;
                 match member {
                     MemberReference::Named { name } => {
                         if name.eq_ignore_ascii_case("class") {
                             // `Foo::class`, `self::class`, `static::class`.
-                            let argument = keys
-                                .as_ref()
-                                .and_then(|keys| keys.first())
-                                .map(|key| TypeId::class(db, key, vec![]));
+                            // A union receiver's keys are exclusive
+                            // control-flow alternatives, so every key
+                            // contributes through `TypeId::union` —
+                            // never a first-seen constituent (Finding
+                            // 1, mirroring `member_value_type`'s
+                            // per-key reduce).
+                            let argument = keys.as_ref().and_then(|keys| {
+                                keys.iter()
+                                    .map(|key| TypeId::class(db, key, vec![]))
+                                    .reduce(|left, right| TypeId::union(db, [left, right]))
+                            });
                             TypeId::class_string(db, argument)
                         } else {
                             keys.as_ref()
                                 .and_then(|keys| {
-                                    self.member_value_type(keys, MemberKind::ClassConstant, &name)
-                                        .or_else(|| {
-                                            self.member_value_type(
-                                                keys,
-                                                MemberKind::EnumCase,
-                                                &name,
-                                            )
-                                        })
+                                    self.member_value_type(
+                                        keys,
+                                        MemberKind::ClassConstant,
+                                        &name,
+                                        subject_type,
+                                    )
+                                    .or_else(|| {
+                                        self.member_value_type(
+                                            keys,
+                                            MemberKind::EnumCase,
+                                            &name,
+                                            subject_type,
+                                        )
+                                    })
                                 })
                                 .unwrap_or_else(|| TypeId::mixed(db))
                         }
@@ -1572,7 +2253,12 @@ impl<'db> Walker<'db, '_, '_> {
                         } else {
                             keys.as_ref()
                                 .and_then(|keys| {
-                                    self.member_value_type(keys, MemberKind::Property, &name)
+                                    self.member_value_type(
+                                        keys,
+                                        MemberKind::Property,
+                                        &name,
+                                        subject_type,
+                                    )
                                 })
                                 .unwrap_or_else(|| TypeId::mixed(db))
                         }
@@ -1692,7 +2378,20 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        of
+                        // Task 8: the call-site solver, applied to
+                        // whichever tier answered `of` (the provider
+                        // tier is exempt without special-casing — its
+                        // answer is already concrete, so
+                        // `contains_symbolic` is already false for it).
+                        match &signature {
+                            Some(signature) => self.solved_call_result(
+                                of,
+                                &signature.parameters,
+                                &arguments,
+                                &argument_types,
+                            ),
+                            None => of,
+                        }
                     }
                     Some(BodyExpression::ScopedAccess {
                         subject,
@@ -1750,7 +2449,18 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        of
+                        // Task 8: the call-site solver (see the sibling
+                        // `MemberAccess` arm above for the provider-tier
+                        // exemption's reasoning).
+                        match &signature {
+                            Some(signature) => self.solved_call_result(
+                                of,
+                                &signature.parameters,
+                                &arguments,
+                                &argument_types,
+                            ),
+                            None => of,
+                        }
                     }
                     Some(BodyExpression::NamedReference { text }) => {
                         self.record(callee, TypeId::mixed(db));
@@ -1809,7 +2519,13 @@ impl<'db> Walker<'db, '_, '_> {
                             &arguments,
                             environment,
                         );
-                        of
+                        // Task 8: the call-site solver (see the
+                        // `MemberAccess` arm above for the
+                        // provider-tier exemption's reasoning); a named
+                        // function has no receiver, so `parameters`
+                        // (already the declared list, empty when
+                        // unresolved) is exactly `solver_pairs`' input.
+                        self.solved_call_result(of, parameters, &arguments, &argument_types)
                     }
                     _ => {
                         // A callable value: a variable, an array
@@ -1865,19 +2581,20 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::New { class, arguments } => {
                 let of = match &class {
-                    // Decision 5: `new self()`/`new static()` type as the
-                    // defining class, `new parent()` as the parent — the
-                    // same resolution `scoped_subject` applies to
-                    // `self::`/`static::`/`parent::`. Not
-                    // `class_type_of_written` (which would qualify these
-                    // keywords into bogus class names `self`/`parent`),
-                    // and not `this_type` (whose static-method gate is
-                    // `$this`'s alone; the `self`/`static` class keyword is
-                    // available in a static method too).
+                    // `new self()`/`new static()`/`new parent()` name the
+                    // same scope keywords `self::`/`static::`/`parent::`
+                    // resolve (`scope_keyword_class`), not
+                    // `class_type_of_written` (which would qualify them
+                    // into bogus class names `self`/`parent`). Their
+                    // placeholders resolve immediately below, right here
+                    // in the defining context (decision 1): `self`/`parent`
+                    // answer the owner/its parent concretely, `static`
+                    // stays the forwarding placeholder — `new static()`'s
+                    // identity is only known at the outer call boundary.
                     ClassReference::Named { name } => self
                         .scope_keyword_class(name)
                         .unwrap_or_else(|| self.class_type_of_written(name)),
-                    ClassReference::StaticKeyword => self.defining_class_type(),
+                    ClassReference::StaticKeyword => self.current_static_type(),
                     ClassReference::Dynamic { expression } => {
                         let dynamic = self.expression(*expression, environment);
                         dynamic
@@ -1890,12 +2607,30 @@ impl<'db> Walker<'db, '_, '_> {
                             })
                             .unwrap_or_else(|| TypeId::mixed(db))
                     }
-                    // Decision 12: no folded key exists yet.
+                    // Recorded debt (decision 14): anonymous-class
+                    // receivers (`new class { }`) stay `mixed` — no
+                    // folded key exists yet for an anonymous class
+                    // literal, and the expression-to-key path belongs
+                    // with the checks' receiver-resolution surface
+                    // (plan 8), not here: no diagnostic consumes
+                    // receiver types before plan 8, so building the
+                    // path here would ship untested-by-consumer
+                    // machinery. `Missing` (a malformed `new` with no
+                    // class reference at all) shares the same silent
+                    // fallback.
                     ClassReference::Anonymous { .. } | ClassReference::Missing => TypeId::mixed(db),
                 };
-                for argument in &arguments {
-                    self.expression(argument.value, environment);
-                }
+                let of = self.member_boundary_type(
+                    of,
+                    self.context.owner_class_key.as_deref(),
+                    self.current_static_type(),
+                );
+                let argument_types = self.typed_arguments(&arguments, environment);
+                // Decision 11 (task 9): `Foo`'s own class-level
+                // templates, when it declares any, solve from the
+                // `__construct` arguments — the same call-site solver
+                // task 8 built for an ordinary call.
+                let of = self.constructor_solved_class(of, &arguments, &argument_types);
                 // Instantiation may run arbitrary constructor code
                 // (decision 10).
                 self.kill_property_bindings(environment);
@@ -2387,14 +3122,17 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// Task 9(e): a callee's declared signature projected into a
-    /// callable type, shared by every first-class-callable form. A
-    /// `self`/`static` return placeholder substitutes the receiver
-    /// (decision 6); the parameters are never substituted (plan 6
-    /// revisits generic callables).
+    /// callable type, shared by every first-class-callable form. The
+    /// return type funnels through `member_boundary_type` (decision
+    /// 1): a `self`/`static`/`parent` placeholder substitutes against
+    /// the receiver and the receiver's class arguments bind its
+    /// class-level templates; the parameters are never substituted (a
+    /// later task revisits generic callables).
     fn projected_callable(
         &mut self,
         signature: Option<DeclaredSignature<'db>>,
         receiver: Option<TypeId<'db>>,
+        owner: Option<&str>,
         return_fallback: TypeId<'db>,
     ) -> TypeId<'db> {
         let db = self.db();
@@ -2420,7 +3158,7 @@ impl<'db> Walker<'db, '_, '_> {
             return_fallback
         };
         if let Some(receiver) = receiver {
-            return_type = self.substitute_receiver(return_type, receiver);
+            return_type = self.member_boundary_type(return_type, owner, receiver);
         }
         TypeId::callable(db, parameters, return_type)
     }
@@ -2455,7 +3193,7 @@ impl<'db> Walker<'db, '_, '_> {
         } else {
             TypeId::mixed(db)
         };
-        self.projected_callable(signature, None, return_fallback)
+        self.projected_callable(signature, None, None, return_fallback)
     }
 
     /// A method's declared signature on a resolved receiver, projected
@@ -2485,8 +3223,24 @@ impl<'db> Walker<'db, '_, '_> {
         let db = self.db();
         let mut signatures = self.method_signatures(keys, name);
         // One key, one signature: more is a union receiver, silence.
-        let signature = (signatures.len() == 1).then(|| signatures.remove(0));
-        self.projected_callable(signature, Some(receiver), TypeId::mixed(db))
+        // The owner comes from that same one key, never a different
+        // one — there is exactly one candidate here, so there is no
+        // hoisting hazard to begin with (Finding 3 is about the
+        // multi-signature callers above).
+        let resolved = (signatures.len() == 1).then(|| signatures.remove(0));
+        let (signature, owner) = match resolved {
+            Some((key, signature)) => (
+                Some(signature),
+                self.member_owner(&key, MemberKind::Method, name),
+            ),
+            None => (None, None),
+        };
+        self.projected_callable(
+            signature,
+            Some(receiver),
+            owner.as_deref(),
+            TypeId::mixed(db),
+        )
     }
 
     fn string_parts(&mut self, parts: &[StringPart], environment: &mut Environment<'db>) {

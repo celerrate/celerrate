@@ -91,11 +91,14 @@ mod display;
 mod dynamic_type_provider;
 mod flow;
 mod inference;
+mod inheritance;
 mod judgments;
 mod narrowing;
 mod operators;
 mod ordering;
 mod representation;
+mod solver;
+mod substitution;
 mod type_syntax;
 mod widening;
 mod written;
@@ -110,13 +113,14 @@ pub use dynamic_type_provider::{
     DynamicTypeProviderRegistry, Invocation, SymbolClaim, validate_claims,
 };
 pub use inference::{
-    FIXPOINT_ITERATION_BUDGET, InferredBody, InterproceduralEdgeCounts, inferred_body_types,
-    inferred_function_return,
+    FIXPOINT_ITERATION_BUDGET, InferenceContext, InferredBody, InterproceduralEdgeCounts,
+    MethodQuery, inferred_body_types, inferred_function_return, inferred_method_return,
 };
+pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
-    AnnotationSite, AssertionPolarity, ParsedAnnotations, ParsedAssertion, TypeSyntax,
-    TypeSyntaxRegistration, TypeSyntaxRegistry,
+    AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
+    ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
 };
 pub use widening::{STRUCTURAL_DEPTH_CAP, UNION_ARITY_CAP, join, widened_literals};
