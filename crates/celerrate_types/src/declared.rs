@@ -425,7 +425,7 @@ pub fn declared_member_signature<'db>(
         }
         None => own,
     };
-    Some(resolve_member_signature(
+    let mut signature = resolve_member_signature(
         db,
         files,
         stubs,
@@ -434,7 +434,37 @@ pub fn declared_member_signature<'db>(
         &owner,
         &member,
         &annotations,
-    ))
+    );
+    // Design section 3, "declared types inherit", completed by the
+    // threading of task 3: a member declared on a generic ancestor is
+    // answered with the receiver class's fixed arguments applied.
+    if let Some(map) =
+        crate::inheritance::ancestor_substitution(db, files, stubs, configuration, root_key, &owner)
+    {
+        signature.value_type = crate::substitution::substitute(
+            db,
+            files,
+            stubs,
+            configuration,
+            signature.value_type,
+            &map,
+            None,
+        );
+        for parameter in &mut signature.parameters {
+            if let Some(parameter_type) = parameter.parameter_type {
+                parameter.parameter_type = Some(crate::substitution::substitute(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    parameter_type,
+                    &map,
+                    None,
+                ));
+            }
+        }
+    }
+    Some(signature)
 }
 
 /// The declaring site of one source class-like: its file handle,
@@ -2494,5 +2524,93 @@ mod tests {
         .unwrap();
         assert_eq!(signature.value_type, TypeId::mixed(&fixture.db));
         assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    #[test]
+    fn an_inherited_signature_substitutes_the_threaded_arguments() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\userrepository".to_owned(),
+            MemberKind::Method,
+            "find".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::class(&f.db, "app\\user", vec![]),
+            "the ancestor's template return arrives fixed to User",
+        );
+    }
+
+    #[test]
+    fn an_inherited_parameter_substitutes_too() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Collection {
+    /** @param T $item */
+    public function add($item) {}
+}
+/** @extends Collection<User> */
+class UserCollection extends Collection {}
+class User {}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\usercollection".to_owned(),
+            MemberKind::Method,
+            "add".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        let parameter = signature
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "item")
+            .unwrap();
+        assert_eq!(
+            parameter.parameter_type,
+            Some(TypeId::class(&f.db, "app\\user", vec![])),
+        );
+    }
+
+    #[test]
+    fn the_owner_consulted_directly_keeps_its_template() {
+        let f = fixture(&[r#"<?php
+namespace App;
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let query = MemberQuery::new(
+            &f.db,
+            "app\\repository".to_owned(),
+            MemberKind::Method,
+            "find".to_owned(),
+        );
+        let signature =
+            declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::template(&f.db, "app\\repository", "T", TypeId::mixed(&f.db)),
+            "no threading applies at the declaring class itself",
+        );
     }
 }
