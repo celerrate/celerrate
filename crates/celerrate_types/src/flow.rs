@@ -1408,6 +1408,19 @@ impl<'db> Walker<'db, '_, '_> {
     /// resolves through either `resolved` (a source class-like) or
     /// `stub` (a compiled one) — exactly one is `Some` on a resolved
     /// edge (`AncestorEdge`'s own invariant).
+    ///
+    /// `ancestry` alone still misses a whole class of real implementors,
+    /// though: the linearization walk only ever pushes a stub ancestor's
+    /// *direct* edge there (`linearize.rs`'s `AncestorAnswer::Stub` arm),
+    /// then expands the transitive stub frontier — the compiled parents
+    /// a stub class-like's own surface names — into the separate
+    /// `stub_ancestors` field. A class that `extends \ArrayObject`
+    /// records only `ancestry = [edge{stub: "arrayobject"}]`; the fact
+    /// that `ArrayObject` itself implements `IteratorAggregate` lives
+    /// only in `stub_ancestors`, already folded, sorted, and deduped by
+    /// the same walk. Checking both fields is what makes this query
+    /// answer "implements" for a stub-inherited protocol, not just a
+    /// directly-named one.
     fn implements_iteration_protocol(&self, name: &str) -> bool {
         let db = self.db();
         let Some(linearized) = linearized_class(
@@ -1425,7 +1438,10 @@ impl<'db> Walker<'db, '_, '_> {
                 .as_deref()
                 .or(edge.stub.as_deref())
                 .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
-        })
+        }) || linearized
+            .stub_ancestors
+            .iter()
+            .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
     }
 
     /// The class arm of [`Self::iteration_types`]: the protocol's own

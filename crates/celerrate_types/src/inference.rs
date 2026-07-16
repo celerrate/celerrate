@@ -3128,4 +3128,118 @@ class Terminal implements Iterator {
         assert_eq!(caller_return_display(&f, "within"), "terminalvalue|null");
         assert_eq!(caller_return_display(&f, "beyond"), "mixed");
     }
+
+    /// Re-review finding: `implements_iteration_protocol` must also
+    /// consult `stub_ancestors`, not only `ancestry`. Every fixture
+    /// above that exercises a genuine protocol implementor names the
+    /// protocol interface directly in the source's own `implements`/
+    /// `extends` clause, so `linearized_class`'s `ancestry` already
+    /// carries the resolved edge and none of them can catch a gate that
+    /// forgot `stub_ancestors` entirely. A real `\ArrayObject`
+    /// implementor (`\ArrayIterator`, `\SplStack`,
+    /// `\SplObjectStorage`, ... are the same shape) is different:
+    /// `Users extends \ArrayObject {}` records only
+    /// `ancestry = [edge { stub: "arrayobject" }]` — `linearize.rs`'s
+    /// `AncestorAnswer::Stub` arm pushes only the direct edge there.
+    /// `ArrayObject`'s own compiled surface names `IteratorAggregate`
+    /// as a parent, which the transitive stub-frontier walk
+    /// (`linearize.rs:347-376`) folds into `stub_ancestors` alone,
+    /// mirroring the walk `stub_ancestry_walks_transitively_through_the_blob`
+    /// pins in `celerrate_semantics`. `fixture`'s own stub index is
+    /// empty, so this crate needs its own isolated stub index (this
+    /// test builds its own `Fixture` by hand rather than widening
+    /// `fixture`'s shared, empty one, following
+    /// `a_stub_method_without_a_declared_return_answers_mixed`'s idiom
+    /// above) — no other test in this module is affected.
+    ///
+    /// The gap answers `mixed` (the gate reads `false`, so the
+    /// `getIterator` unwrap never runs); the fix answers `element|null`
+    /// (`getIterator`'s declared return, `Cursor`, is a genuine
+    /// `\Iterator` implementor whose `current(): Element` supplies the
+    /// element type). The two answers differ, which is what lets this
+    /// test discriminate a fixed gate from a missing one; verified by
+    /// reverting `implements_iteration_protocol` to check `ancestry`
+    /// alone, which turns this assertion red.
+    #[test]
+    fn a_stub_ancestor_carries_a_genuine_protocol_implementor_transitively() {
+        use celerrate_stubs::{
+            StubAvailability, StubClassSurface, StubIndex, StubMember, StubMemberKind,
+            StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+        };
+
+        let db = TestDatabase::default();
+        let source = r#"<?php
+interface Traversable {}
+interface Iterator extends Traversable {}
+interface IteratorAggregate extends Traversable {}
+class Element {}
+class ElementKey {}
+class Cursor implements Iterator {
+    public function current(): Element {}
+    public function key(): ElementKey {}
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool {}
+}
+class Users extends \ArrayObject {}
+function caller(Users $users) {
+    foreach ($users as $item) { return $item; }
+    return null;
+}
+"#;
+        let handles = vec![SourceFile::new(
+            &db,
+            FileId::new(0),
+            source.as_bytes().to_vec(),
+        )];
+        let files = AnalyzedFileSet::new(&db, handles.clone());
+        let get_iterator = StubMember {
+            kind: StubMemberKind::Method,
+            name: "getIterator".to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: Some(StubSignature {
+                parameters: vec![],
+                return_type: VersionedTypeText::from_text(Some("Cursor".to_owned())),
+                by_reference: false,
+            }),
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        };
+        let stubs = StubIndexInput::builder(StubIndex::new(
+            vec![StubSymbol {
+                name: "ArrayObject".to_owned(),
+                kind: StubSymbolKind::Class,
+                availability: StubAvailability::ALWAYS,
+            }],
+            vec![],
+            vec![(
+                "ArrayObject".to_owned(),
+                StubClassSurface {
+                    // The transitive stub frontier, not a direct
+                    // `ancestry` edge: only `ArrayObject`'s own
+                    // compiled surface names `IteratorAggregate`.
+                    parents: vec!["IteratorAggregate".to_owned()],
+                    members: vec![get_iterator],
+                },
+            )],
+        ))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        let f = Fixture {
+            db,
+            handles,
+            files,
+            stubs,
+            configuration,
+        };
+        assert_eq!(caller_return_display(&f, "caller"), "element|null");
+    }
 }
