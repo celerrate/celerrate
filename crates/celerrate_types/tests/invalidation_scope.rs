@@ -1481,27 +1481,37 @@ fn fixture_with_inheritance_syntax(sources: &[&str]) -> InferenceFixture {
 /// the brief named. `class_annotations` re-runs (its
 /// `owner_class_docblock` input's text changed) and produces a
 /// byte-identical parsed template list — but `declared_member_signature`
-/// ALSO re-runs, unconditionally, because it calls the plain
-/// (non-tracked) `declaring_site`/`owner_class_docblock` helpers
-/// directly (`declared.rs:443`), which read the whole file's
-/// `member_tree` — a file-granular query bundling every class's own
-/// docblock text in one `Vec<ClassMembers>`. Editing Repository's
-/// docblock therefore changes `member_tree`'s value for the WHOLE
-/// FILE, and since `declaring_site` is not itself a tracked query,
-/// there is no memo boundary between that file-wide change and
-/// `declared_member_signature`'s own re-execution — an honest,
-/// already-documented cost (the sibling pin
+/// ALSO re-runs, unconditionally. `declared_member_signature` has two
+/// separate reads that reach the same file-granular `member_tree` —
+/// bundling every class's own docblock text into one
+/// `Vec<ClassMembers>` — but only one of them lacks a memo boundary
+/// for THIS edit: its direct call to the plain (non-tracked)
+/// `declaring_site`/`owner_class_docblock` helpers (`declared.rs:444`),
+/// which read `member_tree` with nothing memoized in between, so
+/// Repository's changed docblock forces a re-execution
+/// unconditionally. Its other read, `lookup_member`
+/// (`declared.rs:382`), reaches `member_tree` too, transitively
+/// through `linearized_class`'s own `fetch` helper
+/// (`linearize.rs:758`) — but `linearized_class` IS a tracked query,
+/// so when Repository's changed docblock leaves `UserRepository`'s own
+/// linearized member list byte-identical, that query's early cutoff
+/// absorbs the change before `lookup_member` is ever re-invoked
+/// (confirmed empirically: instrumenting the log shows `lookup_member`
+/// executing zero times across this edit). So the direct helper calls,
+/// not `lookup_member`, are the forcing mechanism for THIS pin's edit
+/// — an honest, already-documented cost (the sibling pin
 /// `a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict`
-/// names the same class of cost for the queried member's OWN
-/// docblock; this shows it extends to any OTHER class's docblock in
-/// the same file). The two-stage cutoff this pin can actually
-/// demonstrate is one layer further down: the refined VALUE stays
-/// identical, so a downstream verdict computed from it — routed
-/// through the class hierarchy exactly as the sibling pins insist on,
-/// so "spared" is not a vacuous structural short-circuit — stays
-/// memoized.
+/// names `lookup_member` for a DIFFERENT edit, the queried member's OWN
+/// docblock, where `lookup_member`'s own returned payload genuinely
+/// changes; this pin shows a second, independent file-granular cost
+/// reaching any OTHER class's docblock in the same file). The
+/// two-stage cutoff this pin can actually demonstrate is one layer
+/// further down: the refined VALUE stays identical, so a downstream
+/// verdict computed from it — routed through the class hierarchy
+/// exactly as the sibling pins insist on, so "spared" is not a vacuous
+/// structural short-circuit — stays memoized.
 #[test]
-fn a_prose_only_class_docblock_edit_backdates_class_annotations_dependents() {
+fn a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict() {
     let before = r#"<?php
 namespace App;
 class Entity {}
@@ -1588,11 +1598,15 @@ class User extends Entity {}
         executions_of(&log, "declared_member_signature"),
         1,
         "declared_member_signature re-runs unconditionally on ANY docblock \
-         edit in the file: it calls the plain (non-tracked) \
-         declaring_site/owner_class_docblock helpers directly, which read \
-         the file-granular member_tree with no memo boundary in between \
-         (declared.rs:443) — an honest, already-documented cost, not a \
-         defect this task fixes: {log:?}",
+         edit in the file: its direct calls to the plain (non-tracked) \
+         declaring_site/owner_class_docblock helpers (declared.rs:444) read \
+         the file-granular member_tree with no memo boundary in between. \
+         Its other file-granular read, lookup_member (declared.rs:382), \
+         reaches the same member_tree transitively through \
+         linearized_class, but that query IS tracked and backdates here \
+         (lookup_member executes 0 times across this edit), so it is not \
+         the forcing mechanism for this particular edit — an honest, \
+         already-documented cost, not a defect this task fixes: {log:?}",
     );
     assert_eq!(
         executions_of(&log, "subtype_of"),

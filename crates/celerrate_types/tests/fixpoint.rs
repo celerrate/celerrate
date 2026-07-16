@@ -141,21 +141,23 @@ fn every_entry_point_converges_to_the_same_fixpoint() {
 /// The method-cycle counterpart of
 /// `every_entry_point_converges_to_the_same_fixpoint` (design section
 /// 10, harness 3, extended to method cycles per decision 15): the same
-/// two-class mutual-recursion cluster queried method-first,
-/// function-first, and callee-first over fresh databases answers
-/// byte-identically every time. Entry-point independence for the
-/// method fixpoint is already pinned at the unit level (task 6's
+/// two-class mutual-recursion cluster, queried in two orders -- ping
+/// then pong, and pong then ping, both method-first -- over fresh
+/// databases answers identically regardless of entry order.
+/// Entry-point independence for the method fixpoint is already pinned
+/// at the unit level (task 6's
 /// `a_mutual_method_cluster_converges_the_same_from_either_entry_point`,
 /// a single-class cluster asking `left`/`right` on the same class);
-/// this fixture is a genuine two-class cluster and the sorted
-/// comparison also folds in a free-function entry, matching this
-/// harness's own established shape (`every_entry_point_converges_to_the_same_fixpoint`
-/// above).
+/// this fixture is a genuine two-class cluster. The comparison is
+/// pairwise by key, mirroring `every_entry_point_converges_to_the_same_fixpoint`
+/// above, not sorted: a sorted comparison would still pass under an
+/// entry-order-dependent swap between `ping` and `pong`, since the two
+/// orders would then carry the same multiset of values, only relabeled.
 #[test]
 fn a_method_cycle_answers_identically_from_every_entry_point() {
-    // The same two-class mutual-recursion cluster, queried
-    // method-first, function-first, and callee-first over fresh
-    // databases: byte-identical display every time.
+    // The same two-class mutual-recursion cluster, queried in two
+    // orders -- ping then pong, and pong then ping, both method-first
+    // -- over fresh databases: identical answers regardless of order.
     let source = r#"<?php
 namespace App;
 class Left {
@@ -171,27 +173,15 @@ class Right {
     }
 }
 "#;
-    let orders: [&[(&str, &str)]; 2] = [
-        &[("app\\left", "ping"), ("app\\right", "pong")],
-        &[("app\\right", "pong"), ("app\\left", "ping")],
-    ];
-    let mut answers = Vec::new();
-    for order in orders {
-        let f = fixture(&[source]);
-        let displays: Vec<String> = order
-            .iter()
-            .map(|(class, method)| method_return_display(&f, class, method))
-            .collect();
-        answers.push(displays);
-    }
-    let mut sorted_first = answers[0].clone();
-    sorted_first.sort();
-    let mut sorted_second = answers[1].clone();
-    sorted_second.sort();
-    assert_eq!(
-        sorted_first, sorted_second,
-        "entry order never changes a fixpoint"
-    );
+    let first = fixture(&[source]);
+    let first_ping = method_return_display(&first, "app\\left", "ping");
+    let first_pong = method_return_display(&first, "app\\right", "pong");
+    let second = fixture(&[source]);
+    let second_pong = method_return_display(&second, "app\\right", "pong");
+    let second_ping = method_return_display(&second, "app\\left", "ping");
+    assert_eq!(first_ping, second_ping);
+    assert_eq!(first_pong, second_pong);
+    assert_eq!(first_ping, first_pong, "the cluster shares one fixpoint");
 }
 
 #[test]

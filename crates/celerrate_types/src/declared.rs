@@ -441,6 +441,15 @@ pub fn declared_member_signature<'db>(
             }));
         }
     };
+    // Recorded debt: `declaring_site` (below `owner_class_docblock` at
+    // the `Virtual` arm above) is a plain, non-tracked function that
+    // reads the file-granular `member_tree` directly, with no memo
+    // boundary in between. So this query re-executes on ANY docblock
+    // edit anywhere in the owner's file, not only the queried member's
+    // own or its declaring ancestor's (pinned by
+    // `invalidation_scope.rs`'s
+    // `a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict`).
+    // An honest, already-documented cost, not fixed here.
     let site_parts = declaring_site(db, files, &owner)?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {

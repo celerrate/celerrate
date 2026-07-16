@@ -56,6 +56,16 @@ pub(crate) fn solve<'db>(
 /// re-derives `argument`'s shape. Any shape this does not recognize
 /// (or an argument that does not match the declared shape) simply
 /// contributes nothing: silence, never a guess.
+///
+/// Recorded debt (decision 10): the `Array`, `Shape`, `Callable`,
+/// `Union`, and `Intersection` arms below are implemented per decision
+/// 10 but unpinned by any test — the brief prescribed this code
+/// verbatim while fixing its own seven-test list, and the shared fake
+/// type syntax (`test_support::FakeSyntax`) parses none of
+/// `array<K, V>`, `|`, `&`, or `callable(...)`, so no fixture can drive
+/// them. Closing this needs a fake-syntax grammar extension, not a
+/// code change (task 8's ledger, adjudicated out of scope there; not a
+/// silent carry).
 fn collect<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
