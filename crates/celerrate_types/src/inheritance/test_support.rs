@@ -8,9 +8,11 @@
 //! drive the exact same notation without duplicating it, and extended
 //! by task 8 for the call-site solver's tests (a class-string binder
 //! and a conditional return, task 8's remaining two grammar arms — the
-//! template bound was already there). Recorded debt: the crate has no
-//! other shared test-support module, mirroring the semantic-core
-//! crates' own duplicated test fakes.
+//! template bound was already there), and further extended by task 8's
+//! review fix for a bound naming another template, `NAME<ARG, ...>`
+//! (e.g. `@template TKey of Collection<TValue>`). Recorded debt: the
+//! crate has no other shared test-support module, mirroring the
+//! semantic-core crates' own duplicated test fakes.
 
 use std::sync::Arc;
 
@@ -213,18 +215,31 @@ impl TypeSyntax for FakeSyntax {
             .collect();
         let mut parsed = ParsedAnnotations::default();
         for (name, bound_text) in &template_declarations {
-            // A bound is itself an ordinary written name, resolved
-            // through the keyword-or-class rule only: a bound that
-            // named another template declared in the same docblock
-            // would be a self-reference this fake does not support
-            // (unneeded by any test), so it is deliberately not looked
-            // up against `parsed.templates`, still under construction
-            // in this very loop.
+            // A bound is an ordinary written name OR `NAME<ARG, ...>`
+            // (task 8's follow-up fix: a bound naming another template
+            // declared earlier in the same docblock, e.g. `@template
+            // TKey of Collection<TValue>`, is legal Psalm/PHPStan
+            // notation and the solver must resolve it rather than leak
+            // it). Each argument resolves through `lower_name` against
+            // `parsed.templates` as built so far — declaration order
+            // means an earlier `@template` is already pushed by the
+            // time a later one's bound looks it up.
             let bound = bound_text.as_deref().map(|written| {
-                site.keyword_type(written).unwrap_or_else(|| {
-                    let qualified = site.qualify_class_name(written).to_lowercase();
-                    TypeId::class(site.database(), &qualified, vec![])
-                })
+                if let Some((head, rest)) = written.split_once('<')
+                    && let Some(arguments_text) = rest.strip_suffix('>')
+                {
+                    let arguments: Vec<TypeId<'db>> = arguments_text
+                        .split(',')
+                        .map(|argument| Self::lower_name(site, &parsed.templates, argument.trim()))
+                        .collect();
+                    let qualified = site.qualify_class_name(head.trim()).to_lowercase();
+                    TypeId::class(site.database(), &qualified, arguments)
+                } else {
+                    site.keyword_type(written).unwrap_or_else(|| {
+                        let qualified = site.qualify_class_name(written).to_lowercase();
+                        TypeId::class(site.database(), &qualified, vec![])
+                    })
+                }
             });
             parsed.templates.push(ParsedTemplate {
                 name: name.clone(),

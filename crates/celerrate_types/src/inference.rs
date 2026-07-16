@@ -1411,6 +1411,99 @@ function on_string() { return flip('text'); }
         assert_eq!(caller_return_display(&f, "app\\on_string"), "bool");
     }
 
+    // Review follow-up (task 8): three findings, each pinning a gap the
+    // original seven tests left untested.
+
+    #[test]
+    fn a_template_bound_naming_another_template_resolves_rather_than_leaking() {
+        // `finalize_return`'s fallback previously bound an unresolved
+        // template straight to its raw `bound` without recursing into
+        // it: `TKey`'s bound `Collection<TValue>` carried a live,
+        // still-unresolved `TValue` through untouched. Neither `TKey`
+        // nor `TValue` is constrained by any argument here (`make`
+        // takes none), so both must fall through bound-then-mixed:
+        // `TKey` to its bound `Collection<TValue>`, and `TValue`
+        // (boundless) to `mixed` within it. The pre-fix behavior
+        // answers `app\collection<TValue>` (the nested template
+        // rendered literally, unresolved); the fix answers
+        // `app\collection<mixed>` — different types, so this
+        // discriminates.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class Collection {}
+/**
+ * @template TValue
+ * @template TKey of Collection<TValue>
+ * @return TKey
+ */
+function make() {}
+function caller() { return make(); }
+"#]);
+        assert_eq!(
+            caller_return_display(&f, "app\\caller"),
+            "app\\collection<mixed>"
+        );
+    }
+
+    #[test]
+    fn a_generic_class_parameter_binds_directly_when_names_match() {
+        // Decision 10's FIRST `Class` rule: when the declared and
+        // argument class names match, recurse argument-wise directly
+        // rather than through the ancestry. No existing test drives
+        // this: `a_generic_class_parameter_recurses_through_the_ancestry`
+        // pairs `Collection<T>` against `UserCollection` (a DIFFERENT
+        // name), landing on the fallback arm. Here the caller's own
+        // `$collection` parameter is annotated `Collection<User>`
+        // directly (same name as the callee's declared `Collection<T>`),
+        // so the name-match arm is the only one that can bind `T`; the
+        // fallback arm would look for `app\collection` in its OWN
+        // ancestry (which has none, since it declares no `@extends`)
+        // and contribute nothing, falling `T` to `mixed`.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/** @template T */
+class Collection {}
+/**
+ * @template T
+ * @param Collection<T> $items
+ * @return T
+ */
+function first_item($items) {}
+/**
+ * @param Collection<User> $collection
+ */
+function caller(Collection $collection) { return first_item($collection); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
+    #[test]
+    fn a_raw_string_literal_binds_the_template_through_class_string() {
+        // Decision 10's FIRST `class-string` binder: a plain string
+        // literal argument against a declared `class-string<T>`
+        // parameter. `class_string_binds_the_template_through_class_constants`
+        // only reaches the SECOND binder (`Foo::class`, already typed
+        // `class-string<Foo>`); no test reached this arm, the one line
+        // task 8 altered from the brief's prescribed code (dropping the
+        // caller-side `.to_lowercase()`, since `TypeId::class` already
+        // strips a leading `\` and folds through `folded_symbol_key`).
+        // The literal here is both mixed-case and backslash-prefixed so
+        // the assertion pins that folding, not just that the arm runs.
+        let f = fixture_with_generics(&[r#"<?php
+namespace App;
+class User {}
+/**
+ * @template T
+ * @param class-string<T> $name
+ * @return T
+ */
+function make(string $name) {}
+function caller() { return make('\App\User'); }
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
+    }
+
     #[test]
     fn new_types_as_the_class_and_anonymous_stays_mixed() {
         let fixture = fixture(&["<?php class A {}

@@ -187,7 +187,7 @@ pub(crate) fn finalize_return<'db>(
         return of;
     }
     let mut map = Substitution::default();
-    collect_remaining_templates(db, of, &mut map);
+    collect_remaining_templates(db, files, stubs, configuration, of, &mut map);
     crate::substitution::substitute(db, files, stubs, configuration, of, &map, None)
 }
 
@@ -197,14 +197,39 @@ pub(crate) fn finalize_return<'db>(
 /// move, not two. Exhaustive over every `TypeData` variant, no
 /// wildcard: a lattice form added later must be triaged here
 /// explicitly rather than silently falling through unresolved.
+///
+/// A bound can itself name another template (legal Psalm/PHPStan
+/// notation, e.g. `@template TKey of Collection<TValue>`), so the
+/// `Template` arm recurses into `bound` first — registering that
+/// nested template's own fallback in the same map — and only then
+/// resolves `bound` against the accumulated map before storing it.
+/// Storing the *resolved* value, not the raw `bound`, matters because
+/// `substitute`'s `Template` arm returns a stored replacement verbatim
+/// rather than re-substituting it (`substitution.rs`): if `bound`
+/// still carried a live nested template when stored, the final
+/// `substitute` call in `finalize_return` would hand it back
+/// unresolved, breaking this module's own "a call result is concrete"
+/// contract. This recursion always terminates: a bound must already be
+/// a fully interned `TypeId` before the template that names it can be
+/// constructed (constructors take their bound by value), so bounds
+/// form a DAG, never a cycle.
 fn collect_remaining_templates<'db>(
     db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
     of: TypeId<'db>,
     map: &mut Substitution<'db>,
 ) {
+    let recurse = |child: TypeId<'db>, map: &mut Substitution<'db>| {
+        collect_remaining_templates(db, files, stubs, configuration, child, map);
+    };
     match of.data(db) {
         TypeData::Template { scope, name, bound } => {
-            map.bind(scope, name, *bound);
+            recurse(*bound, map);
+            let resolved =
+                crate::substitution::substitute(db, files, stubs, configuration, *bound, map, None);
+            map.bind(scope, name, resolved);
         }
         TypeData::Mixed
         | TypeData::Never
@@ -222,31 +247,31 @@ fn collect_remaining_templates<'db>(
         | TypeData::StaticPlaceholder => {}
         TypeData::Union { constituents } => {
             for child in constituents {
-                collect_remaining_templates(db, *child, map);
+                recurse(*child, map);
             }
         }
         TypeData::Intersection { intersectands } => {
             for child in intersectands {
-                collect_remaining_templates(db, *child, map);
+                recurse(*child, map);
             }
         }
         TypeData::Array { key, value, .. } => {
-            collect_remaining_templates(db, *key, map);
-            collect_remaining_templates(db, *value, map);
+            recurse(*key, map);
+            recurse(*value, map);
         }
         TypeData::Shape { fields } => {
             for field in fields {
-                collect_remaining_templates(db, field.value, map);
+                recurse(field.value, map);
             }
         }
         TypeData::ClassString { argument } => {
             if let Some(child) = argument {
-                collect_remaining_templates(db, *child, map);
+                recurse(*child, map);
             }
         }
         TypeData::Class { arguments, .. } => {
             for child in arguments {
-                collect_remaining_templates(db, *child, map);
+                recurse(*child, map);
             }
         }
         TypeData::Callable {
@@ -254,12 +279,12 @@ fn collect_remaining_templates<'db>(
             return_type,
         } => {
             for parameter in parameters {
-                collect_remaining_templates(db, parameter.parameter_type, map);
+                recurse(parameter.parameter_type, map);
             }
-            collect_remaining_templates(db, *return_type, map);
+            recurse(*return_type, map);
         }
         TypeData::KeyOf { subject } | TypeData::ValueOf { subject } => {
-            collect_remaining_templates(db, *subject, map);
+            recurse(*subject, map);
         }
         TypeData::Conditional {
             subject,
@@ -268,10 +293,10 @@ fn collect_remaining_templates<'db>(
             otherwise_branch,
             ..
         } => {
-            collect_remaining_templates(db, *subject, map);
-            collect_remaining_templates(db, *matches, map);
-            collect_remaining_templates(db, *then_branch, map);
-            collect_remaining_templates(db, *otherwise_branch, map);
+            recurse(*subject, map);
+            recurse(*matches, map);
+            recurse(*then_branch, map);
+            recurse(*otherwise_branch, map);
         }
     }
 }
