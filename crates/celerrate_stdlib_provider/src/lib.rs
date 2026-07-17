@@ -9,6 +9,7 @@
 
 mod array_functions;
 mod json_functions;
+mod pattern_functions;
 mod string_functions;
 
 use celerrate_plugin::{DynamicTypeProvider, Invocation, SymbolClaim, TypeId, salsa};
@@ -22,6 +23,7 @@ const CLAIMED_FUNCTIONS: &[&str] = &[
     "end",
     "explode",
     "json_decode",
+    "preg_match",
     "reset",
 ];
 
@@ -65,6 +67,22 @@ impl DynamicTypeProvider for StdlibProvider {
         };
         function_return(db, key, &invocation.argument_types)
     }
+
+    fn by_reference_types<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        invocation: &Invocation<'db>,
+    ) -> Vec<(usize, TypeId<'db>)> {
+        let SymbolClaim::Function { key } = &invocation.claim else {
+            return Vec::new();
+        };
+        match key.as_str() {
+            "preg_match" => pattern_functions::preg_match_matches(db, &invocation.argument_types)
+                .map(|matches| vec![(2, matches)])
+                .unwrap_or_default(),
+            _ => Vec::new(),
+        }
+    }
 }
 
 fn function_return<'db>(
@@ -78,6 +96,7 @@ fn function_return<'db>(
         "current" | "end" | "reset" => array_functions::pointer_value(db, arguments),
         "explode" => string_functions::explode(db, arguments),
         "json_decode" => json_functions::json_decode(db, arguments),
+        "preg_match" => Some(pattern_functions::preg_match_return(db)),
         _ => None,
     }
 }
@@ -274,6 +293,19 @@ mod tests {
                 TypeId::bool_literal(db, false),
                 TypeId::int_literal(db, 512),
                 TypeId::int_literal(db, crate::json_functions::JSON_OBJECT_AS_ARRAY),
+            ]),
+            // `preg_match`'s return type (`0|1|false`) never branches on
+            // its arguments, so this subject exercises the handler's
+            // only path — a realistic call, pattern and subject, rather
+            // than an empty argument list. The pattern-derived
+            // `$matches` shape is a separate channel
+            // (`by_reference_types`), covered by `pattern_functions.rs`'s
+            // own tests and by `celerrate_types/tests/by_reference.rs`'s
+            // end-to-end fixture, since this totality gate only
+            // exercises `return_type`.
+            "preg_match" => Some(vec![
+                TypeId::string_literal(db, "/(?<year>\\d+)/"),
+                TypeId::string(db),
             ]),
             _ => None,
         }

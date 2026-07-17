@@ -16,5 +16,19 @@ celerrate_source = { path = "../celerrate_source" }
 celerrate_stubs = { path = "../celerrate_stubs" }
 celerrate_syntax = { path = "../celerrate_syntax" }
 
+[dev-dependencies]
+# Test-only, and deliberately an INTEGRATION-test dependency only
+# (`tests/by_reference.rs`), never referenced from `src/`: a `#[cfg(test)]`
+# module inside this crate that pulled in `celerrate_stdlib_provider` was
+# tried and rejected — it recompiles this crate under `--cfg test`, and
+# `celerrate_stdlib_provider` reaches the *plain* build of this crate
+# through `celerrate_plugin`, so rustc sees two incompatible
+# `celerrate_types` crates ("multiple different versions of crate
+# `celerrate_types` in the dependency graph"). `tests/*.rs` binaries link
+# the plain rlib, so no such duplication occurs there — the same reason
+# `tests/fixpoint.rs` and `celerrate_stdlib_provider/tests/end_to_end.rs`
+# already use this shape.
+celerrate_stdlib_provider = { path = "../celerrate_stdlib_provider" }
+
 [lints]
 workspace = true

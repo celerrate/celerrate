@@ -111,7 +111,7 @@ Enumerated so sub-project 6 extends rather than reshapes:
 | Native trait (owner) | Guest exports | Host families needed |
 |---|---|---|
 | `TypeSyntax` (`celerrate_types`) | `can_parse(text) -> bool`, `parse_docblock(site, text) -> annotations`, `parse_type_expression(site, text) -> type?` | construction, symbol lookup |
-| `DynamicTypeProvider` (`celerrate_types`) | `claims() -> list`, `return_type(invocation) -> type?` | all four |
+| `DynamicTypeProvider` (`celerrate_types`) | `claims() -> list`, `return_type(invocation) -> type?`, `by_reference_types(invocation) -> list<(index, handle)>` | all four |
 | `VirtualSymbolProvider` (`celerrate_semantics`) | `virtual_members(text) -> list` | none — plain data out |
 | `CommentDirectiveProvider` (`celerrate_semantics`) | `directives(kind, text) -> list` | none — plain data out |
 

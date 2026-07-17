@@ -278,6 +278,7 @@ dependencies = [
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",
+ "celerrate_stdlib_provider",
  "celerrate_stubs",
  "celerrate_syntax",
  "salsa",

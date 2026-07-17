@@ -1156,6 +1156,69 @@ impl<'db> Walker<'db, '_, '_> {
         None
     }
 
+    /// The by-reference sibling of `provider_return`: first claiming
+    /// registration wins; every contribution is widened at the
+    /// consumption boundary. Applied after `apply_by_reference`, so a
+    /// provider refines (overrides) the declared write-back.
+    fn provider_by_reference(
+        &mut self,
+        claim: crate::dynamic_type_provider::SymbolClaim,
+        receiver_type: Option<TypeId<'db>>,
+        argument_types: &[TypeId<'db>],
+    ) -> Vec<(usize, TypeId<'db>)> {
+        let db = self.db();
+        let Some(registry) = crate::dynamic_type_provider::DynamicTypeProviderRegistry::try_get(db)
+        else {
+            return Vec::new();
+        };
+        for registration in registry.registrations(db) {
+            if !registration.provider.claims().contains(&claim) {
+                continue;
+            }
+            let invocation = crate::dynamic_type_provider::Invocation {
+                claim: claim.clone(),
+                receiver_type,
+                argument_types: argument_types.to_vec(),
+            };
+            let contributions = registration.provider.by_reference_types(db, &invocation);
+            if !contributions.is_empty() {
+                return contributions
+                    .into_iter()
+                    .map(|(index, of)| (index, crate::widening::capped_child(db, of)))
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Binds provider by-reference contributions onto their positional
+    /// arguments' subjects. Labeled arguments are skipped (the channel
+    /// is positional); a spread ends the mapping, like
+    /// `apply_by_reference`.
+    fn apply_provider_by_reference(
+        &mut self,
+        contributions: &[(usize, TypeId<'db>)],
+        arguments: &[celerrate_semantics::CallArgument],
+        environment: &mut Environment<'db>,
+    ) {
+        for (index, of) in contributions {
+            let Some(argument) = arguments.get(*index) else {
+                continue;
+            };
+            if arguments
+                .iter()
+                .take(*index + 1)
+                .any(|argument| argument.spread)
+                || argument.label.is_some()
+            {
+                continue;
+            }
+            if let Some(subject) = subject_of(self.context.ir, argument.value) {
+                environment.bind(subject, *of);
+            }
+        }
+    }
+
     /// Decision 3, tiers two and three, for a named function call.
     /// Task 10 replaces the `mixed` fallback with the fixpoint.
     fn function_call_result(&mut self, key: &str, source_exists: bool) -> TypeId<'db> {
@@ -2496,14 +2559,11 @@ impl<'db> Walker<'db, '_, '_> {
                                 }
                             }
                         }
+                        let claim = crate::dynamic_type_provider::SymbolClaim::Function {
+                            key: key.clone(),
+                        };
                         let of = self
-                            .provider_return(
-                                crate::dynamic_type_provider::SymbolClaim::Function {
-                                    key: key.clone(),
-                                },
-                                None,
-                                &argument_types,
-                            )
+                            .provider_return(claim.clone(), None, &argument_types)
                             .unwrap_or_else(|| self.function_call_result(&key, source_exists));
                         let declared = declared_function_signature(
                             db,
@@ -2516,6 +2576,9 @@ impl<'db> Walker<'db, '_, '_> {
                         if let Some(signature) = &declared {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
                         }
+                        let contributions =
+                            self.provider_by_reference(claim.clone(), None, &argument_types);
+                        self.apply_provider_by_reference(&contributions, &arguments, environment);
                         // A named function has no receiver: the
                         // declared parameter list comes straight from
                         // the signature (empty when unresolved).
