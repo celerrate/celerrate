@@ -40,6 +40,23 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
         if guarded.contains(&id) && !called.contains(&id) {
             continue;
         }
+        // A receiver that is itself a call result carries its `|null`
+        // from a return type the plan-5/6 narrowing floor does not
+        // track: `subject_of` narrows variables and `$this->prop`
+        // chains, never a call. So the floor cannot see the guards PHP
+        // routinely writes around such a receiver (`if ($x->get() &&
+        // $x->get()->y())`, a local re-bind), and reporting one is a
+        // false-positive class — the guillotine stays silent (design
+        // section 8: an undecidable receiver is never a guess). A
+        // variable or property receiver holding a nullable call result
+        // (`$p = $u?->profile(); $p->refresh();`) is narrowable and
+        // still reports.
+        if matches!(
+            context.ir.expression(*receiver),
+            Some(BodyExpression::Call { .. })
+        ) {
+            continue;
+        }
         let Some(receiver_type) = context.inferred.expression_type(*receiver) else {
             continue;
         };
@@ -217,6 +234,36 @@ function f(?Box $b, array $bag): void {
             vec![TypedVerdictKind::NullDereference {
                 member: "get".to_owned(),
                 receiver: "Box|null".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn a_call_result_receiver_is_not_a_tracked_dereference() {
+        // The corpus idiom `if ($e->getCommand() && $e->getCommand()->getName())`:
+        // the second `getCommand()` is a fresh call whose `?Command` the
+        // narrowing floor cannot track, so the `&&` guard is invisible to
+        // it and reporting the `getName()` receiver would be a false
+        // positive. A variable receiver holding the same nullable value
+        // (`$c`) stays reported, so the silence is specifically about the
+        // call-result receiver shape, not a vacuous fixture.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function f(Event $e): void {
+    $e->getCommand()->getName();       // call-result receiver: silent
+}
+function g(?Command $c): void {
+    $c->getName();                     // variable receiver: reports
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "getName".to_owned(),
+                receiver: "Command|null".to_owned(),
             }],
         );
     }

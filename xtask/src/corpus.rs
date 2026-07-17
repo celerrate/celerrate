@@ -65,6 +65,17 @@ fn install_vendor(directory: &Path) -> Result<()> {
 /// the umbrella design classifies as a priority bug, not an opinion.
 const UNKNOWN_SYMBOL_IDENTIFIERS: [&str; 3] = ["CEL0018", "CEL0019", "CEL0020"];
 
+/// The identifiers of the unknown-member family (`CEL0030` method,
+/// `CEL0031` property, `CEL0032` class constant, `CEL0033` enum case).
+/// Task 12's triage landed them at zero occurrences on the corpus, so
+/// they join the hard-refusal list: like an unknown symbol, an
+/// unknown member on this correct code is a priority bug, refused even
+/// under `--bless`, never a snapshot entry. The nullability and
+/// argument families (`CEL0034`-`CEL0038`) are gated by snapshot
+/// equality alone — they carry legitimate stances whose regressions a
+/// diverging snapshot already catches.
+const TYPED_MEMBER_IDENTIFIERS: [&str; 4] = ["CEL0030", "CEL0031", "CEL0032", "CEL0033"];
+
 /// The committed expected report.
 pub fn snapshot_path() -> Result<PathBuf> {
     Ok(crate::workspace_root()?.join("xtask/corpus-snapshot.txt"))
@@ -75,10 +86,22 @@ pub fn snapshot_path() -> Result<PathBuf> {
 /// (`path:line:column identifier message`); a plain substring match is
 /// enough because the identifiers never appear in message text.
 pub fn unknown_symbol_violations(report: &str) -> Vec<String> {
+    lines_with_any(report, &UNKNOWN_SYMBOL_IDENTIFIERS)
+}
+
+/// Every report line carrying an unknown-member diagnostic, by the same
+/// line-scanning shape as [`unknown_symbol_violations`].
+pub fn typed_member_violations(report: &str) -> Vec<String> {
+    lines_with_any(report, &TYPED_MEMBER_IDENTIFIERS)
+}
+
+/// Report lines containing any of `identifiers`. A plain substring
+/// match is enough because the identifiers never appear in message text.
+fn lines_with_any(report: &str, identifiers: &[&str]) -> Vec<String> {
     report
         .lines()
         .filter(|line| {
-            UNKNOWN_SYMBOL_IDENTIFIERS
+            identifiers
                 .iter()
                 .any(|identifier| line.contains(identifier))
         })
@@ -125,6 +148,17 @@ pub fn check_snapshot(bless: bool) -> Result<()> {
         .into());
     }
 
+    let member_violations = typed_member_violations(&actual);
+    if !member_violations.is_empty() {
+        return Err(format!(
+            "the corpus report contains {} unknown-member diagnostic(s); each is a \
+             false positive on correct code and a priority bug:\n{}",
+            member_violations.len(),
+            member_violations.join("\n"),
+        )
+        .into());
+    }
+
     let path = snapshot_path()?;
     if bless {
         std::fs::write(&path, &actual)?;
@@ -160,7 +194,7 @@ pub fn check_snapshot(bless: bool) -> Result<()> {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
-    use super::unknown_symbol_violations;
+    use super::{typed_member_violations, unknown_symbol_violations};
 
     #[test]
     fn the_committed_corpus_pin_parses_and_names_the_corpus() {
@@ -189,5 +223,21 @@ mod tests {
         let report = "src/B.php:9:5 CEL0024 match expressions require PHP 8.0\n\
                       0 notices, 1 diagnostic\n";
         assert!(unknown_symbol_violations(report).is_empty());
+        assert!(typed_member_violations(report).is_empty());
+    }
+
+    #[test]
+    fn the_unknown_member_family_is_caught_line_by_line() {
+        let report = "src/A.php:3:1 CEL0030 unknown method save on \\App\\User\n\
+                      src/B.php:9:5 CEL0034 accessing save on a possibly null \\App\\User|null\n\
+                      src/C.php:1:1 CEL0031 unknown property name on \\App\\User\n\
+                      src/D.php:2:2 CEL0032 unknown class constant LIMIT on \\App\\Config\n\
+                      src/E.php:4:4 CEL0033 unknown enum case Draft on \\App\\Status\n\
+                      0 notices, 5 diagnostics\n";
+        let violations = typed_member_violations(report);
+        // The four unknown-member identifiers are caught; the
+        // nullability line (CEL0034) is gated by snapshot equality only.
+        assert_eq!(violations.len(), 4);
+        assert!(violations.iter().all(|line| !line.contains("CEL0034")));
     }
 }

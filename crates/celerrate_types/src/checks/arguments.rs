@@ -35,6 +35,7 @@ use crate::declared::{
 };
 use crate::flow::resolved_function_key;
 use crate::judgments::{CoercionMode, Proof, assignable_to};
+use crate::representation::TypeData;
 
 use super::members::{resolve_scoped_class_key, scoped_subject_keys};
 use super::receivers::{ReceiverAtom, atoms_of, written_type_display};
@@ -134,6 +135,18 @@ fn check_arity(
         });
     }
     // Missing: a required parameter bound neither by position nor name.
+    // Reported for source callees only. A stub signature's optionality
+    // is not trustworthy for this check: phpstorm-stubs routinely marks
+    // a parameter optional in its `@param ... [optional]` docblock while
+    // leaving the signature without a default (`mt_rand(int $min, int
+    // $max)` is callable as `mt_rand()`), and the compiled stub reads
+    // optionality from the signature default alone. A source callee's
+    // signature is authored by the analyzed code itself and is reliable;
+    // for a stub callee this stays silent — the guillotine's mandated
+    // over-suppression when a signature is not decidably complete
+    // (design section 8). Excess (CEL0037) and unknown-name (CEL0038)
+    // are unaffected: the `[optional]` gap can only over-declare a
+    // parameter as required, never drop one.
     let required = parameters
         .iter()
         .filter(|parameter| !parameter.optional && !parameter.variadic)
@@ -148,7 +161,7 @@ fn check_arity(
                 && !named.iter().any(|name| **name == parameter.name)
         })
         .count();
-    if unbound > 0 {
+    if unbound > 0 && resolved.source_body.is_some() {
         verdicts.push(TypedVerdict {
             body: context.body,
             expression: call,
@@ -237,7 +250,13 @@ fn check_argument_types<'db>(
         // `Proof`-based: `mixed` passes everywhere, and a union reports
         // only when every constituent fails assignability on its own
         // (a non-union scalar source is the one-constituent case of the
-        // same fold).
+        // same fold). A constituent that shares an unenforced container
+        // kind with the parameter (design section 8's guillotine: PHP
+        // checks only the outer `array`/`callable` at the boundary,
+        // never the phpdoc type arguments or the callable's inner
+        // signature) never counts as failing — a genuine
+        // `Fails`/`CannotProve` there is a phpdoc-only divergence PHP
+        // does not enforce, so it is silence, not a diagnostic.
         if argument_type.is_mixed(context.db) {
             continue;
         }
@@ -246,15 +265,16 @@ fn check_argument_types<'db>(
                 .constituents(context.db)
                 .into_iter()
                 .all(|part| {
-                    assignable_to(
-                        context.db,
-                        context.files,
-                        context.stubs,
-                        context.configuration,
-                        part,
-                        parameter_type,
-                        mode,
-                    ) == Proof::Fails
+                    !shares_unenforced_container_kind(context.db, part, parameter_type)
+                        && assignable_to(
+                            context.db,
+                            context.files,
+                            context.stubs,
+                            context.configuration,
+                            part,
+                            parameter_type,
+                            mode,
+                        ) == Proof::Fails
                 });
         if every_constituent_fails {
             verdicts.push(TypedVerdict {
@@ -269,6 +289,49 @@ fn check_argument_types<'db>(
             });
         }
     }
+}
+
+/// Whether a single argument constituent shares an *unenforced
+/// container kind* with the parameter type: both array-shaped
+/// (`array`/`list`/shape) or both callable-shaped. PHP verifies only
+/// the outer `array`/`callable` at the parameter boundary — never the
+/// phpdoc type arguments (`array<K, V>`, `list<T>`) nor a callable's
+/// declared inner signature. So an argument that is an array against
+/// an array parameter (or a callable against a callable parameter)
+/// raises no runtime `TypeError`, whatever the type arguments say;
+/// the guillotine stays silent (design section 8). A cross-kind
+/// mismatch (an array where an `int` is declared, a scalar where a
+/// `callable` is declared) shares no kind and still reports.
+fn shares_unenforced_container_kind<'db>(
+    db: &'db dyn salsa::Database,
+    source_part: TypeId<'db>,
+    parameter: TypeId<'db>,
+) -> bool {
+    let parameter_parts = parameter.constituents(db);
+    (is_array_shaped(db, source_part)
+        && parameter_parts
+            .iter()
+            .any(|part| is_array_shaped(db, *part)))
+        || (is_callable_shaped(db, source_part)
+            && parameter_parts
+                .iter()
+                .any(|part| is_callable_shaped(db, *part)))
+}
+
+/// The array family PHP enforces as the single runtime kind `array`:
+/// `array<K, V>`, its list and non-empty refinements, and sealed
+/// shapes (a shape is an `array` at runtime).
+fn is_array_shaped<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(of.data(db), TypeData::Array { .. } | TypeData::Shape { .. })
+}
+
+/// The callable family PHP enforces as the single runtime kind
+/// `callable`: only the lattice `Callable`. A class, `class-string`,
+/// array, or string that *might* be callable is not this kind — the
+/// judgment already answers `CannotProve` for those, never `Fails`,
+/// so they need no silencing here.
+fn is_callable_shaped<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(of.data(db), TypeData::Callable { .. })
 }
 
 /// The parameter a 1-based position binds: the last variadic absorbs
@@ -553,6 +616,8 @@ mod tests {
 
     use super::super::test_support::{family_verdicts, fixture_with_stubs, handle_of};
     use super::super::{ArgumentLabel, TypedVerdictKind, typed_file_verdicts};
+    use super::shares_unenforced_container_kind;
+    use crate::TypeId;
 
     const STRICT: &str = "<?php declare(strict_types=1);\n";
 
@@ -872,6 +937,183 @@ function f(): void {
 "#
         ));
         assert_eq!(verdicts, vec![]);
+    }
+
+    /// Two required `int` parameters, no defaults — the shape
+    /// phpstorm-stubs gives `mt_rand`/`rand` (documented `[optional]`
+    /// but written without a signature default), the CEL0036 false
+    /// positive on the corpus.
+    fn two_required_signature() -> StubSignature {
+        fn required_int(name: &str) -> StubParameter {
+            StubParameter {
+                name: name.to_owned(),
+                type_text: VersionedTypeText::from_text(Some("int".to_owned())),
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }
+        }
+        StubSignature {
+            parameters: vec![required_int("min"), required_int("max")],
+            return_type: VersionedTypeText::from_text(Some("int".to_owned())),
+            by_reference: false,
+        }
+    }
+
+    #[test]
+    fn too_few_arguments_is_reported_for_source_callees_only() {
+        // A stub signature's optionality is not trustworthy for CEL0036:
+        // phpstorm-stubs marks parameters `[optional]` in the docblock
+        // while the signature carries no default (`mt_rand(int $min, int
+        // $max)` is callable as `mt_rand()`), and the compiled stub reads
+        // optionality from the default alone. So a stub callee with too
+        // few arguments stays silent; a source callee, whose signature is
+        // authored by the analyzed code, still reports — proving the
+        // silence is about the source/stub distinction, not the fixture.
+        let index = StubIndex::new(
+            vec![StubSymbol {
+                name: "needs_two".to_owned(),
+                kind: StubSymbolKind::Function,
+                availability: StubAvailability::ALWAYS,
+            }],
+            vec![("needs_two".to_owned(), two_required_signature())],
+            vec![],
+        );
+        let fixture = fixture_with_stubs(
+            &[r#"<?php
+function pair(int $a, int $b): void {}
+function f(): void {
+    needs_two(1);      // stub callee: optionality untrustworthy, silent
+    pair(1);           // source callee: reliable signature, reports
+}
+"#],
+            index,
+        );
+        let verdicts: Vec<TypedVerdictKind> = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        )
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.kind.clone())
+        .collect();
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::TooFewArguments {
+                callee: "pair".to_owned(),
+                given: 1,
+                required: 2,
+            }],
+        );
+    }
+
+    #[test]
+    fn a_matching_array_kind_is_not_enforced_on_its_element_types() {
+        // The corpus's `\array_slice($tagNames, ...)` false positive: an
+        // `array<int|string, mixed>` against `array_slice`'s refined
+        // `array<TKey, TValue>` parameter. PHP checks only the outer
+        // `array` at the boundary, never the phpdoc type arguments, so
+        // the guillotine stays silent. A non-array argument shares no
+        // kind and still reports, proving the silence is about the shared
+        // container kind and not a vacuous fixture. Uses the embedded
+        // stubs because the refined generic parameter (`array<TKey,
+        // TValue>`) only exists through the compiled overlay.
+        let fixture = fixture_with_stubs(
+            &[r#"<?php declare(strict_types=1);
+function f(array $rows): void {
+    \array_slice($rows, 0);        // array vs array<TKey, TValue>: silent
+    \array_slice(5, 0);            // int vs array: reports
+}
+"#],
+            embedded_stub_index().unwrap(),
+        );
+        let verdicts: Vec<TypedVerdictKind> = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        )
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.kind.clone())
+        .collect();
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::ArgumentType {
+                label: ArgumentLabel::Positional(1),
+                callee: "array_slice".to_owned(),
+                expected: "array<TKey, TValue>".to_owned(),
+                given: "5".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn the_unenforced_container_predicate_covers_arrays_and_callables() {
+        // The `callable`(inner-signature) branch of the guillotine — the
+        // corpus's `ask`/`askHidden` false positive, a
+        // `callable(string|null): string` against a `callable(mixed):
+        // mixed` parameter — cannot be reproduced through the ad-hoc
+        // stub path (only the compiled overlay lowers a parametrised
+        // `callable(...)` type text), so this pins both branches of
+        // `shares_unenforced_container_kind` directly. A scalar shares no
+        // container kind with either and is never silenced.
+        use crate::representation::CallableParameter;
+        let fixture = super::super::test_support::fixture(&["<?php\n"]);
+        let db = &fixture.db;
+        let int = TypeId::int(db);
+        let string = TypeId::string(db);
+        let mixed = TypeId::mixed(db);
+        let array_string_int = TypeId::array(db, string, int);
+        let array_int_mixed = TypeId::array(db, int, mixed);
+        let callable_string = TypeId::callable(
+            db,
+            vec![CallableParameter {
+                parameter_type: string,
+                optional: false,
+                variadic: false,
+                by_reference: false,
+            }],
+            string,
+        );
+        let callable_mixed = TypeId::callable(
+            db,
+            vec![CallableParameter {
+                parameter_type: mixed,
+                optional: false,
+                variadic: false,
+                by_reference: false,
+            }],
+            mixed,
+        );
+        // Same container kind (differing type arguments): silenced.
+        assert!(shares_unenforced_container_kind(
+            db,
+            array_int_mixed,
+            array_string_int
+        ));
+        assert!(shares_unenforced_container_kind(
+            db,
+            callable_string,
+            callable_mixed
+        ));
+        // A callable parameter admitted through a nullable union — the
+        // `?callable` shape the corpus presents — still matches.
+        let nullable_callable = TypeId::union(db, [callable_mixed, TypeId::null(db)]);
+        assert!(shares_unenforced_container_kind(
+            db,
+            callable_string,
+            nullable_callable
+        ));
+        // A cross-kind pair shares nothing and is never silenced.
+        assert!(!shares_unenforced_container_kind(db, int, array_string_int));
+        assert!(!shares_unenforced_container_kind(db, array_int_mixed, int));
+        assert!(!shares_unenforced_container_kind(db, callable_string, int));
     }
 
     #[test]
