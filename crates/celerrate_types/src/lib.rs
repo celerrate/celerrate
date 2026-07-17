@@ -48,11 +48,15 @@
 //! union or intersection absorption and deduplication rules run, so the
 //! capped result is independent of construction order.
 //!
-//! **Rendering debt.** `TypeId::display` renders class and enum names as
+//! **Rendering.** `TypeId::display` renders class and enum names as
 //! their folded keys (the case-insensitive, backslash-normalized
-//! symbol-table key), not their originally written spelling. Recovering
-//! the original spelling requires the symbol table and is deferred to
-//! plan 8, which renders diagnostics.
+//! symbol-table key), on purpose: the lattice's canonical form must
+//! never depend on spelling. Plan 8's checks layer
+//! (`checks::receivers::written_type_display`) recovers the originally
+//! written spelling through the symbol table when rendering
+//! diagnostics, via the crate-private `TypeId::display_with_names`
+//! (never a new public rendering surface — `display` itself is
+//! unchanged, byte-identical to before this recovery existed).
 //!
 //! **Declared types.** [`declared_member_signature`] and
 //! [`declared_function_signature`] are the per-member and per-function

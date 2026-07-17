@@ -1,11 +1,37 @@
 //! Deterministic rendering: PHPStan-flavored spellings over the
-//! canonical structure. Class names render as their folded keys in this
-//! plan (recorded debt: plan 8 recovers original spellings through the
-//! symbol table when rendering diagnostics).
+//! canonical structure. `TypeId::display` renders class and enum names
+//! as their folded keys (the lattice stays folded on purpose: identity
+//! and canonical form must never depend on spelling); the checks layer
+//! recovers the originally written spelling by threading a name
+//! resolver through `display_type_resolved` (`TypeId::display_with_names`,
+//! plan 8's `written_type_display` in `checks/receivers.rs`).
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
 
+/// A class-or-enum-name resolver: the folded key in, the originally
+/// written spelling out (or `None` to fall back to the folded key).
+/// Named so the threaded parameter stays a plain reference everywhere
+/// rather than the equivalent unnamed trait-object type, which clippy's
+/// `type_complexity` lint flags.
+pub(crate) type NameResolver<'a> = &'a dyn Fn(&str) -> Option<String>;
+
 pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> String {
+    display_type_resolved(db, of, None)
+}
+
+/// `display_type` with an optional name resolver threaded through the
+/// `Class` and enum-case arms: `None` renders the folded key, exactly
+/// `display_type`'s own behavior (byte-identical — this is the only
+/// caller of the match below, and it always passes `None`); `Some`
+/// tries the resolver first and falls back to the folded key when it
+/// answers nothing. An anonymous class's coordinate-stripped rendering
+/// is unconditional either way (decision 3): a resolver is never even
+/// consulted for it.
+pub(crate) fn display_type_resolved<'db>(
+    db: &'db dyn salsa::Database,
+    of: TypeId<'db>,
+    resolve: Option<NameResolver<'_>>,
+) -> String {
     match of.data(db) {
         TypeData::Mixed => "mixed".to_owned(),
         TypeData::Never => "never".to_owned(),
@@ -66,7 +92,10 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
         TypeData::ClassString {
             argument: Some(argument),
         } => {
-            format!("class-string<{}>", display_type(db, *argument))
+            format!(
+                "class-string<{}>",
+                display_type_resolved(db, *argument, resolve)
+            )
         }
         TypeData::Union { constituents } => {
             // Render null last: `User|null`, the conventional spelling.
@@ -74,14 +103,18 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
                 constituents.iter().partition(|part| part.is_null(db));
             let mut rendered: Vec<String> = other_parts
                 .iter()
-                .map(|&&part| parenthesized(db, part))
+                .map(|&&part| parenthesized(db, part, resolve))
                 .collect();
-            rendered.extend(null_parts.iter().map(|&&part| display_type(db, part)));
+            rendered.extend(
+                null_parts
+                    .iter()
+                    .map(|&&part| display_type_resolved(db, part, resolve)),
+            );
             rendered.join("|")
         }
         TypeData::Intersection { intersectands } => intersectands
             .iter()
-            .map(|part| parenthesized(db, *part))
+            .map(|part| parenthesized(db, *part, resolve))
             .collect::<Vec<_>>()
             .join("&"),
         TypeData::Array {
@@ -90,18 +123,21 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
             is_list,
             non_empty,
         } => match (is_list, non_empty) {
-            (true, true) => format!("non-empty-list<{}>", display_type(db, *value)),
-            (true, false) => format!("list<{}>", display_type(db, *value)),
+            (true, true) => format!(
+                "non-empty-list<{}>",
+                display_type_resolved(db, *value, resolve)
+            ),
+            (true, false) => format!("list<{}>", display_type_resolved(db, *value, resolve)),
             (false, true) => format!(
                 "non-empty-array<{}, {}>",
-                display_type(db, *key),
-                display_type(db, *value)
+                display_type_resolved(db, *key, resolve),
+                display_type_resolved(db, *value, resolve)
             ),
             (false, false) => {
                 format!(
                     "array<{}, {}>",
-                    display_type(db, *key),
-                    display_type(db, *value)
+                    display_type_resolved(db, *key, resolve),
+                    display_type_resolved(db, *value, resolve)
                 )
             }
         },
@@ -114,19 +150,22 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
                         crate::ShapeKey::String(value) => value.clone(),
                     };
                     let marker = if field.optional { "?" } else { "" };
-                    format!("{key}{marker}: {}", display_type(db, field.value))
+                    format!(
+                        "{key}{marker}: {}",
+                        display_type_resolved(db, field.value, resolve)
+                    )
                 })
                 .collect();
             format!("array{{{}}}", rendered.join(", "))
         }
         TypeData::Class { name, arguments } => {
-            let name = class_display_name(name);
+            let name = class_display_name(name, resolve);
             if arguments.is_empty() {
-                name.to_owned()
+                name
             } else {
                 let rendered: Vec<String> = arguments
                     .iter()
-                    .map(|argument| display_type(db, *argument))
+                    .map(|argument| display_type_resolved(db, *argument, resolve))
                     .collect();
                 format!("{name}<{}>", rendered.join(", "))
             }
@@ -134,7 +173,10 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
         TypeData::EnumCase {
             enum_name,
             case_name,
-        } => format!("{enum_name}::{case_name}"),
+        } => {
+            let enum_name = class_display_name(enum_name, resolve);
+            format!("{enum_name}::{case_name}")
+        }
         TypeData::Callable {
             parameters,
             return_type,
@@ -142,7 +184,7 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
             let rendered: Vec<String> = parameters
                 .iter()
                 .map(|parameter| {
-                    let mut text = display_type(db, parameter.parameter_type);
+                    let mut text = display_type_resolved(db, parameter.parameter_type, resolve);
                     if parameter.by_reference {
                         text.push_str(" &");
                     }
@@ -157,18 +199,22 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
             format!(
                 "callable({}): {}",
                 rendered.join(", "),
-                display_type(db, *return_type)
+                display_type_resolved(db, *return_type, resolve)
             )
         }
         TypeData::Template { name, bound, .. } => {
             if bound.is_mixed(db) {
                 name.clone()
             } else {
-                format!("{name} of {}", display_type(db, *bound))
+                format!("{name} of {}", display_type_resolved(db, *bound, resolve))
             }
         }
-        TypeData::KeyOf { subject } => format!("key-of<{}>", display_type(db, *subject)),
-        TypeData::ValueOf { subject } => format!("value-of<{}>", display_type(db, *subject)),
+        TypeData::KeyOf { subject } => {
+            format!("key-of<{}>", display_type_resolved(db, *subject, resolve))
+        }
+        TypeData::ValueOf { subject } => {
+            format!("value-of<{}>", display_type_resolved(db, *subject, resolve))
+        }
         TypeData::Conditional {
             subject,
             matches,
@@ -179,10 +225,10 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
             let operator = if *negated { "is not" } else { "is" };
             format!(
                 "({} {operator} {} ? {} : {})",
-                display_type(db, *subject),
-                display_type(db, *matches),
-                display_type(db, *then_branch),
-                display_type(db, *otherwise_branch),
+                display_type_resolved(db, *subject, resolve),
+                display_type_resolved(db, *matches, resolve),
+                display_type_resolved(db, *then_branch, resolve),
+                display_type_resolved(db, *otherwise_branch, resolve),
             )
         }
         TypeData::SelfPlaceholder => "self".to_owned(),
@@ -192,22 +238,30 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
 }
 
 /// The rendered spelling of a class-like folded key: an anonymous
-/// class's synthetic key (`class@anonymous:{file}:{index}`) strips its
-/// coordinates, so a message never changes just because an unrelated
-/// earlier declaration renumbered the file. Every other folded key
-/// renders verbatim.
-fn class_display_name(name: &str) -> &str {
+/// class's synthetic key (`class@anonymous:{file}:{index}`) always
+/// strips its coordinates, whatever `resolve` says, so a message never
+/// changes just because an unrelated earlier declaration renumbered
+/// the file. Every other key tries the resolver first (the written
+/// spelling `written_type_display` recovers through the symbol
+/// index), falling back to the folded key verbatim when `resolve` is
+/// `None` or answers nothing.
+fn class_display_name(name: &str, resolve: Option<NameResolver<'_>>) -> String {
     if name.starts_with("class@anonymous:") {
-        "class@anonymous"
-    } else {
-        name
+        return "class@anonymous".to_owned();
     }
+    resolve
+        .and_then(|resolve| resolve(name))
+        .unwrap_or_else(|| name.to_owned())
 }
 
 /// Unions and intersections nested inside another compound render in
 /// parentheses.
-fn parenthesized<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> String {
-    let rendered = display_type(db, of);
+fn parenthesized<'db>(
+    db: &'db dyn salsa::Database,
+    of: TypeId<'db>,
+    resolve: Option<NameResolver<'_>>,
+) -> String {
+    let rendered = display_type_resolved(db, of, resolve);
     match of.data(db) {
         TypeData::Union { .. } | TypeData::Intersection { .. } => format!("({rendered})"),
         _ => rendered,

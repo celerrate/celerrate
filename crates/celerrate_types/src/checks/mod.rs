@@ -22,6 +22,8 @@ pub(crate) mod arguments;
 pub(crate) mod members;
 pub(crate) mod nullability;
 pub(crate) mod receivers;
+#[cfg(test)]
+pub(crate) mod test_support;
 
 /// Unknown method on the receiver's resolved type.
 pub const UNKNOWN_METHOD: DiagnosticId = DiagnosticId::new("CEL0030");
@@ -368,53 +370,8 @@ pub fn typed_diagnostics(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
-    use celerrate_db::testing::TestDatabase;
-    use celerrate_db::{AnalyzedFileSet, SourceFile};
-    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-    use celerrate_source::FileId;
-    use celerrate_stubs::StubIndexInput;
-
+    use super::test_support::{fixture, handle_of};
     use super::{ArgumentLabel, TypedVerdictKind, typed_diagnostics};
-
-    struct Fixture {
-        db: TestDatabase,
-        handles: Vec<SourceFile>,
-        files: AnalyzedFileSet,
-        stubs: StubIndexInput,
-        configuration: ProjectConfiguration,
-    }
-
-    fn fixture(sources: &[&str]) -> Fixture {
-        let db = TestDatabase::default();
-        let handles: Vec<SourceFile> = sources
-            .iter()
-            .enumerate()
-            .map(|(index, source)| {
-                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
-            })
-            .collect();
-        let files = AnalyzedFileSet::new(&db, handles.clone());
-        let stubs = StubIndexInput::builder(crate::inheritance::test_support::minimal_stub_index())
-            .durability(salsa::Durability::HIGH)
-            .new(&db);
-        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-            PhpVersion::new(8, 1),
-            PhpVersion::new(8, 5),
-        ))
-        .durability(salsa::Durability::MEDIUM)
-        .new(&db);
-        Fixture {
-            db,
-            handles,
-            files,
-            stubs,
-            configuration,
-        }
-    }
-
-    fn handle_of(fixture: &Fixture, index: usize) -> SourceFile {
-        fixture.handles[index]
-    }
 
     #[test]
     fn every_kind_names_its_identifier_and_message() {

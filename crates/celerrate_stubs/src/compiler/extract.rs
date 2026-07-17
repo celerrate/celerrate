@@ -136,18 +136,26 @@ fn collect(statements: ast::AstChildren<ast::Statement>, initial_namespace: &str
                     declaration.syntax(),
                 );
                 if let Some(name_token) = declaration.name_token() {
-                    // Implicit `UnitEnum`/`BackedEnum` parents are not
-                    // synthesized here (recorded debt: plan 8's checks
-                    // need them, revisit there).
-                    sink.classes.push((
-                        qualify(&namespace, name_token.text()),
-                        class_surface(
-                            &namespace,
-                            declaration.extends_clause(),
-                            declaration.implements_clause(),
-                            declaration.member_list(),
-                        ),
-                    ));
+                    let mut surface = class_surface(
+                        &namespace,
+                        declaration.extends_clause(),
+                        declaration.implements_clause(),
+                        declaration.member_list(),
+                    );
+                    // Decision 7: every enum implicitly implements
+                    // `UnitEnum`, and a backed one (its declared
+                    // backing type is present) additionally
+                    // `BackedEnum` — real ancestor facts no PHP
+                    // grammar lets a class-like write explicitly.
+                    // Appended after any written heritage, global
+                    // names (no namespace qualification, matching
+                    // `StubClassSurface.parents`'s own convention).
+                    surface.parents.push("UnitEnum".to_owned());
+                    if declaration.backing_type().is_some() {
+                        surface.parents.push("BackedEnum".to_owned());
+                    }
+                    sink.classes
+                        .push((qualify(&namespace, name_token.text()), surface));
                 }
             }
             ast::Statement::FunctionDeclaration(declaration) => {
@@ -1150,6 +1158,30 @@ mod tests {
         assert_eq!(
             extraction.classes[1].1.parents,
             vec!["Random\\Engine".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_enum_surface_implicitly_carries_unitenum_and_backedenum_parents() {
+        // Decision 7: the stub compiler's enum arm synthesizes the
+        // engine-provided parents no PHP grammar lets a class-like
+        // write. A plain enum only ever gains `UnitEnum`; a backed one
+        // (its `backing_type()` is present) additionally gains
+        // `BackedEnum`.
+        let plain = extract("<?php enum Suit {}");
+        let (_, surface) = &plain.classes[0];
+        assert_eq!(surface.parents, vec!["UnitEnum".to_owned()]);
+
+        let backed = extract(
+            "<?php\n\
+             enum Status: string {\n\
+                 case Active = 'active';\n\
+             }\n",
+        );
+        let (_, surface) = &backed.classes[0];
+        assert_eq!(
+            surface.parents,
+            vec!["UnitEnum".to_owned(), "BackedEnum".to_owned()],
         );
     }
 

@@ -52,14 +52,16 @@ pub use index::{
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
     AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember,
-    LinearizedVirtualMember, MagicMarkers, MemberOrigin, anonymous_class_key, folded_member_key,
-    linearized_class, parse_anonymous_class_key,
+    LinearizedVirtualMember, MagicMarkers, MemberOrigin, anonymous_class_key,
+    class_declaration_kind, folded_member_key, linearized_class, parse_anonymous_class_key,
 };
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration,
     lookup_function_declaration, lookup_symbol,
 };
-pub use member_lookup::{MemberQuery, MemberResolution, lookup_member};
+pub use member_lookup::{
+    ClassSurface, MemberQuery, MemberResolution, class_surface, lookup_member,
+};
 pub use members::{
     ClassMembers, FreeFunction, Member, MemberFlags, MemberKind, MemberSignature, MemberTree,
     ParameterSignature, TraitAdaptation, TraitUse, Visibility,
