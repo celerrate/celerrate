@@ -143,7 +143,31 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use celerrate_db::testing::TestDatabase;
-    use celerrate_plugin::TypeId;
+    use celerrate_plugin::{ShapeField, ShapeKey, TypeId};
+
+    /// A two-field shape whose keys are both strings, so
+    /// `shape_as_array`'s `is_list` is `false` (`ShapeKey::String`
+    /// keys never collect into the `Some(Vec<i64>)` `is_list`
+    /// requires) — the only way to reach the `array_key_of`
+    /// (`array<K, R>`) branch rather than the `is_list` (`list<R>`)
+    /// branch.
+    fn shape_with_string_keys(db: &TestDatabase) -> TypeId<'_> {
+        TypeId::shape(
+            db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("a".to_owned()),
+                    optional: false,
+                    value: TypeId::int(db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("b".to_owned()),
+                    optional: false,
+                    value: TypeId::int(db),
+                },
+            ],
+        )
+    }
 
     #[test]
     fn array_map_with_a_null_callback_answers_the_array_unchanged() {
@@ -195,6 +219,28 @@ mod tests {
         assert!(super::array_map(&db, &[TypeId::mixed(&db)]).is_none());
     }
 
+    /// The non-list shape path (`array<K, R>`, `array_key_of`
+    /// composed over the callable return): a shape whose keys are
+    /// strings is not a list, so `array_map` must keep the shape's
+    /// key union rather than answering `list<R>`.
+    #[test]
+    fn array_map_over_a_non_list_shape_keeps_the_key_union() {
+        let db = TestDatabase::default();
+        let callback = TypeId::callable(&db, vec![], TypeId::string(&db));
+        let subject = shape_with_string_keys(&db);
+        let key = TypeId::union(
+            &db,
+            [
+                TypeId::string_literal(&db, "a"),
+                TypeId::string_literal(&db, "b"),
+            ],
+        );
+        assert_eq!(
+            super::array_map(&db, &[callback, subject]).unwrap(),
+            TypeId::array(&db, key, TypeId::string(&db)),
+        );
+    }
+
     #[test]
     fn array_filter_without_a_callback_drops_falsy_constituents() {
         let db = TestDatabase::default();
@@ -232,6 +278,27 @@ mod tests {
         assert_eq!(
             super::array_filter(&db, &[subject, callback]).unwrap(),
             TypeId::array(&db, TypeId::string(&db), value),
+        );
+    }
+
+    /// The non-list shape path's `array_filter` equivalent: a shape
+    /// whose keys are strings is not a list, so `array_filter` must
+    /// keep the shape's key union (`array_key_of`) rather than
+    /// answering the list branch's `int_range(0, None)`.
+    #[test]
+    fn array_filter_over_a_non_list_shape_keeps_the_key_union() {
+        let db = TestDatabase::default();
+        let subject = shape_with_string_keys(&db);
+        let key = TypeId::union(
+            &db,
+            [
+                TypeId::string_literal(&db, "a"),
+                TypeId::string_literal(&db, "b"),
+            ],
+        );
+        assert_eq!(
+            super::array_filter(&db, &[subject]).unwrap(),
+            TypeId::array(&db, key, TypeId::int(&db)),
         );
     }
 }

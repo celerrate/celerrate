@@ -224,12 +224,15 @@ mod tests {
     }
 
     /// The subject fed to each claimed function by
-    /// [`every_claimed_function_answers_some_for_its_subject`].
-    /// Deliberately has no wildcard arm: a claimed function with no
-    /// arm here answers `None`, which the caller turns into a named
-    /// assertion failure rather than silently skipping the check. A
-    /// future claim needing a different subject shape (a `preg_match`
-    /// pattern, say) gets its own arm instead of reusing this one.
+    /// [`every_claimed_function_answers_some_for_its_subject`]. The
+    /// trailing `_ => None` arm is a deliberate forcing function, not
+    /// a shortcut: the caller asserts `subject.is_some()` with an
+    /// actionable message, so any claimed function without a matching
+    /// arm here fails that assertion by name instead of silently
+    /// skipping the check. A future claim needing a different subject
+    /// shape (a `preg_match` pattern, say) still needs its own arm:
+    /// falling through to the wildcard only earns a named test
+    /// failure, not coverage.
     fn claimed_function_subject<'db>(db: &'db TestDatabase, key: &str) -> Option<Vec<TypeId<'db>>> {
         match key {
             "array_filter" => Some(vec![TypeId::array(db, TypeId::int(db), TypeId::string(db))]),
