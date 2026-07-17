@@ -3,4 +3,5 @@
 //! `compiler` feature — the runtime never parses PHP.
 
 pub mod extract;
+pub mod refinement_source;
 pub mod snapshot;

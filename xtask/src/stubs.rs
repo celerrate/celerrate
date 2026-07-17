@@ -34,6 +34,7 @@ pub fn compile(check: bool) -> Result<()> {
     let root = crate::workspace_root()?;
     let snapshot = snapshot_directory()?;
     let blob = root.join("crates/celerrate_stubs/src/stubs.bin");
+    let refinements = root.join("crates/celerrate_stubs/refinements.celerrate");
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
     let mut command = Command::new(cargo);
     command
@@ -50,7 +51,9 @@ pub fn compile(check: bool) -> Result<()> {
             "--",
         ])
         .arg(&snapshot)
-        .arg(&blob);
+        .arg(&blob)
+        .arg("--refinements")
+        .arg(&refinements);
     if check {
         command.arg("--check");
     }

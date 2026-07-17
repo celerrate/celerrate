@@ -1,0 +1,13 @@
+# The Celerrate refinements overlay (design section 7): enriched
+# stub signatures in the internal norm, compiled into stubs.bin by
+# `cargo xtask compile-stubs`. Validated at compile time (existence)
+# and by the lowering-totality test in celerrate_types (grammar).
+
+function array_keys<TKey, TValue>(array<TKey, TValue> $array): list<TKey>
+function array_values<TKey, TValue>(array<TKey, TValue> $array): list<TValue>
+
+class ArrayIterator<TKey, TValue> implements Iterator<TKey, TValue> {
+    method __construct(array<TKey, TValue> $array)
+    method current(): TValue
+    method key(): TKey
+}
