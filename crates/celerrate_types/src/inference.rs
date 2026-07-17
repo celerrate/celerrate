@@ -3599,4 +3599,110 @@ function consume() { return array_keys(['a' => 1, 'b' => 2]); }
         // `array<TKey, TValue>`.
         assert_eq!(inferred.display(&f.db), "list<'a'|'b'>");
     }
+
+    // Task 5 (decision 8): stub-class refinements settle plan 6's
+    // recorded stub-generics debt on the curated classes. Both tests
+    // below use the real embedded blob (`fixture_with_embedded_stubs`),
+    // exactly like the refined-function test above, so they exercise
+    // the genuine `refinements.celerrate` seed end to end rather than
+    // a hand-built fixture that might not match it.
+
+    #[test]
+    fn a_refined_stub_constructor_solves_the_class_templates() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() { return new \ArrayIterator(['a' => 1]); }
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "consume".to_owned()),
+        );
+        // The refined `__construct`'s `array<TKey, TValue>` bound
+        // both: TKey from the literal key `'a'`, TValue from the
+        // literal value `1`.
+        assert_eq!(inferred.display(&f.db), "arrayiterator<'a', 1>");
+    }
+
+    #[test]
+    fn iteration_over_a_refined_stub_iterator_types_key_and_value() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() {
+    foreach (new \ArrayIterator(['a' => 1, 'b' => 2]) as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "consume".to_owned()),
+        );
+        // The threaded `Iterator<TKey, TValue>` arguments reached
+        // iteration typing's protocol chain (if iteration typing
+        // answers through the refined `current()`/`key()` returns
+        // instead, that is equally correct — the displays are the
+        // contract, not the path). The list literal display: a shape
+        // of the two subjects, unioned with the fall-through null.
+        let display = inferred.display(&f.db);
+        assert!(display.contains("'a'|'b'"), "{display}");
+        assert!(display.contains("1|2"), "{display}");
+    }
+
+    /// Blind-spot proof (the plan-6 `member_owner`/`$obj::class`
+    /// shape): `implements_iteration_protocol`'s new stub fallback
+    /// (`flow.rs`'s `stub_implements_iteration_protocol`, task 5) must
+    /// resolve PER CONSTITUENT class key when the receiver is a union,
+    /// never a verdict computed once and shared across every
+    /// constituent. `\ArrayIterator` (a genuine stub, no source
+    /// declaration — routed through the NEW fallback) and `StringKeys`
+    /// (an ordinary source class implementing `\Iterator` directly —
+    /// routed through the PRE-EXISTING `linearized_class` check) sit on
+    /// either side of that fallback: a bug that computed the gate once
+    /// from whichever constituent ran first, then reused the answer,
+    /// would either drop `StringKeys`'s `bool`/`float` pair or drop
+    /// `ArrayIterator`'s `'a'`/`1` pair from the union — never both.
+    #[test]
+    fn a_union_of_a_stub_and_a_source_iterator_types_each_constituent_independently() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+namespace App;
+class StringKeys implements \Iterator {
+    public function current(): float { return 1.0; }
+    public function key(): bool { return true; }
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+}
+function pick(bool $flag) {
+    return $flag ? new \ArrayIterator(['a' => 1]) : new StringKeys();
+}
+function consume(bool $flag) {
+    foreach (pick($flag) as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "app\\consume".to_owned()),
+        );
+        let display = inferred.display(&f.db);
+        // `ArrayIterator`'s constituent: the constructor-solved literal
+        // key/value, reached through the stub fallback.
+        assert!(display.contains("'a'"), "{display}");
+        // `StringKeys`'s constituent: its own declared `current()`/
+        // `key()` returns, reached through the pre-existing source
+        // path — present in the SAME union, not displaced by the
+        // stub constituent.
+        assert!(display.contains("float"), "{display}");
+        assert!(display.contains("bool"), "{display}");
+    }
 }

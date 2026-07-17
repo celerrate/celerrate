@@ -6,15 +6,15 @@
 //! section 6). Absence is silence: a subject missing from the
 //! environment reads as its wide type, `mixed` for locals.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet, VecDeque};
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
     ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
-    MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
-    lookup_member,
+    MemberResolution, StatementId, StringPart, SymbolSpace, UseTables, folded_member_key,
+    folded_symbol_key, linearized_class, lookup_member, stub_signature_table,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -1432,27 +1432,77 @@ impl<'db> Walker<'db, '_, '_> {
     /// the same walk. Checking both fields is what makes this query
     /// answer "implements" for a stub-inherited protocol, not just a
     /// directly-named one.
+    ///
+    /// `linearized_class` itself answers `None` for `name` when `name`
+    /// has no SOURCE declaration at all — `linearize.rs`'s root fetch
+    /// requires one, by design (plan 6). A genuine stub receiver with
+    /// no user subclass in between (`new \ArrayIterator(...)`, task 5's
+    /// decision 8: `foreach` over one must still type through the
+    /// threaded `Iterator<TKey, TValue>` its curated refinement
+    /// composed) falls into exactly that gap: it is never the ROOT of
+    /// any source ancestry walk, so `ancestry`/`stub_ancestors` never
+    /// exist for it to check. `stub_implements_iteration_protocol`
+    /// covers this one remaining case by walking `name`'s own compiled
+    /// surface directly, the same transitive-parents walk
+    /// `linearize.rs`'s stub-frontier expansion runs for an INHERITED
+    /// stub ancestor, just seeded from `name` itself rather than from
+    /// a source class's `stub_ancestors`.
     fn implements_iteration_protocol(&self, name: &str) -> bool {
         let db = self.db();
-        let Some(linearized) = linearized_class(
+        match linearized_class(
             db,
             self.context.files,
             self.context.stubs,
             self.context.configuration,
             ClassQuery::new(db, name.to_owned()),
         )
-        .as_ref() else {
-            return false;
-        };
-        linearized.ancestry.iter().any(|edge| {
-            edge.resolved
-                .as_deref()
-                .or(edge.stub.as_deref())
-                .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
-        }) || linearized
-            .stub_ancestors
-            .iter()
-            .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
+        .as_ref()
+        {
+            Some(linearized) => {
+                linearized.ancestry.iter().any(|edge| {
+                    edge.resolved
+                        .as_deref()
+                        .or(edge.stub.as_deref())
+                        .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
+                }) || linearized
+                    .stub_ancestors
+                    .iter()
+                    .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
+            }
+            None => self.stub_implements_iteration_protocol(name),
+        }
+    }
+
+    /// Whether `name` — a class-like with no source declaration at all
+    /// — transitively implements the iteration protocol through its
+    /// OWN compiled stub surface: a breadth-first walk of
+    /// `StubClassSurface::parents`, seeded from `name`, answering true
+    /// the moment a visited (folded) key is one of
+    /// [`Self::ITERATION_PROTOCOL`]. A name with no compiled surface at
+    /// all (unresolvable, or a plain function-only stub key by
+    /// mistake) answers `false`, the same conservative-silence default
+    /// [`Self::implements_iteration_protocol`] already carries for a
+    /// wholly unresolved class.
+    fn stub_implements_iteration_protocol(&self, name: &str) -> bool {
+        let db = self.db();
+        let table = stub_signature_table(db, self.context.stubs);
+        let mut queue: VecDeque<String> = VecDeque::from([name.to_owned()]);
+        let mut visited: HashSet<String> = HashSet::new();
+        while let Some(key) = queue.pop_front() {
+            if !visited.insert(key.clone()) {
+                continue;
+            }
+            if Self::ITERATION_PROTOCOL.contains(&key.as_str()) {
+                return true;
+            }
+            let Some(surface) = table.class(&key) else {
+                continue;
+            };
+            for parent in &surface.parents {
+                queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
+            }
+        }
+        false
     }
 
     /// The class arm of [`Self::iteration_types`]: the protocol's own
