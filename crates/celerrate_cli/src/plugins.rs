@@ -195,16 +195,23 @@ mod tests {
 
     #[test]
     fn a_claim_conflict_excludes_the_later_registrant_and_rebuilds() {
-        // Unit-level: two fake registrations claiming the same function;
-        // the admitted set keeps the first, the exclusion names the
-        // second, and validate_claims passes on the rebuilt vector.
+        // Unit-level: three mutually conflicting registrations (all
+        // claiming the same function). Two registrants would only
+        // ever exercise a single pass, which a non-rebuilding shape
+        // (`if let Err` + one `retain`) would pass identically. The
+        // third registrant forces a second loop iteration: after the
+        // first pass excludes "second", the set of [first, third]
+        // still conflicts, so only the `while` loop — not a single
+        // `if` — drives it to a conflict-free result.
         let (admitted, excluded) = super::admit_dynamic_providers(vec![
             fake_registration("first", &["current"]),
             fake_registration("second", &["current"]),
+            fake_registration("third", &["current"]),
         ]);
         assert_eq!(admitted.len(), 1);
-        assert_eq!(excluded.len(), 1);
+        assert_eq!(excluded.len(), 2);
         assert_eq!(excluded.first().unwrap().name, "second");
+        assert_eq!(excluded.get(1).unwrap().name, "third");
         assert!(celerrate_types::validate_claims(&admitted).is_ok());
     }
 

@@ -189,4 +189,51 @@ mod tests {
             .unwrap();
         assert_eq!(answer, TypeId::bool_literal(&db, false));
     }
+
+    /// Totality gate over `CLAIMED_FUNCTIONS` (task 6 review, Minor
+    /// 2), mirroring `celerrate_types`'s
+    /// `every_embedded_refinement_text_lowers`: every key the
+    /// provider claims must actually answer `Some` through
+    /// `function_return`. Without this, a typo in a match arm would
+    /// claim a key and then silently answer `None` — the provider
+    /// would swallow the call and fall through to the declared tier
+    /// with nothing failing.
+    #[test]
+    fn every_claimed_function_answers_some_for_its_subject() {
+        let db = TestDatabase::default();
+        let provider = StdlibProvider::new();
+        for key in super::CLAIMED_FUNCTIONS {
+            let subject = claimed_function_subject(&db, key);
+            assert!(
+                subject.is_some(),
+                "no subject configured for claimed function {key:?} in \
+                 `claimed_function_subject`; growing CLAIMED_FUNCTIONS \
+                 requires adding a matching subject here so this totality \
+                 test keeps verifying the new dispatch arm",
+            );
+            let arguments = subject.unwrap_or_default();
+            let answer = provider.return_type(&db, &function_invocation(key, arguments));
+            assert!(
+                answer.is_some(),
+                "claimed function {key:?} answered None: it is claimed but \
+                 has no working dispatch arm in `function_return`",
+            );
+        }
+    }
+
+    /// The subject fed to each claimed function by
+    /// [`every_claimed_function_answers_some_for_its_subject`].
+    /// Deliberately has no wildcard arm: a claimed function with no
+    /// arm here answers `None`, which the caller turns into a named
+    /// assertion failure rather than silently skipping the check. A
+    /// future claim needing a different subject shape (a `preg_match`
+    /// pattern, say) gets its own arm instead of reusing this one.
+    fn claimed_function_subject<'db>(db: &'db TestDatabase, key: &str) -> Option<Vec<TypeId<'db>>> {
+        match key {
+            "current" | "end" | "reset" => {
+                Some(vec![TypeId::array(db, TypeId::int(db), TypeId::string(db))])
+            }
+            _ => None,
+        }
+    }
 }
