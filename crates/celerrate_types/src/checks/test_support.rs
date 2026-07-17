@@ -10,14 +10,17 @@
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-use celerrate_semantics::{AstId, BodyQuery, UseTables, body_ir, item_tree};
+use celerrate_semantics::{
+    AstId, BodyQuery, PluginIdentity, UseTables, VirtualMember, VirtualMemberKind,
+    VirtualSymbolProvider, VirtualSymbolRegistration, VirtualSymbolRegistry, body_ir, item_tree,
+};
 use celerrate_source::FileId;
 use celerrate_stubs::{
     StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
     StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
 };
 
-use super::CheckContext;
+use super::{CheckContext, TypedVerdictKind, typed_file_verdicts};
 use crate::inference::{BodyOwner, InferenceContext, body_owner, inferred_body_types};
 
 pub(crate) struct Fixture {
@@ -235,4 +238,83 @@ pub(crate) fn context_for(fixture: &Fixture, body_index: u32) -> CheckContext<'_
         tables: UseTables::for_namespace(item_tree(db, file), &namespace),
         namespace,
     }
+}
+
+/// A provider that recognizes the literal PHPDoc `@method` and
+/// `@property` tag conventions (`@method <ReturnType> <name>(...)`,
+/// `@property <Type> $<name>`) — just enough to exercise the
+/// virtual-member integration `members.rs`'s guillotine leans on
+/// (design section 8: `@method`/`@property` "count as existing"). The
+/// real dialect lives in `celerrate_phpdoc_bridge`, a crate above this
+/// one in the dependency DAG that cannot be depended on from here; a
+/// duplicated minimal parser is the codebase's own precedent for this
+/// gap (`celerrate_semantics`'s own test modules carry an equivalent
+/// `FakeProvider`, keyed on a bare `@fake` marker since none of them
+/// exercise the real tag text).
+#[derive(Debug)]
+struct DocblockMemberProvider;
+
+impl VirtualSymbolProvider for DocblockMemberProvider {
+    fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
+        let methods = class_docblock.split("@method").skip(1).filter_map(|rest| {
+            let name_token = rest.split_whitespace().find(|token| token.contains('('))?;
+            let name = name_token.split('(').next()?;
+            (!name.is_empty()).then(|| VirtualMember {
+                kind: VirtualMemberKind::Method,
+                name: name.to_owned(),
+                is_static: false,
+                type_text: None,
+                parameters: Vec::new(),
+            })
+        });
+        let properties = class_docblock
+            .split("@property")
+            .skip(1)
+            .filter_map(|rest| {
+                let name_token = rest
+                    .split_whitespace()
+                    .find(|token| token.starts_with('$'))?;
+                let name = name_token.trim_start_matches('$');
+                (!name.is_empty()).then(|| VirtualMember {
+                    kind: VirtualMemberKind::Property,
+                    name: name.to_owned(),
+                    is_static: false,
+                    type_text: None,
+                    parameters: Vec::new(),
+                })
+            });
+        methods.chain(properties).collect()
+    }
+}
+
+/// The shared checks-family test entry point: one file's `typed_file_verdicts`
+/// kinds, over the default fixture with a `DocblockMemberProvider`
+/// registered (design section 8's virtual-member surface). Every
+/// `checks` module's test suite shares this rather than re-deriving the
+/// `typed_file_verdicts` plumbing — `members.rs`'s tests first built it
+/// (as `method_verdicts`), promoted here once `nullability.rs`'s tests
+/// needed the same fixture-to-verdicts path (task 6).
+pub(crate) fn family_verdicts(source: &str) -> Vec<TypedVerdictKind> {
+    let fixture = fixture(&[source]);
+    let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
+        identity: PluginIdentity {
+            name: "test-docblock-member".to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        },
+        provider: std::sync::Arc::new(DocblockMemberProvider),
+    }])
+    .durability(salsa::Durability::HIGH)
+    .new(&fixture.db);
+    typed_file_verdicts(
+        &fixture.db,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+        handle_of(&fixture, 0),
+    )
+    .verdicts
+    .iter()
+    .map(|verdict| verdict.kind.clone())
+    .collect()
 }

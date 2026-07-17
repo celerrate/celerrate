@@ -321,90 +321,13 @@ pub(crate) fn written_class_display(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
-    use celerrate_semantics::{
-        PluginIdentity, VirtualMember, VirtualMemberKind, VirtualSymbolProvider,
-        VirtualSymbolRegistration, VirtualSymbolRegistry,
-    };
-
     use super::super::test_support::{
-        fixture, fixture_with_stub_class, fixture_with_stub_enum,
+        family_verdicts, fixture_with_stub_class, fixture_with_stub_enum,
         fixture_with_stub_enum_interfaces, handle_of,
     };
     use super::super::{TypedVerdictKind, typed_file_verdicts};
 
-    /// A provider that recognizes the literal PHPDoc `@method` and
-    /// `@property` tag conventions (`@method <ReturnType> <name>(...)`,
-    /// `@property <Type> $<name>`) — just enough to exercise the
-    /// virtual-member integration this walker's guillotine leans on
-    /// (design section 8: `@method`/`@property` "count as existing").
-    /// The real dialect lives in `celerrate_phpdoc_bridge`, a crate
-    /// above this one in the dependency DAG that cannot be depended on
-    /// from here; a duplicated minimal parser is the codebase's own
-    /// precedent for this gap (`celerrate_semantics`'s own test modules
-    /// carry an equivalent `FakeProvider`, keyed on a bare `@fake`
-    /// marker since none of them exercise the real tag text).
-    #[derive(Debug)]
-    struct DocblockMemberProvider;
-
-    impl VirtualSymbolProvider for DocblockMemberProvider {
-        fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
-            let methods = class_docblock.split("@method").skip(1).filter_map(|rest| {
-                let name_token = rest.split_whitespace().find(|token| token.contains('('))?;
-                let name = name_token.split('(').next()?;
-                (!name.is_empty()).then(|| VirtualMember {
-                    kind: VirtualMemberKind::Method,
-                    name: name.to_owned(),
-                    is_static: false,
-                    type_text: None,
-                    parameters: Vec::new(),
-                })
-            });
-            let properties = class_docblock
-                .split("@property")
-                .skip(1)
-                .filter_map(|rest| {
-                    let name_token = rest
-                        .split_whitespace()
-                        .find(|token| token.starts_with('$'))?;
-                    let name = name_token.trim_start_matches('$');
-                    (!name.is_empty()).then(|| VirtualMember {
-                        kind: VirtualMemberKind::Property,
-                        name: name.to_owned(),
-                        is_static: false,
-                        type_text: None,
-                        parameters: Vec::new(),
-                    })
-                });
-            methods.chain(properties).collect()
-        }
-    }
-
-    fn method_verdicts(source: &str) -> Vec<TypedVerdictKind> {
-        let fixture = fixture(&[source]);
-        let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {
-            identity: PluginIdentity {
-                name: "test-docblock-member".to_owned(),
-                version: "0.0.0".to_owned(),
-                configuration: String::new(),
-            },
-            provider: std::sync::Arc::new(DocblockMemberProvider),
-        }])
-        .durability(salsa::Durability::HIGH)
-        .new(&fixture.db);
-        typed_file_verdicts(
-            &fixture.db,
-            fixture.files,
-            fixture.stubs,
-            fixture.configuration,
-            handle_of(&fixture, 0),
-        )
-        .verdicts
-        .iter()
-        .map(|verdict| verdict.kind.clone())
-        .collect()
-    }
-
-    /// `method_verdicts` over a fixture whose stub input is a synthetic
+    /// `family_verdicts` over a fixture whose stub input is a synthetic
     /// `StubIndex::from_symbols` carrying a single `stdClass` class
     /// symbol — the shared `fixture_with_stub_class` idiom, so a source
     /// class can `extends \stdClass` and record it as a stub ancestor
@@ -424,7 +347,7 @@ mod tests {
         .collect()
     }
 
-    /// `method_verdicts` over the shared `fixture_with_stub_enum_interfaces`
+    /// `family_verdicts` over the shared `fixture_with_stub_enum_interfaces`
     /// fixture, carrying `UnitEnum`/`BackedEnum` surfaces so decision 7's
     /// implicit enum edges are synthesized end to end through this walk.
     fn method_verdicts_with_stub_enum_interfaces(source: &str) -> Vec<TypedVerdictKind> {
@@ -442,7 +365,7 @@ mod tests {
         .collect()
     }
 
-    /// `method_verdicts` over the shared `fixture_with_stub_enum`
+    /// `family_verdicts` over the shared `fixture_with_stub_enum`
     /// fixture: an enum declared only in the compiled stub surface, with
     /// no matching source declaration at all — a PHP built-in enum, the
     /// stub-only-enum classification regression's shape.
@@ -467,7 +390,7 @@ mod tests {
 
     #[test]
     fn an_unknown_instance_method_reports() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class User { public function save(): void {} }
 function f(User $u): void { $u->svae(); }
@@ -484,7 +407,7 @@ function f(User $u): void { $u->svae(); }
 
     #[test]
     fn known_inherited_virtual_and_magic_receivers_are_silent() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class Base { public function up(): void {} }
 /** @method void annotated() */
@@ -515,7 +438,7 @@ function f(User $u, Magic $m, mixed $x): void {
 
     #[test]
     fn union_receivers_report_only_when_missing_everywhere() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class A { public function shared(): void {} public function onlyA(): void {} }
 class B { public function shared(): void {} }
@@ -538,21 +461,25 @@ function f(A|B $either, ?A $nullable): void {
                     member: "nowhere".to_owned(),
                     receiver: "A".to_owned(),
                 },
+                // Task 6's nullability walker: `$nullable->nowhere()`'s
+                // receiver carries `null`, so the same `MemberAccess`
+                // node also earns a `NullDereference` beat, appended
+                // after every members-family verdict (`body_typed_verdicts`
+                // runs `members::check` then `nullability::check`).
+                TypedVerdictKind::NullDereference {
+                    member: "nowhere".to_owned(),
+                    receiver: "A|null".to_owned(),
+                },
             ],
         );
     }
-
-    // Signpost: task 6's nullability walker will additionally report a
-    // `NullDereference` for `$nullable->nowhere()` above (the receiver
-    // carries null); task 6 extends this expectation when it lands —
-    // that update is expected, not a regression.
 
     #[test]
     fn trait_owned_bodies_are_not_checked() {
         // Decision 3: plan 6 analyzes trait bodies per using class;
         // judged against the trait's own surface, this call would be a
         // false positive.
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 trait Caching {
     public function warm(): void { $this->providedByTheUsingClass(); }
@@ -564,7 +491,7 @@ trait Caching {
 
     #[test]
     fn scoped_calls_resolve_their_subject_symbolically() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class Tool { public static function make(): static { return new static(); } }
 function f(string $class): void {
@@ -587,7 +514,7 @@ function f(string $class): void {
 
     #[test]
     fn an_anonymous_class_receiver_is_checked() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 function f(): void {
     $listener = new class { public function handle(): void {} };
@@ -607,7 +534,7 @@ function f(): void {
 
     #[test]
     fn unknown_properties_report_with_their_suppressions() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class User { public string $name = ''; }
 class Getter { public function __get(string $n): mixed {} }
@@ -662,7 +589,7 @@ function f(Payload $p, \stdClass $raw): void {
 
     #[test]
     fn static_properties_constants_and_cases_report() {
-        let verdicts = method_verdicts(
+        let verdicts = family_verdicts(
             r#"<?php
 class Config {
     public static int $limit = 10;
