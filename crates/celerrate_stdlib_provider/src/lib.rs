@@ -263,10 +263,12 @@ mod tests {
                 TypeId::string(db),
                 TypeId::int_literal(db, -1),
             ]),
-            // A `false` associative literal overridden by the
-            // `JSON_OBJECT_AS_ARRAY` flag bit, so the dispatch reaches
-            // the flag-wins-over-associative rule (decision 12)
-            // rather than the trivially-`Some` no-arguments default.
+            // A `false` associative literal alongside a flags argument
+            // that carries `JSON_OBJECT_AS_ARRAY`: PHP's BC-reasons
+            // override means the literal wins over the flag (decision
+            // 12, amended), so the dispatch reaches that
+            // associative-overrides-flags path rather than the
+            // trivially-`Some` no-arguments default.
             "json_decode" => Some(vec![
                 TypeId::string(db),
                 TypeId::bool_literal(db, false),
