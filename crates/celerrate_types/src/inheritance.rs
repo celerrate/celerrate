@@ -334,6 +334,27 @@ fn thread_refined_ancestors<'db>(
             ClassQuery::new(db, ancestor.name.clone()),
         )
         .templates;
+        // `zip_templates`' padded `fixed` is deliberately DISCARDED
+        // here — only its substitution is kept. Padding it through, the
+        // way the outer walk does, would truncate this list to the
+        // ancestor's own template count, and a refined ancestor is
+        // typically NOT itself curated: `Iterator` carries no
+        // `RefinedClass`, so its template count is zero and the padded
+        // list would be empty, dropping the very answer decision 8
+        // exists to produce. The raw lowered list is the contract.
+        //
+        // The consequence, recorded rather than fixed: the
+        // `fixed.len() == templates.len()` invariant the outer walk
+        // guarantees (via `zip_templates`) is, for entries pushed HERE,
+        // conditional on the curation writing the ancestor's arguments
+        // at its real arity — `implements Iterator<TKey>` against
+        // `Iterator`'s two positions pushes a length-1 entry. Both
+        // consumers degrade safely rather than trusting the length:
+        // `flow.rs`'s iteration typing reads `.first()`/`.get(1)` and
+        // falls back when either is absent, and `solver.rs` `.zip()`s,
+        // which stops at the shorter side. The curation is the place to
+        // keep the arity honest; the real seed
+        // (`refinements.celerrate`) does.
         let (composed, _) = zip_templates(db, &ancestor.name, ancestor_templates, &fixed);
         substitutions.insert(ancestor.name.clone(), composed.clone());
         if !fixed.is_empty() {

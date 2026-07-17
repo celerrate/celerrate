@@ -3705,4 +3705,72 @@ function consume(bool $flag) {
         assert!(display.contains("float"), "{display}");
         assert!(display.contains("bool"), "{display}");
     }
+
+    /// Decision 8's named mechanism, end to end against the REAL
+    /// curated stub ancestor: `foreach` over a class extending
+    /// `\ArrayIterator` types through iteration typing's
+    /// **threaded-ancestors step** — `ancestor_arguments`' composition
+    /// of `ArrayIterator<TKey, TValue> implements Iterator<TKey,
+    /// TValue>` from `refinements.celerrate`, substituted against the
+    /// subclass's own `@extends` arguments.
+    ///
+    /// A source subclass is what makes the threaded step reachable at
+    /// all: `ancestor_arguments` calls `linearized_class`, which
+    /// answers only for a class with a SOURCE declaration
+    /// (`linearize.rs`'s root fetch, plan 6). `RecentPosts` supplies
+    /// that source root; the curated stub ancestry behind it is the
+    /// part under test.
+    ///
+    /// `current()`/`key()` are overridden with `float`/`bool` — types
+    /// the curated `Iterator<string, int>` chain cannot produce — so
+    /// the two candidate arms answer DIFFERENT types and the assertion
+    /// discriminates them. Iteration typing prefers the threaded step
+    /// over the `current`/`key` fallback (the precedence
+    /// `threaded_ancestor_arguments_precede_the_current_key_fallback`
+    /// pins for source classes), so `string`/`int` proves the threaded
+    /// step ran; `bool`/`float` would prove it answered `None` and the
+    /// fallback took over.
+    ///
+    /// `register_fake_syntax` is what makes the `@extends` tag mean
+    /// anything: annotations answer the default on a database with no
+    /// registered notation, so without it the tag is invisible and
+    /// both arms collapse to `mixed` — a vacuous pass.
+    #[test]
+    fn iteration_over_a_source_subclass_of_a_refined_stub_threads_the_curated_ancestor() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+namespace App;
+/**
+ * @extends \ArrayIterator<string, int>
+ */
+class RecentPosts extends \ArrayIterator {
+    public function current(): float { return 1.0; }
+    public function key(): bool { return true; }
+}
+function consume(RecentPosts $posts) {
+    foreach ($posts as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "app\\consume".to_owned()),
+        );
+        let display = inferred.display(&f.db);
+        // The threaded `Iterator<string, int>`: `@extends
+        // \ArrayIterator<string, int>` bound `TKey`/`TValue`, and the
+        // curated `implements Iterator<TKey, TValue>` carried both to
+        // the protocol.
+        assert!(display.contains("string"), "{display}");
+        assert!(display.contains("int"), "{display}");
+        // The `current`/`key` fallback's answers must NOT appear: their
+        // presence means the threaded step answered `None`.
+        assert!(!display.contains("float"), "{display}");
+        assert!(!display.contains("bool"), "{display}");
+    }
 }
