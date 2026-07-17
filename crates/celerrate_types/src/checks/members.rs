@@ -276,8 +276,13 @@ pub(crate) fn scoped_subject_keys(
 
 /// A written class name resolved through the global symbol index, the
 /// same candidate set `resolve_name` consults: `None` when it resolves
-/// to no declaration.
-fn resolve_scoped_class_key(context: &CheckContext<'_, '_>, written: &str) -> Option<String> {
+/// to no declaration. `pub(crate)`: task 8's `New { class: Named }`
+/// constructor resolution (`checks::arguments`) resolves its written
+/// class name through this exact same lookup.
+pub(crate) fn resolve_scoped_class_key(
+    context: &CheckContext<'_, '_>,
+    written: &str,
+) -> Option<String> {
     let candidate = resolve_candidates(
         written,
         SymbolSpace::ClassLike,

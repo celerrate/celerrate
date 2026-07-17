@@ -1,8 +1,561 @@
-//! The argument family: assignability of each call argument against its
-//! parameter, arity (too few, too many), and unknown named arguments
-//! (design section 8). A later task fills this walker in; today it
-//! finds nothing.
+//! The argument family (design section 8): per-argument assignability
+//! against exactly one resolved declared signature, under the calling
+//! file's coercion posture. `Proof::Fails` reports; `Holds` and
+//! `CannotProve` are silence — which is how weak-mode coercions stay
+//! unreported (task 7 upgrades a coercible `Fails` to `CannotProve`).
+//! `mixed` and partially fitting unions are guarded **before** the
+//! judgment (decision 10): the shipped `judge`/`subtype_of` refutes
+//! them set-theoretically (a `mixed` candidate answers `Fails`, a union
+//! candidate folds through `Proof::all` so one failing constituent
+//! fails the whole union), so their silence is this walk's own
+//! structural job, never the `Proof` value's.
+//!
+//! Resolution (decision 11) answers `None` unless exactly one declared
+//! signature resolves: a named free function or stub function; a
+//! method, static call, or constructor whose receiver decomposes to
+//! exactly one class or enum-case atom (a union receiver, or a
+//! genuinely undecidable one, is silent — a recorded stance). The
+//! **declared tier only** — providers compute returns, never parameter
+//! contracts. `ResolvedCall`/`resolved_call_signature` is the interface
+//! task 9's arity and named-argument checks reuse, `source_body` in
+//! particular for its `func_get_args` probe.
 
-use super::{CheckContext, TypedVerdict};
+use celerrate_db::SourceFile;
+use celerrate_semantics::{
+    BodyExpression, BodyQuery, CallArgument, ClassReference, ExpressionId, MemberKind, MemberQuery,
+    MemberReference, MemberResolution, SymbolQuery, SymbolSpace, analyzed_file_index,
+    anonymous_class_key, file_strict_types, folded_member_key, lookup_function_declaration,
+    lookup_member,
+};
 
-pub(crate) fn check(_context: &CheckContext<'_, '_>, _verdicts: &mut Vec<TypedVerdict>) {}
+use crate::TypeId;
+use crate::declared::{
+    DeclaredParameter, DeclaredSignature, FunctionQuery, declared_function_signature,
+    declared_member_signature,
+};
+use crate::flow::resolved_function_key;
+use crate::judgments::{CoercionMode, Proof, assignable_to};
+
+use super::members::{resolve_scoped_class_key, scoped_subject_keys};
+use super::receivers::{ReceiverAtom, atoms_of, written_type_display};
+use super::{ArgumentLabel, CheckContext, TypedVerdict, TypedVerdictKind};
+
+/// Exactly one declared signature for a call's callee, or `None`
+/// (decision 11), plus enough to reach into that callee's own body when
+/// it is source code. `pub(crate)`: task 9 reuses both. `source_body`
+/// is constructed and unread until task 9's `func_get_args` probe
+/// consumes it, hence the field-local `dead_code` allow (the same
+/// not-yet-read precedent `checks/mod.rs`'s `CheckContext` already
+/// carries for its own future-task fields).
+#[allow(dead_code)]
+pub(crate) struct ResolvedCall<'db> {
+    pub callee_display: String,
+    pub signature: DeclaredSignature<'db>,
+    pub source_body: Option<(SourceFile, BodyQuery<'db>)>,
+}
+
+pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerdict>) {
+    let mode = if file_strict_types(context.db, context.file) {
+        CoercionMode::Strict
+    } else {
+        CoercionMode::Weak
+    };
+    for (index, expression) in context.ir.expressions.iter().enumerate() {
+        let Some(id) = ExpressionId::from_index(index) else {
+            continue;
+        };
+        let arguments = match expression {
+            BodyExpression::Call { arguments, .. } | BodyExpression::New { arguments, .. } => {
+                arguments
+            }
+            _ => continue,
+        };
+        let Some(resolved) = resolved_call_signature(context, id) else {
+            continue;
+        };
+        check_argument_types(context, verdicts, &resolved, arguments, mode);
+    }
+}
+
+fn check_argument_types<'db>(
+    context: &CheckContext<'db, '_>,
+    verdicts: &mut Vec<TypedVerdict>,
+    resolved: &ResolvedCall<'db>,
+    arguments: &[CallArgument],
+    mode: CoercionMode,
+) {
+    let parameters = &resolved.signature.parameters;
+    let mut position = 0usize;
+    for argument in arguments {
+        if argument.spread {
+            // Spread makes later positional matching undecidable;
+            // arguments before the first spread were already checked.
+            break;
+        }
+        let (parameter, label) = match &argument.label {
+            Some(name) => {
+                let Some(parameter) = parameters.iter().find(|parameter| parameter.name == *name)
+                else {
+                    continue; // task 9 reports the unknown name
+                };
+                (parameter, ArgumentLabel::Named(name.clone()))
+            }
+            None => {
+                position += 1;
+                let Some(parameter) = parameter_at(parameters, position) else {
+                    continue; // task 9 reports the excess
+                };
+                (parameter, ArgumentLabel::Positional(position))
+            }
+        };
+        if parameter.by_reference {
+            continue; // the `preg_match` exemption (design section 6)
+        }
+        let Some(parameter_type) = parameter.parameter_type else {
+            continue; // the empty-intersection stub guard (plan 3)
+        };
+        let Some(argument_type) = context.inferred.expression_type(argument.value) else {
+            continue;
+        };
+        // Decision 10's pre-judgment guards, structural rather than
+        // `Proof`-based: `mixed` passes everywhere, and a union reports
+        // only when every constituent fails assignability on its own
+        // (a non-union scalar source is the one-constituent case of the
+        // same fold).
+        if argument_type.is_mixed(context.db) {
+            continue;
+        }
+        let every_constituent_fails =
+            argument_type
+                .constituents(context.db)
+                .into_iter()
+                .all(|part| {
+                    assignable_to(
+                        context.db,
+                        context.files,
+                        context.stubs,
+                        context.configuration,
+                        part,
+                        parameter_type,
+                        mode,
+                    ) == Proof::Fails
+                });
+        if every_constituent_fails {
+            verdicts.push(TypedVerdict {
+                body: context.body,
+                expression: argument.value,
+                kind: TypedVerdictKind::ArgumentType {
+                    label,
+                    callee: resolved.callee_display.clone(),
+                    expected: written_type_display(context, parameter_type),
+                    given: written_type_display(context, argument_type),
+                },
+            });
+        }
+    }
+}
+
+/// The parameter a 1-based position binds: the last variadic absorbs
+/// everything past the list.
+fn parameter_at<'a, 'db>(
+    parameters: &'a [DeclaredParameter<'db>],
+    position: usize,
+) -> Option<&'a DeclaredParameter<'db>> {
+    match parameters.get(position.saturating_sub(1)) {
+        Some(parameter) => Some(parameter),
+        None => parameters.last().filter(|parameter| parameter.variadic),
+    }
+}
+
+/// Exactly one declared signature for a call's or instantiation's
+/// callee (decision 11); `None` otherwise. `expression` is the `Call`
+/// or `New` expression itself, not its callee sub-expression.
+pub(crate) fn resolved_call_signature<'db>(
+    context: &CheckContext<'db, '_>,
+    expression: ExpressionId,
+) -> Option<ResolvedCall<'db>> {
+    match context.ir.expression(expression)? {
+        BodyExpression::Call { callee, .. } => resolved_callee_signature(context, *callee),
+        BodyExpression::New { class, .. } => resolved_constructor_signature(context, class),
+        _ => None,
+    }
+}
+
+/// A `Call`'s callee, decomposed by written shape (mirrors `flow.rs`'s
+/// own call-boundary matching): a named free function, an instance
+/// method, or a static/scoped call. Any other callee shape (a callable
+/// value, a closure result) is undecidable here and answers `None`.
+fn resolved_callee_signature<'db>(
+    context: &CheckContext<'db, '_>,
+    callee: ExpressionId,
+) -> Option<ResolvedCall<'db>> {
+    match context.ir.expression(callee)? {
+        BodyExpression::NamedReference { text } => resolved_named_function_call(context, text),
+        BodyExpression::MemberAccess {
+            receiver,
+            member: MemberReference::Named { name },
+            ..
+        } => resolved_method_call(context, *receiver, name),
+        BodyExpression::ScopedAccess {
+            subject,
+            member: MemberReference::Named { name },
+        } => resolved_scoped_call(context, *subject, name),
+        _ => None,
+    }
+}
+
+/// `foo(...)`: resolved through the same candidate order the flow
+/// walk's own call boundary uses (`crate::flow::resolved_function_key`,
+/// the fallback-to-global rule folded in), against the declared tier
+/// only. `callee_display` is the written text's last segment (`App\foo`
+/// displays as `foo`, matching `flow.rs`'s own convention for messages
+/// that name a callee).
+fn resolved_named_function_call<'db>(
+    context: &CheckContext<'db, '_>,
+    text: &str,
+) -> Option<ResolvedCall<'db>> {
+    let db = context.db;
+    let (key, _) = resolved_function_key(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        &context.namespace,
+        &context.tables,
+        text,
+    );
+    let signature = declared_function_signature(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        FunctionQuery::new(db, key.clone()),
+    )?;
+    Some(ResolvedCall {
+        callee_display: last_segment(text).to_owned(),
+        signature,
+        source_body: source_function_body(context, &key),
+    })
+}
+
+/// `(file, BodyQuery)` for a resolved function key, when it names a
+/// source declaration — the `inferred_function_return` idiom
+/// (`analyzed_file_index` bridges the declaration's `AstId::file` back
+/// to the salsa `SourceFile` handle). `None` for a stub-only or
+/// unresolved key.
+fn source_function_body<'db>(
+    context: &CheckContext<'db, '_>,
+    key: &str,
+) -> Option<(SourceFile, BodyQuery<'db>)> {
+    let db = context.db;
+    let query = SymbolQuery::new(db, SymbolSpace::Function, key.to_owned());
+    let ast_id = lookup_function_declaration(db, context.files, query)?;
+    let index = analyzed_file_index(db, context.files);
+    let position = index
+        .binary_search_by_key(&ast_id.file, |(id, _)| *id)
+        .ok()?;
+    let &(_, file) = index.get(position)?;
+    Some((file, BodyQuery::new(db, ast_id)))
+}
+
+/// `$receiver->name(...)`: the receiver's inferred type must decompose
+/// to exactly one class or enum-case atom, non-null constituents
+/// dropped (a union receiver, or an otherwise undecidable one, is
+/// silent — decision 11's recorded stance).
+fn resolved_method_call<'db>(
+    context: &CheckContext<'db, '_>,
+    receiver: ExpressionId,
+    name: &str,
+) -> Option<ResolvedCall<'db>> {
+    let receiver_type = context.inferred.expression_type(receiver)?;
+    let key = single_class_atom_key(context, receiver_type)?;
+    resolved_member_call(context, &key, name)
+}
+
+/// The one class or enum-case key a receiver names, after dropping
+/// `Null` atoms — `None` when zero or more than one atom remains, or
+/// when the sole remaining atom is itself undecidable.
+fn single_class_atom_key<'db>(
+    context: &CheckContext<'db, '_>,
+    receiver: TypeId<'db>,
+) -> Option<String> {
+    let mut atoms = atoms_of(context, receiver)
+        .into_iter()
+        .filter(|atom| !matches!(atom, ReceiverAtom::Null));
+    let atom = atoms.next()?;
+    if atoms.next().is_some() {
+        return None;
+    }
+    match atom {
+        ReceiverAtom::Class { key } | ReceiverAtom::Case { enum_key: key } => Some(key),
+        ReceiverAtom::Null | ReceiverAtom::Undecidable => None,
+    }
+}
+
+/// `Subject::name(...)`: `scoped_subject_keys` (task 4) must answer
+/// exactly one key (`self`/`static`/`parent` already fold to the
+/// owner's key there; any other name resolves through the global
+/// symbol index) — a union or unresolvable subject is silent.
+fn resolved_scoped_call<'db>(
+    context: &CheckContext<'db, '_>,
+    subject: ExpressionId,
+    name: &str,
+) -> Option<ResolvedCall<'db>> {
+    let keys = scoped_subject_keys(context, subject)?;
+    let [key] = keys.as_slice() else {
+        return None;
+    };
+    resolved_member_call(context, key, name)
+}
+
+/// The declared method signature `key::name` names, plus its source
+/// body when it has one. Shared by the instance-method and scoped-call
+/// resolutions above: both fold their receiver down to a single class
+/// key before reaching here.
+fn resolved_member_call<'db>(
+    context: &CheckContext<'db, '_>,
+    key: &str,
+    name: &str,
+) -> Option<ResolvedCall<'db>> {
+    let db = context.db;
+    let query = MemberQuery::new(
+        db,
+        key.to_owned(),
+        MemberKind::Method,
+        folded_member_key(MemberKind::Method, name),
+    );
+    let signature = declared_member_signature(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        query,
+    )?;
+    Some(ResolvedCall {
+        callee_display: name.to_owned(),
+        signature,
+        source_body: source_method_body(context, key, name),
+    })
+}
+
+/// `(file, BodyQuery)` for a resolved member key, when `lookup_member`
+/// answers `Source` — the `inferred_method_return` idiom
+/// (`member.ast_id` bridged through `analyzed_file_index` exactly like
+/// the free-function case). `None` for a stub, virtual, or unresolved
+/// member.
+fn source_method_body<'db>(
+    context: &CheckContext<'db, '_>,
+    key: &str,
+    name: &str,
+) -> Option<(SourceFile, BodyQuery<'db>)> {
+    let db = context.db;
+    let query = MemberQuery::new(
+        db,
+        key.to_owned(),
+        MemberKind::Method,
+        folded_member_key(MemberKind::Method, name),
+    );
+    let MemberResolution::Source { member, .. } = lookup_member(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        query,
+    )?
+    else {
+        return None;
+    };
+    let index = analyzed_file_index(db, context.files);
+    let position = index
+        .binary_search_by_key(&member.ast_id.file, |(id, _)| *id)
+        .ok()?;
+    let &(_, file) = index.get(position)?;
+    Some((file, BodyQuery::new(db, member.ast_id)))
+}
+
+/// `new Name(...)`/`new class { }(...)`: the named class resolved
+/// through the same global lookup a scoped subject uses, or the
+/// anonymous class's own synthetic key (task 1); no constructor at all
+/// (`declared_member_signature` answers `None`) silences the whole call
+/// (decision 12) rather than reporting on an assumed empty signature.
+/// `new self()`/`new static()`/`new $dynamic()` are not covered:
+/// resolving them needs the defining context's own placeholders, out of
+/// this family's declared-tier-only scope, so they stay silent.
+fn resolved_constructor_signature<'db>(
+    context: &CheckContext<'db, '_>,
+    class: &ClassReference,
+) -> Option<ResolvedCall<'db>> {
+    let (key, callee_display) = match class {
+        ClassReference::Named { name } => (resolve_scoped_class_key(context, name)?, name.clone()),
+        ClassReference::Anonymous { declaration } => (
+            anonymous_class_key(*declaration),
+            "class@anonymous".to_owned(),
+        ),
+        ClassReference::StaticKeyword
+        | ClassReference::Dynamic { .. }
+        | ClassReference::Missing => {
+            return None;
+        }
+    };
+    let db = context.db;
+    let query = MemberQuery::new(
+        db,
+        key.clone(),
+        MemberKind::Method,
+        folded_member_key(MemberKind::Method, "__construct"),
+    );
+    let signature = declared_member_signature(
+        db,
+        context.files,
+        context.stubs,
+        context.configuration,
+        query,
+    )?;
+    Some(ResolvedCall {
+        callee_display,
+        signature,
+        source_body: source_method_body(context, &key, "__construct"),
+    })
+}
+
+/// A written class or function name's last segment: `App\Sub\foo` and
+/// `foo` alike display as `foo` — the flow walk's own convention for a
+/// message that names a callee.
+fn last_segment(written: &str) -> &str {
+    written.rsplit('\\').next().unwrap_or(written)
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
+
+    use super::super::test_support::family_verdicts;
+    use super::super::{ArgumentLabel, TypedVerdictKind};
+
+    const STRICT: &str = "<?php declare(strict_types=1);\n";
+
+    #[test]
+    fn a_failing_argument_reports_in_a_strict_file() {
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function takes(int $n, string $s = ''): void {}
+function f(mixed $anything, int|string $either): void {
+    takes(1, 'ok');
+    takes('wrong');        // reports: string against int
+    takes($anything);      // mixed: guarded before the judgment, silent
+    takes($either);        // int|string: one constituent fits, silent
+    takes(s: 42);          // named argument, reports: int against string
+}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(1),
+                    callee: "takes".to_owned(),
+                    expected: "int".to_owned(),
+                    given: "'wrong'".to_owned(),
+                },
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Named("s".to_owned()),
+                    callee: "takes".to_owned(),
+                    expected: "string".to_owned(),
+                    given: "42".to_owned(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn a_weak_file_does_not_report_runtime_coercions() {
+        let verdicts = family_verdicts(
+            r#"<?php
+function takes(int $n): void {}
+class Plain {}
+function f(Plain $object): void {
+    takes('42');       // weak mode coerces: silent
+    takes($object);    // no coercion exists: reports
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::ArgumentType {
+                label: ArgumentLabel::Positional(1),
+                callee: "takes".to_owned(),
+                expected: "int".to_owned(),
+                given: "Plain".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn the_exemptions_are_structural() {
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function fills(array &$out, int $n): void {}
+class A { public function m(int $n): void {} }
+class B { public function m(int $n): void {} }
+function f(A|B $either): void {
+    fills($undefined, 1);   // by-reference parameter: exempt
+    $either->m('x');        // union receiver: silent (recorded stance)
+}
+"#
+        ));
+        assert_eq!(verdicts, vec![]);
+    }
+
+    #[test]
+    fn methods_static_calls_constructors_and_variadics_are_checked() {
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+class Mailer {
+    public function __construct(private string $dsn) {}
+    public function send(string $to): void {}
+    public static function make(string $dsn): static { return new static($dsn); }
+}
+function f(Mailer $m): void {
+    $m->send('a@b');
+    $m->send(42);              // reports
+    Mailer::make(42);          // reports
+    new Mailer(42);            // reports
+    variadic('a', 'b', 42);    // reports on the third
+}
+function variadic(string ...$parts): void {}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(1),
+                    callee: "send".to_owned(),
+                    expected: "string".to_owned(),
+                    given: "42".to_owned(),
+                },
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(1),
+                    callee: "make".to_owned(),
+                    expected: "string".to_owned(),
+                    given: "42".to_owned(),
+                },
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(1),
+                    callee: "Mailer".to_owned(),
+                    expected: "string".to_owned(),
+                    given: "42".to_owned(),
+                },
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(3),
+                    callee: "variadic".to_owned(),
+                    expected: "string".to_owned(),
+                    given: "42".to_owned(),
+                },
+            ],
+        );
+    }
+}
