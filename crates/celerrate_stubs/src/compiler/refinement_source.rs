@@ -277,11 +277,15 @@ fn parse_parameters(text: &str) -> Result<Vec<(String, String)>, String> {
         let Some((type_text, name)) = part.split_once('$') else {
             return Err(format!("parameter has no name: {part}"));
         };
-        let type_text = type_text.trim();
+        // By-reference (`&`) and variadic (`...`) sigils sit on the
+        // type side of the split (`int &$ref`, `int ...$items`), never
+        // on the name side, so the type text is trimmed of trailing
+        // sigil characters here; the name never carries them.
+        let type_text = type_text.trim().trim_end_matches(['&', '.']).trim();
         if type_text.is_empty() {
             return Err(format!("parameter has no type: {part}"));
         }
-        let name = name.trim().trim_matches(['&', '.']).trim();
+        let name = name.trim();
         if name.is_empty() {
             return Err(format!("parameter has no name: {part}"));
         }
@@ -368,14 +372,22 @@ fn parse_ancestor_list(text: &str) -> Result<Vec<RefinedAncestor>, String> {
     let mut ancestors = Vec::new();
     for part in split_top_level(text) {
         let ancestor = match part.find('<') {
-            None => RefinedAncestor {
-                name: folded(part),
-                arguments: Vec::new(),
-            },
+            None => {
+                if part.chars().any(char::is_whitespace) {
+                    return Err(format!("ancestor name contains whitespace: {part}"));
+                }
+                RefinedAncestor {
+                    name: folded(part),
+                    arguments: Vec::new(),
+                }
+            }
             Some(open) => {
                 let name = part.get(..open).unwrap_or_default().trim();
                 if name.is_empty() {
                     return Err(format!("ancestor missing a name: {part}"));
+                }
+                if name.chars().any(char::is_whitespace) {
+                    return Err(format!("ancestor name contains whitespace: {name}"));
                 }
                 let close = find_matching_close(part, open + 1)
                     .ok_or_else(|| format!("unterminated ancestor argument list: {part}"))?;
@@ -503,7 +515,11 @@ pub fn validate_refinements(
                     "refined method {key}::{method_name} has no base signature",
                 ));
             };
-            validate_parameters(method_name, signature, &base_signature.parameters)?;
+            validate_parameters(
+                &format!("{key}::{method_name}"),
+                signature,
+                &base_signature.parameters,
+            )?;
         }
     }
     Ok(())
@@ -529,9 +545,45 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use super::{parse_refinement_source, validate_refinements};
-    use crate::refinements::{RefinedAncestor, RefinedSignature, RefinedTemplate, StubRefinements};
-    use crate::signature::{StubParameter, StubSignature, VersionedTypeText};
+    use crate::refinements::{
+        RefinedAncestor, RefinedClass, RefinedSignature, RefinedTemplate, StubRefinements,
+    };
+    use crate::signature::{
+        StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
+        VersionedTypeText,
+    };
     use crate::symbol::StubAvailability;
+
+    /// A method member with the given base signature (or `None` for a
+    /// member that carries no signature at all — the "has no base
+    /// signature" branch).
+    fn method_member(name: &str, signature: Option<StubSignature>) -> StubMember {
+        StubMember {
+            kind: StubMemberKind::Method,
+            name: name.to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature,
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        }
+    }
+
+    fn signature_with_parameter(name: &str) -> StubSignature {
+        StubSignature {
+            parameters: vec![StubParameter {
+                name: name.to_owned(),
+                type_text: VersionedTypeText::default(),
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }],
+            return_type: VersionedTypeText::default(),
+            by_reference: false,
+        }
+    }
 
     #[test]
     fn a_function_entry_parses_with_templates_parameters_and_return() {
@@ -578,6 +630,23 @@ mod tests {
     }
 
     #[test]
+    fn by_reference_and_variadic_sigils_are_trimmed_off_the_type_not_the_name() {
+        // The `$` split leaves `&` and `...` sitting in the type text
+        // (`"int &"`, `"int ..."`), never in the name (Fix 3): the
+        // sigils must be trimmed from the type side.
+        let parsed =
+            parse_refinement_source("function f(int &$ref, int ...$items): void\n").unwrap();
+        let (_, signature) = parsed.functions.first().unwrap();
+        assert_eq!(
+            signature.parameters,
+            vec![
+                ("ref".to_owned(), "int".to_owned()),
+                ("items".to_owned(), "int".to_owned()),
+            ],
+        );
+    }
+
+    #[test]
     fn a_class_entry_parses_ancestors_and_methods() {
         let parsed = parse_refinement_source(
             "class ArrayIterator<TKey, TValue> implements Iterator<TKey, TValue> {\n\
@@ -599,6 +668,21 @@ mod tests {
         let (name, current) = class.methods.first().unwrap();
         assert_eq!(name, "current");
         assert_eq!(current.return_type.as_deref(), Some("TValue"));
+    }
+
+    #[test]
+    fn an_ancestor_name_containing_whitespace_is_rejected() {
+        // Fix 4: `split_before_implements` finds only the first
+        // occurrence of "implements" and its word-boundary guard bails
+        // out when a real trailing `implements` clause is glued onto a
+        // name (`Aimplements`), folding it all into one ancestor whose
+        // "name" contains whitespace. That must be rejected rather than
+        // silently accepted, since decision 3 forbids an ancestor
+        // existence check that would otherwise catch it downstream.
+        let error = parse_refinement_source("class Foo extends Aimplements implements B {\n}\n")
+            .unwrap_err();
+        assert!(error.starts_with("line 1"), "{error}");
+        assert!(error.contains("whitespace"), "{error}");
     }
 
     #[test]
@@ -705,23 +789,10 @@ mod tests {
     }
 
     #[test]
-    fn validation_checks_parameters_methods_and_classes() {
-        let functions = vec![(
-            "array_keys".to_owned(),
-            StubSignature {
-                parameters: vec![StubParameter {
-                    name: "array".to_owned(),
-                    type_text: VersionedTypeText::default(),
-                    optional: false,
-                    by_reference: false,
-                    variadic: false,
-                    availability: StubAvailability::ALWAYS,
-                }],
-                return_type: VersionedTypeText::default(),
-                by_reference: false,
-            },
-        )];
-        // A refined parameter name absent from the base signature fails.
+    fn validation_names_the_offending_parameter_on_a_refined_function() {
+        let functions = vec![("array_keys".to_owned(), signature_with_parameter("array"))];
+        // A refined parameter name absent from the base signature fails,
+        // naming both the bad parameter and the function it belongs to.
         let refinements = StubRefinements::new(
             vec![(
                 "array_keys".to_owned(),
@@ -735,5 +806,117 @@ mod tests {
         );
         let error = validate_refinements(&refinements, &functions, &[]).unwrap_err();
         assert!(error.contains("wrong"), "{error}");
+        assert!(error.contains("array_keys"), "{error}");
+    }
+
+    #[test]
+    fn validation_names_the_missing_class() {
+        let refinements = StubRefinements::new(
+            vec![],
+            vec![("missing_class".to_owned(), RefinedClass::default())],
+        );
+        let error = validate_refinements(&refinements, &[], &[]).unwrap_err();
+        assert!(error.contains("missing_class"), "{error}");
+    }
+
+    #[test]
+    fn validation_names_the_class_and_method_when_the_method_is_missing() {
+        let classes = vec![(
+            "arrayiterator".to_owned(),
+            StubClassSurface {
+                parents: vec![],
+                members: vec![method_member("current", Some(StubSignature::default()))],
+            },
+        )];
+        let refinements = StubRefinements::new(
+            vec![],
+            vec![(
+                "arrayiterator".to_owned(),
+                RefinedClass {
+                    templates: vec![],
+                    ancestors: vec![],
+                    methods: vec![("missing_method".to_owned(), RefinedSignature::default())],
+                },
+            )],
+        );
+        let error = validate_refinements(&refinements, &[], &classes).unwrap_err();
+        // The error must name both the class and the method: neither
+        // alone lets a contributor find the offending entry, since
+        // both "arrayiterator" and "missing_method" recur across the
+        // stub set.
+        assert!(error.contains("arrayiterator"), "{error}");
+        assert!(error.contains("missing_method"), "{error}");
+    }
+
+    #[test]
+    fn validation_names_the_method_with_no_base_signature() {
+        let classes = vec![(
+            "arrayiterator".to_owned(),
+            StubClassSurface {
+                parents: vec![],
+                // A method member with no signature (blob invariant
+                // aside, `validate_refinements` must still handle it
+                // without panicking).
+                members: vec![method_member("current", None)],
+            },
+        )];
+        let refinements = StubRefinements::new(
+            vec![],
+            vec![(
+                "arrayiterator".to_owned(),
+                RefinedClass {
+                    templates: vec![],
+                    ancestors: vec![],
+                    methods: vec![("current".to_owned(), RefinedSignature::default())],
+                },
+            )],
+        );
+        let error = validate_refinements(&refinements, &[], &classes).unwrap_err();
+        assert!(error.contains("arrayiterator"), "{error}");
+        assert!(error.contains("current"), "{error}");
+    }
+
+    #[test]
+    fn validation_names_the_class_on_a_refined_method_parameter() {
+        // Pins Fix 1: a mistyped parameter on a method must report the
+        // full `Class::method` entry, not the bare method name, since
+        // method names like `current` or `__construct` recur across
+        // dozens of classes. Before the fix, `validate_parameters` was
+        // called with only `method_name` as the target, so this
+        // assertion on the class key fails against the old code.
+        let classes = vec![(
+            "arrayiterator".to_owned(),
+            StubClassSurface {
+                parents: vec![],
+                members: vec![method_member(
+                    "__construct",
+                    Some(signature_with_parameter("array")),
+                )],
+            },
+        )];
+        let refinements = StubRefinements::new(
+            vec![],
+            vec![(
+                "arrayiterator".to_owned(),
+                RefinedClass {
+                    templates: vec![],
+                    ancestors: vec![],
+                    methods: vec![(
+                        "__construct".to_owned(),
+                        RefinedSignature {
+                            templates: vec![],
+                            parameters: vec![("arrray".to_owned(), "int".to_owned())],
+                            return_type: None,
+                        },
+                    )],
+                },
+            )],
+        );
+        let error = validate_refinements(&refinements, &[], &classes).unwrap_err();
+        assert!(error.contains("arrray"), "{error}");
+        assert!(
+            error.contains("arrayiterator::__construct"),
+            "expected the full class::method entry, got: {error}",
+        );
     }
 }
