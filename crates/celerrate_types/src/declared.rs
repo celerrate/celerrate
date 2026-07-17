@@ -11,7 +11,7 @@ use celerrate_semantics::{
     AstId, ClassQuery, LinearizedClass, Member, MemberKind, MemberQuery, MemberResolution,
     SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, folded_member_key, item_tree,
     linearized_class, lookup_class_declaration, lookup_function_declaration, lookup_member,
-    member_tree, resolve_candidates, stub_signature_table,
+    member_tree, parse_anonymous_class_key, resolve_candidates, stub_signature_table,
 };
 use celerrate_stubs::{
     StubIndexInput, StubMember, StubMemberKind, StubParameter, StubSignature, VersionedTypeText,
@@ -647,7 +647,10 @@ pub fn declared_member_signature<'db>(
 
 /// The declaring site of one source class-like: its file handle,
 /// namespace, and declaration AST id, found through the same
-/// firewalls linearization uses.
+/// firewalls linearization uses. An anonymous class's synthetic key
+/// (`anonymous_class_key`) carries its `AstId` directly, so its site
+/// resolves without a symbol-table lookup — it has no name to look up
+/// (mirrors `linearize.rs`'s `fetch`).
 pub(crate) struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
@@ -659,8 +662,13 @@ pub(crate) fn declaring_site(
     files: AnalyzedFileSet,
     owner_key: &str,
 ) -> Option<DeclaringSite> {
-    let query = SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned());
-    let (_, ast_id) = lookup_class_declaration(db, files, query)?;
+    let ast_id = match parse_anonymous_class_key(owner_key) {
+        Some(ast_id) => ast_id,
+        None => {
+            let query = SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned());
+            lookup_class_declaration(db, files, query)?.1
+        }
+    };
     let index = analyzed_file_index(db, files);
     let position = index
         .binary_search_by_key(&ast_id.file, |(id, _)| *id)

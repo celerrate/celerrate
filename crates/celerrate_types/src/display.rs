@@ -120,8 +120,9 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
             format!("array{{{}}}", rendered.join(", "))
         }
         TypeData::Class { name, arguments } => {
+            let name = class_display_name(name);
             if arguments.is_empty() {
-                name.clone()
+                name.to_owned()
             } else {
                 let rendered: Vec<String> = arguments
                     .iter()
@@ -187,6 +188,19 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
         TypeData::SelfPlaceholder => "self".to_owned(),
         TypeData::ParentPlaceholder => "parent".to_owned(),
         TypeData::StaticPlaceholder => "static".to_owned(),
+    }
+}
+
+/// The rendered spelling of a class-like folded key: an anonymous
+/// class's synthetic key (`class@anonymous:{file}:{index}`) strips its
+/// coordinates, so a message never changes just because an unrelated
+/// earlier declaration renumbered the file. Every other folded key
+/// renders verbatim.
+fn class_display_name(name: &str) -> &str {
+    if name.starts_with("class@anonymous:") {
+        "class@anonymous"
+    } else {
+        name
     }
 }
 
@@ -360,5 +374,12 @@ mod tests {
         assert_eq!(TypeId::float_literal(&db, 2.0).display(&db), "2.0");
         assert_eq!(TypeId::float_literal(&db, -2.0).display(&db), "-2.0");
         assert_eq!(TypeId::float_literal(&db, 1.5).display(&db), "1.5");
+    }
+
+    #[test]
+    fn an_anonymous_class_displays_without_coordinates() {
+        let db = TestDatabase::default();
+        let anonymous = TypeId::class(&db, "class@anonymous:0:3", vec![]);
+        assert_eq!(anonymous.display(&db), "class@anonymous");
     }
 }

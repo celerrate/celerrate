@@ -138,6 +138,13 @@ pub struct ClassMembers {
     /// declaration node's attribute groups so linearization need not
     /// re-read the syntax tree.
     pub attribute_names: Vec<String>,
+    /// Written `extends` names, for the declaration-less anonymous
+    /// case; named classes keep resolving heritage through their
+    /// `Declaration`. Populated for every class-like, same accessors
+    /// `ItemTree`'s lowering reads.
+    pub extends: Vec<String>,
+    /// Written `implements` names, same purpose.
+    pub implements: Vec<String>,
 }
 
 /// The member projection of one file, in tree order.
@@ -216,49 +223,68 @@ fn free_function(item: &ItemNode, ast_id: AstId) -> Option<FreeFunction> {
 
 /// The group of a class-like item node; `None` for anything else.
 fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
-    let (kind, name_token, trait_uses, attribute_names) = match item.node.kind() {
+    let (kind, name_token, trait_uses, attribute_names, extends, implements) = match item
+        .node
+        .kind()
+    {
         SyntaxKind::ClassDeclaration => {
             let declaration = ast::ClassDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
             let attribute_names = attribute_names_of(declaration.attribute_groups());
+            let extends = names_of(declaration.extends_clause().map(|clause| clause.names()));
+            let implements = names_of(declaration.implements_clause().map(|clause| clause.names()));
             (
                 DeclarationKind::Class,
                 declaration.name_token(),
                 trait_uses,
                 attribute_names,
+                extends,
+                implements,
             )
         }
         SyntaxKind::InterfaceDeclaration => {
             let declaration = ast::InterfaceDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
             let attribute_names = attribute_names_of(declaration.attribute_groups());
+            let extends = names_of(declaration.extends_clause().map(|clause| clause.names()));
+            let implements = names_of(declaration.implements_clause().map(|clause| clause.names()));
             (
                 DeclarationKind::Interface,
                 declaration.name_token(),
                 trait_uses,
                 attribute_names,
+                extends,
+                implements,
             )
         }
         SyntaxKind::TraitDeclaration => {
             let declaration = ast::TraitDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
             let attribute_names = attribute_names_of(declaration.attribute_groups());
+            let extends = names_of(declaration.extends_clause().map(|clause| clause.names()));
+            let implements = names_of(declaration.implements_clause().map(|clause| clause.names()));
             (
                 DeclarationKind::Trait,
                 declaration.name_token(),
                 trait_uses,
                 attribute_names,
+                extends,
+                implements,
             )
         }
         SyntaxKind::EnumDeclaration => {
             let declaration = ast::EnumDeclaration::cast(item.node.clone())?;
             let trait_uses = trait_uses_of(declaration.member_list());
             let attribute_names = attribute_names_of(declaration.attribute_groups());
+            let extends = names_of(declaration.extends_clause().map(|clause| clause.names()));
+            let implements = names_of(declaration.implements_clause().map(|clause| clause.names()));
             (
                 DeclarationKind::Enum,
                 declaration.name_token(),
                 trait_uses,
                 attribute_names,
+                extends,
+                implements,
             )
         }
         _ => return None,
@@ -272,7 +298,21 @@ fn class_group(item: &ItemNode, ast_id: AstId) -> Option<ClassMembers> {
         members: Vec::new(),
         trait_uses,
         attribute_names,
+        extends,
+        implements,
     })
+}
+
+/// The written names of one heritage clause, in source order. Mirrors
+/// `items.rs`'s `ItemTree` projection of the same clauses — the member
+/// projection and the item projection are siblings with no dependency
+/// edge between them, so the reader is duplicated rather than shared.
+fn names_of(names: Option<ast::AstChildren<ast::Name>>) -> Vec<String> {
+    names
+        .into_iter()
+        .flatten()
+        .map(|name| name.text())
+        .collect()
 }
 
 /// The written names of every attribute across a class-like's attribute

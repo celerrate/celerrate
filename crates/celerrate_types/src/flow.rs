@@ -13,8 +13,8 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
     ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
-    MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
-    lookup_member, stub_ancestors_of, stub_signature_table,
+    MemberResolution, StatementId, StringPart, UseTables, anonymous_class_key, folded_member_key,
+    linearized_class, lookup_member, stub_ancestors_of, stub_signature_table,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -2739,18 +2739,17 @@ impl<'db> Walker<'db, '_, '_> {
                             })
                             .unwrap_or_else(|| TypeId::mixed(db))
                     }
-                    // Recorded debt (decision 14): anonymous-class
-                    // receivers (`new class { }`) stay `mixed` — no
-                    // folded key exists yet for an anonymous class
-                    // literal, and the expression-to-key path belongs
-                    // with the checks' receiver-resolution surface
-                    // (plan 8), not here: no diagnostic consumes
-                    // receiver types before plan 8, so building the
-                    // path here would ship untested-by-consumer
-                    // machinery. `Missing` (a malformed `new` with no
-                    // class reference at all) shares the same silent
-                    // fallback.
-                    ClassReference::Anonymous { .. } | ClassReference::Missing => TypeId::mixed(db),
+                    // Plan 8, task 1: an anonymous-class receiver
+                    // (`new class { }`) now types as its synthetic
+                    // folded key (decision 14's debt closed), so it
+                    // linearizes, resolves `$this`, and types like any
+                    // named class. `Missing` (a malformed `new` with no
+                    // class reference at all) keeps the silent `mixed`
+                    // fallback: there is no declaration to key by.
+                    ClassReference::Anonymous { declaration } => {
+                        TypeId::class(db, &anonymous_class_key(*declaration), vec![])
+                    }
+                    ClassReference::Missing => TypeId::mixed(db),
                 };
                 let of = self.member_boundary_type(
                     of,

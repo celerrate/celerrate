@@ -35,6 +35,7 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndexInput, StubMember, StubMemberKind};
 
+use crate::ast_id::AstId;
 use crate::index::{stub_frontier, stub_signature_table};
 use crate::items::Declaration;
 use crate::lookup::{
@@ -193,6 +194,24 @@ pub fn folded_member_key(kind: MemberKind, name: &str) -> String {
     }
 }
 
+/// The synthetic folded key of an anonymous class. `@` and `:` are
+/// illegal in PHP names, so the form can never collide with a real
+/// folded key, and `folded_symbol_key` maps it to itself (already
+/// lowercase, no leading backslash).
+pub fn anonymous_class_key(ast_id: AstId) -> String {
+    format!("class@anonymous:{}:{}", ast_id.file.as_u32(), ast_id.index)
+}
+
+/// The inverse of [`anonymous_class_key`]; `None` for any real name.
+pub fn parse_anonymous_class_key(key: &str) -> Option<AstId> {
+    let rest = key.strip_prefix("class@anonymous:")?;
+    let (file, index) = rest.split_once(':')?;
+    Some(AstId {
+        file: FileId::new(file.parse().ok()?),
+        index: index.parse().ok()?,
+    })
+}
+
 /// The linearized member table of one class-like, or `None` when the
 /// queried key is not a source class-like. The walk is iterative with a
 /// visited set inside this one tracked query, so an inheritance cycle is
@@ -277,15 +296,21 @@ pub fn linearized_class<'db>(
             }
         }
 
-        let Some(declaration) = found.declaration.as_ref() else {
-            continue;
-        };
         // The adaptations of each trait-use clause, keyed by the folded
         // key of every trait the clause names, so a trait edge can pick
         // up the context to hand its members. Resolved at the using
         // site, reusing the same candidate order as the edges.
         let clause_context = resolve_clause_context(db, files, stubs, configuration, &found);
-        for (relation, written) in edges_of(declaration) {
+        // Named class-likes derive their inheritance edges from their
+        // `Declaration`; a declaration-less anonymous class derives the
+        // same edges from its member group's heritage projection
+        // instead (`ClassMembers::extends`/`implements`, populated by
+        // the same accessors `Declaration` reads).
+        let edges = match found.declaration.as_ref() {
+            Some(declaration) => edges_of(declaration),
+            None => edges_of_group(&found.group),
+        };
+        for (relation, written) in edges {
             let answer = resolve_ancestor(
                 db,
                 files,
@@ -741,8 +766,25 @@ struct Fetched {
 
 /// Loads the source class-like named by one folded key: `None` when the
 /// key names no source class-like (a stub, an unknown name, or a
-/// non-class symbol).
+/// non-class symbol). An anonymous synthetic key (`anonymous_class_key`)
+/// loads its member group directly by `AstId`, bypassing the symbol
+/// table entirely — an anonymous class declares no name to index.
 fn fetch(db: &dyn salsa::Database, files: AnalyzedFileSet, key: &str) -> Option<Fetched> {
+    if let Some(ast_id) = parse_anonymous_class_key(key) {
+        let file = file_of(db, files, ast_id.file)?;
+        let group = member_tree(db, file)
+            .classes
+            .iter()
+            .find(|group| group.ast_id == ast_id)?
+            .clone();
+        let namespace = group.namespace.clone();
+        return Some(Fetched {
+            group,
+            declaration: None,
+            file,
+            namespace,
+        });
+    }
     let query = SymbolQuery::new(db, SymbolSpace::ClassLike, key.to_owned());
     let (_, ast_id) = lookup_class_declaration(db, files, query)?;
     let file = file_of(db, files, ast_id.file)?;
@@ -788,6 +830,25 @@ fn edges_of(declaration: &Declaration) -> Vec<(AncestorRelation, String)> {
         edges.push((AncestorRelation::Extends, name.clone()));
     }
     for name in &declaration.implements {
+        edges.push((AncestorRelation::Implements, name.clone()));
+    }
+    edges
+}
+
+/// The inheritance edges of a declaration-less (anonymous) class, from
+/// the member group's heritage projection: traits first, then
+/// `extends`, then `implements` — the same precedence as `edges_of`.
+fn edges_of_group(group: &ClassMembers) -> Vec<(AncestorRelation, String)> {
+    let mut edges = Vec::new();
+    for trait_use in &group.trait_uses {
+        for name in &trait_use.names {
+            edges.push((AncestorRelation::UsesTrait, name.clone()));
+        }
+    }
+    for name in &group.extends {
+        edges.push((AncestorRelation::Extends, name.clone()));
+    }
+    for name in &group.implements {
         edges.push((AncestorRelation::Implements, name.clone()));
     }
     edges
@@ -867,7 +928,12 @@ mod tests {
         StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
-    use super::{ClassQuery, LinearizedClass, MemberOrigin, linearized_class};
+    use super::{
+        ClassQuery, LinearizedClass, MemberOrigin, anonymous_class_key, linearized_class,
+        parse_anonymous_class_key,
+    };
+    use crate::ast_id::AstId;
+    use crate::member_lookup::{MemberQuery, MemberResolution, lookup_member};
     use crate::members::MemberKind;
     use crate::plugin::PluginIdentity;
     use crate::symbols::{SymbolSpace, folded_symbol_key};
@@ -1563,5 +1629,79 @@ mod tests {
             keys,
             vec![("alpha", "post"), ("alpha", "post"), ("beta", "post")]
         );
+    }
+
+    #[test]
+    fn the_anonymous_key_round_trips_and_never_collides() {
+        let ast_id = AstId {
+            file: FileId::new(3),
+            index: 7,
+        };
+        let key = anonymous_class_key(ast_id);
+        assert_eq!(key, "class@anonymous:3:7");
+        assert_eq!(parse_anonymous_class_key(&key), Some(ast_id));
+        // Real folded keys never parse: the prefix is not a PHP name.
+        assert_eq!(parse_anonymous_class_key("app\\kernel"), None);
+        assert_eq!(parse_anonymous_class_key("class@anonymous:x:y"), None);
+    }
+
+    #[test]
+    fn an_anonymous_class_linearizes_by_its_synthetic_key() {
+        let fixture = fixture(&[r#"<?php
+function build(): void {
+    $listener = new class {
+        public function handle(): int { return 1; }
+    };
+}
+"#]);
+        // Numbering: function = 0, anonymous class = 1, method = 2.
+        let key = anonymous_class_key(AstId {
+            file: FileId::new(0),
+            index: 1,
+        });
+        let linearized = linearized_class(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            ClassQuery::new(&fixture.db, key),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(
+            linearized
+                .members
+                .iter()
+                .any(|member| member.key == "handle")
+        );
+    }
+
+    #[test]
+    fn an_anonymous_class_inherits_through_its_heritage() {
+        let fixture = fixture(&[r#"<?php
+class Base { public function inherited(): int { return 1; } }
+function build(): void {
+    $listener = new class extends Base {};
+}
+"#]);
+        // Numbering: Base = 0, its method = 1, build = 2, anonymous = 3.
+        let key = anonymous_class_key(AstId {
+            file: FileId::new(0),
+            index: 3,
+        });
+        let resolution = lookup_member(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            MemberQuery::new(&fixture.db, key, MemberKind::Method, "inherited".to_owned()),
+        );
+        assert!(matches!(
+            resolution,
+            Some(MemberResolution::Source {
+                origin: MemberOrigin::Inherited,
+                ..
+            })
+        ));
     }
 }
