@@ -28,8 +28,8 @@ pub const SECTION_SYMBOL_TABLE: u32 = 1;
 /// Reserved: per-version signature deltas (sub-project 3).
 pub const SECTION_SIGNATURES: u32 = 2;
 
-/// Reserved: the overlay merge point (Celerrate refinements, plugin
-/// stubs).
+/// The overlay merge point: live for the Celerrate refinements payload
+/// (design section 7); still reserved for plugin stubs.
 pub const SECTION_OVERLAYS: u32 = 3;
 
 /// Why a blob failed to decode. Every variant is a clean rejection:
