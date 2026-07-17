@@ -7,13 +7,6 @@
 //! iff every part is missing", which is why flattening both into one
 //! atom list is sound.
 //!
-//! Every function below is exercised by this module's own tests, but
-//! unread from production code until tasks 4-6 wire the
-//! `members`/`nullability`/`arguments` walkers to call it (the same
-//! situation `checks/mod.rs`'s `CheckContext` fields are in) — hence
-//! the module-wide `dead_code` allow.
-#![allow(dead_code)]
-
 use celerrate_semantics::{
     AncestorRelation, ClassQuery, ClassSurface, DeclarationKind, MemberKind, MemberQuery,
     SymbolSpace, class_declaration_kind, class_surface, folded_member_key, linearized_class,
@@ -102,27 +95,35 @@ fn resolve_placeholder<'db>(
     context: &CheckContext<'db, '_>,
     receiver: TypeId<'db>,
 ) -> Option<Vec<ReceiverAtom>> {
-    let owner_class_key = || match context.owner {
-        Some(BodyOwner::Method {
-            class_key: Some(key),
-            ..
-        }) => Some(key.clone()),
-        _ => None,
-    };
     match receiver.data(context.db) {
         TypeData::SelfPlaceholder | TypeData::StaticPlaceholder => {
-            Some(vec![match owner_class_key() {
+            Some(vec![match owner_class_key(context) {
                 Some(key) => ReceiverAtom::Class { key },
                 None => ReceiverAtom::Undecidable,
             }])
         }
         TypeData::ParentPlaceholder => {
-            let parent = owner_class_key().and_then(|key| parent_key(context, &key));
+            let parent = owner_class_key(context).and_then(|key| parent_key(context, &key));
             Some(vec![match parent {
                 Some(key) => ReceiverAtom::Class { key },
                 None => ReceiverAtom::Undecidable,
             }])
         }
+        _ => None,
+    }
+}
+
+/// The body's owner class key, when the body is a method of a
+/// resolvable class-like (`None` for a free function, or a method
+/// whose owner itself failed to resolve). Shared by the placeholder
+/// resolution above and by `members.rs`'s scoped-subject folding
+/// (`self`/`static` in `Foo::m()` resolve to this same owner).
+pub(crate) fn owner_class_key(context: &CheckContext<'_, '_>) -> Option<String> {
+    match context.owner {
+        Some(BodyOwner::Method {
+            class_key: Some(key),
+            ..
+        }) => Some(key.clone()),
         _ => None,
     }
 }
@@ -133,7 +134,7 @@ fn resolve_placeholder<'db>(
 /// traits-behind-`extends` blind spot applies here too: a subclass
 /// asking through `parent` gets its own direct parent, never the
 /// asker's).
-fn parent_key(context: &CheckContext<'_, '_>, class_key: &str) -> Option<String> {
+pub(crate) fn parent_key(context: &CheckContext<'_, '_>, class_key: &str) -> Option<String> {
     let linearized = linearized_class(
         context.db,
         context.files,
@@ -150,7 +151,10 @@ fn parent_key(context: &CheckContext<'_, '_>, class_key: &str) -> Option<String>
 }
 
 /// The ternary judgment of one atomic class or enum-case constituent.
-fn atom_existence(
+/// `pub(crate)`: scoped subjects are already folded class keys
+/// (`members.rs`'s `scoped_subject_keys`), so scoped checks call this
+/// directly with no atom decomposition needed.
+pub(crate) fn atom_existence(
     context: &CheckContext<'_, '_>,
     key: &str,
     kind: MemberKind,

@@ -24,7 +24,12 @@ impl ExpressionId {
     /// unreachable behind the 4 GiB source cap, total anyway.
     pub(crate) const OVERFLOW: Self = Self(u32::MAX);
 
-    pub(crate) fn from_index(index: usize) -> Option<Self> {
+    /// Constructs an id from a dense arena index, `None` past the
+    /// `u32` cap (the `OVERFLOW` sentinel is never a valid id). Public
+    /// so a check walker enumerating `BodyIr::expressions` can rebuild
+    /// the id its own index corresponds to; never cast an index with
+    /// `as`.
+    pub fn from_index(index: usize) -> Option<Self> {
         u32::try_from(index)
             .ok()
             .filter(|&value| value != u32::MAX)
