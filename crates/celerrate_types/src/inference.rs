@@ -3860,6 +3860,35 @@ function consume(): void { $x = helper(); }
         assert!(inferred.stub_calls.is_empty());
     }
 
+    /// The other conjunct of decision 14's recording condition: a call
+    /// to a name that exists in neither source nor the stub symbol
+    /// table (`source_exists == false` AND `lookup(...).is_none()`)
+    /// must never enter `stub_calls`. `fixture` wires up
+    /// `minimal_stub_index`, which declares no functions at all, so
+    /// `totally_undefined_function` resolves to neither side and the
+    /// call falls through to the dynamic fallback typing. If the
+    /// `.is_some()` conjunct were ever dropped from the predicate, this
+    /// call alone (`source_exists == false`, nothing else) would be
+    /// recorded and this assertion would fail.
+    #[test]
+    fn a_call_to_an_undefined_function_is_not_recorded() {
+        let f = fixture(&[r#"<?php
+function consume(): void { $x = totally_undefined_function(); }
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(inferred.stub_calls.is_empty());
+    }
+
     /// The task-9 by-reference spread guard stops applying
     /// by-reference write-backs at a spread argument, but the
     /// recording this task adds is a different mechanism entirely
