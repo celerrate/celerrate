@@ -4,6 +4,18 @@
 //! norm is not a plugin notation, so this module is `pub(crate)`
 //! and never crosses the facade. Tolerant: anything outside the v0
 //! subset answers `None`, never a panic (decision 13).
+//!
+//! Task-12 debt (owner: the norm v0 subset, recorded in the norm
+//! draft's own mapping table). Conditional types (`(T is int ? A :
+//! B)`) are excluded from v0 and answer `None`
+//! (`everything_outside_the_subset_answers_none_never_a_panic`
+//! pins the exact text below): the lattice has no conditional-type
+//! constructor to lower into, and no refinement has needed one to
+//! date. Refinements are version-agnostic by design (decision 6):
+//! `NormScope` carries no PHP-version parameter, so a curated
+//! signature cannot express a per-version delta the way the base
+//! phpstorm-stubs surface (outside this module) does; revisit only if
+//! a curated signature ever needs one.
 
 use crate::representation::{CallableParameter, ShapeField, ShapeKey, TypeId};
 

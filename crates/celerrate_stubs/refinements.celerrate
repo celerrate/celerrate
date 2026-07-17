@@ -10,6 +10,25 @@
 # to array_map/array_filter, resolving real precision-gap records;
 # inert-but-in-table returns (count, implode, in_array) moved no
 # instrument and only duplicate the base fold, so they stay out.
+#
+# Task-12 debt (owner: this overlay).
+#
+# - By-reference stdlib mutators (array_shift, usort, sort, and their
+#   family) carry no refinement here and are not claimed by
+#   StdlibProvider's by-reference channel either: they stay on
+#   whatever write-back the base phpstorm-stubs declared signature
+#   already gives their by-reference parameter. Curation revisits only
+#   if the corpus's per-callee mixed-rate table ever demands it —
+#   unmeasured today, not by omission.
+# - Decision-15 top-ten exit, named exceptions (task 11's measured
+#   exit, verbatim): array_pop stays mixed (rank 10, mixed 3/3) —
+#   caller opacity, its sole corpus call site feeds it an untyped
+#   `array` (element type `mixed`) from an untyped method return, and
+#   no signature on array_pop itself can fix a caller's opacity.
+#   max (mixed 2/2) and min (mixed 1/1), both below the top ten: the
+#   return is the join of the argument types, computation-dependent
+#   and provider territory, not a declarative refinement — combined
+#   demand of 3 calls, not a genuine case for a new provider handler.
 
 function array_keys<TKey, TValue>(array<TKey, TValue> $array): list<TKey>
 function array_slice<TKey, TValue>(array<TKey, TValue> $array): array<TKey, TValue>

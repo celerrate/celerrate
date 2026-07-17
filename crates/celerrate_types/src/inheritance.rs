@@ -19,12 +19,19 @@
 //! `implements Iterator<TKey, TValue>` would otherwise never appear
 //! in `linearized_class`'s `ancestry` at all). An **uncurated** stub
 //! ancestor — no `RefinedClass` on file — still contributes nothing,
-//! exactly as before: curating the phpstorm-stubs surface to carry
+//! exactly as before. Curating the phpstorm-stubs surface to carry
 //! its own `@template`/`@extends` annotations, class by class, is
-//! plan 7's ongoing debt, not settled wholesale by this task. A
-//! receiver reaching an uncurated stub ancestor still degrades to the
-//! protocol-member fallback (`flow.rs`'s iteration-typing chain,
-//! decision 12).
+//! measurement-driven (design section 7, plan 7 task 11): an entry
+//! earns its place only when the pinned corpus both names it and a
+//! measured result sharpens, so most stub classes are deliberately
+//! uncurated by that gate, not by omission. As of task 11's exit the
+//! curated class seed is `ArrayIterator` alone (`refinements.celerrate`);
+//! every other stub class — `SplStack`, `ArrayObject`, and the rest —
+//! still contributes no generic ancestors here, task-12 debt (owner:
+//! curation) revisited only if a future corpus measurement demands a
+//! new class entry. A receiver reaching an uncurated stub ancestor
+//! still degrades to the protocol-member fallback (`flow.rs`'s
+//! iteration-typing chain, decision 12).
 
 use std::collections::BTreeMap;
 

@@ -81,8 +81,9 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     }
 
     // Overlapping dynamic-provider claims exclude the later
-    // registrant (no documented precedence exists yet); the set is
-    // rebuilt and re-validated until it is conflict-free.
+    // registrant: registration order above IS the precedence (first
+    // claim wins), and the set is rebuilt and re-validated until it
+    // is conflict-free (`admit_dynamic_providers` below).
     let (dynamic_providers, rebuild_exclusions) = admit_dynamic_providers(dynamic_providers);
     excluded.extend(rebuild_exclusions);
 
@@ -103,8 +104,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
 }
 
 /// Overlapping claims exclude the later registrant and the set is
-/// rebuilt until it validates — the plan-7 gap the registration
-/// comment recorded, closed.
+/// rebuilt until it validates: registration order is the precedence.
 fn admit_dynamic_providers(
     mut registrations: Vec<celerrate_types::DynamicTypeProviderRegistration>,
 ) -> (

@@ -16,10 +16,13 @@ use std::sync::{Arc, Barrier};
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
+use celerrate_semantics::{AstId, BodyQuery};
 use celerrate_source::FileId;
+use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    FunctionQuery, MethodQuery, inferred_function_return, inferred_method_return,
+    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, InferenceContext,
+    MethodQuery, inferred_body_types, inferred_function_return, inferred_method_return,
 };
 
 struct Fixture {
@@ -107,6 +110,63 @@ fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) 
         MethodQuery::new(&fixture.db, class_key.to_owned(), method_name.to_owned()),
     )
     .display(&fixture.db)
+}
+
+/// The fixture with the real embedded stub blob (so provider-claimed
+/// functions like `json_decode` and `preg_match` resolve against a
+/// real declared signature) plus `StdlibProvider` registered through
+/// `DynamicTypeProviderRegistry` (task 6's registration idiom,
+/// `tests/by_reference.rs`'s own `fixture`, duplicated here: no
+/// shared test-support module spans this crate's integration-test
+/// binaries — `invalidation_scope.rs`'s own `executions_of` doc notes
+/// the same constraint). Task 12's determinism and invalidation pins
+/// need the real provider wired up, not the empty stub index the
+/// fixpoint suite otherwise uses to keep resolution noise out.
+fn fixture_with_embedded_stubs_and_stdlib_provider(sources: &[&str]) -> Fixture {
+    let db = TestDatabase::default();
+    let handles: Vec<SourceFile> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+        })
+        .collect();
+    let files = AnalyzedFileSet::new(&db, handles.clone());
+    let stubs = StubIndexInput::builder(celerrate_stubs::embedded_stub_index().unwrap())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let _ = DynamicTypeProviderRegistry::builder(vec![DynamicTypeProviderRegistration {
+        identity: celerrate_stdlib_provider::descriptor().identity,
+        provider: Arc::new(StdlibProvider::new()),
+    }])
+    .durability(salsa::Durability::HIGH)
+    .new(&db);
+    Fixture {
+        db,
+        files,
+        stubs,
+        configuration,
+        handles,
+    }
+}
+
+/// The body of the declaration numbered `index` in file 0 (mirrors
+/// `inference.rs`'s own private `body_query` test helper, unreachable
+/// from this external integration-test binary).
+fn body_query(fixture: &Fixture, index: u32) -> BodyQuery<'_> {
+    BodyQuery::new(
+        &fixture.db,
+        AstId {
+            file: FileId::new(0),
+            index,
+        },
+    )
 }
 
 const MUTUAL: &str = "<?php
@@ -566,4 +626,83 @@ fn an_edit_mid_method_fixpoint_unwinds_cleanly_and_serves_no_provisional_value()
     .display(&setter_db);
     let fresh = fixture_with(&[edited]);
     assert_eq!(after, method_return_display(&fresh, "app\\entry", "run"));
+}
+
+/// A body exercising every provider channel this plan built: the
+/// array-family return channel (`array_map`), the computation-dependent
+/// return channel (`json_decode`), and the by-reference channel
+/// (`preg_match`'s `$matches`).
+const DETERMINISM_SOURCE: &str = r#"<?php
+function consume(string $json, string $subject): void {
+    $mapped = array_map(fn (int $n): string => (string) $n, [1, 2]);
+    $decoded = json_decode($json, true);
+    if (preg_match('/(?<year>\d+)/', $subject, $matches) === 1) {
+        $inside = $matches;
+    }
+}
+"#;
+
+/// Task 12's determinism pin (decision 16): a body exercising every
+/// provider channel this plan built types identically across two
+/// fresh, unrelated databases. Interner handles may differ across
+/// databases (each database owns its own `salsa` interner), so the
+/// comparison renders through `display` rather than comparing `TypeId`
+/// values directly — the same accommodation `return_of`/
+/// `method_return_display` above already make.
+#[test]
+fn provider_answers_are_identical_across_fresh_databases() {
+    // Interner handles may differ across databases; displays must
+    // not.
+    let render = || {
+        let f = fixture_with_embedded_stubs_and_stdlib_provider(&[DETERMINISM_SOURCE]);
+        let file = f.handles[0];
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            file,
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        inferred
+            .expression_types
+            .iter()
+            .map(|of| of.display(&f.db))
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(render(), render());
+}
+
+/// Task 12's fall-through pin (decision 16): every registered
+/// `StdlibProvider` handler answers `None` for arguments that are
+/// themselves `mixed` (`array_map`'s callback and subject, `current`'s
+/// subject), so the declared tier's answer stands and no provider edge
+/// is ever counted — the residual instrument's `provider_edges` field
+/// (untested since task 10 introduced it, per its own doc comment)
+/// stays honest at zero rather than over-counting a claim that never
+/// actually contributed a type.
+#[test]
+fn a_claim_never_reached_leaves_the_body_on_the_declared_tier() {
+    let f = fixture_with_embedded_stubs_and_stdlib_provider(&[r#"<?php
+function consume(mixed $anything): void {
+    $mapped = array_map($anything, $anything);
+    $slice = current($anything);
+}
+"#]);
+    let file = f.handles[0];
+    let inferred = inferred_body_types(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        file,
+        body_query(&f, 0),
+        InferenceContext::new(&f.db, None),
+    )
+    .as_ref()
+    .unwrap();
+    assert_eq!(inferred.edge_counts.provider_edges, 0);
 }

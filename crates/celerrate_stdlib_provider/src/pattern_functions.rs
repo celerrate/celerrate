@@ -7,6 +7,19 @@
 //! does a leading `]` inside a character class (`[]()]`), which is
 //! literal in PCRE but ends the class early for the scanner and
 //! lets the following `(` count as a group.
+//!
+//! Task-12 debt (owner: the pattern scanner). All three items above
+//! are sound-but-imprecise, recorded and unresolved as of this task:
+//! alternation-aware group optionality (a group inside `a|b` is
+//! unconditionally required by the scanner, though only one branch's
+//! groups actually populate at runtime), the conditional-group
+//! over-count, and the leading-`]` character-class miscount. A fourth,
+//! named here for the same reason: an undecided or non-zero
+//! `PREG_OFFSET_CAPTURE`-family flags argument answers the
+//! conservative `array<int|string, mixed>` value shape
+//! (`preg_match_matches` below) rather than threading the pattern's
+//! named groups through the offset-tuple shape — sound, imprecise,
+//! unmeasured against the corpus.
 
 use celerrate_plugin::{ShapeField, ShapeKey, TypeId, salsa};
 

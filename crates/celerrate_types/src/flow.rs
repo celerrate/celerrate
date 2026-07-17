@@ -1204,6 +1204,15 @@ impl<'db> Walker<'db, '_, '_> {
     /// arguments' subjects. Labeled arguments are skipped (the channel
     /// is positional); a spread ends the mapping, like
     /// `apply_by_reference`.
+    ///
+    /// Task-12 debt (owner: the by-reference channel). Only the
+    /// free-function call site above wires `provider_by_reference`/
+    /// `apply_provider_by_reference` in; the method-call arm has no
+    /// analogous wiring, so a provider's by-reference contribution
+    /// never reaches a method call's arguments. No handler claims a
+    /// method today (`StdlibProvider`'s channel is free-function-only,
+    /// `preg_match`), so this is a wiring gap with no live symptom yet
+    /// — closed only once a method-call claimant exists to demand it.
     fn apply_provider_by_reference(
         &mut self,
         contributions: &[(usize, TypeId<'db>)],
@@ -2581,6 +2590,17 @@ impl<'db> Walker<'db, '_, '_> {
                         // just above, and the call's own answer `of` —
                         // so nothing outside the walker re-implements
                         // callee resolution to reconstruct them.
+                        //
+                        // Task-12 debt (owner: the mixed-rate
+                        // instrument, decision 14's stated scope): this
+                        // recording arm exists only on the free-function
+                        // call path. A stub METHOD call (the task-5
+                        // class-refinement channel) still moves the
+                        // global expressions-mixed counter through the
+                        // ordinary `record` below, but never reaches
+                        // this arm, so it never enters `stub_calls` and
+                        // decision 15's per-callee exit table cannot see
+                        // it.
                         if !source_exists
                             && celerrate_semantics::stub_symbol_table(
                                 db,

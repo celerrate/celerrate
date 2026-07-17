@@ -231,6 +231,16 @@ mod tests {
     /// claim a key and then silently answer `None` — the provider
     /// would swallow the call and fall through to the declared tier
     /// with nothing failing.
+    ///
+    /// Task-12 debt (owner: this totality gate, task-9/11 finding
+    /// M45). This gate covers `return_type`'s dispatch only. The
+    /// by-reference channel (`by_reference_types`, above) has no
+    /// analogous totality check: today it has exactly one claimant
+    /// (`preg_match`), covered end to end by
+    /// `celerrate_types/tests/by_reference.rs` instead, so the gap has
+    /// no live symptom. If a second `by_reference_types` contributor
+    /// is ever added, a by-reference-specific totality check (a typo'd
+    /// match arm silently contributing nothing) is owed alongside it.
     #[test]
     fn every_claimed_function_answers_some_for_its_subject() {
         let db = TestDatabase::default();

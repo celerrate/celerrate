@@ -25,14 +25,17 @@ use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
-    MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key, folded_symbol_key,
+    AstId, BodyQuery, MemberKind, MemberQuery, PluginIdentity, SymbolSpace, folded_member_key,
+    folded_symbol_key,
 };
 use celerrate_source::FileId;
+use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    AnnotationSite, FunctionQuery, MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate,
-    Proof, TypeId, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
-    declared_member_signature, inferred_function_return, inferred_method_return, subtype_of,
+    AnnotationSite, DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery,
+    InferenceContext, MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate, Proof,
+    TypeId, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature,
+    inferred_body_types, inferred_function_return, inferred_method_return, subtype_of,
 };
 use salsa::Setter;
 
@@ -1681,5 +1684,167 @@ class Admin {}
         second,
         TypeId::class(&f.db, "app\\admin", vec![]),
         "the threaded argument flows through on the next demand",
+    );
+}
+
+/// `fixture` with the real embedded stub blob and `StdlibProvider`
+/// registered (task 6's registration idiom; duplicated from
+/// `tests/fixpoint.rs`'s identical helper — no shared test-support
+/// module spans this crate's integration-test binaries, the same
+/// constraint `executions_of` above already notes). Task 12's closing
+/// pin needs a provider whose answer is a genuine pure function of the
+/// `Invocation` (decision 16), not the empty stub index the rest of
+/// this suite uses to keep resolution noise out.
+fn fixture_with_embedded_stubs_and_stdlib_provider(sources: &[&str]) -> InferenceFixture {
+    let db = TestDatabase::default();
+    let handles: Vec<SourceFile> = sources
+        .iter()
+        .enumerate()
+        .map(|(index, source)| {
+            SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+        })
+        .collect();
+    let files = AnalyzedFileSet::new(&db, handles.clone());
+    let stubs = StubIndexInput::builder(celerrate_stubs::embedded_stub_index().unwrap())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+        PhpVersion::new(8, 1),
+        PhpVersion::new(8, 5),
+    ))
+    .durability(salsa::Durability::MEDIUM)
+    .new(&db);
+    let _ = DynamicTypeProviderRegistry::builder(vec![DynamicTypeProviderRegistration {
+        identity: celerrate_stdlib_provider::descriptor().identity,
+        provider: Arc::new(StdlibProvider::new()),
+    }])
+    .durability(salsa::Durability::HIGH)
+    .new(&db);
+    InferenceFixture {
+        db,
+        handles,
+        files,
+        stubs,
+        configuration,
+    }
+}
+
+/// The body of the declaration numbered `index` in file 0 (mirrors
+/// `inference.rs`'s own private `body_query` test helper, unreachable
+/// from this external integration-test binary, and `tests/fixpoint.rs`'s
+/// identical duplicate).
+fn body_query(fixture: &InferenceFixture, index: u32) -> BodyQuery<'_> {
+    BodyQuery::new(
+        &fixture.db,
+        AstId {
+            file: FileId::new(0),
+            index,
+        },
+    )
+}
+
+/// Task 12's load-bearing invalidation pin (decision 16): "a provider
+/// answer changes only when its `Invocation` changes." A provider's
+/// answer is a pure function of the argument types it is handed
+/// (`json_decode`'s second argument here, an `Invocation` component),
+/// so editing an argument LITERAL re-infers only the body containing
+/// the edit, never a sibling body in the same file that never
+/// consulted the provider. `bystander` calls `strlen`, a function the
+/// provider does not claim at all, so it has no dependency on the
+/// provider's answer either way — its non-re-execution is not merely
+/// "same file, spared" but "no edge to the edited call at all". The
+/// counterexample proving the 0/1 split is not vacuous: `bystander`
+/// alone (no `decoding`) is exercised by a sibling pin's identical
+/// shape (`a_prose_docblock_edit_re_runs_no_inference`, expecting 0)
+/// and every earlier pin in this suite already establishes that an
+/// edited file's OTHER declaration re-infers when its own dependency
+/// changed (`editing_one_signature_spares_the_other_members_inference`),
+/// so a "both bodies always re-run on any edit in the file" alternative
+/// implementation would fail this assertion's `== 1`.
+#[test]
+fn an_argument_literal_edit_reruns_only_the_editing_body() {
+    // A provider answer is a pure function of the invocation, so an
+    // argument-literal edit moves nothing but the editing body.
+    let before = r#"<?php
+function decoding(string $json) { return json_decode($json, true); }
+function bystander(string $text) { return strlen($text); }
+"#;
+    let after = before.replace(", true)", ", false)");
+    let mut f = fixture_with_embedded_stubs_and_stdlib_provider(&[before]);
+    let file = f.handles[0];
+    for index in [0, 1] {
+        let _ = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            file,
+            body_query(&f, index),
+            InferenceContext::new(&f.db, None),
+        );
+    }
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    for index in [0, 1] {
+        let _ = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            file,
+            body_query(&f, index),
+            InferenceContext::new(&f.db, None),
+        );
+    }
+    let log = f.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "inferred_body_types"),
+        1,
+        "only the editing body re-infers: {log:?}",
+    );
+}
+
+/// Task 12's second pin (decision 16): a provider answer, once it
+/// changes, propagates through the ordinary interprocedural path —
+/// nothing special-cased. `json_decode`'s `$associative` literal edit
+/// flips `decoding`'s inferred return from the array branch to the
+/// object branch (`json_functions.rs`'s truth table), and `caller`,
+/// which never mentions `json_decode` itself, still sees the flip
+/// through `inferred_function_return`'s ordinary callee-return
+/// dependency — the same path a declared-return or inferred-return
+/// edge would ride.
+#[test]
+fn a_provider_answer_change_propagates_like_any_inferred_return() {
+    // The flags edit changes the callee's inferred return; the
+    // caller re-infers on demand — provider answers ride the
+    // existing invalidation paths, no special casing.
+    let before = r#"<?php
+function decoding(string $json) { return json_decode($json, true); }
+function caller(string $json) { return decoding($json); }
+"#;
+    let after = before.replace(", true)", ", false)");
+    let mut f = fixture_with_embedded_stubs_and_stdlib_provider(&[before]);
+    let first = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "caller".to_owned()),
+    )
+    .display(&f.db);
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let second = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "caller".to_owned()),
+    )
+    .display(&f.db);
+    assert_ne!(
+        first, second,
+        "the array branch became the object branch through the caller",
     );
 }
