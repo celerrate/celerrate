@@ -13,7 +13,7 @@ use celerrate_plugin::{DynamicTypeProvider, Invocation, SymbolClaim, TypeId, sal
 
 /// Sorted; `claims()` maps it verbatim. Grown by tasks 7–9 and
 /// curation, never speculatively.
-const CLAIMED_FUNCTIONS: &[&str] = &["current", "end", "reset"];
+const CLAIMED_FUNCTIONS: &[&str] = &["array_filter", "array_map", "current", "end", "reset"];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StdlibProvider;
@@ -63,6 +63,8 @@ fn function_return<'db>(
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     match key {
+        "array_filter" => array_functions::array_filter(db, arguments),
+        "array_map" => array_functions::array_map(db, arguments),
         "current" | "end" | "reset" => array_functions::pointer_value(db, arguments),
         _ => None,
     }
@@ -230,6 +232,11 @@ mod tests {
     /// pattern, say) gets its own arm instead of reusing this one.
     fn claimed_function_subject<'db>(db: &'db TestDatabase, key: &str) -> Option<Vec<TypeId<'db>>> {
         match key {
+            "array_filter" => Some(vec![TypeId::array(db, TypeId::int(db), TypeId::string(db))]),
+            "array_map" => Some(vec![
+                TypeId::callable(db, vec![], TypeId::int(db)),
+                TypeId::array(db, TypeId::int(db), TypeId::string(db)),
+            ]),
             "current" | "end" | "reset" => {
                 Some(vec![TypeId::array(db, TypeId::int(db), TypeId::string(db))])
             }
