@@ -1737,4 +1737,109 @@ mod tests {
         assert_eq!(judge(stringable, string, Strict), Fails);
         assert_eq!(judge(plain, string, Weak), Fails);
     }
+
+    /// `coercion_could_apply`'s union arms in isolation: a source union
+    /// needs every constituent coercible (`all`), a target union needs
+    /// only one (`any`). Each assertion is built so the verdict
+    /// genuinely depends on the reduction, not on a single-constituent
+    /// shortcut: `int|Plain` and `Plain|Address` mix one coercible and
+    /// one refuted-and-uncoercible constituent (or two refuted ones),
+    /// so a broken `all`/`any` (say, `any` swapped in for the source
+    /// side, or the target loop stopping at the first constituent)
+    /// would flip these answers.
+    #[test]
+    fn union_source_and_target_reduction_is_load_bearing() {
+        let fixture = fixture(&[
+            "<?php class WithString { public function __toString(): string { return ''; } } class Plain {} class Address {}",
+        ]);
+        let db = &fixture.db;
+        let judge = |source, target, mode| {
+            assignable_to(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                source,
+                target,
+                mode,
+            )
+        };
+        use CoercionMode::Weak;
+        use Proof::{CannotProve, Fails};
+        let int = TypeId::int(db);
+        let bool_type = TypeId::bool(db);
+        let string = TypeId::string(db);
+        let plain = TypeId::class(db, "plain", vec![]);
+        let address = TypeId::class(db, "address", vec![]);
+
+        // Source union: one non-coercible constituent (`Plain`, no
+        // `__toString`, no `Stringable` ancestry) sinks the whole
+        // `all()`, even though `int` alone would un-fail.
+        let int_or_plain = TypeId::union(db, [int, plain]);
+        assert_eq!(judge(int_or_plain, string, Weak), Fails);
+
+        // Source union: every constituent individually coercible to a
+        // scalar target un-fails the whole union.
+        let int_or_bool = TypeId::union(db, [int, bool_type]);
+        assert_eq!(judge(int_or_bool, string, Weak), CannotProve);
+
+        // Target union: `int` cannot subtype `string` or `Plain`, but
+        // one arm (`string`) is reachable through weak-mode scalar
+        // interchange, so `any()` un-fails the whole union.
+        let string_or_plain = TypeId::union(db, [string, plain]);
+        assert_eq!(judge(int, string_or_plain, Weak), CannotProve);
+
+        // Target union with no coercible arm at all (two plain classes,
+        // neither scalar nor `Stringable`) stays refuted.
+        let plain_or_address = TypeId::union(db, [plain, address]);
+        assert_eq!(judge(int, plain_or_address, Weak), Fails);
+    }
+
+    /// `is_stringable`'s stub-only branch: a class with no source
+    /// declaration at all, known only through a synthetic stub surface
+    /// whose parent names `Stringable` — reached only through
+    /// `stub_ancestors_of`, never through `lookup_member` (this stub
+    /// surface declares no members, so no `__toString` is ever found)
+    /// nor through `linearized_class` (which answers `None` for a
+    /// class with no source declaration).
+    #[test]
+    fn a_stub_only_stringable_ancestry_un_fails_in_weak_mode_only() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php"],
+            vec![(
+                "StubStringable".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Stringable".to_owned()],
+                    members: vec![],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let stub_stringable = TypeId::class(db, "StubStringable", vec![]);
+        let string = TypeId::string(db);
+        assert_eq!(
+            assignable_to(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                stub_stringable,
+                string,
+                CoercionMode::Weak,
+            ),
+            Proof::CannotProve
+        );
+        assert_eq!(
+            assignable_to(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                stub_stringable,
+                string,
+                CoercionMode::Strict,
+            ),
+            Proof::Fails
+        );
+    }
 }
