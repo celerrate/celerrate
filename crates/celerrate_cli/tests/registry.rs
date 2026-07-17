@@ -29,6 +29,7 @@ fn producers() -> Vec<(&'static str, &'static [DiagnosticId])> {
             "celerrate_project",
             celerrate_project::ALLOCATED_IDENTIFIERS,
         ),
+        ("celerrate_types", celerrate_types::ALLOCATED_IDENTIFIERS),
     ]
 }
 

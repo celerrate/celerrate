@@ -85,6 +85,7 @@
 //! bare-callable form is recorded debt, revisited when plan 8 measures
 //! the silence.
 
+pub mod checks;
 mod construction;
 mod declared;
 mod display;
@@ -104,6 +105,10 @@ mod type_syntax;
 mod widening;
 mod written;
 
+pub use checks::{
+    ALLOCATED_IDENTIFIERS, ArgumentLabel, TypedFileResult, TypedVerdict, TypedVerdictKind,
+    typed_diagnostics, typed_file_verdicts,
+};
 pub use declared::{
     DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
     declared_function_signature, declared_member_signature, function_annotations,

@@ -85,6 +85,19 @@ impl<'db> InferredBody<'db> {
     }
 }
 
+impl InterproceduralEdgeCounts {
+    /// Sums another body's counts into this one, saturating.
+    pub fn accumulate(&mut self, other: &Self) {
+        self.declared_return_edges = self
+            .declared_return_edges
+            .saturating_add(other.declared_return_edges);
+        self.inferred_return_edges = self
+            .inferred_return_edges
+            .saturating_add(other.inferred_return_edges);
+        self.provider_edges = self.provider_edges.saturating_add(other.provider_edges);
+    }
+}
+
 /// The declaration a body belongs to: a free function, or a method of
 /// a class-like. `class_key` stays an `Option` (decision 12's shape:
 /// nothing else in this struct forces a class-like to have a name),
