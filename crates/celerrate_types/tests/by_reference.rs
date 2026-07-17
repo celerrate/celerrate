@@ -133,3 +133,33 @@ function consume(array $arguments): void {
     .unwrap();
     assert!(!inferred.expression_types.is_empty());
 }
+
+/// A spread landing exactly at the `$matches` position, with a
+/// contribution the provider DID compute (unlike the previous test,
+/// where `preg_match_matches` bails before any contribution exists):
+/// `apply_provider_by_reference`'s guard —
+/// `arguments.iter().take(*index + 1).any(|argument| argument.spread)`
+/// — must skip the bind rather than mis-attributing the pattern-derived
+/// shape to `$rest`, an array of trailing arguments that has nothing to
+/// do with `$matches`. Without the guard this would bind the shape onto
+/// `$rest` and the assertion below would fail.
+#[test]
+fn a_spread_at_the_matches_position_is_not_mistaken_for_matches() {
+    let f = fixture(&[r#"<?php
+function consume(string $subject, array $rest) {
+    preg_match('/(?<year>\d+)/', $subject, ...$rest);
+    return $rest;
+}
+"#]);
+    let inferred = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "consume".to_owned()),
+    );
+    let display = inferred.display(&f.db);
+    // `$rest` keeps its declared `array` type: the pattern-derived
+    // shape (which would show `year`) was never bound onto it.
+    assert!(!display.contains("year"), "{display}");
+}
