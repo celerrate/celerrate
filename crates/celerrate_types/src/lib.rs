@@ -128,7 +128,7 @@ pub use inference::{
     inferred_method_return,
 };
 pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
-pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
+pub use judgments::{CoercionMode, Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
