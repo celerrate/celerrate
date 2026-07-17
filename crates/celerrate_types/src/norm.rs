@@ -39,10 +39,21 @@ pub(crate) fn lower_norm_text<'db>(
     let mut cursor = Cursor {
         tokens: &tokens,
         position: 0,
+        depth: 0,
     };
     let lowered = union_type(db, scope, &mut cursor)?;
     cursor.at_end().then_some(lowered)
 }
+
+/// Cap on `atom_type` recursion depth (`union_type` -> `intersection_type`
+/// -> `atom_type`, plus `?T`'s direct self-recursion, both cycle back
+/// through this function). No legitimate norm text nests anywhere close
+/// to this: phpstorm-stubs refinements are a handful of levels deep at
+/// most. 256 is comfortably past any real input while staying far below
+/// the stack a single recursive frame here could exhaust (each cycle
+/// pushes only a few hundred bytes), so hostile input such as
+/// `"(".repeat(100_000)` answers `None` instead of overflowing the stack.
+const MAX_ATOM_NESTING_DEPTH: usize = 256;
 
 #[derive(Debug, Clone, PartialEq)]
 enum Token {
@@ -246,6 +257,10 @@ fn lex_number(characters: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
 struct Cursor<'a> {
     tokens: &'a [Token],
     position: usize,
+    /// Current `atom_type` call-stack depth. Incremented on entry and
+    /// decremented on exit (see `atom_type`), so it tracks live nesting
+    /// rather than the total number of atoms parsed.
+    depth: usize,
 }
 
 impl<'a> Cursor<'a> {
@@ -303,7 +318,25 @@ fn intersection_type<'db>(
     })
 }
 
+/// Guards `atom_type_body`'s recursion depth (decision 13's global
+/// constraint: hostile input answers `None`, never crashes). See
+/// `MAX_ATOM_NESTING_DEPTH`.
 fn atom_type<'db>(
+    db: &'db dyn salsa::Database,
+    scope: &NormScope<'db, '_>,
+    cursor: &mut Cursor<'_>,
+) -> Option<TypeId<'db>> {
+    cursor.depth += 1;
+    let result = if cursor.depth > MAX_ATOM_NESTING_DEPTH {
+        None
+    } else {
+        atom_type_body(db, scope, cursor)
+    };
+    cursor.depth -= 1;
+    result
+}
+
+fn atom_type_body<'db>(
     db: &'db dyn salsa::Database,
     scope: &NormScope<'db, '_>,
     cursor: &mut Cursor<'_>,
@@ -444,6 +477,16 @@ fn int_type<'db>(db: &'db dyn salsa::Database, cursor: &mut Cursor<'_>) -> Optio
         _ => None,
     };
     if minimum.is_none() && maximum.is_none() {
+        return None;
+    }
+    // An inverted range (`int<5..1>`) is outside the v0 subset: hand
+    // it to `TypeId::int_range` and it canonicalizes to `never`, the
+    // most dangerous wrong answer this module can give (decision 13's
+    // global constraint forbids fabricating `never`). Reject it here
+    // instead.
+    if let (Some(low), Some(high)) = (minimum, maximum)
+        && low > high
+    {
         return None;
     }
     cursor
@@ -1003,11 +1046,48 @@ mod tests {
             "\u{0}\u{1}\u{2}",
             "int<<>>",
             "42.4.2",
+            "int<5..1>",  // inverted range: low > high
+            "int<1..-5>", // inverted range: low > high, negative bound
         ] {
             assert!(
                 lower_norm_text(&db, &scope(), text).is_none(),
                 "expected None for {text:?}",
             );
+        }
+    }
+
+    #[test]
+    fn deeply_nested_input_answers_none_instead_of_overflowing_the_stack() {
+        let db = TestDatabase::default();
+        // Comfortably past `MAX_ATOM_NESTING_DEPTH` (256). Each of these
+        // alone crashes the process (stack overflow) without the depth
+        // guard in `atom_type` — see the fix report for the observed
+        // crash with the guard removed.
+        let deeply_nested_parentheses = "(".repeat(100_000);
+        let deeply_nested_nullable = "?".repeat(100_000);
+        assert!(lower_norm_text(&db, &scope(), &deeply_nested_parentheses).is_none());
+        assert!(lower_norm_text(&db, &scope(), &deeply_nested_nullable).is_none());
+    }
+
+    #[test]
+    fn every_norm_alphabet_soup_is_parsed_or_rejected_without_panicking() {
+        // A cheap fuzz floor, matching written.rs's
+        // `every_ascii_soup_is_parsed_or_rejected_without_panicking`:
+        // three-byte soups over an alphabet drawn from the norm's own
+        // grammar (union, intersection, nullable, generics, ranges,
+        // shapes, enum cases, strings, names).
+        let db = TestDatabase::default();
+        let alphabet = [
+            b'A', b' ', b'?', b'|', b'&', b'(', b')', b'<', b'>', b'{', b'}', b':', b'.', b',',
+            b'=', b'\'', b'1', b'_', b'-', b'\\',
+        ];
+        for &a in &alphabet {
+            for &b in &alphabet {
+                for &c in &alphabet {
+                    let text: String = [a, b, c].iter().map(|&byte| byte as char).collect();
+                    let _ = lower_norm_text(&db, &scope(), &text);
+                }
+            }
         }
     }
 }
