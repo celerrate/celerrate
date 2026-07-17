@@ -810,15 +810,45 @@ mod tests {
                     return_type: Some("list<int>".to_owned()),
                 },
             )],
-            vec![],
+            vec![(
+                "arrayiterator".to_owned(),
+                crate::refinements::RefinedClass {
+                    templates: vec![
+                        crate::refinements::RefinedTemplate {
+                            name: "TKey".to_owned(),
+                            bound: None,
+                        },
+                        crate::refinements::RefinedTemplate {
+                            name: "TValue".to_owned(),
+                            bound: Some("object".to_owned()),
+                        },
+                    ],
+                    ancestors: vec![crate::refinements::RefinedAncestor {
+                        name: "iterator".to_owned(),
+                        arguments: vec!["TKey".to_owned(), "TValue".to_owned()],
+                    }],
+                    methods: vec![
+                        (
+                            "current".to_owned(),
+                            crate::refinements::RefinedSignature {
+                                templates: vec![],
+                                parameters: vec![],
+                                return_type: Some("TValue".to_owned()),
+                            },
+                        ),
+                        (
+                            "key".to_owned(),
+                            crate::refinements::RefinedSignature {
+                                templates: vec![],
+                                parameters: vec![],
+                                return_type: Some("TKey".to_owned()),
+                            },
+                        ),
+                    ],
+                },
+            )],
         ));
-        let decoded = decode(&encode(&index)).unwrap();
-        assert_eq!(
-            decoded
-                .function_refinement("array_keys")
-                .and_then(|refinement| refinement.return_type.as_deref()),
-            Some("list<int>"),
-        );
+        assert_eq!(decode(&encode(&index)), Ok(index));
     }
 
     #[test]

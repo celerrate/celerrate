@@ -39,12 +39,16 @@ pub struct RefinedAncestor {
 pub struct RefinedClass {
     pub templates: Vec<RefinedTemplate>,
     pub ancestors: Vec<RefinedAncestor>,
-    /// Method name (folded) to signature refinement.
+    /// Method name (folded) to signature refinement, sorted by name
+    /// inside `StubRefinements::new` (methods carry no positional
+    /// meaning, unlike `templates` and `ancestors[].arguments`).
     pub methods: Vec<(String, RefinedSignature)>,
 }
 
-/// The whole overlay, keyed by folded symbol keys, both lists sorted
-/// so lookups binary-search and the blob encoding is deterministic.
+/// The whole overlay, keyed by folded symbol keys: `functions` and
+/// `classes` are sorted by key, and each class's `methods` is sorted
+/// by name too, so lookups binary-search and the blob encoding is
+/// deterministic.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct StubRefinements {
     pub functions: Vec<(String, RefinedSignature)>,
@@ -58,6 +62,9 @@ impl StubRefinements {
     ) -> Self {
         functions.sort_by(|left, right| left.0.cmp(&right.0));
         classes.sort_by(|left, right| left.0.cmp(&right.0));
+        for (_, class) in &mut classes {
+            class.methods.sort_by(|left, right| left.0.cmp(&right.0));
+        }
         Self { functions, classes }
     }
 
@@ -283,6 +290,37 @@ mod tests {
             .map(|(key, _)| key.as_str())
             .collect();
         assert_eq!(keys, ["a", "b"]);
+    }
+
+    #[test]
+    fn construction_sorts_methods_by_name_within_each_class() {
+        let refinements = StubRefinements::new(
+            vec![],
+            vec![(
+                "arrayiterator".to_owned(),
+                RefinedClass {
+                    templates: vec![],
+                    ancestors: vec![],
+                    methods: vec![
+                        ("valid".to_owned(), RefinedSignature::default()),
+                        ("current".to_owned(), RefinedSignature::default()),
+                        ("key".to_owned(), RefinedSignature::default()),
+                    ],
+                },
+            )],
+        );
+        let class = &refinements
+            .classes
+            .iter()
+            .find(|(key, _)| key == "arrayiterator")
+            .unwrap()
+            .1;
+        let method_names: Vec<&str> = class
+            .methods
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect();
+        assert_eq!(method_names, ["current", "key", "valid"]);
     }
 
     #[test]
