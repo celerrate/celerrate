@@ -1,5 +1,4 @@
 # celerrate ground-truth baseline — regenerate with: cargo xtask ground-truth --bless
 # corpus: https://github.com/symfony/demo @ 03fe25671b720b15103a2ff26934e94c87bd4d82
 # format: <classification>\t<symbol>\t<inferred>\t<annotated>
-precision-gap	app\datafixtures\appfixtures::getrandomtags	array<int|string, mixed>	array<int|string, app\\entity\\tag>
-precision-gap	app\repository\postrepository::extractsearchterms	array<int|string, mixed>	array<int|string, string>
+unclassified	app\repository\postrepository::extractsearchterms	array<int|string, symfony\\component\\string\\unicodestring>	array<int|string, string>

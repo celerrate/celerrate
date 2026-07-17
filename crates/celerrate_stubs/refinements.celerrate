@@ -2,8 +2,18 @@
 # stub signatures in the internal norm, compiled into stubs.bin by
 # `cargo xtask compile-stubs`. Validated at compile time (existence)
 # and by the lowering-totality test in celerrate_types (grammar).
+#
+# Curation is measurement-driven (plan 7, task 11): an entry earns its
+# place only when it both names a callee the pinned corpus exercises and
+# demonstrably sharpens a measured result (the ground-truth or mixed-rate
+# baseline). array_slice and array_unique carry the element type through
+# to array_map/array_filter, resolving real precision-gap records;
+# inert-but-in-table returns (count, implode, in_array) moved no
+# instrument and only duplicate the base fold, so they stay out.
 
 function array_keys<TKey, TValue>(array<TKey, TValue> $array): list<TKey>
+function array_slice<TKey, TValue>(array<TKey, TValue> $array): array<TKey, TValue>
+function array_unique<TKey, TValue>(array<TKey, TValue> $array): array<TKey, TValue>
 function array_values<TKey, TValue>(array<TKey, TValue> $array): list<TValue>
 
 class ArrayIterator<TKey, TValue> implements Iterator<TKey, TValue> {

@@ -3427,9 +3427,12 @@ git commit -m "✨ feat(stdlib): the provider crate registers and claims the poi
   the array argument unchanged (`array_map(null, $a)` is `$a`).
 - Two arguments, callback carries a callable type with return `R`:
   a list argument answers `list<R>`; an array argument with key `K`
-  answers `array<K, R>`; a shape argument answers
+  answers `array<K, R>`; a non-list shape argument answers
   `array<K', R>` where `K'` is the union of the shape's keys
   (integer keys as int literals, string keys as string literals).
+  The shipped code checks `is_list` first, so a list-shaped shape
+  argument is already answered `list<R>` above; only a non-list
+  shape reaches the shape-key-union branch (the code governs, M42).
 - More than two arguments (the zip form) with a callable callback:
   `list<R>` (PHP reindexes).
 - A callback without a callable type (a `'strtoupper'` string, a
@@ -3439,7 +3442,9 @@ git commit -m "✨ feat(stdlib): the provider crate registers and claims the poi
 - The key: a list argument answers `array<int<0..>, V>` — filtering
   keeps keys, so list contiguity is lost, but the keys stay
   non-negative integers. An array argument keeps its key type; a
-  shape argument answers keys as the shape-key union.
+  non-list shape argument answers keys as the shape-key union (the
+  code checks `is_list` first, so a list-shaped shape is answered
+  by the list branch above; the code governs, M42).
 - The value: with one argument (no callback), falsy constituents
   drop — `null` and `false` literals are removed from a union value
   type (`0`/`''`/`'0'` literals too when present as literals); a
