@@ -44,6 +44,23 @@ pub struct InterproceduralEdgeCounts {
     pub provider_edges: u32,
 }
 
+/// One stub-function call and whether its expression stayed
+/// `mixed` — the residual instrument stub curation measures its
+/// exit with (design sections 7 and 9). Recorded by the walker at
+/// the call boundary; nothing re-derives callee resolution.
+///
+/// Derives `salsa::Update` (beyond the brief's `Debug, Clone,
+/// PartialEq, Eq`): it lives inside `InferredBody`'s
+/// `Vec<StubCallRecord>` field, and `InferredBody` derives
+/// `salsa::Update` too, so every field type must satisfy `Update`
+/// for that derive to compile (`Vec<T>: Update` requires `T: Update`).
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct StubCallRecord {
+    /// The folded function key.
+    pub callee: String,
+    pub mixed: bool,
+}
+
 /// The inference result of one body: a type per arena expression, the
 /// joined return type, and the edge-count instrument. `Eq`-comparable
 /// on purpose: a body edit that leaves every inferred result identical
@@ -53,6 +70,13 @@ pub struct InferredBody<'db> {
     pub expression_types: Vec<TypeId<'db>>,
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
+    /// One record per stub-function call expression in the body
+    /// (task-14 recording rule, decision 14): free-function calls
+    /// whose resolved key exists only in stubs. Stub *method* calls
+    /// (the task-5 class-refinement channel) move
+    /// `edge_counts`/`expression_types`' mixed count but never enter
+    /// this table — scope, stated in decision 14.
+    pub stub_calls: Vec<StubCallRecord>,
 }
 
 impl<'db> InferredBody<'db> {
@@ -249,6 +273,7 @@ pub fn inferred_body_types<'db>(
         expression_types: result.expression_types,
         return_type: result.return_type,
         edge_counts: result.edge_counts,
+        stub_calls: result.stub_calls,
     })
 }
 
@@ -3772,5 +3797,93 @@ function consume(RecentPosts $posts) {
         // presence means the threaded step answered `None`.
         assert!(!display.contains("float"), "{display}");
         assert!(!display.contains("bool"), "{display}");
+    }
+
+    /// Task 10, decision 14: a free-function call resolved to a stub
+    /// symbol (`source_exists == false`, the stub table has it) is
+    /// recorded with its verdict — `array_keys` answers a refined,
+    /// non-mixed `array` (its native return, `declared_present`
+    /// true), `unserialize` answers exactly `mixed` (no refinement,
+    /// native declared type is `mixed` itself, so `declared_present`
+    /// is false and the call falls through to the `mixed` fallback).
+    /// Both are recorded; their verdicts differ, so this cannot pass
+    /// by an instrument that always reads 0 or always reads 1.
+    #[test]
+    fn stub_function_calls_are_recorded_with_their_mixed_verdict() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume(): void {
+    $keys = array_keys(['a' => 1]);
+    $value = unserialize('x');
+}
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        let callees: Vec<(&str, bool)> = inferred
+            .stub_calls
+            .iter()
+            .map(|record| (record.callee.as_str(), record.mixed))
+            .collect();
+        assert!(callees.contains(&("array_keys", false)), "{callees:?}",);
+        assert!(callees.contains(&("unserialize", true)), "{callees:?}",);
+    }
+
+    /// The boundary at the other side of decision 14's condition: a
+    /// call resolved to a SOURCE function (`source_exists == true`)
+    /// must never enter `stub_calls`, even though the callee is a
+    /// perfectly ordinary function call the walker types normally.
+    #[test]
+    fn source_function_calls_are_not_recorded() {
+        let f = fixture(&[r#"<?php
+function helper(): int { return 1; }
+function consume(): void { $x = helper(); }
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 1),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(inferred.stub_calls.is_empty());
+    }
+
+    /// The task-9 by-reference spread guard stops applying
+    /// by-reference write-backs at a spread argument, but the
+    /// recording this task adds is a different mechanism entirely
+    /// (callee resolution, not argument binding) — it must not stop
+    /// with it. `preg_match` is a stub function; the spread call
+    /// still resolves one callee and is recorded once.
+    #[test]
+    fn a_spread_call_to_a_stub_function_is_still_recorded() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume(array $arguments): void {
+    preg_match(...$arguments);
+}
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.stub_calls.len(), 1);
     }
 }

@@ -22,7 +22,7 @@ use celerrate_syntax::SyntaxKind;
 use crate::declared::{
     DeclaredSignature, Trust, declared_function_signature, declared_member_signature,
 };
-use crate::inference::InterproceduralEdgeCounts;
+use crate::inference::{InterproceduralEdgeCounts, StubCallRecord};
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
 use crate::representation::{TypeData, TypeId};
@@ -64,6 +64,9 @@ pub(crate) struct FlowResult<'db> {
     pub expression_types: Vec<TypeId<'db>>,
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
+    /// Task 10, decision 14: every stub-function call this body made,
+    /// with its mixed verdict — drained from `Walker::stub_calls`.
+    pub stub_calls: Vec<StubCallRecord>,
 }
 
 /// The abstract state at one program point. `reachable` is the
@@ -188,6 +191,10 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     returns: Vec<TypeId<'db>>,
     saw_yield: bool,
     edge_counts: InterproceduralEdgeCounts,
+    /// Task 10, decision 14: one record per free-function call this
+    /// body made whose resolved key exists only in stubs, appended at
+    /// the call boundary and drained into `InferredBody.stub_calls`.
+    stub_calls: Vec<StubCallRecord>,
     /// Set while typing inside a `NullSafeChain` when a `?->` link's
     /// receiver was possibly null: the wrapper re-acquires `|null`
     /// once, at the end (the design's whole-chain rule).
@@ -221,6 +228,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         returns: Vec::new(),
         saw_yield: false,
         edge_counts: InterproceduralEdgeCounts::default(),
+        stub_calls: Vec::new(),
         null_safe_reacquires: false,
         pending_condition_facts: Vec::new(),
         inline_variable_texts,
@@ -258,6 +266,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         expression_types: walker.types,
         return_type,
         edge_counts: walker.edge_counts,
+        stub_calls: walker.stub_calls,
     }
 }
 
@@ -2565,6 +2574,27 @@ impl<'db> Walker<'db, '_, '_> {
                         let of = self
                             .provider_return(claim.clone(), None, &argument_types)
                             .unwrap_or_else(|| self.function_call_result(&key, source_exists));
+                        // Task 10, decision 14: the instrument records
+                        // at the source. The walker already knows both
+                        // facts the recording condition needs —
+                        // `source_exists` from `resolved_function_key`
+                        // just above, and the call's own answer `of` —
+                        // so nothing outside the walker re-implements
+                        // callee resolution to reconstruct them.
+                        if !source_exists
+                            && celerrate_semantics::stub_symbol_table(
+                                db,
+                                self.context.stubs,
+                                self.context.configuration,
+                            )
+                            .lookup(celerrate_semantics::SymbolSpace::Function, &key)
+                            .is_some()
+                        {
+                            self.stub_calls.push(StubCallRecord {
+                                callee: key.clone(),
+                                mixed: of.is_mixed(db),
+                            });
+                        }
                         let declared = declared_function_signature(
                             db,
                             self.context.files,
