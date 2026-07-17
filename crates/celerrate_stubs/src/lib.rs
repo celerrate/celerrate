@@ -23,10 +23,19 @@
 //! return and value types, most-restrictive-or-silenced for parameter
 //! types) lives upstairs in `celerrate_types`, next to the existence
 //! check against the availability-filtered symbol table.
+//!
+//! The blob's `SECTION_OVERLAYS` (section 3) is live for the Celerrate
+//! refinements overlay (design section 7): [`StubRefinements`] carries
+//! enriched signatures written in the internal norm, keyed by folded
+//! symbol name and consulted through [`StubIndex::function_refinement`]
+//! and [`StubIndex::class_refinement`]. Refinement texts are opaque
+//! strings in this crate; lowering them into lattice types happens
+//! upstairs in `celerrate_types`.
 
 mod blob;
 mod index;
 mod query;
+mod refinements;
 mod signature;
 mod symbol;
 
@@ -39,6 +48,9 @@ pub use blob::{
 };
 pub use index::StubIndex;
 pub use query::{StubIndexInput, stubs_in_range};
+pub use refinements::{
+    RefinedAncestor, RefinedClass, RefinedSignature, RefinedTemplate, StubRefinements,
+};
 pub use signature::{
     StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
     VersionedTypeText,

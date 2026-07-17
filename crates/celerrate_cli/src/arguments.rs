@@ -33,6 +33,12 @@ pub enum Command {
     /// from help — the product surface is plan 9c's.
     #[command(hide = true)]
     GroundTruth { path: PathBuf },
+
+    /// Internal: the residual mixed-rate counters over a project
+    /// (design sections 7 and 9). Plan 9b publishes the number; this
+    /// stays hidden until then.
+    #[command(hide = true)]
+    MixedRate { path: PathBuf },
 }
 
 #[cfg(test)]
@@ -76,5 +82,29 @@ mod tests {
             panic!("expected Command::GroundTruth");
         };
         assert_eq!(path.to_str(), Some("src"));
+    }
+
+    #[test]
+    fn mixed_rate_takes_a_path() {
+        let arguments = Arguments::try_parse_from(["celerrate", "mixed-rate", "src"]).unwrap();
+        let Command::MixedRate { path } = arguments.command else {
+            panic!("expected Command::MixedRate");
+        };
+        assert_eq!(path.to_str(), Some("src"));
+    }
+
+    /// The hidden variants must actually stay hidden: `--help` is the
+    /// product surface plan 9c owns, and a subcommand appearing there
+    /// early would ship an undocumented, unstable channel as if it
+    /// were supported.
+    #[test]
+    fn mixed_rate_is_hidden_from_help() {
+        let mut output = Vec::new();
+        let outcome = crate::run(vec!["celerrate".into(), "--help".into()], &mut output);
+        assert_eq!(outcome, crate::Outcome::Clean);
+        assert!(
+            !String::from_utf8(output).unwrap().contains("mixed-rate"),
+            "mixed-rate must not appear in --help",
+        );
     }
 }

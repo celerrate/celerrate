@@ -15,9 +15,12 @@ use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKin
 
 pub const BLOB_MAGIC: [u8; 8] = *b"CELSTUBS";
 
-/// Bumped only on incompatible layout changes. Additive evolution goes
-/// through new sections, which old readers skip.
-pub const BLOB_FORMAT_VERSION: u32 = 1;
+/// Version 2 marks the overlays section (`SECTION_OVERLAYS`) going
+/// live: the schema bump the design's section 9 mandates whenever a
+/// reserved section starts being written. Otherwise additive
+/// evolution goes through new sections, which old readers skip
+/// without a version bump.
+pub const BLOB_FORMAT_VERSION: u32 = 2;
 
 /// The top-level symbol table: the one live section.
 pub const SECTION_SYMBOL_TABLE: u32 = 1;
@@ -25,8 +28,8 @@ pub const SECTION_SYMBOL_TABLE: u32 = 1;
 /// Reserved: per-version signature deltas (sub-project 3).
 pub const SECTION_SIGNATURES: u32 = 2;
 
-/// Reserved: the overlay merge point (Celerrate refinements, plugin
-/// stubs).
+/// The overlay merge point: live for the Celerrate refinements payload
+/// (design section 7); still reserved for plugin stubs.
 pub const SECTION_OVERLAYS: u32 = 3;
 
 /// Why a blob failed to decode. Every variant is a clean rejection:
@@ -65,10 +68,13 @@ impl std::error::Error for StubBlobError {}
 pub fn encode(index: &StubIndex) -> Vec<u8> {
     let symbol_table = encode_symbol_table(index);
     let signatures = encode_signatures(index);
-    let table_entries = 2u32;
+    let mut overlays = Vec::new();
+    crate::refinements::encode_refinements(index.refinements(), &mut overlays);
+    let table_entries = 3u32;
     let symbol_offset = 24u64 + u64::from(table_entries) * 20;
     let signature_offset = symbol_offset + symbol_table.len() as u64;
-    let mut blob = Vec::with_capacity(symbol_table.len() + signatures.len() + 64);
+    let overlays_offset = signature_offset + signatures.len() as u64;
+    let mut blob = Vec::with_capacity(symbol_table.len() + signatures.len() + overlays.len() + 64);
     blob.extend_from_slice(&BLOB_MAGIC);
     blob.extend_from_slice(&BLOB_FORMAT_VERSION.to_le_bytes());
     blob.extend_from_slice(&[0; 8]); // checksum, patched below
@@ -79,8 +85,12 @@ pub fn encode(index: &StubIndex) -> Vec<u8> {
     blob.extend_from_slice(&SECTION_SIGNATURES.to_le_bytes());
     blob.extend_from_slice(&signature_offset.to_le_bytes());
     blob.extend_from_slice(&(signatures.len() as u64).to_le_bytes());
+    blob.extend_from_slice(&SECTION_OVERLAYS.to_le_bytes());
+    blob.extend_from_slice(&overlays_offset.to_le_bytes());
+    blob.extend_from_slice(&(overlays.len() as u64).to_le_bytes());
     blob.extend_from_slice(&symbol_table);
     blob.extend_from_slice(&signatures);
+    blob.extend_from_slice(&overlays);
     let checksum = fnv1a64(blob.get(20..).unwrap_or_default());
     if let Some(slot) = blob.get_mut(12..20) {
         slot.copy_from_slice(&checksum.to_le_bytes());
@@ -242,6 +252,7 @@ pub fn decode(blob: &[u8]) -> Result<StubIndex, StubBlobError> {
     let section_count = header.u32().ok_or(StubBlobError::TooShort)?;
     let mut symbol_table: Option<&[u8]> = None;
     let mut signatures: Option<&[u8]> = None;
+    let mut overlays: Option<&[u8]> = None;
     for _ in 0..section_count {
         let identifier = header.u32().ok_or(StubBlobError::TooShort)?;
         let offset = header.u64().ok_or(StubBlobError::TooShort)?;
@@ -258,21 +269,31 @@ pub fn decode(blob: &[u8]) -> Result<StubIndex, StubBlobError> {
             symbol_table = Some(section);
         } else if identifier == SECTION_SIGNATURES {
             signatures = Some(section);
+        } else if identifier == SECTION_OVERLAYS {
+            overlays = Some(section);
         }
         // Unknown identifiers are skipped: newer blobs that only add
         // sections stay readable without a format version bump.
     }
     let symbols = decode_symbol_table(symbol_table.ok_or(StubBlobError::MissingSymbolTable)?)?;
-    match signatures {
+    let mut index = match signatures {
         Some(section) => {
             let (functions, classes) = decode_signatures(section)?;
-            Ok(StubIndex::new(symbols, functions, classes))
+            StubIndex::new(symbols, functions, classes)
         }
         // A blob without the signatures section (a pre-plan-3 blob, or
         // one that legitimately has nothing to say): empty payloads,
         // not an error — the section is optional on read.
-        None => Ok(StubIndex::from_symbols(symbols)),
+        None => StubIndex::from_symbols(symbols),
+    };
+    if let Some(section) = overlays {
+        index.set_refinements(crate::refinements::decode_refinements(section)?);
     }
+    // A blob without the overlays section (one predating this format
+    // revision, or a compilation whose refinements overlay is empty):
+    // empty overlay, not an error — the section is optional on read,
+    // mirroring the signatures section's own tolerance rule.
+    Ok(index)
 }
 
 fn decode_symbol_table(bytes: &[u8]) -> Result<Vec<StubSymbol>, StubBlobError> {
@@ -390,12 +411,12 @@ pub(crate) fn fnv1a64(bytes: &[u8]) -> u64 {
 }
 
 /// A cursor over borrowed bytes; every read is checked, no indexing.
-struct Reader<'blob> {
+pub(crate) struct Reader<'blob> {
     bytes: &'blob [u8],
 }
 
 impl<'blob> Reader<'blob> {
-    fn new(bytes: &'blob [u8]) -> Self {
+    pub(crate) fn new(bytes: &'blob [u8]) -> Self {
         Self { bytes }
     }
 
@@ -405,11 +426,11 @@ impl<'blob> Reader<'blob> {
         Some(head)
     }
 
-    fn u8(&mut self) -> Option<u8> {
+    pub(crate) fn u8(&mut self) -> Option<u8> {
         self.take(1)?.first().copied()
     }
 
-    fn u32(&mut self) -> Option<u32> {
+    pub(crate) fn u32(&mut self) -> Option<u32> {
         Some(u32::from_le_bytes(self.take(4)?.try_into().ok()?))
     }
 
@@ -426,7 +447,7 @@ impl<'blob> Reader<'blob> {
         Some(u16::from_le_bytes(self.take(2)?.try_into().ok()?))
     }
 
-    fn string(&mut self) -> Option<String> {
+    pub(crate) fn string(&mut self) -> Option<String> {
         let length = usize::try_from(self.u32()?).ok()?;
         let bytes = self.take(length)?;
         core::str::from_utf8(bytes).ok().map(str::to_owned)
@@ -513,8 +534,8 @@ mod tests {
     use celerrate_project::PhpVersion;
 
     use super::{
-        BLOB_FORMAT_VERSION, BLOB_MAGIC, SECTION_SYMBOL_TABLE, StubBlobError, decode, encode,
-        encode_symbol_table, fnv1a64,
+        BLOB_FORMAT_VERSION, BLOB_MAGIC, SECTION_SIGNATURES, SECTION_SYMBOL_TABLE, StubBlobError,
+        decode, encode, encode_signatures, encode_symbol_table, fnv1a64,
     };
     use crate::index::StubIndex;
     use crate::signature::{
@@ -583,7 +604,7 @@ mod tests {
     fn the_blob_starts_with_magic_and_format_version() {
         let blob = encode(&StubIndex::default());
         assert_eq!(blob[0..8], BLOB_MAGIC);
-        assert_eq!(blob[8..12], BLOB_FORMAT_VERSION.to_le_bytes());
+        assert_eq!(blob[8..12], 2u32.to_le_bytes());
     }
 
     #[test]
@@ -627,15 +648,15 @@ mod tests {
 
     #[test]
     fn unknown_sections_are_skipped_for_forward_compatibility() {
-        // Hand-build a version-1 blob whose table carries an unknown
+        // Hand-build a version-2 blob whose table carries an unknown
         // section before the symbol table.
         let symbol_table = {
             let encoded = encode(&sample_index());
             // The symbol table of a freshly encoded blob starts right
-            // after the header (24) plus two 20-byte table entries
-            // (symbol table + signatures) and runs for exactly
-            // `encode_symbol_table`'s own length.
-            let symbol_offset = 24 + 2 * 20;
+            // after the header (24) plus three 20-byte table entries
+            // (symbol table + signatures + overlays) and runs for
+            // exactly `encode_symbol_table`'s own length.
+            let symbol_offset = 24 + 3 * 20;
             let symbol_length = encode_symbol_table(&sample_index()).len();
             encoded[symbol_offset..symbol_offset + symbol_length].to_vec()
         };
@@ -742,8 +763,8 @@ mod tests {
 
     #[test]
     fn a_blob_without_the_signature_section_decodes_with_empty_payloads() {
-        // The pre-plan-3 encoding: hand-build a genuinely one-section,
-        // version-1 blob (magic + version + checksum patch + a single
+        // The pre-plan-3 encoding: hand-build a genuinely one-section
+        // blob (magic + current version + checksum patch + a single
         // symbol-table entry), mirroring
         // `unknown_sections_are_skipped_for_forward_compatibility`'s
         // construction. `encode` always writes the signatures section
@@ -768,6 +789,100 @@ mod tests {
         assert_eq!(decoded.symbols(), old_index.symbols());
         assert!(decoded.functions().is_empty());
         assert!(decoded.classes().is_empty());
+    }
+
+    #[test]
+    fn the_format_version_is_two_and_the_table_carries_three_sections() {
+        let blob = encode(&sample_index());
+        assert_eq!(blob.get(8..12), Some(2u32.to_le_bytes().as_slice()));
+        assert_eq!(blob.get(20..24), Some(3u32.to_le_bytes().as_slice()));
+    }
+
+    #[test]
+    fn refinements_round_trip_through_the_blob() {
+        let mut index = sample_index();
+        index.set_refinements(crate::refinements::StubRefinements::new(
+            vec![(
+                "array_keys".to_owned(),
+                crate::refinements::RefinedSignature {
+                    templates: vec![],
+                    parameters: vec![],
+                    return_type: Some("list<int>".to_owned()),
+                },
+            )],
+            vec![(
+                "arrayiterator".to_owned(),
+                crate::refinements::RefinedClass {
+                    templates: vec![
+                        crate::refinements::RefinedTemplate {
+                            name: "TKey".to_owned(),
+                            bound: None,
+                        },
+                        crate::refinements::RefinedTemplate {
+                            name: "TValue".to_owned(),
+                            bound: Some("object".to_owned()),
+                        },
+                    ],
+                    ancestors: vec![crate::refinements::RefinedAncestor {
+                        name: "iterator".to_owned(),
+                        arguments: vec!["TKey".to_owned(), "TValue".to_owned()],
+                    }],
+                    methods: vec![
+                        (
+                            "current".to_owned(),
+                            crate::refinements::RefinedSignature {
+                                templates: vec![],
+                                parameters: vec![],
+                                return_type: Some("TValue".to_owned()),
+                            },
+                        ),
+                        (
+                            "key".to_owned(),
+                            crate::refinements::RefinedSignature {
+                                templates: vec![],
+                                parameters: vec![],
+                                return_type: Some("TKey".to_owned()),
+                            },
+                        ),
+                    ],
+                },
+            )],
+        ));
+        assert_eq!(decode(&encode(&index)), Ok(index));
+    }
+
+    #[test]
+    fn a_blob_without_the_overlays_section_decodes_with_empty_refinements() {
+        // Build a two-section, version-2 blob by hand: magic + version
+        // 2 + checksum patch + a symbol-table entry + a signatures
+        // entry, but no overlays entry. This is the exact tolerance
+        // rule decision 4 relies on: the signatures section already
+        // has it (see
+        // `a_blob_without_the_signature_section_decodes_with_empty_payloads`),
+        // and the overlays section must have it too.
+        let old_index = sample_index();
+        let symbol_table = encode_symbol_table(&old_index);
+        let signatures = encode_signatures(&old_index);
+        let table_entries = 2u32;
+        let symbol_offset = 24u64 + u64::from(table_entries) * 20;
+        let signature_offset = symbol_offset + symbol_table.len() as u64;
+        let mut blob = Vec::new();
+        blob.extend_from_slice(&BLOB_MAGIC);
+        blob.extend_from_slice(&BLOB_FORMAT_VERSION.to_le_bytes());
+        blob.extend_from_slice(&[0; 8]);
+        blob.extend_from_slice(&table_entries.to_le_bytes());
+        blob.extend_from_slice(&SECTION_SYMBOL_TABLE.to_le_bytes());
+        blob.extend_from_slice(&symbol_offset.to_le_bytes());
+        blob.extend_from_slice(&(symbol_table.len() as u64).to_le_bytes());
+        blob.extend_from_slice(&SECTION_SIGNATURES.to_le_bytes());
+        blob.extend_from_slice(&signature_offset.to_le_bytes());
+        blob.extend_from_slice(&(signatures.len() as u64).to_le_bytes());
+        blob.extend_from_slice(&symbol_table);
+        blob.extend_from_slice(&signatures);
+        let checksum = fnv1a64(&blob[20..]);
+        blob[12..20].copy_from_slice(&checksum.to_le_bytes());
+        let decoded = decode(&blob).unwrap();
+        assert!(decoded.refinements().is_empty());
     }
 
     #[test]

@@ -1,0 +1,26 @@
+[package]
+name = "celerrate_stdlib_provider"
+description = "First-party plugin computing the stdlib signatures no declarative stub can express"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_plugin = { path = "../celerrate_plugin" }
+
+# Test-only, exempt from the dependency-shape rule: the end-to-end
+# tests need the whole seam to prove answers flow through the call
+# boundary, not just the handlers' unit shapes.
+[dev-dependencies]
+celerrate_db = { path = "../celerrate_db" }
+celerrate_project = { path = "../celerrate_project" }
+celerrate_semantics = { path = "../celerrate_semantics" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_stubs = { path = "../celerrate_stubs" }
+celerrate_types = { path = "../celerrate_types" }
+salsa.workspace = true
+
+[lints]
+workspace = true

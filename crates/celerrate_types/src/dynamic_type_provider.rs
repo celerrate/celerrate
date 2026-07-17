@@ -5,7 +5,11 @@
 //! registration-time error unless resolved by documented precedence at
 //! the composition root (none is documented yet — the composition root
 //! excludes the later registrant and reports the run degraded).
-//! Deterministic: claims are gathered in registered order.
+//! Deterministic: claims are gathered in registered order. A second,
+//! optional channel (`by_reference_types`) lets a provider refine the
+//! type a by-reference argument holds after the call — `preg_match`'s
+//! pattern-derived `$matches` shape is the first consumer — layered on
+//! top of the declared write-back the flow walker already applies.
 
 use std::sync::Arc;
 
@@ -61,6 +65,20 @@ pub trait DynamicTypeProvider: Send + Sync {
         db: &'db dyn salsa::Database,
         invocation: &Invocation<'db>,
     ) -> Option<TypeId<'db>>;
+    /// By-reference parameter refinements for a claimed invocation:
+    /// (positional parameter index, the type the argument holds after
+    /// the call). The default contributes nothing. Same purity and
+    /// monotonicity contract as `return_type`; contributions are
+    /// widened at the consumption boundary. Positional only — the
+    /// consumer skips labeled arguments and stops at a spread.
+    fn by_reference_types<'db>(
+        &self,
+        db: &'db dyn salsa::Database,
+        invocation: &Invocation<'db>,
+    ) -> Vec<(usize, TypeId<'db>)> {
+        let _ = (db, invocation);
+        Vec::new()
+    }
 }
 
 /// One registration: the implementation travels with its identity,
@@ -123,6 +141,7 @@ pub fn validate_claims(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+    use celerrate_db::testing::TestDatabase;
     use celerrate_semantics::PluginIdentity;
 
     use super::{
@@ -210,5 +229,19 @@ mod tests {
         };
         let registrations = vec![registration("solo", vec![claim.clone(), claim.clone()])];
         assert!(validate_claims(&registrations).is_err());
+    }
+
+    #[test]
+    fn the_by_reference_channel_defaults_to_empty() {
+        let db = TestDatabase::default();
+        let provider = FakeProvider { claimed: vec![] };
+        let invocation = Invocation {
+            claim: SymbolClaim::Function {
+                key: "any".to_owned(),
+            },
+            receiver_type: None,
+            argument_types: vec![],
+        };
+        assert!(provider.by_reference_types(&db, &invocation).is_empty());
     }
 }

@@ -143,6 +143,7 @@ dependencies = [
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",
+ "celerrate_stdlib_provider",
  "celerrate_stubs",
  "celerrate_syntax",
  "celerrate_types",
@@ -233,6 +234,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "celerrate_stdlib_provider"
+version = "0.0.2"
+dependencies = [
+ "celerrate_db",
+ "celerrate_plugin",
+ "celerrate_project",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_stubs",
+ "celerrate_types",
+ "salsa",
+]
+
+[[package]]
 name = "celerrate_stubs"
 version = "0.0.2"
 dependencies = [
@@ -263,6 +278,7 @@ dependencies = [
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",
+ "celerrate_stdlib_provider",
  "celerrate_stubs",
  "celerrate_syntax",
  "salsa",

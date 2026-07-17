@@ -6,7 +6,10 @@
 //! benchmark corpus and measure it; `ground-truth` spawns the built
 //! binary's hidden annotation ground-truth channel over the same
 //! pinned corpus and gates the produced divergences against a
-//! committed, human-classified baseline; `fetch-phpdoc-parser` and
+//! committed, human-classified baseline; `mixed-rate` spawns the
+//! built binary's hidden mixed-rate channel over the same pinned
+//! corpus and byte-compares the produced counters against a committed
+//! snapshot baseline; `fetch-phpdoc-parser` and
 //! `phpdoc-cases` fetch the pinned phpstan/phpdoc-parser snapshot and
 //! extract its `TypeParserTest` inputs into the committed case file the
 //! phpdoc-bridge coverage test consumes. xtask deliberately depends on
@@ -22,6 +25,7 @@ pub mod codegen;
 pub mod corpus;
 pub mod dependency_shape;
 pub mod ground_truth;
+pub mod mixed_rate;
 pub mod phpdoc_corpus;
 pub mod pin;
 pub mod release;

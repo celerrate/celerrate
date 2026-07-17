@@ -94,6 +94,7 @@ mod inference;
 mod inheritance;
 mod judgments;
 mod narrowing;
+mod norm;
 mod operators;
 mod ordering;
 mod representation;
@@ -114,7 +115,8 @@ pub use dynamic_type_provider::{
 };
 pub use inference::{
     FIXPOINT_ITERATION_BUDGET, InferenceContext, InferredBody, InterproceduralEdgeCounts,
-    MethodQuery, inferred_body_types, inferred_function_return, inferred_method_return,
+    MethodQuery, StubCallRecord, inferred_body_types, inferred_function_return,
+    inferred_method_return,
 };
 pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
 pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};

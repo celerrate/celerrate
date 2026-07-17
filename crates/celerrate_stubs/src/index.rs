@@ -1,6 +1,7 @@
 //! The compiled stub index: every top-level symbol, deterministically
 //! sorted, duplicates merged.
 
+use crate::refinements::{RefinedClass, RefinedSignature, StubRefinements};
 use crate::signature::{StubClassSurface, StubSignature};
 use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol};
 
@@ -11,6 +12,7 @@ pub struct StubIndex {
     symbols: Vec<StubSymbol>,
     functions: Vec<(String, StubSignature)>,
     classes: Vec<(String, StubClassSurface)>,
+    refinements: StubRefinements,
 }
 
 impl StubIndex {
@@ -49,6 +51,7 @@ impl StubIndex {
             symbols: merged,
             functions,
             classes,
+            refinements: StubRefinements::empty(),
         }
     }
 
@@ -75,6 +78,36 @@ impl StubIndex {
 
     pub fn classes(&self) -> &[(String, StubClassSurface)] {
         &self.classes
+    }
+
+    /// Attaches the refinements overlay (design section 7). A
+    /// builder-style setter rather than a `new` parameter: `new`
+    /// keeps its three-parameter shape so every existing caller
+    /// compiles unchanged.
+    pub fn set_refinements(&mut self, refinements: StubRefinements) {
+        self.refinements = refinements;
+    }
+
+    pub fn refinements(&self) -> &StubRefinements {
+        &self.refinements
+    }
+
+    pub fn function_refinement(&self, key: &str) -> Option<&RefinedSignature> {
+        self.refinements
+            .functions
+            .binary_search_by(|(name, _)| name.as_str().cmp(key))
+            .ok()
+            .and_then(|position| self.refinements.functions.get(position))
+            .map(|(_, signature)| signature)
+    }
+
+    pub fn class_refinement(&self, key: &str) -> Option<&RefinedClass> {
+        self.refinements
+            .classes
+            .binary_search_by(|(name, _)| name.as_str().cmp(key))
+            .ok()
+            .and_then(|position| self.refinements.classes.get(position))
+            .map(|(_, class)| class)
     }
 }
 
@@ -112,6 +145,7 @@ mod tests {
     use celerrate_project::PhpVersion;
 
     use super::StubIndex;
+    use crate::refinements::{RefinedClass, RefinedSignature, StubRefinements};
     use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKind};
 
     fn symbol(name: &str, kind: StubSymbolKind, availability: StubAvailability) -> StubSymbol {
@@ -256,5 +290,51 @@ mod tests {
         assert_eq!(names, vec!["apple", "zebra"]);
         assert_eq!(index.functions()[0].1, first, "first duplicate wins");
         assert_eq!(index.classes().len(), 1);
+    }
+
+    #[test]
+    fn a_freshly_built_index_carries_no_refinements() {
+        // `new` initializes the overlay to empty even though it does
+        // not take a refinements parameter: the boundary the brief's
+        // `new` signature does not exercise on its own.
+        let index = StubIndex::default();
+        assert!(index.refinements().is_empty());
+        assert_eq!(index.function_refinement("strlen"), None);
+        assert_eq!(index.class_refinement("Exception"), None);
+    }
+
+    #[test]
+    fn lookups_binary_search_among_several_sorted_entries() {
+        let mut index = StubIndex::default();
+        index.set_refinements(StubRefinements::new(
+            vec![
+                ("array_keys".to_owned(), RefinedSignature::default()),
+                (
+                    "strlen".to_owned(),
+                    RefinedSignature {
+                        return_type: Some("int".to_owned()),
+                        ..RefinedSignature::default()
+                    },
+                ),
+                ("zend_version".to_owned(), RefinedSignature::default()),
+            ],
+            vec![
+                ("ArrayIterator".to_owned(), RefinedClass::default()),
+                ("Exception".to_owned(), RefinedClass::default()),
+                ("Traversable".to_owned(), RefinedClass::default()),
+            ],
+        ));
+        // The middle entry, a boundary entry, and a key past every
+        // entry (would land past the end in a naive binary search).
+        assert_eq!(
+            index
+                .function_refinement("strlen")
+                .and_then(|refinement| refinement.return_type.as_deref()),
+            Some("int"),
+        );
+        assert!(index.function_refinement("array_keys").is_some());
+        assert_eq!(index.function_refinement("zzz_not_present"), None);
+        assert!(index.class_refinement("Exception").is_some());
+        assert_eq!(index.class_refinement("Zzz\\NotPresent"), None);
     }
 }

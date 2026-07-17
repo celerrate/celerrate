@@ -44,6 +44,23 @@ pub struct InterproceduralEdgeCounts {
     pub provider_edges: u32,
 }
 
+/// One stub-function call and whether its expression stayed
+/// `mixed` — the residual instrument stub curation measures its
+/// exit with (design sections 7 and 9). Recorded by the walker at
+/// the call boundary; nothing re-derives callee resolution.
+///
+/// Derives `salsa::Update` (beyond the brief's `Debug, Clone,
+/// PartialEq, Eq`): it lives inside `InferredBody`'s
+/// `Vec<StubCallRecord>` field, and `InferredBody` derives
+/// `salsa::Update` too, so every field type must satisfy `Update`
+/// for that derive to compile (`Vec<T>: Update` requires `T: Update`).
+#[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+pub struct StubCallRecord {
+    /// The folded function key.
+    pub callee: String,
+    pub mixed: bool,
+}
+
 /// The inference result of one body: a type per arena expression, the
 /// joined return type, and the edge-count instrument. `Eq`-comparable
 /// on purpose: a body edit that leaves every inferred result identical
@@ -53,6 +70,13 @@ pub struct InferredBody<'db> {
     pub expression_types: Vec<TypeId<'db>>,
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
+    /// One record per stub-function call expression in the body
+    /// (task-14 recording rule, decision 14): free-function calls
+    /// whose resolved key exists only in stubs. Stub *method* calls
+    /// (the task-5 class-refinement channel) move
+    /// `edge_counts`/`expression_types`' mixed count but never enter
+    /// this table — scope, stated in decision 14.
+    pub stub_calls: Vec<StubCallRecord>,
 }
 
 impl<'db> InferredBody<'db> {
@@ -249,6 +273,7 @@ pub fn inferred_body_types<'db>(
         expression_types: result.expression_types,
         return_type: result.return_type,
         edge_counts: result.edge_counts,
+        stub_calls: result.stub_calls,
     })
 }
 
@@ -605,6 +630,39 @@ mod tests {
         let built = fixture(sources);
         crate::inheritance::test_support::register_fake_syntax(&built.db);
         built
+    }
+
+    /// `fixture` with the real embedded stub blob wired in, instead of
+    /// the minimal test-only index: the end-to-end proof that a
+    /// refined stub function's templates solve at a real call site
+    /// (task 4, decision 5 and 7), through the plan-6 solver path
+    /// exactly as any other symbolic stub return would.
+    fn fixture_with_embedded_stubs(sources: &[&str]) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles.clone());
+        let stubs = StubIndexInput::builder(celerrate_stubs::embedded_stub_index().unwrap())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            handles,
+            files,
+            stubs,
+            configuration,
+        }
     }
 
     /// The body of the declaration numbered `index` in file 0.
@@ -3547,5 +3605,314 @@ function caller(Users $users) { return $users->getIterator(); }
             configuration,
         };
         assert_eq!(caller_return_display(&f, "caller"), "arrayiterator");
+    }
+
+    /// Task 4's end-to-end proof: `array_keys`'s refinement
+    /// (`array<TKey, TValue> -> list<TKey>`) reaches the declared
+    /// tier through `declared_function_signature`'s stub path, and
+    /// the plan-6 solver (`solver_pairs`/`solve`/`finalize_return`,
+    /// already run wherever a call result `contains_symbolic`) binds
+    /// `TKey` from the shape argument with no new wiring.
+    #[test]
+    fn a_refined_stub_function_solves_its_templates_at_the_call_site() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() { return array_keys(['a' => 1, 'b' => 2]); }
+"#]);
+        let query = FunctionQuery::new(&f.db, "consume".to_owned());
+        let inferred = inferred_function_return(&f.db, f.files, f.stubs, f.configuration, query);
+        // TKey solved from the shape argument against
+        // `array<TKey, TValue>`.
+        assert_eq!(inferred.display(&f.db), "list<'a'|'b'>");
+    }
+
+    // Task 5 (decision 8): stub-class refinements settle plan 6's
+    // recorded stub-generics debt on the curated classes. Both tests
+    // below use the real embedded blob (`fixture_with_embedded_stubs`),
+    // exactly like the refined-function test above, so they exercise
+    // the genuine `refinements.celerrate` seed end to end rather than
+    // a hand-built fixture that might not match it.
+
+    #[test]
+    fn a_refined_stub_constructor_solves_the_class_templates() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() { return new \ArrayIterator(['a' => 1]); }
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "consume".to_owned()),
+        );
+        // The refined `__construct`'s `array<TKey, TValue>` bound
+        // both: TKey from the literal key `'a'`, TValue from the
+        // literal value `1`.
+        assert_eq!(inferred.display(&f.db), "arrayiterator<'a', 1>");
+    }
+
+    #[test]
+    fn iteration_over_a_refined_stub_iterator_types_key_and_value() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() {
+    foreach (new \ArrayIterator(['a' => 1, 'b' => 2]) as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "consume".to_owned()),
+        );
+        // The threaded `Iterator<TKey, TValue>` arguments reached
+        // iteration typing's protocol chain (if iteration typing
+        // answers through the refined `current()`/`key()` returns
+        // instead, that is equally correct — the displays are the
+        // contract, not the path). The list literal display: a shape
+        // of the two subjects, unioned with the fall-through null.
+        let display = inferred.display(&f.db);
+        assert!(display.contains("'a'|'b'"), "{display}");
+        assert!(display.contains("1|2"), "{display}");
+    }
+
+    /// Blind-spot proof (the plan-6 `member_owner`/`$obj::class`
+    /// shape): `implements_iteration_protocol`'s new stub fallback
+    /// (`flow.rs`'s `stub_implements_iteration_protocol`, task 5) must
+    /// resolve PER CONSTITUENT class key when the receiver is a union,
+    /// never a verdict computed once and shared across every
+    /// constituent. `\ArrayIterator` (a genuine stub, no source
+    /// declaration — routed through the NEW fallback) and `StringKeys`
+    /// (an ordinary source class implementing `\Iterator` directly —
+    /// routed through the PRE-EXISTING `linearized_class` check) sit on
+    /// either side of that fallback: a bug that computed the gate once
+    /// from whichever constituent ran first, then reused the answer,
+    /// would either drop `StringKeys`'s `bool`/`float` pair or drop
+    /// `ArrayIterator`'s `'a'`/`1` pair from the union — never both.
+    #[test]
+    fn a_union_of_a_stub_and_a_source_iterator_types_each_constituent_independently() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+namespace App;
+class StringKeys implements \Iterator {
+    public function current(): float { return 1.0; }
+    public function key(): bool { return true; }
+    public function next(): void {}
+    public function rewind(): void {}
+    public function valid(): bool { return false; }
+}
+function pick(bool $flag) {
+    return $flag ? new \ArrayIterator(['a' => 1]) : new StringKeys();
+}
+function consume(bool $flag) {
+    foreach (pick($flag) as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "app\\consume".to_owned()),
+        );
+        let display = inferred.display(&f.db);
+        // `ArrayIterator`'s constituent: the constructor-solved literal
+        // key/value, reached through the stub fallback.
+        assert!(display.contains("'a'"), "{display}");
+        // `StringKeys`'s constituent: its own declared `current()`/
+        // `key()` returns, reached through the pre-existing source
+        // path — present in the SAME union, not displaced by the
+        // stub constituent.
+        assert!(display.contains("float"), "{display}");
+        assert!(display.contains("bool"), "{display}");
+    }
+
+    /// Decision 8's named mechanism, end to end against the REAL
+    /// curated stub ancestor: `foreach` over a class extending
+    /// `\ArrayIterator` types through iteration typing's
+    /// **threaded-ancestors step** — `ancestor_arguments`' composition
+    /// of `ArrayIterator<TKey, TValue> implements Iterator<TKey,
+    /// TValue>` from `refinements.celerrate`, substituted against the
+    /// subclass's own `@extends` arguments.
+    ///
+    /// A source subclass is what makes the threaded step reachable at
+    /// all: `ancestor_arguments` calls `linearized_class`, which
+    /// answers only for a class with a SOURCE declaration
+    /// (`linearize.rs`'s root fetch, plan 6). `RecentPosts` supplies
+    /// that source root; the curated stub ancestry behind it is the
+    /// part under test.
+    ///
+    /// `current()`/`key()` are overridden with `float`/`bool` — types
+    /// the curated `Iterator<string, int>` chain cannot produce — so
+    /// the two candidate arms answer DIFFERENT types and the assertion
+    /// discriminates them. Iteration typing prefers the threaded step
+    /// over the `current`/`key` fallback (the precedence
+    /// `threaded_ancestor_arguments_precede_the_current_key_fallback`
+    /// pins for source classes), so `string`/`int` proves the threaded
+    /// step ran; `bool`/`float` would prove it answered `None` and the
+    /// fallback took over.
+    ///
+    /// `register_fake_syntax` is what makes the `@extends` tag mean
+    /// anything: annotations answer the default on a database with no
+    /// registered notation, so without it the tag is invisible and
+    /// both arms collapse to `mixed` — a vacuous pass.
+    #[test]
+    fn iteration_over_a_source_subclass_of_a_refined_stub_threads_the_curated_ancestor() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+namespace App;
+/**
+ * @extends \ArrayIterator<string, int>
+ */
+class RecentPosts extends \ArrayIterator {
+    public function current(): float { return 1.0; }
+    public function key(): bool { return true; }
+}
+function consume(RecentPosts $posts) {
+    foreach ($posts as $key => $value) {
+        return [$key, $value];
+    }
+    return null;
+}
+"#]);
+        crate::inheritance::test_support::register_fake_syntax(&f.db);
+        let inferred = inferred_function_return(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "app\\consume".to_owned()),
+        );
+        let display = inferred.display(&f.db);
+        // The threaded `Iterator<string, int>`: `@extends
+        // \ArrayIterator<string, int>` bound `TKey`/`TValue`, and the
+        // curated `implements Iterator<TKey, TValue>` carried both to
+        // the protocol.
+        assert!(display.contains("string"), "{display}");
+        assert!(display.contains("int"), "{display}");
+        // The `current`/`key` fallback's answers must NOT appear: their
+        // presence means the threaded step answered `None`.
+        assert!(!display.contains("float"), "{display}");
+        assert!(!display.contains("bool"), "{display}");
+    }
+
+    /// Task 10, decision 14: a free-function call resolved to a stub
+    /// symbol (`source_exists == false`, the stub table has it) is
+    /// recorded with its verdict — `array_keys` answers a refined,
+    /// non-mixed `array` (its native return, `declared_present`
+    /// true), `unserialize` answers exactly `mixed` (no refinement,
+    /// native declared type is `mixed` itself, so `declared_present`
+    /// is false and the call falls through to the `mixed` fallback).
+    /// Both are recorded; their verdicts differ, so this cannot pass
+    /// by an instrument that always reads 0 or always reads 1.
+    #[test]
+    fn stub_function_calls_are_recorded_with_their_mixed_verdict() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume(): void {
+    $keys = array_keys(['a' => 1]);
+    $value = unserialize('x');
+}
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        let callees: Vec<(&str, bool)> = inferred
+            .stub_calls
+            .iter()
+            .map(|record| (record.callee.as_str(), record.mixed))
+            .collect();
+        assert!(callees.contains(&("array_keys", false)), "{callees:?}",);
+        assert!(callees.contains(&("unserialize", true)), "{callees:?}",);
+    }
+
+    /// The boundary at the other side of decision 14's condition: a
+    /// call resolved to a SOURCE function (`source_exists == true`)
+    /// must never enter `stub_calls`, even though the callee is a
+    /// perfectly ordinary function call the walker types normally.
+    #[test]
+    fn source_function_calls_are_not_recorded() {
+        let f = fixture(&[r#"<?php
+function helper(): int { return 1; }
+function consume(): void { $x = helper(); }
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 1),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(inferred.stub_calls.is_empty());
+    }
+
+    /// The other conjunct of decision 14's recording condition: a call
+    /// to a name that exists in neither source nor the stub symbol
+    /// table (`source_exists == false` AND `lookup(...).is_none()`)
+    /// must never enter `stub_calls`. `fixture` wires up
+    /// `minimal_stub_index`, which declares no functions at all, so
+    /// `totally_undefined_function` resolves to neither side and the
+    /// call falls through to the dynamic fallback typing. If the
+    /// `.is_some()` conjunct were ever dropped from the predicate, this
+    /// call alone (`source_exists == false`, nothing else) would be
+    /// recorded and this assertion would fail.
+    #[test]
+    fn a_call_to_an_undefined_function_is_not_recorded() {
+        let f = fixture(&[r#"<?php
+function consume(): void { $x = totally_undefined_function(); }
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(inferred.stub_calls.is_empty());
+    }
+
+    /// The task-9 by-reference spread guard stops applying
+    /// by-reference write-backs at a spread argument, but the
+    /// recording this task adds is a different mechanism entirely
+    /// (callee resolution, not argument binding) — it must not stop
+    /// with it. `preg_match` is a stub function; the spread call
+    /// still resolves one callee and is recorded once.
+    #[test]
+    fn a_spread_call_to_a_stub_function_is_still_recorded() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume(array $arguments): void {
+    preg_match(...$arguments);
+}
+"#]);
+        let inferred = inferred_body_types(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            f.handles[0],
+            body_query(&f, 0),
+            InferenceContext::new(&f.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        assert_eq!(inferred.stub_calls.len(), 1);
     }
 }

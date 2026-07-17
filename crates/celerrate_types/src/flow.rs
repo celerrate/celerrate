@@ -14,7 +14,7 @@ use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
     ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
     MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
-    lookup_member,
+    lookup_member, stub_ancestors_of, stub_signature_table,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -22,7 +22,7 @@ use celerrate_syntax::SyntaxKind;
 use crate::declared::{
     DeclaredSignature, Trust, declared_function_signature, declared_member_signature,
 };
-use crate::inference::InterproceduralEdgeCounts;
+use crate::inference::{InterproceduralEdgeCounts, StubCallRecord};
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
 use crate::representation::{TypeData, TypeId};
@@ -64,6 +64,9 @@ pub(crate) struct FlowResult<'db> {
     pub expression_types: Vec<TypeId<'db>>,
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
+    /// Task 10, decision 14: every stub-function call this body made,
+    /// with its mixed verdict — drained from `Walker::stub_calls`.
+    pub stub_calls: Vec<StubCallRecord>,
 }
 
 /// The abstract state at one program point. `reachable` is the
@@ -188,6 +191,10 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     returns: Vec<TypeId<'db>>,
     saw_yield: bool,
     edge_counts: InterproceduralEdgeCounts,
+    /// Task 10, decision 14: one record per free-function call this
+    /// body made whose resolved key exists only in stubs, appended at
+    /// the call boundary and drained into `InferredBody.stub_calls`.
+    stub_calls: Vec<StubCallRecord>,
     /// Set while typing inside a `NullSafeChain` when a `?->` link's
     /// receiver was possibly null: the wrapper re-acquires `|null`
     /// once, at the end (the design's whole-chain rule).
@@ -221,6 +228,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         returns: Vec::new(),
         saw_yield: false,
         edge_counts: InterproceduralEdgeCounts::default(),
+        stub_calls: Vec::new(),
         null_safe_reacquires: false,
         pending_condition_facts: Vec::new(),
         inline_variable_texts,
@@ -258,6 +266,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         expression_types: walker.types,
         return_type,
         edge_counts: walker.edge_counts,
+        stub_calls: walker.stub_calls,
     }
 }
 
@@ -1156,6 +1165,78 @@ impl<'db> Walker<'db, '_, '_> {
         None
     }
 
+    /// The by-reference sibling of `provider_return`: first claiming
+    /// registration wins; every contribution is widened at the
+    /// consumption boundary. Applied after `apply_by_reference`, so a
+    /// provider refines (overrides) the declared write-back.
+    fn provider_by_reference(
+        &mut self,
+        claim: crate::dynamic_type_provider::SymbolClaim,
+        receiver_type: Option<TypeId<'db>>,
+        argument_types: &[TypeId<'db>],
+    ) -> Vec<(usize, TypeId<'db>)> {
+        let db = self.db();
+        let Some(registry) = crate::dynamic_type_provider::DynamicTypeProviderRegistry::try_get(db)
+        else {
+            return Vec::new();
+        };
+        for registration in registry.registrations(db) {
+            if !registration.provider.claims().contains(&claim) {
+                continue;
+            }
+            let invocation = crate::dynamic_type_provider::Invocation {
+                claim: claim.clone(),
+                receiver_type,
+                argument_types: argument_types.to_vec(),
+            };
+            let contributions = registration.provider.by_reference_types(db, &invocation);
+            if !contributions.is_empty() {
+                return contributions
+                    .into_iter()
+                    .map(|(index, of)| (index, crate::widening::capped_child(db, of)))
+                    .collect();
+            }
+        }
+        Vec::new()
+    }
+
+    /// Binds provider by-reference contributions onto their positional
+    /// arguments' subjects. Labeled arguments are skipped (the channel
+    /// is positional); a spread ends the mapping, like
+    /// `apply_by_reference`.
+    ///
+    /// Task-12 debt (owner: the by-reference channel). Only the
+    /// free-function call site above wires `provider_by_reference`/
+    /// `apply_provider_by_reference` in; the method-call arm has no
+    /// analogous wiring, so a provider's by-reference contribution
+    /// never reaches a method call's arguments. No handler claims a
+    /// method today (`StdlibProvider`'s channel is free-function-only,
+    /// `preg_match`), so this is a wiring gap with no live symptom yet
+    /// — closed only once a method-call claimant exists to demand it.
+    fn apply_provider_by_reference(
+        &mut self,
+        contributions: &[(usize, TypeId<'db>)],
+        arguments: &[celerrate_semantics::CallArgument],
+        environment: &mut Environment<'db>,
+    ) {
+        for (index, of) in contributions {
+            let Some(argument) = arguments.get(*index) else {
+                continue;
+            };
+            if arguments
+                .iter()
+                .take(*index + 1)
+                .any(|argument| argument.spread)
+                || argument.label.is_some()
+            {
+                continue;
+            }
+            if let Some(subject) = subject_of(self.context.ir, argument.value) {
+                environment.bind(subject, *of);
+            }
+        }
+    }
+
     /// Decision 3, tiers two and three, for a named function call.
     /// Task 10 replaces the `mixed` fallback with the fixpoint.
     fn function_call_result(&mut self, key: &str, source_exists: bool) -> TypeId<'db> {
@@ -1432,27 +1513,46 @@ impl<'db> Walker<'db, '_, '_> {
     /// the same walk. Checking both fields is what makes this query
     /// answer "implements" for a stub-inherited protocol, not just a
     /// directly-named one.
+    ///
+    /// `linearized_class` itself answers `None` for `name` when `name`
+    /// has no SOURCE declaration at all — `linearize.rs`'s root fetch
+    /// requires one, by design (plan 6). A genuine stub receiver with
+    /// no user subclass in between (`new \ArrayIterator(...)`) falls
+    /// into exactly that gap: it is never the ROOT of any source
+    /// ancestry walk, so `ancestry`/`stub_ancestors` never exist for it
+    /// to check. `stub_ancestors_of` covers that case by walking
+    /// `name`'s own compiled surface — the SAME shared stub-frontier
+    /// walk (`celerrate_semantics`' `stub_frontier`) that produced the
+    /// `stub_ancestors` the arm above reads, so both arms mean the same
+    /// thing by construction: only ANCESTORS implement the protocol,
+    /// never `name` itself.
     fn implements_iteration_protocol(&self, name: &str) -> bool {
         let db = self.db();
-        let Some(linearized) = linearized_class(
+        match linearized_class(
             db,
             self.context.files,
             self.context.stubs,
             self.context.configuration,
             ClassQuery::new(db, name.to_owned()),
         )
-        .as_ref() else {
-            return false;
-        };
-        linearized.ancestry.iter().any(|edge| {
-            edge.resolved
-                .as_deref()
-                .or(edge.stub.as_deref())
-                .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
-        }) || linearized
-            .stub_ancestors
-            .iter()
-            .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
+        .as_ref()
+        {
+            Some(linearized) => {
+                linearized.ancestry.iter().any(|edge| {
+                    edge.resolved
+                        .as_deref()
+                        .or(edge.stub.as_deref())
+                        .is_some_and(|key| Self::ITERATION_PROTOCOL.contains(&key))
+                }) || linearized
+                    .stub_ancestors
+                    .iter()
+                    .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str()))
+            }
+            None => stub_ancestors_of(stub_signature_table(db, self.context.stubs), name)
+                .reached
+                .iter()
+                .any(|key| Self::ITERATION_PROTOCOL.contains(&key.as_str())),
+        }
     }
 
     /// The class arm of [`Self::iteration_types`]: the protocol's own
@@ -2477,15 +2577,44 @@ impl<'db> Walker<'db, '_, '_> {
                                 }
                             }
                         }
+                        let claim = crate::dynamic_type_provider::SymbolClaim::Function {
+                            key: key.clone(),
+                        };
                         let of = self
-                            .provider_return(
-                                crate::dynamic_type_provider::SymbolClaim::Function {
-                                    key: key.clone(),
-                                },
-                                None,
-                                &argument_types,
-                            )
+                            .provider_return(claim.clone(), None, &argument_types)
                             .unwrap_or_else(|| self.function_call_result(&key, source_exists));
+                        // Task 10, decision 14: the instrument records
+                        // at the source. The walker already knows both
+                        // facts the recording condition needs —
+                        // `source_exists` from `resolved_function_key`
+                        // just above, and the call's own answer `of` —
+                        // so nothing outside the walker re-implements
+                        // callee resolution to reconstruct them.
+                        //
+                        // Task-12 debt (owner: the mixed-rate
+                        // instrument, decision 14's stated scope): this
+                        // recording arm exists only on the free-function
+                        // call path. A stub METHOD call (the task-5
+                        // class-refinement channel) still moves the
+                        // global expressions-mixed counter through the
+                        // ordinary `record` below, but never reaches
+                        // this arm, so it never enters `stub_calls` and
+                        // decision 15's per-callee exit table cannot see
+                        // it.
+                        if !source_exists
+                            && celerrate_semantics::stub_symbol_table(
+                                db,
+                                self.context.stubs,
+                                self.context.configuration,
+                            )
+                            .lookup(celerrate_semantics::SymbolSpace::Function, &key)
+                            .is_some()
+                        {
+                            self.stub_calls.push(StubCallRecord {
+                                callee: key.clone(),
+                                mixed: of.is_mixed(db),
+                            });
+                        }
                         let declared = declared_function_signature(
                             db,
                             self.context.files,
@@ -2497,6 +2626,9 @@ impl<'db> Walker<'db, '_, '_> {
                         if let Some(signature) = &declared {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
                         }
+                        let contributions =
+                            self.provider_by_reference(claim, None, &argument_types);
+                        self.apply_provider_by_reference(&contributions, &arguments, environment);
                         // A named function has no receiver: the
                         // declared parameter list comes straight from
                         // the signature (empty when unresolved).

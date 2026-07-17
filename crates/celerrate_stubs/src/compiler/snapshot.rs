@@ -73,6 +73,7 @@ mod tests {
 
     use crate::blob::{encode, fnv1a64};
     use crate::compiler::extract::extract;
+    use crate::compiler::refinement_source::{parse_refinement_source, validate_refinements};
     use crate::index::StubIndex;
 
     use super::stub_files;
@@ -160,7 +161,28 @@ mod tests {
                 classes.extend(extraction.classes);
             }
         }
-        let recompiled = encode(&StubIndex::new(symbols, functions, classes));
+        let mut index = StubIndex::new(symbols, functions, classes);
+
+        // `stub-compiler` always attaches the committed refinements
+        // overlay too (`xtask/src/stubs.rs`'s `--refinements` flag),
+        // so a faithful recompilation must parse and apply it the same
+        // way, or this freshness check would flag every healthy commit
+        // as stale.
+        let refinements_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("refinements.celerrate");
+        let refinements_text = match fs::read_to_string(&refinements_path) {
+            Ok(text) => text,
+            Err(error) => panic!("cannot read {}: {error}", refinements_path.display()),
+        };
+        let refinements = match parse_refinement_source(&refinements_text) {
+            Ok(refinements) => refinements,
+            Err(error) => panic!("{}: {error}", refinements_path.display()),
+        };
+        if let Err(error) = validate_refinements(&refinements, index.functions(), index.classes()) {
+            panic!("{}: {error}", refinements_path.display());
+        }
+        index.set_refinements(refinements);
+
+        let recompiled = encode(&index);
         let committed = crate::EMBEDDED_STUB_BLOB;
         // Compare via length + hash: a byte-for-byte assert_eq would
         // dump megabytes on failure.

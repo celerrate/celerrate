@@ -6,6 +6,12 @@ no stability promise. Freezes in v1.x, informed by real-world feedback.
 Parent spec: `.claude/superpowers/specs/2026-07-14-type-engine-design.md`
 (sections 3 and 7).
 
+Amendment history:
+- 2026-07-17 (plan 7, task 11 curation): section 5's open questions
+  answered from curation; a first-consumer grammar note and the v0
+  parser's grammar additions recorded so the draft cannot drift from
+  the shipped `refinement_source.rs` parser.
+
 ## 1. Purpose and posture
 
 The norm is the annotation syntax Celerrate will natively own, designed
@@ -20,6 +26,20 @@ section 5) does not exist yet at the time of writing; the norm's only
 consumer today is the mapping table below, checked by hand against the
 finished `celerrate_types` lattice (`crates/celerrate_types/src/construction.rs`
 and `crates/celerrate_types/src/display.rs`).
+
+**First consumer (the refinements overlay).** The overlay file
+`crates/celerrate_stubs/refinements.celerrate` is the norm's first and
+only writer today. Its grammar is three shapes: function entries
+(`function name<T, U>(type $param): type`, refining any subset of the
+base parameters plus the return); class blocks
+(`class Name<T, U> implements Ancestor<T, U> { method m(type $p): type }`,
+carrying templates, ancestor arguments, and element-bearing methods);
+and `of` template bounds (`<T of SomeBound>`, elided to `mixed` when
+bare). The authoritative parser is
+`crates/celerrate_stubs/src/compiler/refinement_source.rs`; every type
+expression it accepts lowers through `lower_norm_text`
+(`crates/celerrate_types/src/norm.rs`), gated by the totality test
+`every_embedded_refinement_text_lowers`.
 
 ## 2. Design rules
 
@@ -67,6 +87,23 @@ covered by the table below.
 | `intersection` (general) | `A&B` | same | none |
 | nullable shorthand (not its own constructor; lowers through `union` with `null`) | `?T` | `T\|null` also accepted by PHPStan | rule 4 |
 
+### 3.1. v0 grammar additions the parser ships (recorded by curation)
+
+Three conveniences the shipped v0 parser (`norm.rs`) accepts that the
+mapping table above does not name, recorded here so the draft and the
+parser cannot diverge:
+
+- `array-key` keyword: sugar for `int|string`. This is an accepted
+  tension with design rule 1 ("no synonyms"), kept because curated
+  signatures read it everywhere; it lowers to exactly `int|string`.
+- Single-argument `array<V>`: sugar for `array<int|string, V>` (the
+  key defaults to the array-key union). `non-empty-array<V>` follows
+  the same rule.
+- Single-argument `iterable<V>`: sugar for `iterable<mixed, V>` —
+  iterable keys are unconstrained (unlike arrays, whose keys are
+  `int|string`), so the key default is `mixed`, not the array-key
+  union.
+
 ## 4. The tag set (sketch, revised by curation)
 
 `@param`, `@return`, `@var`, `@template`, `@extends`, `@implements`,
@@ -92,27 +129,26 @@ tags with no lattice-constructor counterpart in this plan (`@throws`,
 `@property`, `@method`), which belong to the bridge's virtual-member and
 exception-tracking machinery, not to the type lattice this draft maps.
 
-## 5. Open questions for curation (plan 7)
+## 5. Answers from curation (plan 7)
 
-- Whether the refinements overlay wants a compact multi-signature form
-  for per-version stub deltas (parent spec section 3's per-version stub
-  payload: parameters, returns, and property types that change across
-  `[min, max]`).
-- Whether `?T` inside unions needs parenthesization rules (the lattice's
-  own renderer already parenthesizes nested unions and intersections
-  inside a compound, `crates/celerrate_types/src/display.rs`; whether the
-  norm's input grammar needs an equivalent rule for `?T` written inside
-  `A|?B` is undecided).
-- Intersection spelling in shapes' field types (a shape field value can
-  itself be an intersection; whether it needs parentheses inside
-  `{key: A&B}` the way a top-level intersection nested in another
-  intersection does is undecided).
-- Whether the union arity cap and the general structural depth cap
-  (parent spec section 3, `crates/celerrate_types/src/widening.rs`) need
-  a distinct norm spelling for "this signature widened past the cap", or
-  whether curated stubs should simply never author a construct that
-  triggers one.
-- Whether curated stubs will need syntax for the trust rule's
-  cannot-prove case (a template-bound annotation that refines through
-  the bound and is traced, parent spec section 3) or whether that stays
-  purely a judgment-level concern invisible to the norm's grammar.
+Curation (plan 7, task 11) exercised the norm across the stub overlay
+and answered each of section 5's open questions:
+
+- **Per-version multi-signature form: deferred.** Refinements are
+  version-agnostic (decision 6); the base stubs keep the per-version
+  deltas. Revisit only if a curated signature ever needs a version
+  split, which none has.
+- **`?T` inside unions: no extra grammar.** `?` binds tighter than
+  `|` and `&`, so `?A|B` is `(A|null)|B` (decision 13, pinned by the
+  norm parser's `unions_intersections_and_nullable_compose` test). No
+  parenthesization rule is needed for the input grammar.
+- **Intersections in shape field types: allowed directly.** A shape
+  field value is a full type expression, so
+  `{handler: Countable&Traversable}` parses with no special
+  parenthesization.
+- **Union-arity / depth-cap spelling: none.** The caps are lattice
+  widening behavior (`crates/celerrate_types/src/widening.rs`), not
+  notation; the norm has nothing to spell for them.
+- **Trust-rule cannot-prove syntax: none.** Trust is a judgment on the
+  annotation's relation to the native type, not something an annotation
+  declares about itself, so it stays invisible to the norm's grammar.

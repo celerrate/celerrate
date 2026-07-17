@@ -15,13 +15,15 @@ fn main() -> ExitCode {
         (Some("corpus"), Some("--bless")) => xtask::corpus::check_snapshot(true),
         (Some("ground-truth"), None) => xtask::ground_truth::run(false),
         (Some("ground-truth"), Some("--bless")) => xtask::ground_truth::run(true),
+        (Some("mixed-rate"), None) => xtask::mixed_rate::check(false),
+        (Some("mixed-rate"), Some("--bless")) => xtask::mixed_rate::check(true),
         (Some("fetch-phpdoc-parser"), None) => xtask::phpdoc_corpus::fetch().map(|_| ()),
         (Some("phpdoc-cases"), None) => xtask::phpdoc_corpus::extract(false),
         (Some("phpdoc-cases"), Some("--check")) => xtask::phpdoc_corpus::extract(true),
         (Some("release-notes"), Some(version)) => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | release-notes <version>>"
+                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | mixed-rate [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }

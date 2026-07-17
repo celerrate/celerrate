@@ -39,7 +39,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     let mut type_syntax = Vec::new();
     let mut virtual_symbols = Vec::new();
     let mut comment_directives = Vec::new();
-    let dynamic_providers = Vec::new();
+    let mut dynamic_providers = Vec::new();
 
     // Registration order, declared once: phpdoc-bridge first.
     let descriptor = celerrate_phpdoc_bridge::descriptor();
@@ -65,23 +65,27 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
         }),
     }
 
-    // Overlapping dynamic-provider claims exclude the later
-    // registrant (no documented precedence exists yet) — dormant
-    // until plan 7 registers the stdlib provider.
-    if let Err(conflict) = celerrate_types::validate_claims(&dynamic_providers) {
-        excluded.push(ExcludedPlugin {
-            name: conflict.second.clone(),
-            reason: format!(
-                "claim conflict with {} on {:?}",
-                conflict.first, conflict.claim
-            ),
-        });
-        // The exclusion is recorded but the vector is NOT rebuilt —
-        // with zero registered providers the branch is unreachable.
-        // Plan 7, registering the first real provider, must rebuild
-        // the vector without the excluded registrant and re-validate
-        // before setting the registry.
+    // Stdlib provider: the computation-dependent stdlib signatures
+    // no declarative stub can express.
+    match admission(&celerrate_stdlib_provider::descriptor()) {
+        Ok(()) => {
+            dynamic_providers.push(celerrate_types::DynamicTypeProviderRegistration {
+                identity: celerrate_stdlib_provider::descriptor().identity,
+                provider: Arc::new(celerrate_stdlib_provider::StdlibProvider::new()),
+            });
+        }
+        Err(reason) => excluded.push(ExcludedPlugin {
+            name: celerrate_stdlib_provider::descriptor().identity.name,
+            reason,
+        }),
     }
+
+    // Overlapping dynamic-provider claims exclude the later
+    // registrant: registration order above IS the precedence (first
+    // claim wins), and the set is rebuilt and re-validated until it
+    // is conflict-free (`admit_dynamic_providers` below).
+    let (dynamic_providers, rebuild_exclusions) = admit_dynamic_providers(dynamic_providers);
+    excluded.extend(rebuild_exclusions);
 
     let _ = celerrate_types::TypeSyntaxRegistry::builder(type_syntax)
         .durability(salsa::Durability::HIGH)
@@ -99,9 +103,36 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     RegisteredPlugins { excluded }
 }
 
+/// Overlapping claims exclude the later registrant and the set is
+/// rebuilt until it validates: registration order is the precedence.
+fn admit_dynamic_providers(
+    mut registrations: Vec<celerrate_types::DynamicTypeProviderRegistration>,
+) -> (
+    Vec<celerrate_types::DynamicTypeProviderRegistration>,
+    Vec<ExcludedPlugin>,
+) {
+    let mut excluded = Vec::new();
+    while let Err(conflict) = celerrate_types::validate_claims(&registrations) {
+        excluded.push(ExcludedPlugin {
+            name: conflict.second.clone(),
+            reason: format!(
+                "claim conflict with {} on {:?}",
+                conflict.first, conflict.claim,
+            ),
+        });
+        registrations.retain(|registration| registration.identity.name != conflict.second);
+    }
+    (registrations, excluded)
+}
+
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic
+    )]
 
     use super::{admission, register_plugins};
     use crate::database::AnalysisDatabase;
@@ -128,7 +159,9 @@ mod tests {
             "phpdoc-bridge"
         );
         let providers = celerrate_types::DynamicTypeProviderRegistry::try_get(&database).unwrap();
-        assert!(providers.registrations(&database).is_empty());
+        let provider_registrations = providers.registrations(&database);
+        assert_eq!(provider_registrations.len(), 1);
+        assert_eq!(provider_registrations[0].identity.name, "stdlib-provider");
     }
 
     #[test]
@@ -143,5 +176,82 @@ mod tests {
         };
         let verdict = admission(&mismatched);
         assert!(matches!(verdict, Err(reason) if reason.contains("API version")));
+    }
+
+    #[test]
+    fn the_stdlib_provider_registers_with_its_claims() {
+        let database = AnalysisDatabase::default();
+        let registered = register_plugins(&database);
+        assert!(registered.excluded.is_empty());
+        let registry =
+            celerrate_types::DynamicTypeProviderRegistry::try_get(&database).expect("set");
+        let registrations = registry.registrations(&database);
+        let provider = registrations
+            .iter()
+            .find(|registration| registration.identity.name == "stdlib-provider")
+            .expect("registered");
+        assert!(!provider.provider.claims().is_empty());
+    }
+
+    #[test]
+    fn a_claim_conflict_excludes_the_later_registrant_and_rebuilds() {
+        // Unit-level: three mutually conflicting registrations (all
+        // claiming the same function). Two registrants would only
+        // ever exercise a single pass, which a non-rebuilding shape
+        // (`if let Err` + one `retain`) would pass identically. The
+        // third registrant forces a second loop iteration: after the
+        // first pass excludes "second", the set of [first, third]
+        // still conflicts, so only the `while` loop — not a single
+        // `if` — drives it to a conflict-free result.
+        let (admitted, excluded) = super::admit_dynamic_providers(vec![
+            fake_registration("first", &["current"]),
+            fake_registration("second", &["current"]),
+            fake_registration("third", &["current"]),
+        ]);
+        assert_eq!(admitted.len(), 1);
+        assert_eq!(excluded.len(), 2);
+        assert_eq!(excluded.first().unwrap().name, "second");
+        assert_eq!(excluded.get(1).unwrap().name, "third");
+        assert!(celerrate_types::validate_claims(&admitted).is_ok());
+    }
+
+    #[derive(Debug)]
+    struct FakeProvider {
+        claimed: Vec<celerrate_types::SymbolClaim>,
+    }
+
+    impl celerrate_types::DynamicTypeProvider for FakeProvider {
+        fn claims(&self) -> Vec<celerrate_types::SymbolClaim> {
+            self.claimed.clone()
+        }
+
+        fn return_type<'db>(
+            &self,
+            _db: &'db dyn salsa::Database,
+            _invocation: &celerrate_types::Invocation<'db>,
+        ) -> Option<celerrate_types::TypeId<'db>> {
+            None
+        }
+    }
+
+    fn fake_registration(
+        name: &str,
+        keys: &[&str],
+    ) -> celerrate_types::DynamicTypeProviderRegistration {
+        celerrate_types::DynamicTypeProviderRegistration {
+            identity: celerrate_semantics::PluginIdentity {
+                name: name.to_owned(),
+                version: "0.0.0".to_owned(),
+                configuration: String::new(),
+            },
+            provider: std::sync::Arc::new(FakeProvider {
+                claimed: keys
+                    .iter()
+                    .map(|key| celerrate_types::SymbolClaim::Function {
+                        key: (*key).to_owned(),
+                    })
+                    .collect(),
+            }),
+        }
     }
 }
