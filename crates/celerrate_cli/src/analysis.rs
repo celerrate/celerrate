@@ -10,7 +10,7 @@ use std::sync::Arc;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
-use celerrate_source::{FileId, TextSize};
+use celerrate_source::{FileId, TextRange, TextSize};
 use celerrate_stubs::StubIndexInput;
 use rayon::prelude::*;
 
@@ -132,18 +132,43 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass)).map_err(|_| Panicked)
 }
 
-/// One file's diagnostics, computed: decode and syntax, then references
-/// and gating, then the directive filter. The single composition
-/// point — `analyze_one` serves it on a cache miss, `persist`
-/// re-composes through it, and the equivalence harness recomputes
-/// through it — so the composers cannot drift (audit finding I2's
-/// first hand-maintained mirror). Filtering here, below the verdict,
-/// is sound because directives are strictly file-local: the verdict's
+/// Filters `diagnostics` down to what no suppression directive covers.
+/// Shared by `persistable_diagnostics` and `typed_portion` so the two
+/// composers apply the exact same filter rather than each maintaining
+/// its own copy: suppression is family-agnostic (design section 5), and
+/// that must hold for the typed families exactly as it does for the two
+/// that predate them.
+fn retain_unsuppressed(
+    database: &dyn salsa::Database,
+    file: SourceFile,
+    suppressed: &[TextRange],
+    diagnostics: &mut Vec<Diagnostic>,
+) {
+    let text_end = celerrate_db::source_text(database, file)
+        .as_ref()
+        .map(|text| TextSize::of(text.text()))
+        .unwrap_or_default();
+    diagnostics.retain(|diagnostic| {
+        !celerrate_semantics::is_suppressed(suppressed, diagnostic.range.start(), text_end)
+    });
+}
+
+/// The cache-servable portion: syntax, decode, and semantic families,
+/// suppression applied. Exactly what `StoredVerdict` persists — the
+/// typed families stay out of the packs until plan 9a designs their own
+/// revalidation records as a separate artifact class.
+///
+/// This is the previous `composed_diagnostics` body, moved rather than
+/// paraphrased: `persist`'s `composed_verdict` re-composes through it,
+/// and the equivalence harness recomputes through the union that wraps
+/// it, so the composers cannot drift (audit finding I2's first
+/// hand-maintained mirror). Filtering here, below the verdict, is sound
+/// because directives are strictly file-local: the verdict's
 /// content-hash key covers every directive edit, and it keeps the
 /// exit-code count, the printed report, and the persisted verdict the
 /// same post-filter set by construction (the vendor-filter rationale
 /// above, applied again).
-pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
     diagnostics.extend(
@@ -159,19 +184,51 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
     );
     let suppressed = celerrate_semantics::suppressed_ranges(database, file);
     if !suppressed.is_empty() {
-        let text_end = celerrate_db::source_text(database, file)
-            .as_ref()
-            .map(|text| TextSize::of(text.text()))
-            .unwrap_or_default();
-        diagnostics.retain(|diagnostic| {
-            !celerrate_semantics::is_suppressed(suppressed, diagnostic.range.start(), text_end)
-        });
+        retain_unsuppressed(database, file, suppressed, &mut diagnostics);
     }
     diagnostics
 }
 
-/// One file's total: decode and syntax, then references and gating.
-/// Nothing composes those two families below this line.
+/// The typed families, suppression applied — computed fresh on every
+/// path (decision 13): the persistent cache never speaks for them, so
+/// both a cold miss and a warm hit call this and get the same answer.
+pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+    let database = &inputs.database;
+    let mut diagnostics = celerrate_types::typed_diagnostics(
+        database,
+        inputs.files,
+        inputs.stubs,
+        inputs.configuration,
+        file,
+    )
+    .clone();
+    let suppressed = celerrate_semantics::suppressed_ranges(database, file);
+    if !suppressed.is_empty() {
+        retain_unsuppressed(database, file, suppressed, &mut diagnostics);
+    }
+    diagnostics
+}
+
+/// One file's diagnostics, computed: decode and syntax, then references
+/// and gating, then the typed families, then the directive filter's
+/// effect on each half. The single composition point — `analyze_one`
+/// serves it on a cache miss, `persist`'s `composed_verdict` re-composes
+/// through its `persistable_diagnostics` half, and the equivalence
+/// harness recomputes through it — so the composers cannot drift (audit
+/// finding I2's first hand-maintained mirror).
+pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+    let mut diagnostics = persistable_diagnostics(inputs, file);
+    diagnostics.extend(typed_portion(inputs, file));
+    diagnostics.sort();
+    diagnostics
+}
+
+/// One file's total: decode and syntax, then references and gating,
+/// then the typed families. On a cache hit the served verdict carries
+/// only the untyped half (decision 13), so the typed portion is appended
+/// and the result re-sorted; on a miss `composed_diagnostics` already
+/// produces the full union. Either way the typed instrument is
+/// aggregated once, right after the diagnostics are settled.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
     use std::sync::atomic::Ordering;
 
@@ -182,33 +239,48 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
     let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
     guarded(file_id, || {
         let statistics = &inputs.statistics;
-        match crate::cache::verdict::lookup_verdict(inputs, file) {
-            VerdictLookup::Hit(stored) => {
-                if let Some(diagnostics) = stored
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
-                    .collect::<Option<Vec<_>>>()
-                {
+        let diagnostics = match crate::cache::verdict::lookup_verdict(inputs, file) {
+            VerdictLookup::Hit(stored) => match stored
+                .diagnostics
+                .iter()
+                .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
+                .collect::<Option<Vec<_>>>()
+            {
+                Some(mut diagnostics) => {
                     statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
-                    return diagnostics;
+                    diagnostics.extend(typed_portion(inputs, file));
+                    diagnostics.sort();
+                    diagnostics
                 }
-                // Revalidated, but a stored diagnostic failed conversion:
-                // the same refusal as a moved answer.
-                statistics
-                    .verdicts_discarded
-                    .fetch_add(1, Ordering::Relaxed);
-            }
+                None => {
+                    // Revalidated, but a stored diagnostic failed
+                    // conversion: the same refusal as a moved answer.
+                    statistics
+                        .verdicts_discarded
+                        .fetch_add(1, Ordering::Relaxed);
+                    composed_diagnostics(inputs, file)
+                }
+            },
             VerdictLookup::Discarded => {
                 statistics
                     .verdicts_discarded
                     .fetch_add(1, Ordering::Relaxed);
+                composed_diagnostics(inputs, file)
             }
             VerdictLookup::Absent => {
                 statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
+                composed_diagnostics(inputs, file)
             }
-        }
-        composed_diagnostics(inputs, file)
+        };
+        let typed = celerrate_types::typed_file_verdicts(
+            database,
+            inputs.files,
+            inputs.stubs,
+            inputs.configuration,
+            file,
+        );
+        statistics.record_typed(typed);
+        diagnostics
     })
 }
 
