@@ -3713,20 +3713,27 @@ git commit -m "✨ feat(stdlib): array_map and array_filter compute from their a
   after — both outside the checked range's honesty; the stub's
   declared union already covers the historical `false`).
 
-`json_decode(json, associative?, depth?, flags?)`:
+`json_decode(json, associative?, depth?, flags?)` (decision 12,
+amended — a non-`null` `associative` overrides the flags argument in
+BOTH directions, per PHP's `ext/json/json.c` "for BC reasons"
+override):
 - The scalar tail is always
   `bool|float|int|string|null`.
-- Associative literal `true`, or a flags integer literal with bit
-  `JSON_OBJECT_AS_ARRAY = 1` set: the array branch —
-  `array<int|string, mixed>` unioned with the tail.
-- Associative literal `false`, the `null` literal, or absent (and no
-  array flag): the object branch — `stdClass` unioned with the tail
-  (`?bool $associative = null` since PHP 7.4: an explicit `null`
-  behaves exactly like an absent argument).
-- Associative present but neither a bool literal nor `null` (and no
-  decisive flag): both branches unioned with the tail.
-- A non-literal flags argument: both branches (the flag may or may
-  not be set — the union is the honest answer).
+- Associative literal `true`: the array branch —
+  `array<int|string, mixed>` unioned with the tail — regardless of
+  the flags argument.
+- Associative literal `false`: the object branch — `stdClass`
+  unioned with the tail — regardless of the flags argument.
+- The `null` literal, or absent (`?bool $associative = null` since
+  PHP 7.4: an explicit `null` behaves exactly like an absent
+  argument): the flags argument (index 3) decides — an integer
+  literal with bit `JSON_OBJECT_AS_ARRAY = 1` set selects the array
+  branch, without it selects the object branch, and a non-literal
+  flags argument leaves the answer undecided (both branches).
+- Associative present but neither a bool literal nor `null`: both
+  branches unioned with the tail, regardless of flags (it may be
+  `false` at runtime; answering the array branch alone would be
+  unsound).
 - `null` never leaves the union (`"null"` decodes to `null`;
   `JSON_THROW_ON_ERROR` changes the error path, not the `null`
   value).
@@ -3796,13 +3803,35 @@ fn an_associative_true_literal_selects_the_array_branch() {
 }
 
 #[test]
-fn the_object_as_array_flag_selects_the_array_branch() {
+fn an_associative_false_literal_overrides_the_object_as_array_flag() {
+    // `ext/json/json.c` carries this override as an explicit "for BC
+    // reasons" comment: a non-null `associative` beats the flag in
+    // both directions, so the flag being set does not win here
+    // (decision 12, amended).
     let db = TestDatabase::default();
     let answer = super::json_decode(
         &db,
         &[
             TypeId::string(&db),
             TypeId::bool_literal(&db, false),
+            TypeId::int_literal(&db, 512),
+            TypeId::int_literal(&db, super::JSON_OBJECT_AS_ARRAY),
+        ],
+    )
+    .unwrap();
+    assert_eq!(answer, super::object_branch(&db));
+}
+
+#[test]
+fn a_null_associative_falls_back_to_the_object_as_array_flag_when_set() {
+    // `associative` is `null`, so — unlike the test above — the flag
+    // is the decider.
+    let db = TestDatabase::default();
+    let answer = super::json_decode(
+        &db,
+        &[
+            TypeId::string(&db),
+            TypeId::null(&db),
             TypeId::int_literal(&db, 512),
             TypeId::int_literal(&db, super::JSON_OBJECT_AS_ARRAY),
         ],
@@ -3870,6 +3899,21 @@ pub(crate) fn explode<'db>(
 /// PHP's decode-side flag selecting the array branch.
 pub(crate) const JSON_OBJECT_AS_ARRAY: i64 = 1;
 
+/// `json_decode(json, associative?, depth?, flags?)`: decision 12
+/// (amended). The scalar tail (`bool|float|int|string|null`) is
+/// always present. PHP's `ext/json/json.c` overrides the
+/// `JSON_OBJECT_AS_ARRAY` flag with a non-`null` `$associative` in
+/// BOTH directions ("for BC reasons"): a `true` associative literal
+/// selects the array branch and a `false` associative literal selects
+/// the object branch, regardless of the flags argument. The flags
+/// argument decides only when `associative` is the `null` literal
+/// (the `?bool $associative = null` default since PHP 7.4) or absent:
+/// an integer-literal flags argument with the `JSON_OBJECT_AS_ARRAY`
+/// bit set selects the array branch, without it selects the object
+/// branch, and a non-literal flags argument leaves the answer
+/// undecided (both branches). Any other associative reading (present,
+/// neither a bool literal nor `null`) also answers both branches,
+/// regardless of flags — it may be `false` at runtime.
 pub(crate) fn json_decode<'db>(
     db: &'db dyn salsa::Database,
     arguments: &[TypeId<'db>],
@@ -3883,25 +3927,38 @@ pub(crate) fn json_decode<'db>(
         .is_some_and(|value| value & JSON_OBJECT_AS_ARRAY != 0);
     let flags_undecided = flags.is_some_and(|flags| flags.int_literal_value(db).is_none());
     Some(match arguments.get(1) {
-        _ if flag_selects_array => array_branch(db),
-        None => {
-            if flags_undecided {
-                both_branches(db)
-            } else {
-                object_branch(db)
-            }
-        }
+        None => flags_branch(db, flag_selects_array, flags_undecided),
         Some(associative) => match associative.bool_literal_value(db) {
+            // A non-`null` associative overrides the flag in both
+            // directions (PHP's BC-reasons override), regardless of
+            // what the flags argument says.
             Some(true) => array_branch(db),
-            Some(false) if !flags_undecided => object_branch(db),
+            Some(false) => object_branch(db),
             // An explicit `null` behaves exactly like an absent
-            // argument (`?bool $associative = null` since PHP 7.4).
-            None if associative.is_null(db) && !flags_undecided => {
-                object_branch(db)
+            // argument (`?bool $associative = null` since PHP 7.4):
+            // the flags argument decides.
+            None if associative.is_null(db) => {
+                flags_branch(db, flag_selects_array, flags_undecided)
             }
             _ => both_branches(db),
         },
     })
+}
+
+/// The answer when `associative` is `null` or absent: the flags
+/// argument is the sole decider.
+fn flags_branch<'db>(
+    db: &'db dyn salsa::Database,
+    flag_selects_array: bool,
+    flags_undecided: bool,
+) -> TypeId<'db> {
+    if flags_undecided {
+        both_branches(db)
+    } else if flag_selects_array {
+        array_branch(db)
+    } else {
+        object_branch(db)
+    }
 }
 
 fn scalar_tail<'db>(db: &'db dyn salsa::Database) -> [TypeId<'db>; 5] {
