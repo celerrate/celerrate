@@ -248,6 +248,70 @@ pub(crate) fn refine<'db>(
     }
 }
 
+/// Lowers a refinement's template declarations. Bounds lower under
+/// an empty scope (a bound cannot reference a sibling template); a
+/// bound that fails to lower falls to `mixed` (`TypeId::template`'s
+/// own fallback for a boundless template) — the totality test
+/// (`every_embedded_refinement_text_lowers`) keeps this the dead
+/// branch it should be. `pub(crate)`: task 5's class refinements
+/// reuse this to build the same per-class scope.
+pub(crate) fn norm_templates<'db>(
+    db: &'db dyn salsa::Database,
+    scope_key: &str,
+    templates: &[celerrate_stubs::RefinedTemplate],
+) -> Vec<crate::norm::NormTemplate<'db>> {
+    let empty = crate::norm::NormScope {
+        key: scope_key,
+        templates: &[],
+    };
+    templates
+        .iter()
+        .map(|template| crate::norm::NormTemplate {
+            name: template.name.clone(),
+            bound: template
+                .bound
+                .as_deref()
+                .and_then(|bound| crate::norm::lower_norm_text(db, &empty, bound)),
+        })
+        .collect()
+}
+
+/// One refined element (a stub return or parameter) under decision
+/// 5's three-valued rule: `text` lowers through the norm, then
+/// [`refine`] decides the trust against the native fold — `Holds` ->
+/// `Trust::Refined`, `CannotProve` -> `Trust::RefinedUnproven`,
+/// `Fails` -> the native fold wins with `Trust::RejectedAnnotation`.
+/// `native == None` (the stub range rule's silenced parameter, design
+/// section 3) trusts against `mixed`, so a refinement can rescue a
+/// silenced parameter. Absent text, or text that fails to lower
+/// (`lower_norm_text` answers `None`), never produces a worse answer
+/// than having no refinement at all: `native` stands, untouched, with
+/// `Trust::NativeOnly`. `pub(crate)`: task 5 reuses this for class
+/// refinements too.
+pub(crate) fn refined_element<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    scope: &crate::norm::NormScope<'db, '_>,
+    text: Option<&str>,
+    native: Option<TypeId<'db>>,
+) -> (Option<TypeId<'db>>, Trust) {
+    let Some(lowered) = text.and_then(|text| crate::norm::lower_norm_text(db, scope, text)) else {
+        return (native, Trust::NativeOnly);
+    };
+    let native_for_trust = native.unwrap_or_else(|| TypeId::mixed(db));
+    let (chosen, trust) = refine(
+        db,
+        files,
+        stubs,
+        configuration,
+        native_for_trust,
+        Some(lowered),
+    );
+    (Some(chosen), trust)
+}
+
 /// The ancestor keys of one linearized class, nearest first (edge
 /// walk order), the root and duplicates removed. Stub ancestors take
 /// no part: annotations live in source docblocks.
@@ -383,6 +447,41 @@ pub fn declared_member_signature<'db>(
         MemberResolution::Source { member, owner, .. } => (member, owner),
         MemberResolution::Stub { member, owner } => {
             let range = configuration.php_version_range(db);
+            // Class templates plus the method's own, under one scope
+            // key (the owner class key): a method text like
+            // `current(): TValue` names a class-scoped template, so
+            // both must resolve names in the same lowering pass
+            // (decision 5). The parse-time collision check of task 3
+            // makes merging them safe (a class and its own method can
+            // never redeclare the same template name).
+            let member_key = query.member_key(db);
+            let class_refinement = stubs.index(db).class_refinement(&owner);
+            // Methods only: property and constant refinements are out
+            // of scope for task 4 (decision 5's note). Guarding on
+            // kind, rather than only on a key match, also keeps a
+            // same-spelling property and method from ever cross-
+            // attaching each other's refinement.
+            let method_refinement = if member.kind == StubMemberKind::Method {
+                class_refinement.and_then(|class| {
+                    class
+                        .methods
+                        .iter()
+                        .find(|(name, _)| name == member_key)
+                        .map(|(_, signature)| signature)
+                })
+            } else {
+                None
+            };
+            let mut templates = class_refinement
+                .map(|class| norm_templates(db, &owner, &class.templates))
+                .unwrap_or_default();
+            if let Some(refinement) = method_refinement {
+                templates.extend(norm_templates(db, &owner, &refinement.templates));
+            }
+            let scope = crate::norm::NormScope {
+                key: &owner,
+                templates: &templates,
+            };
             return Some(resolve_stub_member_signature(
                 db,
                 files,
@@ -391,6 +490,8 @@ pub fn declared_member_signature<'db>(
                 range,
                 &owner,
                 &member,
+                &scope,
+                method_refinement,
             ));
         }
         // A virtual member's whole type comes from its annotation text,
@@ -842,7 +943,11 @@ fn parameter_type_across_range<'db>(
 /// One stub member's declared signature under the range rule: the
 /// value type is the union across the range, parameters check against
 /// their most restrictive form or fall silent, and everything is
-/// `Trust::NativeOnly` (stubs carry no annotations to refine with).
+/// `Trust::NativeOnly` — except a refined method, which consults
+/// `refinement` under `scope` (decision 5); properties, constants,
+/// and enum cases carry no refinement (task 4 scope, `refinement` is
+/// unconsulted for them).
+#[allow(clippy::too_many_arguments)]
 fn resolve_stub_member_signature<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -851,6 +956,8 @@ fn resolve_stub_member_signature<'db>(
     range: PhpVersionRange,
     owner_key: &str,
     member: &StubMember,
+    scope: &crate::norm::NormScope<'db, '_>,
+    refinement: Option<&celerrate_stubs::RefinedSignature>,
 ) -> DeclaredSignature<'db> {
     let value_only = |value_type: TypeId<'db>| DeclaredSignature {
         parameters: Vec::new(),
@@ -860,9 +967,16 @@ fn resolve_stub_member_signature<'db>(
     };
     match member.kind {
         StubMemberKind::Method => match member.signature.as_ref() {
-            Some(signature) => {
-                resolve_stub_signature(db, files, stubs, configuration, range, signature)
-            }
+            Some(signature) => resolve_stub_signature(
+                db,
+                files,
+                stubs,
+                configuration,
+                range,
+                scope,
+                signature,
+                refinement,
+            ),
             None => value_only(TypeId::mixed(db)),
         },
         StubMemberKind::EnumCase => value_only(TypeId::enum_case(db, owner_key, &member.name)),
@@ -887,35 +1001,78 @@ fn resolve_stub_member_signature<'db>(
 
 /// One stub callable signature (a function or a method) under the
 /// range rule; shared by the member arm and the function query.
+/// `scope` is built by the caller (task 4, decision 5): the function
+/// path scopes to the function's own refined templates; the method
+/// path merges the owner class's templates with the method's own
+/// under one scope key (the owner class key). `refinement` is the
+/// element's own signature refinement, when one exists; `None` for an
+/// unrefined stub element leaves the plan-3 delta fold exactly as it
+/// stood before this task (`refined_element`'s `None`-text arm).
+#[allow(clippy::too_many_arguments)]
 fn resolve_stub_signature<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
     stubs: StubIndexInput,
     configuration: ProjectConfiguration,
     range: PhpVersionRange,
+    scope: &crate::norm::NormScope<'db, '_>,
     signature: &StubSignature,
+    refinement: Option<&celerrate_stubs::RefinedSignature>,
 ) -> DeclaredSignature<'db> {
+    let native_return = value_type_across_range(db, range, &signature.return_type);
+    let refined_return = refinement.and_then(|refinement| refinement.return_type.as_deref());
+    let (value_type, value_trust) = match refined_element(
+        db,
+        files,
+        stubs,
+        configuration,
+        scope,
+        refined_return,
+        Some(native_return),
+    ) {
+        (Some(chosen), trust) => (chosen, trust),
+        (None, trust) => (native_return, trust),
+    };
     DeclaredSignature {
         parameters: signature
             .parameters
             .iter()
             .map(|parameter| {
-                declared_stub_parameter(db, files, stubs, configuration, range, parameter)
+                let refined_text = refinement.and_then(|refinement| {
+                    refinement
+                        .parameters
+                        .iter()
+                        .find(|(name, _)| name == &parameter.name)
+                        .map(|(_, text)| text.as_str())
+                });
+                declared_stub_parameter(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    range,
+                    scope,
+                    parameter,
+                    refined_text,
+                )
             })
             .collect(),
-        value_type: value_type_across_range(db, range, &signature.return_type),
-        value_trust: Trust::NativeOnly,
+        value_type,
+        value_trust,
         by_reference: signature.by_reference,
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn declared_stub_parameter<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
     stubs: StubIndexInput,
     configuration: ProjectConfiguration,
     range: PhpVersionRange,
+    scope: &crate::norm::NormScope<'db, '_>,
     parameter: &StubParameter,
+    refined_text: Option<&str>,
 ) -> DeclaredParameter<'db> {
     // A parameter that does not span the whole range is optional: a
     // call omitting it must be legal somewhere in the range, so arity
@@ -928,17 +1085,14 @@ fn declared_stub_parameter<'db>(
             .availability
             .removed
             .is_none_or(|version| version > range.maximum);
+    let native =
+        parameter_type_across_range(db, files, stubs, configuration, range, &parameter.type_text);
+    let (parameter_type, trust) =
+        refined_element(db, files, stubs, configuration, scope, refined_text, native);
     DeclaredParameter {
         name: parameter.name.clone(),
-        parameter_type: parameter_type_across_range(
-            db,
-            files,
-            stubs,
-            configuration,
-            range,
-            &parameter.type_text,
-        ),
-        trust: Trust::NativeOnly,
+        parameter_type,
+        trust,
         optional: parameter.optional || !spans_the_whole_range,
         variadic: parameter.variadic,
         by_reference: parameter.by_reference,
@@ -1133,7 +1287,24 @@ pub fn declared_function_signature<'db>(
         return stub_signature_table(db, stubs)
             .function(query.key(db))
             .map(|signature| {
-                resolve_stub_signature(db, files, stubs, configuration, range, signature)
+                let refinement = stubs.index(db).function_refinement(query.key(db));
+                let templates = refinement
+                    .map(|refinement| norm_templates(db, query.key(db), &refinement.templates))
+                    .unwrap_or_default();
+                let scope = crate::norm::NormScope {
+                    key: query.key(db),
+                    templates: &templates,
+                };
+                resolve_stub_signature(
+                    db,
+                    files,
+                    stubs,
+                    configuration,
+                    range,
+                    &scope,
+                    signature,
+                    refinement,
+                )
             });
     };
     let index = analyzed_file_index(db, files);
@@ -1336,15 +1507,16 @@ mod tests {
     };
     use celerrate_source::FileId;
     use celerrate_stubs::{
-        StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
-        StubParameter, StubSignature, StubSymbol, StubSymbolKind, StubVisibility,
-        VersionedTypeText,
+        RefinedSignature, RefinedTemplate, StubAvailability, StubClassSurface, StubIndex,
+        StubIndexInput, StubMember, StubMemberKind, StubParameter, StubRefinements, StubSignature,
+        StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
     use super::{
         DeclaredSignature, FunctionQuery, Trust, declared_function_signature,
-        declared_member_signature,
+        declared_member_signature, norm_templates,
     };
+    use crate::norm::{NormScope, NormTemplate, lower_norm_text};
     use crate::type_syntax::{
         AnnotationSite, ParsedAnnotations, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
     };
@@ -2803,5 +2975,228 @@ class User {}
             TypeId::class(&f.db, "app\\user", vec![]),
             "the same fixture consulted through the child does thread",
         );
+    }
+
+    /// A database around one synthetic stub function plus a
+    /// refinement. Self-contained (no source files needed): the stub
+    /// path never consults `files` for a stub-only function.
+    fn refined_stub_fixture(key: &str, base_return: &str, refinement: RefinedSignature) -> Fixture {
+        let db = TestDatabase::default();
+        let symbols = vec![StubSymbol {
+            name: key.to_owned(),
+            kind: StubSymbolKind::Function,
+            availability: StubAvailability::ALWAYS,
+        }];
+        let functions = vec![(
+            key.to_owned(),
+            StubSignature {
+                parameters: vec![StubParameter {
+                    name: "array".to_owned(),
+                    type_text: VersionedTypeText {
+                        default: Some("array".to_owned()),
+                        overrides: vec![],
+                    },
+                    optional: false,
+                    by_reference: false,
+                    variadic: false,
+                    availability: StubAvailability::ALWAYS,
+                }],
+                return_type: VersionedTypeText {
+                    default: Some(base_return.to_owned()),
+                    overrides: vec![],
+                },
+                by_reference: false,
+            },
+        )];
+        let mut index = StubIndex::new(symbols, functions, vec![]);
+        index.set_refinements(StubRefinements::new(
+            vec![(key.to_owned(), refinement)],
+            vec![],
+        ));
+        let files = AnalyzedFileSet::new(&db, vec![]);
+        let stubs = StubIndexInput::builder(index)
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    /// `array_keys`'s refinement: `array<TKey, TValue> -> list<TKey>`,
+    /// the design's running example (decisions 5 and 7).
+    fn array_keys_refinement() -> RefinedSignature {
+        RefinedSignature {
+            templates: vec![
+                RefinedTemplate {
+                    name: "TKey".to_owned(),
+                    bound: None,
+                },
+                RefinedTemplate {
+                    name: "TValue".to_owned(),
+                    bound: None,
+                },
+            ],
+            parameters: vec![("array".to_owned(), "array<TKey, TValue>".to_owned())],
+            return_type: Some("list<TKey>".to_owned()),
+        }
+    }
+
+    #[test]
+    fn a_refined_return_lowers_under_the_function_scope_and_is_trusted() {
+        let f = refined_stub_fixture("array_keys", "array", array_keys_refinement());
+        let signature = declared_function_signature(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "array_keys".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(
+            signature.value_type,
+            TypeId::list(
+                &f.db,
+                TypeId::template(&f.db, "array_keys", "TKey", TypeId::mixed(&f.db)),
+            ),
+        );
+        // `list<TKey> <: array` holds: a template candidate proves
+        // through its `mixed` bound against the fold's `mixed` value,
+        // and every list is an array (the Holds arm, decision 5).
+        assert_eq!(signature.value_trust, Trust::Refined);
+    }
+
+    #[test]
+    fn a_refined_parameter_replaces_the_fold_and_unrefined_elements_keep_it() {
+        let f = refined_stub_fixture("array_keys", "array", array_keys_refinement());
+        let signature = declared_function_signature(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "array_keys".to_owned()),
+        )
+        .unwrap();
+        let parameter = signature.parameters.first().unwrap();
+        assert_eq!(
+            parameter.parameter_type,
+            Some(TypeId::array(
+                &f.db,
+                TypeId::template(&f.db, "array_keys", "TKey", TypeId::mixed(&f.db)),
+                TypeId::template(&f.db, "array_keys", "TValue", TypeId::mixed(&f.db)),
+            )),
+        );
+        // `TKey <: int|string` cannot be decided through the `mixed`
+        // bound: the genuine CannotProve arm (decision 5).
+        assert_eq!(parameter.trust, Trust::RefinedUnproven);
+    }
+
+    #[test]
+    fn a_failing_refinement_is_rejected_and_the_native_fold_wins() {
+        // A refined `int` against a native `string`: Proof::Fails — the
+        // curation-typo containment (decision 5).
+        let f = refined_stub_fixture(
+            "getcwd",
+            "string",
+            RefinedSignature {
+                templates: vec![],
+                parameters: vec![],
+                return_type: Some("int".to_owned()),
+            },
+        );
+        let signature = declared_function_signature(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "getcwd".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::string(&f.db));
+        assert_eq!(signature.value_trust, Trust::RejectedAnnotation);
+    }
+
+    /// Asserts every parameter text and the return text of one
+    /// refined signature lower under the scope formed by
+    /// `outer_templates` plus the signature's own templates.
+    fn assert_signature_lowers(
+        db: &TestDatabase,
+        key: &str,
+        signature: &RefinedSignature,
+        outer_templates: &[NormTemplate<'_>],
+    ) {
+        let mut templates = outer_templates.to_vec();
+        templates.extend(norm_templates(db, key, &signature.templates));
+        let scope = NormScope {
+            key,
+            templates: &templates,
+        };
+        for (name, text) in &signature.parameters {
+            assert!(
+                lower_norm_text(db, &scope, text).is_some(),
+                "parameter {name} of {key}",
+            );
+        }
+        if let Some(return_type) = &signature.return_type {
+            assert!(
+                lower_norm_text(db, &scope, return_type).is_some(),
+                "return of {key}",
+            );
+        }
+    }
+
+    #[test]
+    fn every_embedded_refinement_text_lowers() {
+        // Decision 3's totality gate: a typo in refinements.celerrate is
+        // a test failure here, never a silent fallback.
+        let db = TestDatabase::default();
+        let index = celerrate_stubs::embedded_stub_index().unwrap();
+        for (key, signature) in &index.refinements().functions {
+            assert_signature_lowers(&db, key, signature, &[]);
+        }
+        for (key, class) in &index.refinements().classes {
+            let class_templates = norm_templates(&db, key, &class.templates);
+            let scope = NormScope {
+                key,
+                templates: &class_templates,
+            };
+            for template in &class.templates {
+                if let Some(bound) = &template.bound {
+                    let empty = NormScope {
+                        key,
+                        templates: &[],
+                    };
+                    assert!(
+                        lower_norm_text(&db, &empty, bound).is_some(),
+                        "bound of {key}::{}",
+                        template.name,
+                    );
+                }
+            }
+            for ancestor in &class.ancestors {
+                for argument in &ancestor.arguments {
+                    assert!(
+                        lower_norm_text(&db, &scope, argument).is_some(),
+                        "ancestor argument {argument} of {key}",
+                    );
+                }
+            }
+            for (name, signature) in &class.methods {
+                assert_signature_lowers(
+                    &db,
+                    &format!("{key}::{name}"),
+                    signature,
+                    &class_templates,
+                );
+            }
+        }
     }
 }

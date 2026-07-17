@@ -4,13 +4,6 @@
 //! norm is not a plugin notation, so this module is `pub(crate)`
 //! and never crosses the facade. Tolerant: anything outside the v0
 //! subset answers `None`, never a panic (decision 13).
-//!
-//! Not yet wired to a caller outside this module's own tests: the
-//! declared tier starts consuming `lower_norm_text` in a later task
-//! of the same plan (type-engine 7 — providers, task 4). Until then
-//! the module is exercised only by its unit tests, so the crate-wide
-//! dead-code lint is silenced here rather than on every item.
-#![allow(dead_code)]
 
 use crate::representation::{CallableParameter, ShapeField, ShapeKey, TypeId};
 

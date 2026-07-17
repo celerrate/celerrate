@@ -607,6 +607,39 @@ mod tests {
         built
     }
 
+    /// `fixture` with the real embedded stub blob wired in, instead of
+    /// the minimal test-only index: the end-to-end proof that a
+    /// refined stub function's templates solve at a real call site
+    /// (task 4, decision 5 and 7), through the plan-6 solver path
+    /// exactly as any other symbolic stub return would.
+    fn fixture_with_embedded_stubs(sources: &[&str]) -> Fixture {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let files = AnalyzedFileSet::new(&db, handles.clone());
+        let stubs = StubIndexInput::builder(celerrate_stubs::embedded_stub_index().unwrap())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            handles,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
     /// The body of the declaration numbered `index` in file 0.
     fn body_query(fixture: &Fixture, index: u32) -> BodyQuery<'_> {
         BodyQuery::new(
@@ -3547,5 +3580,23 @@ function caller(Users $users) { return $users->getIterator(); }
             configuration,
         };
         assert_eq!(caller_return_display(&f, "caller"), "arrayiterator");
+    }
+
+    /// Task 4's end-to-end proof: `array_keys`'s refinement
+    /// (`array<TKey, TValue> -> list<TKey>`) reaches the declared
+    /// tier through `declared_function_signature`'s stub path, and
+    /// the plan-6 solver (`solver_pairs`/`solve`/`finalize_return`,
+    /// already run wherever a call result `contains_symbolic`) binds
+    /// `TKey` from the shape argument with no new wiring.
+    #[test]
+    fn a_refined_stub_function_solves_its_templates_at_the_call_site() {
+        let f = fixture_with_embedded_stubs(&[r#"<?php
+function consume() { return array_keys(['a' => 1, 'b' => 2]); }
+"#]);
+        let query = FunctionQuery::new(&f.db, "consume".to_owned());
+        let inferred = inferred_function_return(&f.db, f.files, f.stubs, f.configuration, query);
+        // TKey solved from the shape argument against
+        // `array<TKey, TValue>`.
+        assert_eq!(inferred.display(&f.db), "list<'a'|'b'>");
     }
 }
