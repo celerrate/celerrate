@@ -3,9 +3,8 @@
 //! point that proves insufficient is extended, never bypassed — this
 //! check is what makes "never bypassed" mechanical.
 
-/// The plugin crates under the rule. Plan 7 adds the stdlib type
-/// provider here.
-const PLUGIN_CRATES: &[&str] = &["celerrate_phpdoc_bridge"];
+/// The plugin crates under the rule.
+const PLUGIN_CRATES: &[&str] = &["celerrate_phpdoc_bridge", "celerrate_stdlib_provider"];
 const ALLOWED_DEPENDENCY: &str = "celerrate_plugin";
 
 pub fn run() -> crate::Result<()> {
@@ -93,6 +92,13 @@ mod tests {
                 ])
             ),
             package(
+                "celerrate_stdlib_provider",
+                serde_json::json!([
+                    { "name": "celerrate_plugin", "kind": null },
+                    { "name": "celerrate_types", "kind": "dev" },
+                ])
+            ),
+            package(
                 "celerrate_cli",
                 serde_json::json!([
                     { "name": "celerrate_types", "kind": null },
@@ -100,6 +106,20 @@ mod tests {
             ),
         ]));
         assert!(check(&value).is_ok());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_missing_second_plugin_crate_fails_the_not_found_guard() {
+        // The "not found" guard protects each named plugin crate from a
+        // silent rename or removal — this pins it for the second entry,
+        // not just the first.
+        let value = metadata(serde_json::json!([package(
+            "celerrate_phpdoc_bridge",
+            serde_json::json!([{ "name": "celerrate_plugin", "kind": null }])
+        ),]));
+        let error = check(&value).unwrap_err().to_string();
+        assert!(error.contains("celerrate_stdlib_provider"));
     }
 
     #[test]

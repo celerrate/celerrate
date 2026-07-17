@@ -23,6 +23,7 @@ celerrate_plugin = { path = "../celerrate_plugin" }
 celerrate_project = { path = "../celerrate_project" }
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_source = { path = "../celerrate_source" }
+celerrate_stdlib_provider = { path = "../celerrate_stdlib_provider" }
 celerrate_stubs = { path = "../celerrate_stubs" }
 celerrate_types = { path = "../celerrate_types" }
 celerrate_vfs = { path = "../celerrate_vfs" }
