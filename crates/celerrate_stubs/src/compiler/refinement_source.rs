@@ -475,11 +475,17 @@ fn split_top_level(text: &str) -> Vec<&str> {
         .collect()
 }
 
-/// Folds a symbol key to its lookup form: lowercase, no leading
+/// Folds a symbol key to its lookup form: ASCII-lowercase, no leading
 /// backslash. Applied to function names, class names, and ancestor
-/// names; parameter names stay verbatim.
+/// names; parameter names stay verbatim. ASCII-only matches PHP's own
+/// case folding for class/function names (non-ASCII letters are never
+/// folded) and the runtime lookup keys computed by
+/// `celerrate_semantics::symbols` and `celerrate_semantics::linearize` —
+/// a mismatch here would compile a blob key the runtime binary search
+/// can never match, so a refinement would validate cleanly and then be
+/// silently dropped at lookup time.
 fn folded(name: &str) -> String {
-    name.trim_start_matches('\\').to_lowercase()
+    name.trim_start_matches('\\').to_ascii_lowercase()
 }
 
 /// Validates that every refined function, class, method, and
@@ -690,6 +696,20 @@ mod tests {
         let parsed =
             parse_refinement_source("# the seed\nfunction Array_Keys(): list<int>\n").unwrap();
         assert_eq!(parsed.functions.first().unwrap().0, "array_keys");
+    }
+
+    #[test]
+    fn folding_is_ascii_only_so_non_ascii_letters_keep_their_case() {
+        // PHP's own class/function name matching folds ASCII A-Z only;
+        // non-ASCII letters are case-sensitive. The runtime lookup keys
+        // (`celerrate_semantics::symbols`, `celerrate_semantics::linearize`)
+        // fold with `to_ascii_lowercase` for the same reason. Folding
+        // here with Unicode `to_lowercase` would compile a blob key
+        // ("àrraything") the runtime binary search can never match,
+        // silently dropping the refinement at lookup time — only the
+        // ASCII `T` is folded below, the leading `À` is not.
+        let parsed = parse_refinement_source("function ÀrrayThing(): int\n").unwrap();
+        assert_eq!(parsed.functions.first().unwrap().0, "Àrraything");
     }
 
     #[test]
