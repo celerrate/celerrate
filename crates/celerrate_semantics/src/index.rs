@@ -6,6 +6,8 @@
 //! through the per-name query in `crate::lookup`, never through a
 //! direct dependency on the whole table.
 
+use std::collections::{HashSet, VecDeque};
+
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_stubs::{
@@ -264,6 +266,92 @@ pub fn stub_signature_table(db: &dyn salsa::Database, stubs: StubIndexInput) -> 
     StubSignatureTable { functions, classes }
 }
 
+/// What one stub-frontier walk reached. The single answer shape both
+/// consumers of [`stub_frontier`] read: linearization folds `reached`
+/// into a class's `stub_ancestors` and `opaque` into its
+/// `has_opaque_edge`; iteration typing only asks whether `reached`
+/// contains a protocol interface.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct StubFrontier {
+    /// Every folded ClassLike key the walk reached, in breadth-first
+    /// order, each exactly once. A key with no compiled surface is
+    /// reached like any other — its own parents are simply unknown.
+    pub reached: Vec<String>,
+    /// Some reached key had no compiled surface, so the hierarchy
+    /// behind it is not fully walked: a genuinely opaque boundary.
+    pub opaque: bool,
+}
+
+/// Breadth-first over the compiled parent links from `seeds`: every
+/// stub class-like transitively reachable, in walk order. The single
+/// implementation of that walk — linearization's stub-frontier
+/// expansion ([`crate::linearize::linearized_class`]) and iteration
+/// typing's protocol check (`celerrate_types`' `flow.rs`) both route
+/// through here rather than each keeping a copy.
+///
+/// **Self-match semantics**: this walk answers ANCESTRY, never
+/// identity. `seeds` are the ancestors to start from, and the walk
+/// never adds the class being asked about — a caller holding a class
+/// key wants [`stub_ancestors_of`], which seeds from that class's
+/// PARENTS. So `stub_ancestors_of(table, "iterator")` does not report
+/// `iterator`, exactly as a source-declared `Iterator`'s linearized
+/// `ancestry` does not list itself. Both callers want that same
+/// meaning, so it is fixed here rather than left to each one's seeding
+/// (it previously differed between them: the `flow.rs` copy seeded the
+/// queue with the queried name itself, so it uniquely reported a class
+/// as its own ancestor).
+///
+/// A key already visited is skipped, so a cycle among stub parents
+/// (`A parent B`, `B parent A`) terminates rather than looping; a key
+/// genuinely reachable from itself through such a cycle does appear,
+/// which is a real ancestry fact, not a self-match.
+///
+/// `reached` is ordered by the queue, a pure function of `seeds`' order
+/// and each surface's recorded `parents` order — deterministic, never
+/// dependent on the visited set's iteration.
+pub fn stub_frontier(
+    table: &StubSignatureTable,
+    seeds: impl IntoIterator<Item = String>,
+) -> StubFrontier {
+    let mut queue: VecDeque<String> = seeds.into_iter().collect();
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut frontier = StubFrontier::default();
+    while let Some(key) = queue.pop_front() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        match table.class(&key) {
+            Some(surface) => {
+                for parent in &surface.parents {
+                    queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
+                }
+            }
+            None => frontier.opaque = true,
+        }
+        frontier.reached.push(key);
+    }
+    frontier
+}
+
+/// The stub ancestors of one class-like, transitively: [`stub_frontier`]
+/// seeded from `class_key`'s own compiled parents. `class_key` itself is
+/// not an ancestor of itself, so it is absent unless a genuine parent
+/// cycle leads back to it. A key with no compiled surface has no known
+/// parents and answers an empty, non-opaque frontier — the caller
+/// already knows the key did not resolve.
+pub fn stub_ancestors_of(table: &StubSignatureTable, class_key: &str) -> StubFrontier {
+    let Some(surface) = table.class(class_key) else {
+        return StubFrontier::default();
+    };
+    stub_frontier(
+        table,
+        surface
+            .parents
+            .iter()
+            .map(|parent| folded_symbol_key(SymbolSpace::ClassLike, parent)),
+    )
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -273,10 +361,15 @@ mod tests {
     use celerrate_source::FileId;
     use salsa::Setter;
 
-    use super::{SymbolOrigin, SymbolTable, source_symbol_table};
+    use celerrate_stubs::StubClassSurface;
+
+    use super::{
+        StubSignatureTable, SymbolOrigin, SymbolTable, source_symbol_table, stub_ancestors_of,
+        stub_frontier,
+    };
     use crate::ast_id::AstId;
     use crate::items::{DeclarationKind, DefineId};
-    use crate::symbols::SymbolSpace;
+    use crate::symbols::{SymbolSpace, folded_symbol_key};
 
     fn set_of(db: &TestDatabase, sources: &[&str]) -> AnalyzedFileSet {
         let files: Vec<SourceFile> = sources
@@ -578,5 +671,90 @@ mod tests {
                 .lookup(SymbolSpace::ClassLike, "random\\randomizer")
                 .is_some(),
         );
+    }
+
+    /// A `StubSignatureTable` over the given `(name, parents)` pairs,
+    /// folded exactly as `stub_signature_table` folds the real blob.
+    fn surface_table(classes: &[(&str, &[&str])]) -> StubSignatureTable {
+        let mut classes: Vec<(String, StubClassSurface)> = classes
+            .iter()
+            .map(|(name, parents)| {
+                (
+                    folded_symbol_key(SymbolSpace::ClassLike, name),
+                    StubClassSurface {
+                        parents: parents.iter().map(|parent| (*parent).to_owned()).collect(),
+                        members: Vec::new(),
+                    },
+                )
+            })
+            .collect();
+        classes.sort_by(|left, right| left.0.cmp(&right.0));
+        StubSignatureTable {
+            functions: Vec::new(),
+            classes,
+        }
+    }
+
+    #[test]
+    fn the_stub_frontier_reaches_transitive_parents_in_walk_order() {
+        let table = surface_table(&[
+            ("ArrayIterator", &["Iterator", "Countable"]),
+            ("Iterator", &["Traversable"]),
+            ("Countable", &[]),
+            ("Traversable", &[]),
+        ]);
+        let frontier = stub_frontier(&table, ["arrayiterator".to_owned()]);
+        // Breadth-first from the seed, each key once, parents in their
+        // recorded (declaration) order: deterministic, not the visited
+        // set's iteration order.
+        assert_eq!(
+            frontier.reached,
+            vec!["arrayiterator", "iterator", "countable", "traversable"],
+        );
+        assert!(!frontier.opaque);
+    }
+
+    /// The self-match contract, fixed in one place (the reviewer's
+    /// Minor #5): `stub_ancestors_of` answers ANCESTRY, never identity.
+    /// The two callers of this walk previously disagreed — iteration
+    /// typing's own copy seeded its queue with the queried name itself,
+    /// so it uniquely reported `Iterator` as implementing `Iterator`,
+    /// where a source-declared `Iterator`'s linearized ancestry does
+    /// not list itself.
+    #[test]
+    fn a_class_is_never_its_own_stub_ancestor() {
+        let table = surface_table(&[("Iterator", &["Traversable"]), ("Traversable", &[])]);
+        let frontier = stub_ancestors_of(&table, "iterator");
+        assert_eq!(frontier.reached, vec!["traversable"]);
+        assert!(!frontier.reached.iter().any(|key| key == "iterator"));
+    }
+
+    #[test]
+    fn a_stub_parent_cycle_terminates() {
+        // `A parent B`, `B parent A`: the visited set closes the loop
+        // rather than queueing forever. A key genuinely reachable from
+        // itself through the cycle is a real ancestry fact, so `a` does
+        // appear here — unlike the self-match case above, which has no
+        // cycle.
+        let table = surface_table(&[("A", &["B"]), ("B", &["A"])]);
+        let frontier = stub_ancestors_of(&table, "a");
+        assert_eq!(frontier.reached, vec!["b", "a"]);
+        assert!(!frontier.opaque);
+    }
+
+    #[test]
+    fn a_parent_with_no_compiled_surface_leaves_the_frontier_opaque() {
+        let table = surface_table(&[("Known", &["Missing"])]);
+        let frontier = stub_ancestors_of(&table, "known");
+        assert_eq!(frontier.reached, vec!["missing"]);
+        assert!(frontier.opaque);
+    }
+
+    #[test]
+    fn a_class_with_no_compiled_surface_has_no_known_ancestors() {
+        let table = surface_table(&[("Known", &[])]);
+        let frontier = stub_ancestors_of(&table, "ghost");
+        assert!(frontier.reached.is_empty());
+        assert!(!frontier.opaque);
     }
 }

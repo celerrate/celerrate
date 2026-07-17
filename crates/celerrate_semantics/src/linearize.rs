@@ -35,7 +35,7 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndexInput, StubMember, StubMemberKind};
 
-use crate::index::stub_signature_table;
+use crate::index::{stub_frontier, stub_signature_table};
 use crate::items::Declaration;
 use crate::lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
@@ -346,33 +346,24 @@ pub fn linearized_class<'db>(
         .any(|edge| edge.resolved.is_none() && edge.stub.is_none());
 
     // Expand the stub frontier: breadth-first through the compiled parent
-    // links, seeded by the direct stub edges in walk order. A stub symbol
-    // without a compiled surface leaves the boundary opaque; magic methods
-    // found on a stub ancestor mark the class. The visited set only guards
-    // revisits, so the queue's recorded order fixes the result.
+    // links, seeded by the direct stub edges in walk order (the shared
+    // `stub_frontier` walk, which `celerrate_types`' iteration typing
+    // reads too). A stub symbol without a compiled surface leaves the
+    // boundary opaque; magic methods found on a stub ancestor mark the
+    // class.
     let table = stub_signature_table(db, stubs);
-    let mut stub_queue: VecDeque<String> = stub_ancestors.iter().cloned().collect();
-    let mut stub_visited: HashSet<String> = HashSet::new();
-    let mut transitive: Vec<String> = Vec::new();
+    let frontier = stub_frontier(table, stub_ancestors.iter().cloned());
+    has_opaque_edge |= frontier.opaque;
     let mut stub_magic = MagicMarkers::default();
-    while let Some(key) = stub_queue.pop_front() {
-        if !stub_visited.insert(key.clone()) {
-            continue;
-        }
-        let Some(surface) = table.class(&key) else {
-            has_opaque_edge = true;
-            transitive.push(key);
+    for key in &frontier.reached {
+        let Some(surface) = table.class(key) else {
             continue;
         };
         for member in &surface.members {
             merge_stub_magic(member, &mut stub_magic);
         }
-        for parent in &surface.parents {
-            stub_queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
-        }
-        transitive.push(key);
     }
-    let mut stub_ancestors = transitive;
+    let mut stub_ancestors = frontier.reached;
     stub_ancestors.sort();
     stub_ancestors.dedup();
 

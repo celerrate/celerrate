@@ -45,8 +45,9 @@ pub use comment_directives::{
     CommentDirectiveRegistry, CommentKind, DirectiveScope, is_suppressed, suppressed_ranges,
 };
 pub use index::{
-    StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin, SymbolTable,
-    source_symbol_table, stub_signature_table, stub_symbol_table,
+    StubFrontier, StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin,
+    SymbolTable, source_symbol_table, stub_ancestors_of, stub_frontier, stub_signature_table,
+    stub_symbol_table,
 };
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
