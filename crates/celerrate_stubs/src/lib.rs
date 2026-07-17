@@ -27,6 +27,7 @@
 mod blob;
 mod index;
 mod query;
+mod refinements;
 mod signature;
 mod symbol;
 
@@ -39,6 +40,9 @@ pub use blob::{
 };
 pub use index::StubIndex;
 pub use query::{StubIndexInput, stubs_in_range};
+pub use refinements::{
+    RefinedAncestor, RefinedClass, RefinedSignature, RefinedTemplate, StubRefinements,
+};
 pub use signature::{
     StubClassSurface, StubMember, StubMemberKind, StubParameter, StubSignature, StubVisibility,
     VersionedTypeText,
