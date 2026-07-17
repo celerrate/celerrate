@@ -8,12 +8,22 @@
 //! `celerrate_plugin` (enforced by `cargo xtask dependency-shape`).
 
 mod array_functions;
+mod json_functions;
+mod string_functions;
 
 use celerrate_plugin::{DynamicTypeProvider, Invocation, SymbolClaim, TypeId, salsa};
 
 /// Sorted; `claims()` maps it verbatim. Grown by tasks 7–9 and
 /// curation, never speculatively.
-const CLAIMED_FUNCTIONS: &[&str] = &["array_filter", "array_map", "current", "end", "reset"];
+const CLAIMED_FUNCTIONS: &[&str] = &[
+    "array_filter",
+    "array_map",
+    "current",
+    "end",
+    "explode",
+    "json_decode",
+    "reset",
+];
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct StdlibProvider;
@@ -66,6 +76,8 @@ fn function_return<'db>(
         "array_filter" => array_functions::array_filter(db, arguments),
         "array_map" => array_functions::array_map(db, arguments),
         "current" | "end" | "reset" => array_functions::pointer_value(db, arguments),
+        "explode" => string_functions::explode(db, arguments),
+        "json_decode" => json_functions::json_decode(db, arguments),
         _ => None,
     }
 }
@@ -243,6 +255,24 @@ mod tests {
             "current" | "end" | "reset" => {
                 Some(vec![TypeId::array(db, TypeId::int(db), TypeId::string(db))])
             }
+            // A negative literal limit, so the dispatch reaches the
+            // `list<string>` branch rather than the trivially-`Some`
+            // default (no-limit) path.
+            "explode" => Some(vec![
+                TypeId::string(db),
+                TypeId::string(db),
+                TypeId::int_literal(db, -1),
+            ]),
+            // A `false` associative literal overridden by the
+            // `JSON_OBJECT_AS_ARRAY` flag bit, so the dispatch reaches
+            // the flag-wins-over-associative rule (decision 12)
+            // rather than the trivially-`Some` no-arguments default.
+            "json_decode" => Some(vec![
+                TypeId::string(db),
+                TypeId::bool_literal(db, false),
+                TypeId::int_literal(db, 512),
+                TypeId::int_literal(db, crate::json_functions::JSON_OBJECT_AS_ARRAY),
+            ]),
             _ => None,
         }
     }
