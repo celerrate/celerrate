@@ -1031,6 +1031,11 @@ fn resolve_stub_signature<'db>(
         Some(native_return),
     ) {
         (Some(chosen), trust) => (chosen, trust),
+        // Defensive: `refined_element` is called here with
+        // `native = Some(native_return)`, and its own `None`-text arm
+        // always returns `native` unchanged, so `(None, trust)` cannot
+        // occur through this call site. Kept for exhaustiveness, not
+        // because the branch is reachable.
         (None, trust) => (native_return, trust),
     };
     DeclaredSignature {
@@ -1507,9 +1512,9 @@ mod tests {
     };
     use celerrate_source::FileId;
     use celerrate_stubs::{
-        RefinedSignature, RefinedTemplate, StubAvailability, StubClassSurface, StubIndex,
-        StubIndexInput, StubMember, StubMemberKind, StubParameter, StubRefinements, StubSignature,
-        StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+        RefinedClass, RefinedSignature, RefinedTemplate, StubAvailability, StubClassSurface,
+        StubIndex, StubIndexInput, StubMember, StubMemberKind, StubParameter, StubRefinements,
+        StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
     use super::{
@@ -2981,26 +2986,42 @@ class User {}
     /// refinement. Self-contained (no source files needed): the stub
     /// path never consults `files` for a stub-only function.
     fn refined_stub_fixture(key: &str, base_return: &str, refinement: RefinedSignature) -> Fixture {
+        refined_stub_fixture_with_extra_parameters(key, base_return, refinement, vec![])
+    }
+
+    /// [`refined_stub_fixture`], plus caller-supplied parameters after
+    /// the refined `array` one. Lets a test carry an unrefined
+    /// parameter alongside the refined one, to pin that unrefined
+    /// elements genuinely keep the native fold rather than merely
+    /// having no test that would notice if they stopped doing so.
+    fn refined_stub_fixture_with_extra_parameters(
+        key: &str,
+        base_return: &str,
+        refinement: RefinedSignature,
+        extra_parameters: Vec<StubParameter>,
+    ) -> Fixture {
         let db = TestDatabase::default();
         let symbols = vec![StubSymbol {
             name: key.to_owned(),
             kind: StubSymbolKind::Function,
             availability: StubAvailability::ALWAYS,
         }];
+        let mut parameters = vec![StubParameter {
+            name: "array".to_owned(),
+            type_text: VersionedTypeText {
+                default: Some("array".to_owned()),
+                overrides: vec![],
+            },
+            optional: false,
+            by_reference: false,
+            variadic: false,
+            availability: StubAvailability::ALWAYS,
+        }];
+        parameters.extend(extra_parameters);
         let functions = vec![(
             key.to_owned(),
             StubSignature {
-                parameters: vec![StubParameter {
-                    name: "array".to_owned(),
-                    type_text: VersionedTypeText {
-                        default: Some("array".to_owned()),
-                        overrides: vec![],
-                    },
-                    optional: false,
-                    by_reference: false,
-                    variadic: false,
-                    availability: StubAvailability::ALWAYS,
-                }],
+                parameters,
                 return_type: VersionedTypeText {
                     default: Some(base_return.to_owned()),
                     overrides: vec![],
@@ -3076,7 +3097,25 @@ class User {}
 
     #[test]
     fn a_refined_parameter_replaces_the_fold_and_unrefined_elements_keep_it() {
-        let f = refined_stub_fixture("array_keys", "array", array_keys_refinement());
+        // A second, unrefined parameter alongside the refined `array`
+        // one: `array_keys_refinement()` only names `array`, so `limit`
+        // has no refined text and must fall through untouched. Without
+        // this second parameter the test's own name promised more than
+        // its body checked.
+        let limit_parameter = StubParameter {
+            name: "limit".to_owned(),
+            type_text: VersionedTypeText::from_text(Some("int".to_owned())),
+            optional: true,
+            by_reference: false,
+            variadic: false,
+            availability: StubAvailability::ALWAYS,
+        };
+        let f = refined_stub_fixture_with_extra_parameters(
+            "array_keys",
+            "array",
+            array_keys_refinement(),
+            vec![limit_parameter],
+        );
         let signature = declared_function_signature(
             &f.db,
             f.files,
@@ -3097,6 +3136,16 @@ class User {}
         // `TKey <: int|string` cannot be decided through the `mixed`
         // bound: the genuine CannotProve arm (decision 5).
         assert_eq!(parameter.trust, Trust::RefinedUnproven);
+
+        // The unrefined `limit` parameter keeps the native fold
+        // exactly, at `Trust::NativeOnly`: no refined text names it.
+        let limit = signature
+            .parameters
+            .iter()
+            .find(|parameter| parameter.name == "limit")
+            .unwrap();
+        assert_eq!(limit.parameter_type, Some(TypeId::int(&f.db)));
+        assert_eq!(limit.trust, Trust::NativeOnly);
     }
 
     #[test]
@@ -3122,6 +3171,165 @@ class User {}
         .unwrap();
         assert_eq!(signature.value_type, TypeId::string(&f.db));
         assert_eq!(signature.value_trust, Trust::RejectedAnnotation);
+    }
+
+    #[test]
+    fn an_unlowerable_refined_return_falls_back_to_the_native_fold_untouched() {
+        // Conservative silence (design section 7): a refined text that
+        // FAILS TO LOWER must fall back to the native fold exactly as
+        // if no refinement existed at all. This is a different branch
+        // from the pre-existing "no refinement" coverage (`text: None`,
+        // exercised implicitly by every non-refined stub test) and from
+        // `a_failing_refinement_is_rejected_and_the_native_fold_wins`
+        // (a text that lowers fine but loses the subtype check). The
+        // seed's own `every_embedded_refinement_text_lowers` proves
+        // every seed text lowers, so nothing in the seed can ever
+        // exercise this arm — it needs a text constructed specifically
+        // to fail lowering.
+        //
+        // `"(T is int ? A : B)"` is a conditional type, explicitly
+        // excluded from the v0 subset: `norm.rs`'s own totality test
+        // (`everything_outside_the_subset_answers_none_never_a_panic`)
+        // pins this exact text as unlowerable, so this fixture is not
+        // guessing at what fails.
+        let unlowerable_text = "(T is int ? A : B)";
+        assert!(
+            lower_norm_text(
+                &TestDatabase::default(),
+                &NormScope {
+                    key: "getcwd",
+                    templates: &[],
+                },
+                unlowerable_text,
+            )
+            .is_none(),
+            "the chosen text must genuinely fail to lower, or this test pins nothing",
+        );
+        let f = refined_stub_fixture(
+            "getcwd",
+            "string",
+            RefinedSignature {
+                templates: vec![],
+                parameters: vec![],
+                return_type: Some(unlowerable_text.to_owned()),
+            },
+        );
+        let signature = declared_function_signature(
+            &f.db,
+            f.files,
+            f.stubs,
+            f.configuration,
+            FunctionQuery::new(&f.db, "getcwd".to_owned()),
+        )
+        .unwrap();
+        assert_eq!(signature.value_type, TypeId::string(&f.db));
+        assert_eq!(signature.value_trust, Trust::NativeOnly);
+    }
+
+    /// A database around one synthetic stub class plus a class
+    /// refinement, wired the same way [`refined_stub_fixture`] wires a
+    /// function refinement. Self-contained: the stub member path never
+    /// consults `files` for a stub-only class.
+    fn refined_stub_class_fixture(
+        class_name: &str,
+        method_name: &str,
+        native_return: &str,
+        refinement: RefinedClass,
+    ) -> Fixture {
+        let db = TestDatabase::default();
+        let folded_class_key = folded_symbol_key(SymbolSpace::ClassLike, class_name);
+        let symbols = vec![StubSymbol {
+            name: class_name.to_owned(),
+            kind: StubSymbolKind::Class,
+            availability: StubAvailability::ALWAYS,
+        }];
+        let classes = vec![(
+            class_name.to_owned(),
+            StubClassSurface {
+                parents: vec![],
+                members: vec![StubMember {
+                    kind: StubMemberKind::Method,
+                    name: method_name.to_owned(),
+                    visibility: StubVisibility::Public,
+                    is_static: false,
+                    availability: StubAvailability::ALWAYS,
+                    signature: Some(StubSignature {
+                        parameters: vec![],
+                        return_type: VersionedTypeText::from_text(Some(native_return.to_owned())),
+                        by_reference: false,
+                    }),
+                    type_text: VersionedTypeText::default(),
+                    value_text: None,
+                }],
+            },
+        )];
+        let mut index = StubIndex::new(symbols, vec![], classes);
+        index.set_refinements(StubRefinements::new(
+            vec![],
+            vec![(folded_class_key, refinement)],
+        ));
+        let files = AnalyzedFileSet::new(&db, vec![]);
+        let stubs = StubIndexInput::builder(index)
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        Fixture {
+            db,
+            files,
+            stubs,
+            configuration,
+        }
+    }
+
+    #[test]
+    fn a_refined_stub_method_resolves_through_the_merged_class_and_method_scope() {
+        // The seed's motivating case for decision 5's merged scope
+        // (`class ArrayIterator<TKey, TValue> { method current():
+        // TValue }`): the method text `TValue` names a CLASS-scoped
+        // template, so it can only lower if the member arm merges the
+        // class refinement's templates with the method's own under one
+        // scope keyed by the owner class. Every other test touching
+        // class refinements builds its own scope in test code and
+        // never calls `declared_member_signature`; this one goes
+        // through the production wiring end to end (the `class_key` ->
+        // `class_refinement` fetch, the method-kind guard, the
+        // class+method template merge, and the scope-key choice all
+        // fire for real).
+        let refinement = RefinedClass {
+            templates: vec![
+                RefinedTemplate {
+                    name: "TKey".to_owned(),
+                    bound: None,
+                },
+                RefinedTemplate {
+                    name: "TValue".to_owned(),
+                    bound: None,
+                },
+            ],
+            ancestors: vec![],
+            methods: vec![(
+                "current".to_owned(),
+                RefinedSignature {
+                    templates: vec![],
+                    parameters: vec![],
+                    return_type: Some("TValue".to_owned()),
+                },
+            )],
+        };
+        let fixture = refined_stub_class_fixture("ArrayIterator", "current", "mixed", refinement);
+        let signature = member(&fixture, "ArrayIterator", MemberKind::Method, "current").unwrap();
+        let db = &fixture.db;
+        assert_eq!(
+            signature.value_type,
+            TypeId::template(db, "arrayiterator", "TValue", TypeId::mixed(db)),
+            "TValue must resolve as the class's own template, not answer the native fold",
+        );
+        assert_eq!(signature.value_trust, Trust::Refined);
     }
 
     /// Asserts every parameter text and the return text of one
@@ -3190,6 +3398,17 @@ class User {}
                 }
             }
             for (name, signature) in &class.methods {
+                // Scope key note: this lowers method texts under
+                // `"{key}::{name}"` (e.g. `"arrayiterator::current"`),
+                // while production (`declared_member_signature`) scopes
+                // a refined stub method under the owner class key alone
+                // (e.g. `"arrayiterator"`), per decision 5's merge. That
+                // mismatch is harmless HERE because only `.is_some()` is
+                // asserted and lowering success does not depend on the
+                // scope key's spelling — but it means this test cannot
+                // pin the scope-key choice itself.
+                // `a_refined_stub_method_resolves_through_the_merged_class_and_method_scope`
+                // is the test that pins it, end to end.
                 assert_signature_lowers(
                     &db,
                     &format!("{key}::{name}"),
