@@ -2577,7 +2577,7 @@ impl<'db> Walker<'db, '_, '_> {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
                         }
                         let contributions =
-                            self.provider_by_reference(claim.clone(), None, &argument_types);
+                            self.provider_by_reference(claim, None, &argument_types);
                         self.apply_provider_by_reference(&contributions, &arguments, environment);
                         // A named function has no receiver: the
                         // declared parameter list comes straight from

@@ -3,7 +3,10 @@
 //! delimiters, escapes, character classes, non-capturing markers,
 //! the three named-group spellings — not a regex parser:
 //! alternation-aware optionality is a recorded debt, and a
-//! conditional group (`(?(1)a|b)`) counts one spurious group.
+//! conditional group (`(?(1)a|b)`) counts one spurious group, as
+//! does a leading `]` inside a character class (`[]()]`), which is
+//! literal in PCRE but ends the class early for the scanner and
+//! lets the following `(` count as a group.
 
 use celerrate_plugin::{ShapeField, ShapeKey, TypeId, salsa};
 
@@ -291,6 +294,7 @@ mod tests {
                 .iter()
                 .all(|field| field.value == TypeId::string(&db)),
         );
+        assert_eq!(fields.len(), 4);
         let keys: Vec<ShapeKey> = fields.iter().map(|field| field.key.clone()).collect();
         assert!(keys.contains(&ShapeKey::Integer(0)));
         assert!(keys.contains(&ShapeKey::Integer(1)));
