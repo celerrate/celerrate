@@ -220,4 +220,27 @@ function f(?Box $b, array $bag): void {
             }],
         );
     }
+
+    #[test]
+    fn index_subjects_thread_through_the_guard_chain() {
+        // The `??` LHS `$h->bag[0]->leaf` expands: the outer
+        // `MemberAccess` (`...->leaf`) receiver is the `Index`
+        // expression `$h->bag[0]`; that `Index`'s subject is the
+        // `MemberAccess` `$h->bag`, whose OWN receiver `$h` is
+        // `Holder|null`. Only the `Index { subject, .. }` expansion arm
+        // reaches `$h->bag` and marks it guarded — without it, `$h->bag`
+        // would be a real, un-exempted `MemberAccess` on a nullable
+        // receiver and would report. `leaf`'s own receiver (an untyped
+        // array's element) is `mixed`, so it never reports regardless of
+        // guard status: this test is about `bag`, not `leaf`.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Holder { public array $bag = []; }
+function g(?Holder $h): void {
+    $x = $h->bag[0]->leaf ?? null;
+}
+"#,
+        );
+        assert_eq!(verdicts, vec![]);
+    }
 }
