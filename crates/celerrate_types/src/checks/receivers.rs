@@ -309,7 +309,14 @@ pub(crate) fn written_type_display<'db>(
     of.display_with_names(context.db, &resolve)
 }
 
-/// The declaring group's kind, for enum detection (`CEL0033`).
+/// The declaring group's kind, source declarations only — `None` for a
+/// class-like with no source declaration (a stub-only class or enum).
+/// `CEL0033`'s enum-kind classification does not call this directly: a
+/// stub-only enum (a PHP built-in, never written in source) would
+/// otherwise answer `None` and be mislabeled a class constant, so that
+/// call site goes through `is_enum_key` instead, which also consults the
+/// stub symbol table. `class_kind` stays as is for callers that only
+/// need the source group's kind.
 pub(crate) fn class_kind(context: &CheckContext<'_, '_>, key: &str) -> Option<DeclarationKind> {
     class_declaration_kind(context.db, context.files, key)
 }
@@ -332,14 +339,10 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use celerrate_semantics::MemberKind;
-    use celerrate_stubs::{
-        StubAvailability, StubClassSurface, StubIndex, StubMember, StubMemberKind, StubSignature,
-        StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
-    };
 
     use super::{MemberExistence, member_existence, written_type_display};
     use crate::TypeId;
-    use crate::checks::test_support::{Fixture, context_for, fixture, fixture_with_stubs};
+    use crate::checks::test_support::{context_for, fixture, fixture_with_stub_enum_interfaces};
 
     const SURFACE_SOURCES: &str = r#"<?php
 class Plain { public function known(): int { return 1; } }
@@ -351,61 +354,6 @@ class Opaque extends GhostBase {}
 enum Status { case Active; }
 function scene(Plain $p, Magic $m, Getter $g, Bag $b, Opaque $o, Status $s): void {}
 "#;
-
-    /// A synthetic stub index carrying `UnitEnum` (with `cases`) and
-    /// `BackedEnum` (with `from`, `tryFrom`) — the compiled surface
-    /// decision 7's implicit enum edges (`linearize.rs`) rely on being
-    /// present. Built on the member-lookup synthetic-stub idiom
-    /// (`fixture_with_stub_classes` in `member_lookup.rs`).
-    fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
-        fn interface_symbol(name: &str) -> StubSymbol {
-            StubSymbol {
-                name: name.to_owned(),
-                kind: StubSymbolKind::Interface,
-                availability: StubAvailability::ALWAYS,
-            }
-        }
-        fn static_method(name: &str, return_type: &str) -> StubMember {
-            StubMember {
-                kind: StubMemberKind::Method,
-                name: name.to_owned(),
-                visibility: StubVisibility::Public,
-                is_static: true,
-                availability: StubAvailability::ALWAYS,
-                signature: Some(StubSignature {
-                    parameters: vec![],
-                    return_type: VersionedTypeText::from_text(Some(return_type.to_owned())),
-                    by_reference: false,
-                }),
-                type_text: VersionedTypeText::default(),
-                value_text: None,
-            }
-        }
-        let index = StubIndex::new(
-            vec![interface_symbol("UnitEnum"), interface_symbol("BackedEnum")],
-            vec![],
-            vec![
-                (
-                    "UnitEnum".to_owned(),
-                    StubClassSurface {
-                        parents: vec![],
-                        members: vec![static_method("cases", "static[]")],
-                    },
-                ),
-                (
-                    "BackedEnum".to_owned(),
-                    StubClassSurface {
-                        parents: vec!["UnitEnum".to_owned()],
-                        members: vec![
-                            static_method("from", "static"),
-                            static_method("tryFrom", "?static"),
-                        ],
-                    },
-                ),
-            ],
-        );
-        fixture_with_stubs(sources, index)
-    }
 
     #[test]
     fn the_ternary_existence_judgment() {

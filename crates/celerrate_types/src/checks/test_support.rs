@@ -12,7 +12,10 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{AstId, BodyQuery, UseTables, body_ir, item_tree};
 use celerrate_source::FileId;
-use celerrate_stubs::{StubIndex, StubIndexInput};
+use celerrate_stubs::{
+    StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
+    StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+};
 
 use super::CheckContext;
 use crate::inference::{BodyOwner, InferenceContext, body_owner, inferred_body_types};
@@ -68,6 +71,120 @@ pub(crate) fn fixture_with_stubs(sources: &[&str], stub_index: StubIndex) -> Fix
 
 pub(crate) fn handle_of(fixture: &Fixture, index: usize) -> SourceFile {
     fixture.handles[index]
+}
+
+/// A fixture whose stub payload carries a single named class with no
+/// parents or members (`StubIndex::from_symbols`) — just enough to
+/// exercise `class_surface`'s `Stub` branch for that one class, and (for
+/// `stdClass` specifically) the dynamic-property stub-ancestor rule.
+/// Built on the `fixture_with_stub_classes`/`fixture_with_stub_class`
+/// idiom already established in `celerrate_semantics::member_lookup`'s
+/// test module.
+pub(crate) fn fixture_with_stub_class(sources: &[&str], name: &str) -> Fixture {
+    fixture_with_stubs(
+        sources,
+        StubIndex::from_symbols(vec![StubSymbol {
+            name: name.to_owned(),
+            kind: StubSymbolKind::Class,
+            availability: StubAvailability::ALWAYS,
+        }]),
+    )
+}
+
+/// A fixture whose stub payload declares one enum entirely in the
+/// compiled surface — a `StubSymbolKind::Enum` symbol with the given
+/// case names as `StubMemberKind::EnumCase` members — and carries no
+/// matching source declaration at all (mirroring a PHP built-in enum).
+/// For pinning the stub-only-enum classification `is_enum_key` alone
+/// gets right: `class_kind` answers `None` for a class-like with no
+/// source declaration, so the constant-or-case dual lookup must not
+/// consult it directly.
+pub(crate) fn fixture_with_stub_enum(sources: &[&str], name: &str, cases: &[&str]) -> Fixture {
+    let members = cases
+        .iter()
+        .map(|case| StubMember {
+            kind: StubMemberKind::EnumCase,
+            name: (*case).to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: false,
+            availability: StubAvailability::ALWAYS,
+            signature: None,
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        })
+        .collect();
+    let index = StubIndex::new(
+        vec![StubSymbol {
+            name: name.to_owned(),
+            kind: StubSymbolKind::Enum,
+            availability: StubAvailability::ALWAYS,
+        }],
+        vec![],
+        vec![(
+            name.to_owned(),
+            StubClassSurface {
+                parents: vec![],
+                members,
+            },
+        )],
+    );
+    fixture_with_stubs(sources, index)
+}
+
+/// A synthetic stub index carrying `UnitEnum` (with `cases`) and
+/// `BackedEnum` (with `from`, `tryFrom`) — the compiled surface decision
+/// 7's implicit enum edges (`linearize.rs`) rely on being present. Shared
+/// by `receivers.rs`'s and `members.rs`'s synthetic-stub tests, built on
+/// the member-lookup synthetic-stub idiom (`fixture_with_stub_classes`
+/// in `member_lookup.rs`).
+pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
+    fn interface_symbol(name: &str) -> StubSymbol {
+        StubSymbol {
+            name: name.to_owned(),
+            kind: StubSymbolKind::Interface,
+            availability: StubAvailability::ALWAYS,
+        }
+    }
+    fn static_method(name: &str, return_type: &str) -> StubMember {
+        StubMember {
+            kind: StubMemberKind::Method,
+            name: name.to_owned(),
+            visibility: StubVisibility::Public,
+            is_static: true,
+            availability: StubAvailability::ALWAYS,
+            signature: Some(StubSignature {
+                parameters: vec![],
+                return_type: VersionedTypeText::from_text(Some(return_type.to_owned())),
+                by_reference: false,
+            }),
+            type_text: VersionedTypeText::default(),
+            value_text: None,
+        }
+    }
+    let index = StubIndex::new(
+        vec![interface_symbol("UnitEnum"), interface_symbol("BackedEnum")],
+        vec![],
+        vec![
+            (
+                "UnitEnum".to_owned(),
+                StubClassSurface {
+                    parents: vec![],
+                    members: vec![static_method("cases", "static[]")],
+                },
+            ),
+            (
+                "BackedEnum".to_owned(),
+                StubClassSurface {
+                    parents: vec!["UnitEnum".to_owned()],
+                    members: vec![
+                        static_method("from", "static"),
+                        static_method("tryFrom", "?static"),
+                    ],
+                },
+            ),
+        ],
+    );
+    fixture_with_stubs(sources, index)
 }
 
 /// A `CheckContext` for the declaration numbered `body_index` in file
