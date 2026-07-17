@@ -429,8 +429,14 @@ fn last_segment(written: &str) -> &str {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
-    use super::super::test_support::family_verdicts;
-    use super::super::{ArgumentLabel, TypedVerdictKind};
+    use celerrate_project::PhpVersion;
+    use celerrate_stubs::{
+        StubAvailability, StubIndex, StubParameter, StubSignature, StubSymbol, StubSymbolKind,
+        VersionedTypeText,
+    };
+
+    use super::super::test_support::{family_verdicts, fixture_with_stubs, handle_of};
+    use super::super::{ArgumentLabel, TypedVerdictKind, typed_file_verdicts};
 
     const STRICT: &str = "<?php declare(strict_types=1);\n";
 
@@ -493,6 +499,16 @@ function f(Plain $object): void {
 
     #[test]
     fn the_exemptions_are_structural() {
+        // `fills('x', 1)`'s first argument is a string literal against
+        // `array &$out`: definitely non-`mixed` and definitely not
+        // assignable to `array`, so this is load-bearing on the
+        // by-reference `continue` alone, not on the `mixed` guard
+        // (a never-assigned local would infer `mixed` and pass through
+        // that guard regardless of the by-reference exemption, proving
+        // nothing). Verified: temporarily deleting the `by_reference`
+        // `continue` in `check_argument_types` turns this into a
+        // reported `ArgumentType { expected: "array", given: "'x'" }`
+        // and this test fails; restoring it goes green again.
         let verdicts = family_verdicts(&format!(
             "{STRICT}{}",
             r#"
@@ -500,11 +516,134 @@ function fills(array &$out, int $n): void {}
 class A { public function m(int $n): void {} }
 class B { public function m(int $n): void {} }
 function f(A|B $either): void {
-    fills($undefined, 1);   // by-reference parameter: exempt
-    $either->m('x');        // union receiver: silent (recorded stance)
+    fills('x', 1);           // by-reference parameter: exempt
+    $either->m('x');         // union receiver: silent (recorded stance)
 }
 "#
         ));
+        assert_eq!(verdicts, vec![]);
+    }
+
+    #[test]
+    fn a_constructor_less_class_is_silent_but_a_declared_constructor_still_reports() {
+        // Decision 12: a class with no `__construct` at all makes the
+        // whole `new` call silent (`resolved_constructor_signature`
+        // answers `None`), rather than checking against an assumed
+        // empty parameter list. `Typed`'s own mismatched constructor
+        // call in the same fixture proves the silence is specifically
+        // about "no constructor", not "this test file checks nothing".
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+class Plain {}
+class Typed { public function __construct(int $n) {} }
+function f(): void {
+    new Plain(1);      // no constructor at all: silent
+    new Typed('x');    // reports: string against int
+}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::ArgumentType {
+                label: ArgumentLabel::Positional(1),
+                callee: "Typed".to_owned(),
+                expected: "int".to_owned(),
+                given: "'x'".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn a_spread_argument_halts_positional_matching() {
+        // A wrong-typed argument before the first spread still reports
+        // (positional matching up to that point is not in question);
+        // the spread itself, and every argument after it, are not
+        // checked at all — even one that is just as clearly wrong —
+        // because a spread makes later positional matching
+        // undecidable without evaluating it.
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function takes(int $a, int $b, int $c): void {}
+function f(array $rest): void {
+    takes('wrong', ...$rest, 'also-wrong');
+}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::ArgumentType {
+                label: ArgumentLabel::Positional(1),
+                callee: "takes".to_owned(),
+                expected: "int".to_owned(),
+                given: "'wrong'".to_owned(),
+            }],
+        );
+    }
+
+    /// A one-parameter stub signature whose forms across the
+    /// configured range have no most-restrictive member: `int` at 8.1,
+    /// `string` from 8.2 — the design's empty-intersection guard
+    /// (plan 3) silences the parameter entirely
+    /// (`DeclaredParameter::parameter_type` is `None`), mirroring
+    /// `declared.rs`'s own `disjoint_signature` fixture.
+    fn disjoint_stub_signature() -> StubSignature {
+        StubSignature {
+            parameters: vec![StubParameter {
+                name: "value".to_owned(),
+                type_text: VersionedTypeText {
+                    default: Some("int".to_owned()),
+                    overrides: vec![(PhpVersion::new(8, 2), "string".to_owned())],
+                },
+                optional: false,
+                by_reference: false,
+                variadic: false,
+                availability: StubAvailability::ALWAYS,
+            }],
+            return_type: VersionedTypeText::from_text(Some("void".to_owned())),
+            by_reference: false,
+        }
+    }
+
+    #[test]
+    fn a_disjoint_stub_parameter_is_silently_unchecked() {
+        // The empty-intersection stub guard (plan 3, consumed here for
+        // the first time by `check_argument_types`'s `let Some(parameter_type)
+        // = parameter.parameter_type else { continue; }`): a parameter
+        // with no single most-restrictive type across the configured
+        // PHP range silences the check outright, whatever the argument
+        // is — an array literal here, which would fail assignability
+        // against either per-version form (`int` or `string`) were the
+        // guard not silencing the parameter first.
+        let index = StubIndex::new(
+            vec![StubSymbol {
+                name: "disjoint".to_owned(),
+                kind: StubSymbolKind::Function,
+                availability: StubAvailability::ALWAYS,
+            }],
+            vec![("disjoint".to_owned(), disjoint_stub_signature())],
+            vec![],
+        );
+        let fixture = fixture_with_stubs(
+            &[r#"<?php
+function f(): void {
+    disjoint([]);
+}
+"#],
+            index,
+        );
+        let verdicts: Vec<TypedVerdictKind> = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        )
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.kind.clone())
+        .collect();
         assert_eq!(verdicts, vec![]);
     }
 
