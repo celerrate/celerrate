@@ -255,7 +255,7 @@ pub(crate) fn member_existence<'db>(
     member_name: &str,
     scoped: bool,
 ) -> MemberExistence {
-    let mut decidable = 0usize;
+    let mut considered = 0usize;
     let mut all_missing = true;
     for atom in atoms_of(context, receiver) {
         let verdict = match &atom {
@@ -269,10 +269,10 @@ pub(crate) fn member_existence<'db>(
         if verdict == MemberExistence::Exists {
             return MemberExistence::Exists;
         }
-        decidable += 1;
+        considered += 1;
         all_missing &= verdict == MemberExistence::Missing;
     }
-    if decidable > 0 && all_missing {
+    if considered > 0 && all_missing {
         MemberExistence::Missing
     } else {
         MemberExistence::PossiblyExists

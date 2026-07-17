@@ -935,6 +935,44 @@ function f(): void {
     }
 
     #[test]
+    fn a_single_call_can_land_both_a_type_mismatch_and_too_few_arguments() {
+        // The type loop and the arity walk are two independent passes
+        // over the same call (`check`'s `check_argument_types` then
+        // `check_arity`); nothing stops both from firing on the very
+        // same call expression. `two($p)` binds `$p` (a `Plain` object)
+        // to `$a`, which is both a type mismatch (`Plain` against `int`
+        // in strict mode: CEL0035) and, since `$b` is never bound at
+        // all, too few arguments (CEL0036) — a genuine cross-family
+        // co-occurrence on one call, not two separate calls.
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function two(int $a, int $b): void {}
+class Plain {}
+function f(Plain $p): void {
+    two($p);
+}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::ArgumentType {
+                    label: ArgumentLabel::Positional(1),
+                    callee: "two".to_owned(),
+                    expected: "int".to_owned(),
+                    given: "Plain".to_owned(),
+                },
+                TypedVerdictKind::TooFewArguments {
+                    callee: "two".to_owned(),
+                    given: 1,
+                    required: 2,
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn a_variadic_signature_accepts_any_named_argument() {
         // PHP 8.0 collects unknown named arguments into a trailing
         // variadic (decision 12); reporting CEL0038 here would flag
