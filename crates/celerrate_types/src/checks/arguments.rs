@@ -24,8 +24,8 @@ use celerrate_db::SourceFile;
 use celerrate_semantics::{
     BodyExpression, BodyQuery, CallArgument, ClassReference, ExpressionId, MemberKind, MemberQuery,
     MemberReference, MemberResolution, SymbolQuery, SymbolSpace, analyzed_file_index,
-    anonymous_class_key, file_strict_types, folded_member_key, lookup_function_declaration,
-    lookup_member,
+    anonymous_class_key, body_ir, file_strict_types, folded_member_key,
+    lookup_function_declaration, lookup_member,
 };
 
 use crate::TypeId;
@@ -43,11 +43,9 @@ use super::{ArgumentLabel, CheckContext, TypedVerdict, TypedVerdictKind};
 /// Exactly one declared signature for a call's callee, or `None`
 /// (decision 11), plus enough to reach into that callee's own body when
 /// it is source code. `pub(crate)`: task 9 reuses both. `source_body`
-/// is constructed and unread until task 9's `func_get_args` probe
-/// consumes it, hence the field-local `dead_code` allow (the same
-/// not-yet-read precedent `checks/mod.rs`'s `CheckContext` already
-/// carries for its own future-task fields).
-#[allow(dead_code)]
+/// feeds `captures_arguments`'s `func_get_args` probe, which silences
+/// the excess-arguments check (CEL0037) for a source callee that reads
+/// its arguments dynamically.
 pub(crate) struct ResolvedCall<'db> {
     pub callee_display: String,
     pub signature: DeclaredSignature<'db>,
@@ -74,7 +72,125 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
             continue;
         };
         check_argument_types(context, verdicts, &resolved, arguments, mode);
+        check_arity(context, verdicts, id, &resolved, arguments);
     }
+}
+
+/// The arity family (design section 8, decision 12): a required
+/// parameter bound neither positionally nor by name (CEL0036), a
+/// positional argument past a non-variadic parameter list (CEL0037),
+/// and a named argument matching no declared parameter (CEL0038). Any
+/// spread argument silences all three (missing and excess become
+/// undecidable); a trailing variadic parameter silences the
+/// unknown-name and excess checks (PHP 8.0 collects unknown names and
+/// excess positionals into it); a source callee that calls
+/// `func_get_args` silences excess alone (a variadic-by-capture
+/// function called with extra arguments is working code). Duplicate
+/// binding (`pair(1, a: 2)`) stays silent — a PHP `Error` this preview
+/// does not own (task 13's ledger).
+fn check_arity(
+    context: &CheckContext<'_, '_>,
+    verdicts: &mut Vec<TypedVerdict>,
+    call: ExpressionId,
+    resolved: &ResolvedCall<'_>,
+    arguments: &[CallArgument],
+) {
+    if arguments.iter().any(|argument| argument.spread) {
+        return; // undecidable in both directions (decision 12)
+    }
+    let parameters = &resolved.signature.parameters;
+    let positional = arguments.iter().filter(|a| a.label.is_none()).count();
+    let named: Vec<&String> = arguments.iter().filter_map(|a| a.label.as_ref()).collect();
+    let variadic = parameters
+        .last()
+        .is_some_and(|parameter| parameter.variadic);
+    // Unknown names first: each is its own verdict. A trailing
+    // variadic accepts any named argument (PHP 8.0 collects unknown
+    // names into it; decision 12), so the whole loop is silenced.
+    if !variadic {
+        for name in &named {
+            if !parameters.iter().any(|parameter| parameter.name == **name) {
+                verdicts.push(TypedVerdict {
+                    body: context.body,
+                    expression: call,
+                    kind: TypedVerdictKind::UnknownNamedArgument {
+                        callee: resolved.callee_display.clone(),
+                        name: (*name).clone(),
+                    },
+                });
+            }
+        }
+    }
+    // Excess: positional arguments past a non-variadic list.
+    if !variadic && positional > parameters.len() && !captures(context, resolved) {
+        verdicts.push(TypedVerdict {
+            body: context.body,
+            expression: call,
+            kind: TypedVerdictKind::TooManyArguments {
+                callee: resolved.callee_display.clone(),
+                given: positional,
+                accepted: parameters.len(),
+            },
+        });
+    }
+    // Missing: a required parameter bound neither by position nor name.
+    let required = parameters
+        .iter()
+        .filter(|parameter| !parameter.optional && !parameter.variadic)
+        .count();
+    let unbound = parameters
+        .iter()
+        .enumerate()
+        .filter(|(index, parameter)| {
+            !parameter.optional
+                && !parameter.variadic
+                && *index >= positional
+                && !named.iter().any(|name| **name == parameter.name)
+        })
+        .count();
+    if unbound > 0 {
+        verdicts.push(TypedVerdict {
+            body: context.body,
+            expression: call,
+            kind: TypedVerdictKind::TooFewArguments {
+                callee: resolved.callee_display.clone(),
+                given: arguments.len(),
+                required,
+            },
+        });
+    }
+}
+
+/// Whether the source callee captures its arguments with
+/// `func_get_args` — a variadic-by-capture function called with extra
+/// arguments is working code (the guillotine forbids reporting it).
+fn captures(context: &CheckContext<'_, '_>, resolved: &ResolvedCall<'_>) -> bool {
+    resolved
+        .source_body
+        .is_some_and(|(file, body)| captures_arguments(context.db, file, body))
+}
+
+/// Tracked per body: any call whose callee text folds to
+/// `func_get_args` (bare or fully qualified).
+#[salsa::tracked]
+pub(crate) fn captures_arguments<'db>(
+    db: &'db dyn salsa::Database,
+    file: SourceFile,
+    body: BodyQuery<'db>,
+) -> bool {
+    let Some(ir) = body_ir(db, file, body).as_ref() else {
+        return false;
+    };
+    ir.expressions.iter().any(|expression| {
+        let BodyExpression::Call { callee, .. } = expression else {
+            return false;
+        };
+        let Some(BodyExpression::NamedReference { text }) = ir.expression(*callee) else {
+            return false;
+        };
+        text.trim_start_matches('\\')
+            .eq_ignore_ascii_case("func_get_args")
+    })
 }
 
 fn check_argument_types<'db>(
@@ -432,7 +548,7 @@ mod tests {
     use celerrate_project::PhpVersion;
     use celerrate_stubs::{
         StubAvailability, StubIndex, StubParameter, StubSignature, StubSymbol, StubSymbolKind,
-        VersionedTypeText,
+        VersionedTypeText, embedded_stub_index,
     };
 
     use super::super::test_support::{family_verdicts, fixture_with_stubs, handle_of};
@@ -451,7 +567,7 @@ function f(mixed $anything, int|string $either): void {
     takes('wrong');        // reports: string against int
     takes($anything);      // mixed: guarded before the judgment, silent
     takes($either);        // int|string: one constituent fits, silent
-    takes(s: 42);          // named argument, reports: int against string
+    takes(1, s: 42);       // named argument, reports: int against string
 }
 "#
         ));
@@ -696,5 +812,104 @@ function variadic(string ...$parts): void {}
                 },
             ],
         );
+    }
+
+    #[test]
+    fn arity_reports_missing_excess_and_unknown_names() {
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function takes(int $a, string $b = '', int ...$rest): void {}
+function pair(int $a, int $b): void {}
+function f(): void {
+    takes(1);                  // optional + variadic satisfied: silent
+    takes(1, 'x', 2, 3);       // variadic absorbs: silent
+    pair(1, 2, 3);             // reports CEL0037
+    pair(1);                   // reports CEL0036
+    pair(b: 2, a: 1);          // named fill: silent
+    pair(1, c: 2);             // reports CEL0038 (and CEL0036 for $b)
+}
+"#
+        ));
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::TooManyArguments {
+                    callee: "pair".to_owned(),
+                    given: 3,
+                    accepted: 2,
+                },
+                TypedVerdictKind::TooFewArguments {
+                    callee: "pair".to_owned(),
+                    given: 1,
+                    required: 2,
+                },
+                TypedVerdictKind::UnknownNamedArgument {
+                    callee: "pair".to_owned(),
+                    name: "c".to_owned(),
+                },
+                TypedVerdictKind::TooFewArguments {
+                    callee: "pair".to_owned(),
+                    given: 2,
+                    required: 2,
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn a_variadic_signature_accepts_any_named_argument() {
+        // PHP 8.0 collects unknown named arguments into a trailing
+        // variadic (decision 12); reporting CEL0038 here would flag
+        // working code.
+        let verdicts = family_verdicts(&format!(
+            "{STRICT}{}",
+            r#"
+function sink(int $first, int ...$rest): void {}
+function f(): void {
+    sink(1, extra: 2, more: 3);
+}
+"#
+        ));
+        assert_eq!(verdicts, vec![]);
+    }
+
+    #[test]
+    fn spread_and_argument_capture_silence_arity() {
+        // The `\DateTime` line needs the real embedded stub surface
+        // (a synthetic single-class fixture has no constructor to
+        // resolve against), so this test builds its own fixture
+        // rather than going through `family_verdicts`'s minimal stub
+        // index — the same `fixture_with_stubs` plus
+        // `celerrate_stubs::embedded_stub_index` idiom
+        // `a_disjoint_stub_parameter_is_silently_unchecked` above and
+        // `inference.rs`'s `fixture_with_embedded_stubs` already use.
+        let fixture = fixture_with_stubs(
+            &[&format!(
+                "{STRICT}{}",
+                r#"
+function pair(int $a, int $b): void {}
+function capturing(): void { $all = func_get_args(); }
+function f(array $bag): void {
+    pair(...$bag);             // spread: all three arity checks silent
+    capturing(1, 2, 3);        // captures arguments: excess silent
+    new \DateTime('now');      // stub constructors resolve normally
+}
+"#
+            )],
+            embedded_stub_index().unwrap(),
+        );
+        let verdicts: Vec<TypedVerdictKind> = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        )
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.kind.clone())
+        .collect();
+        assert_eq!(verdicts, vec![]);
     }
 }

@@ -17,7 +17,7 @@ use celerrate_semantics::{
 use celerrate_source::FileId;
 use celerrate_stubs::{
     StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubMember, StubMemberKind,
-    StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
+    StubParameter, StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
 };
 
 use super::{CheckContext, TypedVerdictKind, typed_file_verdicts};
@@ -148,7 +148,7 @@ pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
             availability: StubAvailability::ALWAYS,
         }
     }
-    fn static_method(name: &str, return_type: &str) -> StubMember {
+    fn static_method(name: &str, return_type: &str, parameters: Vec<StubParameter>) -> StubMember {
         StubMember {
             kind: StubMemberKind::Method,
             name: name.to_owned(),
@@ -156,12 +156,27 @@ pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
             is_static: true,
             availability: StubAvailability::ALWAYS,
             signature: Some(StubSignature {
-                parameters: vec![],
+                parameters,
                 return_type: VersionedTypeText::from_text(Some(return_type.to_owned())),
                 by_reference: false,
             }),
             type_text: VersionedTypeText::default(),
             value_text: None,
+        }
+    }
+    // `from`/`tryFrom` carry a single `$value` parameter, matching the
+    // real `BackedEnum` surface (`from(int|string $value): static`) —
+    // task 9's arity check now runs over every resolved call, so a
+    // zero-parameter synthetic signature here would misreport a
+    // genuine one-argument call as excess.
+    fn value_parameter() -> StubParameter {
+        StubParameter {
+            name: "value".to_owned(),
+            type_text: VersionedTypeText::from_text(Some("int|string".to_owned())),
+            optional: false,
+            by_reference: false,
+            variadic: false,
+            availability: StubAvailability::ALWAYS,
         }
     }
     let index = StubIndex::new(
@@ -172,7 +187,7 @@ pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
                 "UnitEnum".to_owned(),
                 StubClassSurface {
                     parents: vec![],
-                    members: vec![static_method("cases", "static[]")],
+                    members: vec![static_method("cases", "static[]", vec![])],
                 },
             ),
             (
@@ -180,8 +195,8 @@ pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
                 StubClassSurface {
                     parents: vec!["UnitEnum".to_owned()],
                     members: vec![
-                        static_method("from", "static"),
-                        static_method("tryFrom", "?static"),
+                        static_method("from", "static", vec![value_parameter()]),
+                        static_method("tryFrom", "?static", vec![value_parameter()]),
                     ],
                 },
             ),
