@@ -18,7 +18,9 @@
 //! **declared tier only** — providers compute returns, never parameter
 //! contracts. `ResolvedCall`/`resolved_call_signature` is the interface
 //! task 9's arity and named-argument checks reuse, `source_body` in
-//! particular for its `func_get_args` probe.
+//! particular for its `func_get_args` probe. Debt ledger: a union
+//! receiver is silent for the whole argument family (no signature
+//! resolves), owner: a "possibly wrong argument" refinement, future.
 
 use celerrate_db::SourceFile;
 use celerrate_semantics::{
@@ -86,9 +88,9 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
 /// unknown-name and excess checks (PHP 8.0 collects unknown names and
 /// excess positionals into it); a source callee that calls
 /// `func_get_args` silences excess alone (a variadic-by-capture
-/// function called with extra arguments is working code). Duplicate
-/// binding (`pair(1, a: 2)`) stays silent — a PHP `Error` this preview
-/// does not own (task 13's ledger).
+/// function called with extra arguments is working code). Debt ledger:
+/// duplicate binding (`pair(1, a: 2)`, positional plus named for one
+/// parameter) stays silent — a PHP `Error` this family does not own.
 fn check_arity(
     context: &CheckContext<'_, '_>,
     verdicts: &mut Vec<TypedVerdict>,
@@ -97,7 +99,13 @@ fn check_arity(
     arguments: &[CallArgument],
 ) {
     if arguments.iter().any(|argument| argument.spread) {
-        return; // undecidable in both directions (decision 12)
+        // Undecidable in both directions (decision 12): silences every
+        // spread, not only a spread of a non-shape value (design
+        // section 8 qualifies only that narrower case). Debt ledger:
+        // arity-through-known-array-shapes (a spread of a literal
+        // `array{}` shape whose keys are statically known) is future
+        // work.
+        return;
     }
     let parameters = &resolved.signature.parameters;
     let positional = arguments.iter().filter(|a| a.label.is_none()).count();
@@ -257,6 +265,10 @@ fn check_argument_types<'db>(
         // signature) never counts as failing — a genuine
         // `Fails`/`CannotProve` there is a phpdoc-only divergence PHP
         // does not enforce, so it is silence, not a diagnostic.
+        // Debt ledger: a union source that partially fits its
+        // parameter (some constituents fail, some hold) is silent
+        // here too — owner: a "possibly invalid argument" refinement,
+        // future.
         if argument_type.is_mixed(context.db) {
             continue;
         }

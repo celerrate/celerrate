@@ -29,11 +29,12 @@ use crate::representation::TypeId;
 /// The interprocedural edge classes one body's inference took, as
 /// pure data: the design's residual instrument ("how many results
 /// depend on *inferred* returns"). Counters never live inside queries
-/// (the workspace rule); this struct is the query-side data plan 8/9a
-/// aggregate into the `CELERRATE_CACHE_STATS` rendering once the
-/// orchestration layer first demands inference (decision 13) — until
-/// then the field exists and is tested (task 12), but nothing renders
-/// it.
+/// (the workspace rule); this struct is the query-side data the
+/// orchestration layer aggregates into the `CELERRATE_CACHE_STATS`
+/// rendering (`celerrate_cli::analysis` demands `typed_file_verdicts`
+/// and feeds its `edge_counts` into
+/// `celerrate_cli::cache::statistics::CacheStatistics::record_typed`,
+/// decision 13, wired by this plan).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
 pub struct InterproceduralEdgeCounts {
     /// Call results taken from a declared (native or annotated) return.
@@ -1251,7 +1252,8 @@ $listener = new class {
             function opaque(mixed $x) { return $x->n(); }"]);
         assert_eq!(return_display(&fixture, 4), "int|string");
         // The null constituent is the nullability family's business
-        // (plan 8); the read types from the non-null part.
+        // (`checks::nullability`, CEL0034); the read types from the
+        // non-null part.
         assert_eq!(return_display(&fixture, 5), "int");
         assert_eq!(return_display(&fixture, 6), "mixed");
     }

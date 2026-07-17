@@ -21,7 +21,10 @@ use crate::representation::{StringConstraint, TypeData, TypeId};
 /// it into `Fails`, folding it into `Holds`, or dropping it before it
 /// reaches a diagnostic. Each diagnostic family states its own posture
 /// toward `CannotProve` (report, suppress, or downgrade) explicitly at
-/// its own boundary; plan 8 is where those postures are declared.
+/// its own boundary: `checks::receivers`'s member-existence family
+/// suppresses it (`PossiblyExists`, never a guess), `checks::nullability`
+/// suppresses an undecidable receiver the same way, and
+/// `checks::arguments` folds it into "not failing" alongside `Holds`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Proof {
     Holds,
@@ -111,7 +114,7 @@ pub enum CoercionMode {
 /// untouched — the judgment never claims a set-theoretic proof that
 /// does not hold, so an upgraded verdict is silence, exactly what
 /// "coercions PHP performs at runtime are not reported" (the argument
-/// family, plan 8) demands.
+/// family, `checks::arguments::check`, CEL0035) demands.
 #[salsa::tracked]
 pub fn assignable_to<'db>(
     db: &'db dyn salsa::Database,
@@ -145,8 +148,9 @@ pub fn assignable_to<'db>(
 /// hand (the shipped `judge` refutes `mixed` candidates on purpose),
 /// and `is_coercible_scalar`/`is_scalar_target` answer `false` for it
 /// (and for `null`) so it is never silently un-failed here. The
-/// argument family's walk (plan 8, decision 10) guards `mixed` and
-/// per-constituent union fits before ever calling the judgment.
+/// argument family's walk (`checks::arguments`, decision 10) guards
+/// `mixed` and per-constituent union fits before ever calling the
+/// judgment.
 fn coercion_could_apply<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,

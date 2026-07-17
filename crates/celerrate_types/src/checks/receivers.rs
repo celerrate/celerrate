@@ -42,7 +42,12 @@ pub(crate) enum ReceiverAtom {
 /// `Extends` ancestor); unions and intersections flatten; every silent
 /// form of decision 5 (`mixed`, `object`, an unresolvable class name, a
 /// template, `class-string`, a scalar, an array, a callable) lands on
-/// `Undecidable`.
+/// `Undecidable`. Debt ledger: scalar, array, and callable receivers
+/// are silent here — a "call on non-object" family is future work.
+/// Debt ledger: template receivers are silent too; through-bound
+/// reporting (resolving a call against a template's bound rather than
+/// treating it as undecidable) is the stated `CannotProve` posture,
+/// not a gap this walk closes.
 pub(crate) fn atoms_of<'db>(
     context: &CheckContext<'db, '_>,
     receiver: TypeId<'db>,
@@ -238,6 +243,11 @@ pub(crate) fn atom_existence(
 /// The composed judgment: `Missing` iff every non-null atom is
 /// `Missing`; any `Exists` wins immediately; a receiver with no
 /// decidable atom (mixed, only-null, scalars…) is `PossiblyExists`.
+/// Debt ledger: a union receiver missing on SOME constituents and
+/// existing on others also composes to `PossiblyExists` (the union
+/// rule only reports `Missing` when every constituent agrees) — a
+/// future "possibly undefined member" diagnostic for that narrower
+/// case is not built here.
 pub(crate) fn member_existence<'db>(
     context: &CheckContext<'db, '_>,
     receiver: TypeId<'db>,

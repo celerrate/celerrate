@@ -282,10 +282,12 @@ pub(crate) fn body_typed_verdicts<'db>(
 /// order, plus the summed inference instrument. Trait-owned bodies
 /// are skipped (decision 3: plan 6 analyzes them per using class;
 /// checking one against the trait's own surface is a false-positive
-/// class — task 13's ledger). Top-level statement code has no
-/// member-tree body — if the shipped body IR exposes a file-level
-/// body form, include it in this enumeration; otherwise it stays
-/// unchecked, a recorded debt (task 13's ledger).
+/// class). Debt ledger: typed checks never run inside trait-owned
+/// bodies — owner: a per-using-class walk over plan 6's
+/// `InferenceContext` seam, future. Top-level statement code has no
+/// member-tree body and stays unchecked by the typed families — owner:
+/// the rule framework of sub-project 4, or earlier if the corpus
+/// demands it.
 #[salsa::tracked(returns(ref))]
 pub fn typed_file_verdicts(
     db: &dyn salsa::Database,

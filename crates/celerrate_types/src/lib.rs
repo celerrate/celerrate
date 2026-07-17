@@ -85,9 +85,11 @@
 //! silencing the check rather than fabricating an uninhabited
 //! intersection. Bare `callable` lowers to `mixed`: no top-of-callables
 //! form exists in the lattice, so `mixed` is a documented sound
-//! widening (silence, never a false positive); a first-class
-//! bare-callable form is recorded debt, revisited when plan 8 measures
-//! the silence.
+//! widening (silence, never a false positive); the corpus triage
+//! (task 12) measured the silence against a real callable-heavy
+//! codebase and found no false negative. A first-class bare-callable
+//! form stays recorded debt, owner: the type lattice, future, revisited
+//! only if a call-signature-precise diagnostic needs it.
 
 pub mod checks;
 mod construction;

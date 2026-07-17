@@ -1,10 +1,12 @@
 //! Pure typing rules for expression atoms and operators: `TypeId` in,
 //! `TypeId` out, no environment, no queries beyond the interner. The
 //! rules are fold-free (no constant arithmetic — a folded value would
-//! be a precision promise plan 8 has to keep); the one exception is
-//! unary minus on an integer literal, because negative literals feed
-//! `match` and `===` narrowing. `mixed` is the answer to every form
-//! the table does not know: silence, never a guess.
+//! be a precision promise the typed check families
+//! (`checks::arguments`, `checks::nullability`, `checks::members`)
+//! would have to keep); the one exception is unary minus on an integer
+//! literal, because negative literals feed `match` and `===` narrowing.
+//! `mixed` is the answer to every form the table does not know:
+//! silence, never a guess.
 
 use celerrate_syntax::SyntaxKind;
 

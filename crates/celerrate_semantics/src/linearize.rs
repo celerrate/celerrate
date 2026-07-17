@@ -134,7 +134,8 @@ pub struct LinearizedVirtualMember {
 /// and whether the class opts into dynamic properties.
 ///
 /// `stdClass` is not marked here: it is a compiled stub, so a class
-/// extending it records the `stdclass` stub ancestor instead, and plan 8
+/// extending it records the `stdclass` stub ancestor instead, and the
+/// unknown-member family (`celerrate_types::checks::receivers::member_existence`)
 /// reads `stub_ancestors` to grant it dynamic properties. This struct
 /// only carries facts derivable from the source table and its own
 /// attributes.
@@ -142,8 +143,10 @@ pub struct LinearizedVirtualMember {
 pub struct MagicMarkers {
     /// `__get` is defined: unknown *property* reads are suppressed.
     pub has_magic_get: bool,
-    /// `__set` is defined: unknown *property* writes may be suppressed
-    /// (plan 8 decides).
+    /// `__set` is defined: unknown *property* writes are suppressed too
+    /// (`checks::receivers::atom_existence` treats `__get`/`__set`
+    /// uniformly, the conservative side of not distinguishing a read
+    /// from a write context).
     pub has_magic_set: bool,
     /// `__call` is defined: unknown *instance method* calls are
     /// suppressed.

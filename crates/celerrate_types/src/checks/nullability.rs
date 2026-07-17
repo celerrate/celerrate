@@ -27,6 +27,10 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
         let Some(id) = ExpressionId::from_index(index) else {
             continue;
         };
+        // `MemberReference::Computed`/`Variable` (a dynamic member
+        // name) never matches this arm: debt ledger, dynamic member
+        // names are silent across every family (`members.rs` carries
+        // the same note).
         let BodyExpression::MemberAccess {
             receiver,
             member: MemberReference::Named { name },

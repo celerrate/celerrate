@@ -56,6 +56,10 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
                     check_scoped_constant(context, verdicts, id, *subject, name);
                 }
             }
+            // `MemberReference::Computed` (`$x->$m()`, a dynamic member
+            // name) falls through here: debt ledger, dynamic member
+            // names are silent across every family — there is no
+            // written name to judge against.
             _ => {}
         }
     }
@@ -257,7 +261,10 @@ fn check_scoped_constant(
 /// the body's namespace and use tables (`None` when unknown — an
 /// unresolved class name is `CEL0018`'s beat, silence here); any
 /// non-`NamedReference` subject (a variable, an expression) answers
-/// `None` (decision 5: dynamic subjects are silent).
+/// `None` (decision 5: dynamic subjects are silent). Debt ledger: a
+/// variable typed `class-string<Foo>` is a non-`NamedReference`
+/// subject too, so a scoped call through it (`$class::method()`) is
+/// silent even though the class is statically known.
 pub(crate) fn scoped_subject_keys(
     context: &CheckContext<'_, '_>,
     subject: ExpressionId,

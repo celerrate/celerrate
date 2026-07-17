@@ -192,6 +192,8 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
 /// The typed families, suppression applied — computed fresh on every
 /// path (decision 13): the persistent cache never speaks for them, so
 /// both a cold miss and a warm hit call this and get the same answer.
+/// Debt ledger: the typed families are recomputed on every warm run too
+/// — there is no typed-artifact cache class yet; owner: plan 9a.
 pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let mut diagnostics = celerrate_types::typed_diagnostics(

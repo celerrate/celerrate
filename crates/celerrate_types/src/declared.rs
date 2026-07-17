@@ -3,7 +3,10 @@
 //! grammar; unknown names lower to class types (the judgment layer
 //! answers `CannotProve` for unresolvable classes). Bare `callable`
 //! lowers to `mixed`: a documented sound widening (no top-of-callables
-//! form exists in the lattice; recorded debt, revisited by plan 8).
+//! form exists in the lattice; the corpus triage (task 12) measured
+//! the silence and found it sound — a first-class bare-callable form
+//! stays future work, owner: the type lattice, if a call-signature
+//! diagnostic ever needs one).
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration, SUPPORTED_VERSIONS};
@@ -97,7 +100,9 @@ pub(crate) fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Op
         ),
         "iterable" => TypeId::iterable(db, TypeId::mixed(db), TypeId::mixed(db)),
         // Decision 3: no top-of-callables form exists; `mixed` is the
-        // documented sound widening (recorded debt for plan 8).
+        // documented sound widening, measured sound by the corpus
+        // triage (task 12) and left as recorded debt (see the module
+        // doc above).
         "callable" => TypeId::mixed(db),
         "self" => TypeId::self_placeholder(db),
         "static" => TypeId::static_placeholder(db),
