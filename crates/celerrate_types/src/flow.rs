@@ -2763,9 +2763,8 @@ impl<'db> Walker<'db, '_, '_> {
                             })
                             .unwrap_or_else(|| TypeId::mixed(db))
                     }
-                    // Plan 8, task 1: an anonymous-class receiver
-                    // (`new class { }`) now types as its synthetic
-                    // folded key (decision 14's debt closed), so it
+                    // An anonymous-class receiver (`new class { }`)
+                    // types as its synthetic folded key, so it
                     // linearizes, resolves `$this`, and types like any
                     // named class. `Missing` (a malformed `new` with no
                     // class reference at all) keeps the silent `mixed`
