@@ -2347,6 +2347,11 @@ panic) rather than left silently vacuous — the bug itself stays open.
 **Record this as the plan's top follow-up for plan 9c / a dedicated
 fix task.**
 
+**Amendment (2026-07-18): FIXED by the cycle-safe `inferred_body_types`
+wrapper — plan `2026-07-18-issue-51-cycle-safe-inferred-body-types.md`,
+issue #51; the two workaround fixtures were flipped back to
+callee-first and now pin the fix.**
+
 ### Other recorded follow-ups
 
 - **SIGINT/SIGTERM handling** so the watch loop's graceful-exit persist

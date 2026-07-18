@@ -46,6 +46,14 @@ use salsa::Setter;
 /// `celerrate_semantics` invalidation-scope tests' `executions_of`
 /// pattern, duplicated here: no shared test-support module exists per
 /// the design).
+///
+/// Issue #51: the tracked body-inference query was renamed
+/// `inferred_body_types` -> `inferred_body_types_unguarded` (now behind
+/// a non-tracked cycle-safe wrapper that emits no salsa event). These
+/// `executions_of` probes name the raw query under its new identity;
+/// the counts are unchanged because the wrapper's warming demands
+/// execute the raw query at most once per body and memoized. Equally
+/// strict, not weakened (fixed decision 4).
 fn executions_of(log: &[String], query: &str) -> usize {
     let prefix = format!("{query}(");
     log.iter()
@@ -1118,7 +1126,11 @@ fn a_body_edit_with_an_identical_inferred_return_spares_callers() {
     let log = fixture.db.take_executed();
     // The callee re-infers; the identical return backdates; the
     // caller's inference never re-runs (design section 10, harness 2).
-    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "inferred_body_types_unguarded"),
+        1,
+        "{log:?}"
+    );
 }
 
 /// Harness-2, pin 2: a prose-only docblock edit on the callee re-runs
@@ -1164,7 +1176,11 @@ fn a_prose_docblock_edit_re_runs_no_inference() {
     let log = fixture.db.take_executed();
     // The two-stage cutoff (design section 5): the annotation parse
     // re-runs and backdates; no typed query above it re-executes.
-    assert_eq!(executions_of(&log, "inferred_body_types"), 0, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "inferred_body_types_unguarded"),
+        0,
+        "{log:?}"
+    );
 }
 
 /// Harness-2, pin 3: a default-value edit (`= null` -> `= 'd'`) is
@@ -1205,7 +1221,11 @@ fn a_default_value_edit_invalidates_the_signatures_dependents() {
     let log = fixture.db.take_executed();
     // The default value is part of the comparable signature (the 1a
     // contract): the member projection changed, so the body re-infers.
-    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "inferred_body_types_unguarded"),
+        1,
+        "{log:?}"
+    );
 }
 
 /// Demands the inferred return of both of class `A`'s methods through
@@ -1258,7 +1278,11 @@ fn editing_one_signature_spares_the_other_members_inference() {
     // `bystander` is spared. This is the design's "editing one
     // signature does not invalidate other members' bodies" contract
     // (section 10, harness 2).
-    assert_eq!(executions_of(&log, "inferred_body_types"), 1, "{log:?}");
+    assert_eq!(
+        executions_of(&log, "inferred_body_types_unguarded"),
+        1,
+        "{log:?}"
+    );
 }
 
 /// Task 13's closing pin, harness-2 extended to a method callee: a
@@ -1287,7 +1311,7 @@ function caller(Greeter $greeter) { return $greeter->greeting(); }
     let _ = caller_return_display(&f, "app\\caller");
     let log = f.db.take_executed();
     assert_eq!(
-        executions_of(&log, "inferred_body_types"),
+        executions_of(&log, "inferred_body_types_unguarded"),
         1,
         "only the edited callee re-infers: {log:?}",
     );
@@ -1345,7 +1369,7 @@ class Unrelated {
     }
     let log = f.db.take_executed();
     assert_eq!(
-        executions_of(&log, "inferred_body_types"),
+        executions_of(&log, "inferred_body_types_unguarded"),
         2,
         "one re-inference per using class, none for the bystander: {log:?}",
     );
@@ -1925,7 +1949,7 @@ function bystander(string $text) { return strlen($text); }
     }
     let log = f.db.take_executed();
     assert_eq!(
-        executions_of(&log, "inferred_body_types"),
+        executions_of(&log, "inferred_body_types_unguarded"),
         1,
         "only the editing body re-infers: {log:?}",
     );
