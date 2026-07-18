@@ -151,11 +151,21 @@ fn cross_file_source_answers_replay_equal() {
     ]);
 }
 
-/// A typed finding (CEL0034, a possibly-null dereference): the pack now
-/// persists it too (plan 9a, task 9), so a warm second pass over an
-/// unchanged project must serve it back rather than recompute — the net
-/// still covers the full union (untyped plus typed), the same way
-/// `analyze_one` does on a warm hit, through `served_typed_diagnostics`.
+/// Task 10's own extension: a typed fixture firing all three of the
+/// typed families' representative identifiers in one project. The pack
+/// now persists typed findings too (plan 9a, task 9), so a warm second
+/// pass over an unchanged project must serve them back rather than
+/// recompute — the net still covers the full union (untyped plus
+/// typed), the same way `analyze_one` does on a warm hit, through
+/// `served_typed_diagnostics`. `Consumer.php` carries all three:
+/// `$user->svae()` (a typo, CEL0030, resolved against `User`'s
+/// cross-file declaration in `Widget.php`), `$maybe->save()` (CEL0034,
+/// a possibly-null dereference through the nullable parameter type),
+/// and `takes($plain)` (CEL0035, an argument mismatch against the
+/// annotated `takes(int $n)` signature under `strict_types`). If tasks
+/// 8-9 are sound this passes immediately, exactly as it did before this
+/// task widened the fixture; a failure here is a bug in them, not in
+/// this test — treat it as a stop signal, not a test to adjust.
 #[test]
 fn typed_answers_replay_equal() {
     let identifiers = served_equals_recomputed(&[
@@ -164,12 +174,18 @@ fn typed_answers_replay_equal() {
             r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
         ),
         (
-            "src/Service.php",
-            "<?php\ndeclare(strict_types=1);\nnamespace App;\n\nclass User { public function save(): void {} }\n\nclass Service\n{\n    public function run(?User $user): void\n    {\n        $user->save();\n    }\n}\n",
+            "src/Widget.php",
+            "<?php\nnamespace App;\n\nclass User { public function save(): void {} }\nclass Plain {}\n",
+        ),
+        (
+            "src/Consumer.php",
+            "<?php\ndeclare(strict_types=1);\nnamespace App;\n\nfunction takes(int $n): void {}\n\nclass Consumer\n{\n    public function run(User $user, ?User $maybe, Plain $plain): void\n    {\n        $user->svae();\n        $maybe->save();\n        takes($plain);\n    }\n}\n",
         ),
     ]);
-    assert!(
-        identifiers.contains("CEL0034"),
-        "the fixture must exercise a typed finding: {identifiers:?}",
-    );
+    for expected in ["CEL0030", "CEL0034", "CEL0035"] {
+        assert!(
+            identifiers.contains(expected),
+            "the fixture must exercise {expected}: {identifiers:?}",
+        );
+    }
 }

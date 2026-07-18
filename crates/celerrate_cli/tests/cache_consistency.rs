@@ -223,6 +223,218 @@ fn a_composer_project_replays_consistently() {
     );
 }
 
+/// Builds `files` in a fresh, cache-free directory and renders one
+/// `check` pass. Used only as an independent sanity check that a
+/// fixture's "before" and "after" states genuinely produce different
+/// typed diagnostics — `assert_cached_matches_fresh` below is what
+/// proves cache correctness; this is what proves the fixture is not
+/// vacuous (task 10's genuineness requirement).
+fn fresh_render(files: &[(&str, &str)]) -> String {
+    let root = tempfile::tempdir().unwrap();
+    for (path, contents) in files {
+        let path = root.path().join(path);
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(path, contents).unwrap();
+    }
+    run_check(root.path())
+}
+
+// ---------------------------------------------------------------------
+// Plan 9a, task 10: the consistency harness extended over the new typed
+// edit classes. Every test below drives the SAME cross-process harness
+// (`assert_cached_matches_fresh`) the untyped edit classes above already
+// use, so a cache-seeded warm run must render exactly what a from-scratch
+// run over the same on-disk state renders, at every step — including the
+// step where the typed verdict actually flips.
+//
+// Scope note: the spec's default-value edit class (a parameter's default
+// changing the DECLARED signature, e.g. `= null` -> `= 1`) belongs to
+// harness 2's IN-PROCESS invalidation scope and is already pinned by
+// `celerrate_types/tests/invalidation_scope.rs` (`a_default_value_edit_
+// changes_the_declared_signature` and its neighbors, pin 3/pin 4); it is
+// deliberately left OUT of this cross-process suite to avoid duplicating
+// that coverage under a slower harness.
+// ---------------------------------------------------------------------
+
+/// An inferred-return change in one file flips a typed verdict in
+/// another: `helper()` carries no declared or annotated return, so
+/// `caller.php`'s dereference of its result depends on the INFERRED
+/// tier. Flipping `helper()`'s body from `return 1;` to `return null;`
+/// must flip the caller's CEL0034 (a possibly-null dereference) on the
+/// warm run exactly as it does fresh.
+#[test]
+fn an_inferred_return_change_replays_consistently() {
+    let helper_before = "<?php function helper() { return 1; }";
+    let helper_after = "<?php function helper() { return null; }";
+    let caller = "<?php class Widget { public function inspect(): void {} } \
+         function useIt() { $w = helper(); $w->inspect(); }";
+
+    assert!(
+        !fresh_render(&[("helper.php", helper_before), ("caller.php", caller)]).contains("CEL0034"),
+        "sanity: helper() returning 1 must not trip the nullability check",
+    );
+    assert!(
+        fresh_render(&[("helper.php", helper_after), ("caller.php", caller)]).contains("CEL0034"),
+        "sanity: helper() returning null must trip the nullability check",
+    );
+
+    assert_cached_matches_fresh(
+        &[("helper.php", helper_before), ("caller.php", caller)],
+        &[Step::Write("helper.php", helper_after)],
+    );
+}
+
+/// A signature edit in one file flips an argument-type verdict in
+/// another: `takes`'s parameter type moves from `int` to `string`,
+/// which a caller passing an `int` literal under `strict_types` no
+/// longer satisfies — CEL0035 on the warm run exactly as on fresh.
+#[test]
+fn a_signature_edit_replays_consistently() {
+    let takes_before = "<?php function takes(int $n): void {}";
+    let takes_after = "<?php function takes(string $n): void {}";
+    let caller = "<?php declare(strict_types=1); function f() { takes(1); }";
+
+    assert!(
+        !fresh_render(&[("takes.php", takes_before), ("caller.php", caller)]).contains("CEL0035"),
+        "sanity: an int argument against an int parameter must not trip the check",
+    );
+    assert!(
+        fresh_render(&[("takes.php", takes_after), ("caller.php", caller)]).contains("CEL0035"),
+        "sanity: an int argument against a string parameter must trip the check",
+    );
+
+    assert_cached_matches_fresh(
+        &[("takes.php", takes_before), ("caller.php", caller)],
+        &[Step::Write("takes.php", takes_after)],
+    );
+}
+
+/// A docblock annotation appearing on a callee that previously carried
+/// none: `findWidget()` gains an `@return ?Widget` docblock, moving its
+/// callers from the inferred tier to the declared tier. The caller's
+/// typed verdict must follow on the warm run exactly as on fresh.
+///
+/// **Fixed by plan 9a task 10.** This test used to FAIL and was
+/// `#[ignore]`d rather than adjusted (report a genuine tasks-8/9 bug as
+/// a stop signal, never weaken the test that found it). The root cause
+/// traced to `crates/celerrate_types/src/flow.rs`: `function_call_
+/// result` (the free-function call site, decision 4) recorded a
+/// `StoredFunctionDependency` (`dependencies.functions.insert(key)`)
+/// ONLY when `declared_present(signature)` already held at persist
+/// time; when it did not (a `Trust::NativeOnly` signature with a
+/// `mixed` value type — exactly an undocumented, unannotated function),
+/// only the INFERRED edge was recorded (`dependencies.
+/// inferred_functions.push((key, raw))`), carrying no fact about
+/// whether the callee has a declared signature at all. Revalidation
+/// only re-checks what was recorded, and `inferred_function_return`
+/// never consults a docblock's `@return`, so a warm run kept serving
+/// the stale pre-docblock verdict even after the docblock appeared.
+/// `method_call_result_for_keys` and `projected_callable_of_function`
+/// shared the identical pattern for methods and first-class callables.
+///
+/// The fix records the callee's declared-signature-guarding dependency
+/// (a `functions`/`classes` entry, keyed on `function_signature_digest`/
+/// `class_surface_digest`) at each of those three sites IN ADDITION to
+/// the inferred edge, so a later presence flip is visible to
+/// revalidation while an unchanged callee's digest still matches and
+/// the warm verdict still serves.
+#[test]
+fn a_docblock_annotation_edit_replays_consistently() {
+    let callee_before = "<?php namespace App; \
+         class Widget { public function inspect(): void {} } \
+         function findWidget() { return new Widget(); }";
+    let callee_after = "<?php namespace App; \
+         class Widget { public function inspect(): void {} } \
+         /** @return ?Widget */ \
+         function findWidget() { return new Widget(); }";
+    let caller =
+        "<?php namespace App; function useIt(): void { $w = findWidget(); $w->inspect(); }";
+
+    assert!(
+        !fresh_render(&[("callee.php", callee_before), ("caller.php", caller)]).contains("CEL0034"),
+        "sanity: an undocumented findWidget() must not trip the nullability check",
+    );
+    assert!(
+        fresh_render(&[("callee.php", callee_after), ("caller.php", caller)]).contains("CEL0034"),
+        "sanity: the nullable @return must trip the caller's nullability check",
+    );
+
+    assert_cached_matches_fresh(
+        &[("callee.php", callee_before), ("caller.php", caller)],
+        &[Step::Write("callee.php", callee_after)],
+    );
+}
+
+/// A class member addition in one file clears an unknown-method
+/// verdict in another: `User` gains the `save` method `Consumer.php`
+/// calls, exercising the class-surface digest path end to end.
+#[test]
+fn a_class_member_addition_replays_consistently() {
+    let user_before = "<?php namespace App; class User {}";
+    let user_after = "<?php namespace App; class User { public function save(): void {} }";
+    let consumer = "<?php namespace App; function f(User $u): void { $u->save(); }";
+
+    assert!(
+        fresh_render(&[("user.php", user_before), ("consumer.php", consumer)]).contains("CEL0030"),
+        "sanity: a missing save() must trip the unknown-method check",
+    );
+    assert!(
+        !fresh_render(&[("user.php", user_after), ("consumer.php", consumer)]).contains("CEL0030"),
+        "sanity: an added save() must clear the unknown-method check",
+    );
+
+    assert_cached_matches_fresh(
+        &[("user.php", user_before), ("consumer.php", consumer)],
+        &[Step::Write("user.php", user_after)],
+    );
+}
+
+/// A virtual member's type edit in one file changes what a dependent in
+/// another file sees: `Repository`'s class docblock `@method User
+/// find()` becomes `@method Order find()`, and `Order` has no `save`
+/// method, so the caller's chained `->save()` flips from silent to
+/// CEL0030 — the digest's virtual-member payload (decision 3) followed
+/// end to end, warm exactly as fresh.
+#[test]
+fn a_virtual_member_type_edit_replays_consistently() {
+    let repository_before = "<?php namespace App; /** @method User find() */ class Repository {}";
+    let repository_after = "<?php namespace App; /** @method Order find() */ class Repository {}";
+    let classes = "<?php namespace App; \
+         class User { public function save(): void {} } \
+         class Order {}";
+    let consumer = "<?php namespace App; function f(Repository $r): void { $r->find()->save(); }";
+
+    assert!(
+        !fresh_render(&[
+            ("classes.php", classes),
+            ("repository.php", repository_before),
+            ("consumer.php", consumer),
+        ])
+        .contains("CEL0030"),
+        "sanity: find() returning User must not trip the unknown-method check",
+    );
+    assert!(
+        fresh_render(&[
+            ("classes.php", classes),
+            ("repository.php", repository_after),
+            ("consumer.php", consumer),
+        ])
+        .contains("CEL0030"),
+        "sanity: find() returning Order must trip the unknown-method check",
+    );
+
+    assert_cached_matches_fresh(
+        &[
+            ("classes.php", classes),
+            ("repository.php", repository_before),
+            ("consumer.php", consumer),
+        ],
+        &[Step::Write("repository.php", repository_after)],
+    );
+}
+
 /// Every corruption mode of a pack on disk regenerates silently: the
 /// run's rendering never changes.
 #[test]

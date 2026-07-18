@@ -1467,6 +1467,148 @@ mod tests {
         );
     }
 
+    /// Plan 9a, task 10, decision 14's no-provisional pin (design section
+    /// 6): "no provisional value served or persisted". `completed_cycle`
+    /// calls `crate::cache::persist` exactly once, AFTER `cycle` settles
+    /// on a completed `AnalysisOutcome` — `cycle`'s own internal restart
+    /// loop, entered whenever a change lands mid-analysis and cancels
+    /// the in-flight `analyze` (the same primitive
+    /// `a_setter_cancels_an_analysis_that_is_already_running` above
+    /// pins), never calls `persist` itself. This drives that exact
+    /// cancellation primitive directly — not through the OS `notify`
+    /// watcher, which the other test already establishes is sufficient
+    /// to reach the same `Cancelled` arm inside `cycle`'s own loop, so
+    /// re-deriving it through real filesystem events here would only add
+    /// timing flakiness for no additional coverage — and asserts persist
+    /// genuinely never ran during the cancelled attempt: the packs on
+    /// disk stay byte-identical, mtime included, to the prior COMPLETED
+    /// cycle's own persist, right up until the NEXT cycle actually
+    /// completes and persists in turn.
+    #[test]
+    fn a_cancelled_cycle_persists_nothing() {
+        use crate::cache::pack::{Pack, PackHeader, decode};
+        use crate::cache::stored::StoredVerdict;
+
+        let root = tempfile::tempdir().unwrap();
+        let total = 400;
+        for index in 0..total {
+            std::fs::write(
+                root.path().join(format!("Service{index}.php")),
+                format!(
+                    "<?php class Service{index} extends Service{} {{}}",
+                    (index + 1) % total,
+                ),
+            )
+            .unwrap();
+        }
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        let mut output = Vec::new();
+
+        // One completed cycle: the packs exist, and this is the "prior
+        // completed cycle's" state the cancelled attempt below must
+        // leave untouched.
+        let first = super::completed_cycle(&mut session, &mut watcher, &mut output, total).unwrap();
+        assert!(
+            first.diagnostics.is_empty(),
+            "sanity: the initial circular-inheritance fixture is clean"
+        );
+
+        let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
+        let item_trees_pack = root.path().join(".celerrate/cache/item_trees.bin");
+        let after_first_diagnostics = std::fs::read(&diagnostics_pack).unwrap();
+        let after_first_trees = std::fs::read(&item_trees_pack).unwrap();
+        let mtime_before = std::fs::metadata(&diagnostics_pack)
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // The exact cancellation primitive `a_setter_cancels_an_analysis_
+        // that_is_already_running` above pins: a mutation lands on the
+        // main thread's `&mut Session` handle while a worker thread is
+        // mid-fan-out over `analyze`, raising `salsa::Cancelled` in the
+        // worker. Neither `absorb_outcome` nor `persist` is reachable
+        // from this loop at all — both live only inside `completed_
+        // cycle`, downstream of a settled `cycle()` result — so this is
+        // the whole point under test: cancellation cannot persist
+        // anything by construction, and this asserts that empirically
+        // too, on the actual bytes on disk.
+        let edited = root.path().join("Service0.php");
+        let mut cancelled = false;
+        for attempt in 0..20 {
+            let inputs = session.inputs();
+            let worker = std::thread::spawn(move || analyze(&inputs));
+
+            std::fs::write(
+                &edited,
+                format!("<?php class Service0 {{ public int $x = {attempt}; }} new Missing();"),
+            )
+            .unwrap();
+            session.absorb(std::slice::from_ref(&edited));
+
+            if matches!(worker.join(), Ok(Err(Cancelled))) {
+                cancelled = true;
+                break;
+            }
+        }
+        assert!(
+            cancelled,
+            "the analysis was never caught in flight: cancellation was never observed",
+        );
+
+        assert_eq!(
+            std::fs::read(&diagnostics_pack).unwrap(),
+            after_first_diagnostics,
+            "a cancelled analysis must persist nothing: the diagnostics pack bytes are unchanged",
+        );
+        assert_eq!(
+            std::fs::read(&item_trees_pack).unwrap(),
+            after_first_trees,
+            "a cancelled analysis must persist nothing: the item-tree pack bytes are unchanged",
+        );
+        assert_eq!(
+            std::fs::metadata(&diagnostics_pack)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mtime_before,
+            "a cancelled analysis must not even rewrite the pack with identical bytes",
+        );
+
+        // The next COMPLETED cycle sees the settled edit (real bytes on
+        // disk: `new Missing();`) and persists it — proving the
+        // comparison above was not vacuous, since the packs on disk CAN
+        // and DO change once a cycle actually completes.
+        let second = super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        assert!(
+            second
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("Missing")),
+            "the next completed cycle sees the settled edit: {:?}",
+            second.diagnostics,
+        );
+        assert_ne!(
+            std::fs::read(&diagnostics_pack).unwrap(),
+            after_first_diagnostics,
+            "the next completed cycle's persist does rewrite the pack",
+        );
+
+        let header = PackHeader::current(
+            session.configuration.php_version_range(&session.database),
+            session.plugin_set_digest,
+        );
+        let after_second = std::fs::read(&diagnostics_pack).unwrap();
+        let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
+        assert!(
+            pack.entries.iter().any(|(_, verdict)| verdict
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("Missing"))),
+            "the persisted pack carries the settled edit's own finding, never a cancelled one",
+        );
+    }
+
     /// On Linux, inotify reports `IN_OPEN` as `EventKind::Access(_)`, and
     /// `Session::absorb` reading a changed file raises exactly one of
     /// those on the path it just read. An access event never changes

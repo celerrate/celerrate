@@ -67,6 +67,24 @@ fn write_member_trees_pack(
     write_atomically(&directory.join(MEMBER_TREES_PACK), &bytes).unwrap();
 }
 
+/// Task 10's own addition, in the same style as the three helpers
+/// above: the fourth pack's own writer, for the adversarial suite over
+/// `inferred_signatures.bin`.
+fn write_signatures_pack(
+    root: &Path,
+    header: &PackHeader,
+    entries: Vec<(StoredSignatureKey, StoredInferredSignature)>,
+) {
+    let directory = root.join(".celerrate/cache");
+    std::fs::create_dir_all(&directory).unwrap();
+    let bytes = encode(&Pack {
+        header: header.clone(),
+        entries,
+    })
+    .unwrap();
+    write_atomically(&directory.join(INFERRED_SIGNATURES_PACK), &bytes).unwrap();
+}
+
 /// The probe: an empty stored tree for a file that declares one class.
 /// A session that serves it consulted the pack; a session that lowers
 /// the file would see the declaration.
@@ -846,9 +864,12 @@ fn a_cold_session_counts_misses_and_absences() {
 /// gets no entry either (no stable folded key for a caller elsewhere
 /// to cite). `annotated` calls `plain` — no declared return exists for
 /// `plain`, so the call resolves through the INFERRED tier, giving
-/// `annotated`'s own entry a concrete `StoredInferredEdge` to check
-/// alongside the plain declared-tier `functions` dependency `plain`
-/// itself never has any of (it calls nothing).
+/// `annotated`'s own entry a concrete `StoredInferredEdge` to check.
+/// Plan 9a task 10: the call ALSO records `plain` itself as a
+/// declared-signature-guarding `functions` dependency (so a later
+/// docblock `@return` appearing on `plain` is visible to
+/// revalidation), even though the call resolved through the inferred
+/// tier — `plain` itself has neither (it calls nothing).
 #[test]
 fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
     let source_a = "<?php function plain() { return 'hello'; } function annotated(): int { return plain() === 'hello' ? 1 : 2; }";
@@ -934,9 +955,17 @@ fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
         }],
         "annotated's call to the undeclared plain() resolves through the inferred tier",
     );
-    assert!(
-        annotated.classes.is_empty() && annotated.functions.is_empty(),
-        "annotated consults no declared-tier callee and no class",
+    assert!(annotated.classes.is_empty(), "annotated consults no class");
+    assert_eq!(
+        annotated
+            .functions
+            .iter()
+            .map(|dependency| dependency.key.clone())
+            .collect::<Vec<_>>(),
+        vec!["plain".to_owned()],
+        "plan 9a task 10: the inferred-tier call to plain() also records plain \
+         as a declared-signature-guarding dependency, so a later docblock \
+         @return on plain is visible to revalidation",
     );
 }
 
@@ -1621,5 +1650,514 @@ fn a_mutually_recursive_typed_callee_validates_correctly_warm() {
          identically warm and fresh: served or recomputed, the converged \
          fixpoint is the only correct answer, never a leaked mid-cycle \
          provisional",
+    );
+}
+
+// ---------------------------------------------------------------------
+// Plan 9a, task 10: the adversarial suite extended over the typed
+// artifacts (decision 14 — "or the net silently stops guarding"). Every
+// row below hand-writes a v5 pack whose entry deliberately violates the
+// exactness contract, and every row's contract is: no panic, no
+// user-visible internal error, and the run's rendering equals a fresh
+// (cache-free) recomputation over the same files — never merely "it ran".
+// ---------------------------------------------------------------------
+
+/// Decision 2's decode guard, exercised for real at the pack level: one
+/// signature entry whose return nests past `STORED_DEPTH_LIMIT`, forged
+/// AT THE BYTE LEVEL through the same iterative fold
+/// `celerrate_types::stored`'s own unit tests use (a repeated `KeyOf`
+/// variant prefix built in a loop, so this test itself never recurses),
+/// plus a second entry carrying an empty union (a degenerate but
+/// perfectly decodable shape, `never`'s own identity per
+/// `a_forged_non_canonical_value_re_canonicalizes_instead_of_panicking`).
+/// `postcard` decodes a `Pack`'s entries as one contiguous payload, so
+/// the over-deep entry's guarded `Deserialize` rejects the WHOLE
+/// payload, not just its own entry: the entire `inferred_signatures.bin`
+/// pack is discarded, both entries included, exactly like any other
+/// pack-level corruption (`CacheSnapshot::load`'s "anything that fails
+/// any check is silently absent" contract). The run must complete with
+/// no panic and no internal error, and its rendering must equal a
+/// genuinely cache-free run over the same files — the honest proof that
+/// discarding the pack cost nothing but re-inference, never a wrong
+/// answer.
+#[test]
+fn an_absurd_stored_type_never_panics() {
+    use celerrate_types::StoredType;
+
+    let helper_source = "<?php class Widget { public function inspect(): void {} } \
+         function findWidget(): ?Widget { return null; }";
+    let caller_source = "<?php function useIt(): void { $w = findWidget(); $w->inspect(); }";
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+
+    let mut deep = StoredType::Null;
+    for _ in 0..=celerrate_types::stored::STORED_DEPTH_LIMIT {
+        deep = StoredType::KeyOf {
+            subject: Box::new(deep),
+        };
+    }
+    let deep_entry = StoredInferredSignature {
+        content: [0; 32],
+        return_type: deep,
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: Vec::new(),
+    };
+    let empty_union_entry = StoredInferredSignature {
+        content: [0; 32],
+        return_type: StoredType::Union {
+            constituents: Vec::new(),
+        },
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: Vec::new(),
+    };
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    write_signatures_pack(
+        root.path(),
+        &header,
+        vec![
+            (
+                StoredSignatureKey::Function {
+                    key: "deep".to_owned(),
+                },
+                deep_entry,
+            ),
+            (
+                StoredSignatureKey::Function {
+                    key: "emptyunion".to_owned(),
+                },
+                empty_union_entry,
+            ),
+        ],
+    );
+
+    let (outcome, warm_output) = run_check(root.path());
+    assert_ne!(
+        outcome,
+        celerrate_cli::Outcome::InternalError,
+        "an absurdly deep stored type must never surface as an internal error: {warm_output}",
+    );
+    assert!(
+        warm_output.contains("CEL0034"),
+        "the fixture must still exercise the typed finding: {warm_output}",
+    );
+
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "the corrupted signature pack must be discarded whole: rendering equals a no-cache run",
+    );
+}
+
+/// The typed half's own layered outcome (task 9), corrupted
+/// independently of the untyped half: a persisted verdict whose UNTYPED
+/// records still hold (so the untyped half serves) but whose TYPED
+/// class dependency carries a digest that can never match a live
+/// recomputation. `crate::cache::verdict::validate_typed`'s own module
+/// doc names a partial hit — untyped served, typed recomputed — as a
+/// first-class outcome; this plants exactly that outcome by hand rather
+/// than by an edit, and pins that it is silent (no diagnostic about the
+/// cache) and correct (the recomputed typed portion still reports the
+/// genuine finding, and the full rendering equals a fresh run).
+#[test]
+fn a_stale_class_digest_discards_the_typed_portion_only() {
+    use std::sync::atomic::Ordering;
+
+    let helper_source = "<?php class Widget { public function inspect(): void {} } \
+         function findWidget(): ?Widget { return null; }";
+    let caller_source = "<?php function useIt(): void { $w = findWidget(); $w->inspect(); }";
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+    let (_, cold_output) = run_check(root.path());
+    assert!(
+        cold_output.contains("CEL0034"),
+        "the fixture must exercise the typed finding cold: {cold_output}",
+    );
+
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    let path = root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK);
+    let bytes = std::fs::read(&path).unwrap();
+    let mut pack: Pack<Vec<([u8; 32], StoredVerdict)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+
+    let caller_hash = *blake3::hash(caller_source.as_bytes()).as_bytes();
+    let mut corrupted = 0;
+    for (key, verdict) in &mut pack.entries {
+        if *key != caller_hash {
+            continue;
+        }
+        let typed = verdict
+            .typed
+            .as_mut()
+            .expect("caller.php's typed portion must have been persisted");
+        assert!(
+            !typed.classes.is_empty() || !typed.functions.is_empty(),
+            "caller.php's typed record must consult at least one class or function: {typed:?}",
+        );
+        for class in &mut typed.classes {
+            class.digest = Some([0xAB; 32]);
+        }
+        for function in &mut typed.functions {
+            function.digest = Some([0xAB; 32]);
+        }
+        corrupted += 1;
+    }
+    assert_eq!(
+        corrupted, 1,
+        "exactly caller.php's entry must be found and corrupted",
+    );
+
+    write_atomically(&path, &encode(&pack).unwrap()).unwrap();
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.id.as_str() == "CEL0034"),
+        "the typed portion must recompute honestly, still reporting CEL0034: {:?}",
+        outcome.diagnostics,
+    );
+    assert!(
+        session.statistics.typed_recomputed.load(Ordering::Relaxed) > 0,
+        "the corrupted typed digest must force a recompute",
+    );
+    assert_eq!(
+        session
+            .statistics
+            .verdicts_discarded
+            .load(Ordering::Relaxed),
+        0,
+        "the untyped half must still serve: only the typed digest was corrupted",
+    );
+    assert!(
+        session.statistics.verdicts_served.load(Ordering::Relaxed) >= 1,
+        "the untyped verdict must be served from the cache",
+    );
+
+    let (_, warm_output) = run_check(root.path());
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "a stale class digest must discard only the typed portion; rendering still equals fresh",
+    );
+}
+
+/// The fourth pack's own sibling of `a_verdict_whose_answer_flipped_is_
+/// discarded`: a signature entry planted under a key the caller
+/// genuinely resolves, but whose `content` field names a file that
+/// never produced these bytes. `validated_stored_return`'s
+/// content-hash compare must reject it, so the caller falls through to
+/// genuine re-inference — never serving the planted, unprovable return.
+#[test]
+fn a_signature_entry_with_a_wrong_content_hash_is_ignored() {
+    let helper_source = "<?php function helper() { return 1; }";
+    let caller_source = "<?php declare(strict_types=1);\n\
+         function takesInt(int $n): void {}\n\
+         function useIt(): void { takesInt(helper()); }";
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+
+    let poisoned = StoredInferredSignature {
+        // A content hash that cannot match `helper.php`'s real bytes,
+        // whatever they are: the all-zero digest is astronomically
+        // unlikely to collide with a real blake3 hash.
+        content: [0; 32],
+        return_type: celerrate_types::StoredType::String {
+            constraint: celerrate_types::stored::StoredStringConstraint::General,
+        },
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: Vec::new(),
+    };
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    write_signatures_pack(
+        root.path(),
+        &header,
+        vec![(
+            StoredSignatureKey::Function {
+                key: "helper".to_owned(),
+            },
+            poisoned,
+        )],
+    );
+
+    let (outcome, warm_output) = run_check(root.path());
+    assert_ne!(
+        outcome,
+        celerrate_cli::Outcome::InternalError,
+        "{warm_output}"
+    );
+    assert!(
+        !warm_output.contains("CEL0035"),
+        "the poisoned string return must never be served: {warm_output}",
+    );
+
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "a wrong content hash must be ignored; rendering equals a fresh recomputation",
+    );
+}
+
+/// The fourth pack's own sibling of `duplicate_keys_in_a_pack_never_
+/// panic`: two entries under one `StoredSignatureKey`, collected into a
+/// `HashMap` (`CacheSnapshot::load`), so which one wins is not
+/// contractual. Both carry a content hash that can never match the
+/// real file, so — unlike the item-tree analog, which only pins "no
+/// panic" because either entry's fate is genuinely unobservable — this
+/// row's outcome IS observable and pinned: whichever duplicate wins, it
+/// is discarded on the content-hash compare, so the run must recompute
+/// honestly and its rendering must equal fresh regardless of which
+/// duplicate the map happened to keep.
+#[test]
+fn duplicate_signature_keys_never_panic() {
+    let helper_source = "<?php function helper() { return 1; }";
+    let caller_source = "<?php declare(strict_types=1);\n\
+         function takesInt(int $n): void {}\n\
+         function useIt(): void { takesInt(helper()); }";
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+
+    let poisoned = |literal: &str| StoredInferredSignature {
+        content: [0; 32],
+        return_type: celerrate_types::StoredType::String {
+            constraint: celerrate_types::stored::StoredStringConstraint::Literal(
+                literal.to_owned(),
+            ),
+        },
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: Vec::new(),
+    };
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    write_signatures_pack(
+        root.path(),
+        &header,
+        vec![
+            (
+                StoredSignatureKey::Function {
+                    key: "helper".to_owned(),
+                },
+                poisoned("first"),
+            ),
+            (
+                StoredSignatureKey::Function {
+                    key: "helper".to_owned(),
+                },
+                poisoned("second"),
+            ),
+        ],
+    );
+
+    let (outcome, warm_output) = run_check(root.path());
+    assert_ne!(
+        outcome,
+        celerrate_cli::Outcome::InternalError,
+        "{warm_output}"
+    );
+
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "whichever duplicate the map kept, its wrong content hash discards it; \
+         rendering equals a fresh recomputation regardless",
+    );
+}
+
+/// The header-mismatch matrix (`a_range_mismatch_ignores_the_pack`,
+/// `a_stub_blob_mismatch_ignores_the_pack`), extended over every pack at
+/// once through a mismatched `plugins` field (plan 9a's own header
+/// addition, task 6): all FOUR packs are written honestly (a real cold
+/// run's own output, byte-copied), then re-headered under a flipped
+/// plugin-set digest. A fresh session must ignore every one of them
+/// whole — cold-run statistics on every counter — and render exactly
+/// what a genuinely cache-free run renders.
+#[test]
+fn a_plugin_digest_mismatch_ignores_every_pack() {
+    use std::sync::atomic::Ordering;
+
+    let source_a = "<?php class A {}";
+    let source_b = "<?php new Missing();";
+    let root = project(&[("a.php", source_a), ("b.php", source_b)]);
+    let (_, cold_output) = run_check(root.path());
+
+    let mut foreign_plugins = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    foreign_plugins.plugins[0] ^= 0xFF;
+    let cache = root.path().join(".celerrate/cache");
+    for pack in [
+        ITEM_TREES_PACK,
+        MEMBER_TREES_PACK,
+        DIAGNOSTICS_PACK,
+        INFERRED_SIGNATURES_PACK,
+    ] {
+        let path = cache.join(pack);
+        let bytes = std::fs::read(&path).unwrap();
+        // Re-header in place: decode under the pack's OWN real header
+        // (still on disk elsewhere as the just-written file), re-encode
+        // under the foreign one. Since every pack here was just written
+        // by the cold run above under the same real header, reading the
+        // header straight off this very file (rather than
+        // reconstructing it) keeps this test from silently drifting if
+        // the real header ever changes shape.
+        let real_header = PackHeader::current(
+            PhpVersionRange::point(PhpVersion::new(8, 5)),
+            celerrate_cli::plugins::plugin_set_digest(),
+        );
+        match pack {
+            ITEM_TREES_PACK => {
+                let decoded: Pack<Vec<([u8; 32], StoredItemTree)>> =
+                    celerrate_cli::cache::pack::decode(&bytes, &real_header).unwrap();
+                let re_headered = Pack {
+                    header: foreign_plugins.clone(),
+                    entries: decoded.entries,
+                };
+                write_atomically(&path, &encode(&re_headered).unwrap()).unwrap();
+            }
+            MEMBER_TREES_PACK => {
+                let decoded: Pack<Vec<([u8; 32], StoredMemberTree)>> =
+                    celerrate_cli::cache::pack::decode(&bytes, &real_header).unwrap();
+                let re_headered = Pack {
+                    header: foreign_plugins.clone(),
+                    entries: decoded.entries,
+                };
+                write_atomically(&path, &encode(&re_headered).unwrap()).unwrap();
+            }
+            DIAGNOSTICS_PACK => {
+                let decoded: Pack<Vec<([u8; 32], StoredVerdict)>> =
+                    celerrate_cli::cache::pack::decode(&bytes, &real_header).unwrap();
+                let re_headered = Pack {
+                    header: foreign_plugins.clone(),
+                    entries: decoded.entries,
+                };
+                write_atomically(&path, &encode(&re_headered).unwrap()).unwrap();
+            }
+            INFERRED_SIGNATURES_PACK => {
+                let decoded: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
+                    celerrate_cli::cache::pack::decode(&bytes, &real_header).unwrap();
+                let re_headered = Pack {
+                    header: foreign_plugins.clone(),
+                    entries: decoded.entries,
+                };
+                write_atomically(&path, &encode(&re_headered).unwrap()).unwrap();
+            }
+            // The loop above only ever iterates the four named constants
+            // matched above: unreachable in practice, and a silent no-op
+            // rather than a `panic!` keeps this test file's zero-panic
+            // discipline honest even here.
+            _ => {}
+        }
+    }
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert_eq!(
+        outcome.diagnostics.len(),
+        1,
+        "the run still finds Missing honestly"
+    );
+    let statistics = &session.statistics;
+    assert_eq!(statistics.tree_hits.load(Ordering::Relaxed), 0);
+    assert!(statistics.tree_misses.load(Ordering::Relaxed) >= 1);
+    assert_eq!(statistics.member_tree_hits.load(Ordering::Relaxed), 0);
+    assert!(statistics.member_tree_misses.load(Ordering::Relaxed) >= 1);
+    assert_eq!(statistics.verdicts_served.load(Ordering::Relaxed), 0);
+    assert!(statistics.verdicts_absent.load(Ordering::Relaxed) >= 1);
+    assert_eq!(statistics.signatures_found.load(Ordering::Relaxed), 0);
+
+    let (_, warm_output) = run_check(root.path());
+    let fresh_root = project(&[("a.php", source_a), ("b.php", source_b)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        cold_output, warm_output,
+        "the mismatched packs changed nothing"
+    );
+    assert_eq!(
+        warm_output, fresh_output,
+        "a plugin-set mismatch discards every pack; rendering equals a fresh run",
+    );
+}
+
+/// Decision 1's pin, made an explicit regression witness rather than a
+/// compile-time-only truth: the fourth pack carries per-SIGNATURE
+/// records, never a per-EXPRESSION table. `many.php` declares a
+/// function whose body is 100 independent integer-literal statements
+/// (no calls, no class or function consultation, so its own entry stays
+/// minimal regardless of body size); `few.php` declares one with 3. If
+/// the pack ever grew a shadow expression-type table, the 100-expression
+/// entry would dwarf the 3-expression one by roughly the same 100:3
+/// ratio; instead both entries encode to within a small constant factor
+/// of each other, because the persisted record is the return type and a
+/// handful of dependency keys, never one row per expression walked.
+/// Kept a coarse factor bound, not a byte snapshot, so it does not pin
+/// the exact encoding.
+#[test]
+fn the_packs_carry_no_expression_type_tables() {
+    let many_statements: String = (0..100)
+        .map(|index| format!("$x{index} = {index};\n"))
+        .collect();
+    let source_many = format!("<?php function many() {{\n{many_statements}return 1;\n}}");
+    let source_few = "<?php function few() { $a = 1; $b = 2; return $a + $b; }";
+    let root = project(&[("many.php", source_many.as_str()), ("few.php", source_few)]);
+    run_check(root.path());
+
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    let bytes = std::fs::read(
+        root.path()
+            .join(".celerrate/cache/")
+            .join(INFERRED_SIGNATURES_PACK),
+    )
+    .unwrap();
+    let pack: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+
+    let entry_bytes = |key: &str| -> usize {
+        let (_, entry): &(StoredSignatureKey, StoredInferredSignature) = pack
+            .entries
+            .iter()
+            .find(|(candidate, _)| {
+                *candidate
+                    == StoredSignatureKey::Function {
+                        key: key.to_owned(),
+                    }
+            })
+            .expect("the entry must exist");
+        // The type is `StoredInferredSignature`, decision 1's own pin:
+        // the pack's payload class, verified by the successful typed
+        // decode above rather than restated here.
+        postcard::to_allocvec(entry).unwrap().len()
+    };
+    let many_bytes = entry_bytes("many");
+    let few_bytes = entry_bytes("few");
+
+    let expression_ratio = 100.0 / 3.0;
+    let byte_ratio = many_bytes as f64 / few_bytes.max(1) as f64;
+    assert!(
+        byte_ratio < expression_ratio / 2.0,
+        "a per-expression table would make the 100-expression entry roughly \
+         {expression_ratio:.1}x the 3-expression one; the actual ratio \
+         {byte_ratio:.2} ({many_bytes} vs {few_bytes} bytes) must stay far \
+         below that, since the pack holds one record per signature, not \
+         per expression",
     );
 }
