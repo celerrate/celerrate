@@ -481,8 +481,9 @@ pub struct BodyQuery<'db> {
 /// name a function or method carrying a body in `file` (an abstract or
 /// interface method, a property, a mismatched file). Range-free, so an
 /// ignorable edit backdates and body consumers are spared. No
-/// artifact-cache consultation yet: the typed-artifact classes are
-/// plan 9a.
+/// artifact-cache consultation, decided (plan 9a decision 6): the warm
+/// serve path never reads a body IR — content hashes stand in for body
+/// identity — and every recompute path has the parse anyway.
 #[salsa::tracked(returns(ref))]
 pub fn body_ir<'db>(
     db: &'db dyn salsa::Database,

@@ -9,15 +9,16 @@ use std::path::Path;
 
 use celerrate_cli::analysis::analyze;
 use celerrate_cli::cache::pack::{Pack, PackHeader, encode, write_atomically};
-use celerrate_cli::cache::snapshot::{DIAGNOSTICS_PACK, ITEM_TREES_PACK};
+use celerrate_cli::cache::snapshot::{DIAGNOSTICS_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK};
 use celerrate_cli::cache::stored::{
-    StoredAnswer, StoredDiagnostic, StoredItemTree, StoredRecord, StoredSeverity, StoredSpace,
-    StoredVerdict,
+    StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
+    StoredSeverity, StoredSpace, StoredVerdict,
 };
 use celerrate_cli::session::Session;
 use celerrate_project::{PhpVersion, PhpVersionRange};
 use celerrate_semantics::{
-    AstId, Declaration, DeclarationKind, ItemTree, SymbolSpace, item_tree, source_symbol_table,
+    AstId, ClassMembers, Declaration, DeclarationKind, ItemTree, MemberTree, SymbolSpace,
+    item_tree, member_tree, source_symbol_table,
 };
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -47,6 +48,21 @@ fn write_item_trees_pack(
     write_atomically(&directory.join(ITEM_TREES_PACK), &bytes).unwrap();
 }
 
+fn write_member_trees_pack(
+    root: &Path,
+    header: &PackHeader,
+    entries: Vec<([u8; 32], StoredMemberTree)>,
+) {
+    let directory = root.join(".celerrate/cache");
+    std::fs::create_dir_all(&directory).unwrap();
+    let bytes = encode(&Pack {
+        header: header.clone(),
+        entries,
+    })
+    .unwrap();
+    write_atomically(&directory.join(MEMBER_TREES_PACK), &bytes).unwrap();
+}
+
 /// The probe: an empty stored tree for a file that declares one class.
 /// A session that serves it consulted the pack; a session that lowers
 /// the file would see the declaration.
@@ -67,6 +83,30 @@ fn a_matching_pack_seeds_the_item_tree_query() {
     let tree = item_tree(&session.database, file);
     assert!(
         tree.declarations.is_empty(),
+        "the probe tree is served from the pack, not lowered from source",
+    );
+}
+
+/// The member-tree sibling of the item-tree probe above: the pack's
+/// entry deliberately differs from the true projection (an empty
+/// member tree for a file that declares a member-bearing class), so a
+/// session serving it proves the `member_tree` query consulted the
+/// pack rather than lowering the file.
+#[test]
+fn a_matching_pack_seeds_the_member_tree_query() {
+    let source = "<?php class Marker { public function m() {} }";
+    let root = project(&[("a.php", source)]);
+
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+    let probe = StoredMemberTree::of(&MemberTree::default());
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_member_trees_pack(root.path(), &header, vec![(hash, probe)]);
+
+    let session = Session::start(root.path());
+    let (_, &file) = session.sources.iter().next().unwrap();
+    let tree = member_tree(&session.database, file);
+    assert!(
+        tree.classes.is_empty(),
         "the probe tree is served from the pack, not lowered from source",
     );
 }
@@ -320,12 +360,13 @@ fn run_check(root: &Path) -> (celerrate_cli::Outcome, String) {
 }
 
 #[test]
-fn a_completed_run_writes_both_packs_and_the_gitignore() {
+fn a_completed_run_writes_every_pack_and_the_gitignore() {
     let root = project(&[("a.php", "<?php class A {} new Missing();")]);
     let (_, _) = run_check(root.path());
 
     let cache = root.path().join(".celerrate/cache");
     assert!(cache.join(ITEM_TREES_PACK).is_file());
+    assert!(cache.join(MEMBER_TREES_PACK).is_file());
     assert!(cache.join(DIAGNOSTICS_PACK).is_file());
     assert_eq!(
         std::fs::read_to_string(root.path().join(".celerrate/.gitignore")).unwrap(),
@@ -365,6 +406,8 @@ fn a_second_run_leaves_equivalent_packs_behind() {
     let (_, first_output) = run_check(root.path());
     let first_trees =
         std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
+    let first_member_trees =
+        std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK)).unwrap();
     let first_verdicts =
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
 
@@ -373,6 +416,10 @@ fn a_second_run_leaves_equivalent_packs_behind() {
     assert_eq!(
         first_trees,
         std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap(),
+    );
+    assert_eq!(
+        first_member_trees,
+        std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK)).unwrap(),
     );
     assert_eq!(
         first_verdicts,
@@ -459,6 +506,18 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
     );
     assert!(tree_keys.contains(&project_hash));
 
+    let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK))
+        .unwrap();
+    let member_trees: Pack<Vec<([u8; 32], StoredMemberTree)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+    let member_tree_keys: Vec<[u8; 32]> =
+        member_trees.entries.iter().map(|(key, _)| *key).collect();
+    assert!(
+        member_tree_keys.contains(&vendor_hash),
+        "the vendor file's member tree is indexed too"
+    );
+    assert!(member_tree_keys.contains(&project_hash));
+
     let bytes =
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
     let verdicts: Pack<Vec<([u8; 32], StoredVerdict)>> =
@@ -543,6 +602,50 @@ fn an_item_tree_with_an_absurd_ast_index_never_panics() {
         root.path(),
         &header,
         vec![(hash, StoredItemTree::of(&lying_tree))],
+    );
+
+    let (outcome, _) = run_check(root.path());
+    assert_ne!(
+        outcome,
+        celerrate_cli::Outcome::InternalError,
+        "an absurd AST index must never surface as an internal error",
+    );
+}
+
+/// The member-tree sibling of the adversarial test above: a stored
+/// class group names an AST index no tree of this file has. Pins the
+/// same end-to-end contract for the member pack — a lying entry flows
+/// through the engine (member lookup, linearization) without a panic
+/// and without an internal error.
+#[test]
+fn a_member_tree_with_an_absurd_ast_index_never_panics() {
+    let source = "<?php class Marker {} new Marker();";
+    let root = project(&[("a.php", source)]);
+    let hash = *blake3::hash(source.as_bytes()).as_bytes();
+
+    let lying_tree = MemberTree {
+        classes: vec![ClassMembers {
+            kind: DeclarationKind::Class,
+            name: Some("Marker".to_owned()),
+            namespace: String::new(),
+            ast_id: AstId {
+                file: celerrate_source::FileId::new(0),
+                index: u32::MAX,
+            },
+            docblock: None,
+            members: Vec::new(),
+            trait_uses: Vec::new(),
+            attribute_names: Vec::new(),
+            extends: Vec::new(),
+            implements: Vec::new(),
+        }],
+        functions: Vec::new(),
+    };
+    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    write_member_trees_pack(
+        root.path(),
+        &header,
+        vec![(hash, StoredMemberTree::of(&lying_tree))],
     );
 
     let (outcome, _) = run_check(root.path());

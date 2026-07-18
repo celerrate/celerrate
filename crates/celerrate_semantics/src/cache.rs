@@ -11,6 +11,7 @@ use celerrate_db::ContentHash;
 use celerrate_source::FileId;
 
 use crate::items::ItemTree;
+use crate::members::MemberTree;
 
 /// What a registered artifact cache can answer. The contract is exact:
 /// a `Some` must be byte-for-byte what the computation would produce
@@ -25,6 +26,13 @@ pub trait ArtifactCache: Send + Sync {
     /// The cached item tree of the file whose content hashes to
     /// `content`, already remapped to `file`.
     fn item_tree(&self, file: FileId, content: ContentHash) -> Option<ItemTree>;
+
+    /// The member projection, same contract as `item_tree`. Default
+    /// `None`: an implementation that has no member pack simply
+    /// misses (plan 9a).
+    fn member_tree(&self, _file: FileId, _content: ContentHash) -> Option<MemberTree> {
+        None
+    }
 }
 
 /// The registered cache, as the cloneable handle a salsa input field

@@ -8,22 +8,24 @@ use std::path::Path;
 use std::sync::Arc;
 
 use celerrate_db::ContentHash;
-use celerrate_semantics::{ArtifactCache, ItemTree};
+use celerrate_semantics::{ArtifactCache, ItemTree, MemberTree};
 use celerrate_source::FileId;
 use serde::de::DeserializeOwned;
 
 use super::pack::{PackHeader, decode};
 use super::statistics::CacheStatistics;
-use super::stored::{StoredItemTree, StoredVerdict};
+use super::stored::{StoredItemTree, StoredMemberTree, StoredVerdict};
 
 pub const ITEM_TREES_PACK: &str = "item_trees.bin";
+pub const MEMBER_TREES_PACK: &str = "member_trees.bin";
 pub const DIAGNOSTICS_PACK: &str = "diagnostics.bin";
 
-/// Whatever the packs validated to. Both maps may be empty; nothing
+/// Whatever the packs validated to. All maps may be empty; nothing
 /// downstream distinguishes "no cache" from "no valid cache".
 #[derive(Debug, Default)]
 pub struct CacheSnapshot {
     pub item_trees: HashMap<ContentHash, StoredItemTree>,
+    pub member_trees: HashMap<ContentHash, StoredMemberTree>,
     pub verdicts: HashMap<ContentHash, StoredVerdict>,
 }
 
@@ -31,6 +33,7 @@ impl CacheSnapshot {
     pub fn load(cache_directory: &Path, expected: &PackHeader) -> Self {
         Self {
             item_trees: load_pack(&cache_directory.join(ITEM_TREES_PACK), expected),
+            member_trees: load_pack(&cache_directory.join(MEMBER_TREES_PACK), expected),
             verdicts: load_pack(&cache_directory.join(DIAGNOSTICS_PACK), expected),
         }
     }
@@ -67,6 +70,24 @@ impl ArtifactCache for SnapshotCache {
             }
             None => {
                 self.statistics.tree_misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    fn member_tree(&self, file: FileId, content: ContentHash) -> Option<MemberTree> {
+        use std::sync::atomic::Ordering;
+        match self.snapshot.member_trees.get(&content) {
+            Some(stored) => {
+                self.statistics
+                    .member_tree_hits
+                    .fetch_add(1, Ordering::Relaxed);
+                Some(stored.to_member_tree(file))
+            }
+            None => {
+                self.statistics
+                    .member_tree_misses
+                    .fetch_add(1, Ordering::Relaxed);
                 None
             }
         }

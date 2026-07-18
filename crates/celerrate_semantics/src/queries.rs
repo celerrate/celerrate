@@ -47,10 +47,19 @@ pub fn item_tree(db: &dyn salsa::Database, file: SourceFile) -> ItemTree {
 /// docblock text. Range-free like the item tree, and a sibling of it
 /// on purpose: a member edit changes this value without touching
 /// `item_tree`, so top-level consumers — the global symbol table
-/// first — are structurally spared. No artifact-cache consultation
-/// yet: the typed-artifact classes are plan 9a.
+/// first — are structurally spared. A cache registered at the
+/// composition root is consulted first, keyed by the file's content
+/// address, exactly as `item_tree` does.
 #[salsa::tracked(returns(ref))]
 pub fn member_tree(db: &dyn salsa::Database, file: SourceFile) -> MemberTree {
+    if let Some(input) = crate::cache::ArtifactCacheInput::try_get(db)
+        && let Some(tree) = input
+            .cache(db)
+            .0
+            .member_tree(file.file_id(db), celerrate_db::content_hash(db, file))
+    {
+        return tree;
+    }
     MemberTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 

@@ -8,8 +8,9 @@
 use celerrate_diagnostics::{Diagnostic, Severity, find_identifier};
 use celerrate_project::PhpVersion;
 use celerrate_semantics::{
-    AstId, Declaration, DeclarationKind, ImportKind, ItemTree, ResolutionAnswer, ResolutionRecord,
-    SymbolSpace, UseImport,
+    AstId, ClassMembers, Declaration, DeclarationKind, FreeFunction, ImportKind, ItemTree, Member,
+    MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature, ResolutionAnswer,
+    ResolutionRecord, SymbolSpace, TraitAdaptation, TraitUse, UseImport, Visibility,
 };
 use celerrate_source::{FileId, TextRange, TextSize};
 use serde::{Deserialize, Serialize};
@@ -176,6 +177,419 @@ impl StoredItemTree {
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredMemberKind {
+    Method,
+    Property,
+    ClassConstant,
+    EnumCase,
+}
+
+impl StoredMemberKind {
+    fn of(kind: MemberKind) -> Self {
+        match kind {
+            MemberKind::Method => Self::Method,
+            MemberKind::Property => Self::Property,
+            MemberKind::ClassConstant => Self::ClassConstant,
+            MemberKind::EnumCase => Self::EnumCase,
+        }
+    }
+
+    fn to_kind(self) -> MemberKind {
+        match self {
+            Self::Method => MemberKind::Method,
+            Self::Property => MemberKind::Property,
+            Self::ClassConstant => MemberKind::ClassConstant,
+            Self::EnumCase => MemberKind::EnumCase,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredVisibility {
+    Public,
+    Protected,
+    Private,
+}
+
+impl StoredVisibility {
+    fn of(visibility: Visibility) -> Self {
+        match visibility {
+            Visibility::Public => Self::Public,
+            Visibility::Protected => Self::Protected,
+            Visibility::Private => Self::Private,
+        }
+    }
+
+    fn to_visibility(self) -> Visibility {
+        match self {
+            Self::Public => Visibility::Public,
+            Self::Protected => Visibility::Protected,
+            Self::Private => Visibility::Private,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredMemberFlags {
+    visibility: StoredVisibility,
+    is_static: bool,
+    is_abstract: bool,
+    is_final: bool,
+    is_readonly: bool,
+}
+
+impl StoredMemberFlags {
+    fn of(flags: MemberFlags) -> Self {
+        Self {
+            visibility: StoredVisibility::of(flags.visibility),
+            is_static: flags.is_static,
+            is_abstract: flags.is_abstract,
+            is_final: flags.is_final,
+            is_readonly: flags.is_readonly,
+        }
+    }
+
+    fn to_flags(self) -> MemberFlags {
+        MemberFlags {
+            visibility: self.visibility.to_visibility(),
+            is_static: self.is_static,
+            is_abstract: self.is_abstract,
+            is_final: self.is_final,
+            is_readonly: self.is_readonly,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredParameterSignature {
+    name: String,
+    type_text: Option<String>,
+    default_text: Option<String>,
+    by_reference: bool,
+    variadic: bool,
+    is_promoted: bool,
+}
+
+impl StoredParameterSignature {
+    fn of(parameter: &ParameterSignature) -> Self {
+        Self {
+            name: parameter.name.clone(),
+            type_text: parameter.type_text.clone(),
+            default_text: parameter.default_text.clone(),
+            by_reference: parameter.by_reference,
+            variadic: parameter.variadic,
+            is_promoted: parameter.is_promoted,
+        }
+    }
+
+    fn to_parameter(&self) -> ParameterSignature {
+        ParameterSignature {
+            name: self.name.clone(),
+            type_text: self.type_text.clone(),
+            default_text: self.default_text.clone(),
+            by_reference: self.by_reference,
+            variadic: self.variadic,
+            is_promoted: self.is_promoted,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StoredMemberSignature {
+    parameters: Vec<StoredParameterSignature>,
+    type_text: Option<String>,
+    default_text: Option<String>,
+    by_reference: bool,
+}
+
+impl StoredMemberSignature {
+    fn of(signature: &MemberSignature) -> Self {
+        Self {
+            parameters: signature
+                .parameters
+                .iter()
+                .map(StoredParameterSignature::of)
+                .collect(),
+            type_text: signature.type_text.clone(),
+            default_text: signature.default_text.clone(),
+            by_reference: signature.by_reference,
+        }
+    }
+
+    fn to_signature(&self) -> MemberSignature {
+        MemberSignature {
+            parameters: self
+                .parameters
+                .iter()
+                .map(StoredParameterSignature::to_parameter)
+                .collect(),
+            type_text: self.type_text.clone(),
+            default_text: self.default_text.clone(),
+            by_reference: self.by_reference,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredMember {
+    kind: StoredMemberKind,
+    name: String,
+    flags: StoredMemberFlags,
+    signature: StoredMemberSignature,
+    docblock: Option<String>,
+    ast_index: u32,
+}
+
+impl StoredMember {
+    fn of(member: &Member) -> Self {
+        Self {
+            kind: StoredMemberKind::of(member.kind),
+            name: member.name.clone(),
+            flags: StoredMemberFlags::of(member.flags),
+            signature: StoredMemberSignature::of(&member.signature),
+            docblock: member.docblock.clone(),
+            ast_index: member.ast_id.index,
+        }
+    }
+
+    fn to_member(&self, file: FileId) -> Member {
+        Member {
+            kind: self.kind.to_kind(),
+            name: self.name.clone(),
+            flags: self.flags.to_flags(),
+            signature: self.signature.to_signature(),
+            docblock: self.docblock.clone(),
+            ast_id: AstId {
+                file,
+                index: self.ast_index,
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredTraitAdaptation {
+    Precedence {
+        trait_name: Option<String>,
+        member: String,
+        excluded: Vec<String>,
+    },
+    Alias {
+        trait_name: Option<String>,
+        member: String,
+        visibility: Option<StoredVisibility>,
+        alias: Option<String>,
+    },
+}
+
+impl StoredTraitAdaptation {
+    fn of(adaptation: &TraitAdaptation) -> Self {
+        match adaptation {
+            TraitAdaptation::Precedence {
+                trait_name,
+                member,
+                excluded,
+            } => Self::Precedence {
+                trait_name: trait_name.clone(),
+                member: member.clone(),
+                excluded: excluded.clone(),
+            },
+            TraitAdaptation::Alias {
+                trait_name,
+                member,
+                visibility,
+                alias,
+            } => Self::Alias {
+                trait_name: trait_name.clone(),
+                member: member.clone(),
+                visibility: visibility.map(StoredVisibility::of),
+                alias: alias.clone(),
+            },
+        }
+    }
+
+    fn to_adaptation(&self) -> TraitAdaptation {
+        match self {
+            Self::Precedence {
+                trait_name,
+                member,
+                excluded,
+            } => TraitAdaptation::Precedence {
+                trait_name: trait_name.clone(),
+                member: member.clone(),
+                excluded: excluded.clone(),
+            },
+            Self::Alias {
+                trait_name,
+                member,
+                visibility,
+                alias,
+            } => TraitAdaptation::Alias {
+                trait_name: trait_name.clone(),
+                member: member.clone(),
+                visibility: visibility.map(StoredVisibility::to_visibility),
+                alias: alias.clone(),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredTraitUse {
+    names: Vec<String>,
+    adaptations: Vec<StoredTraitAdaptation>,
+}
+
+impl StoredTraitUse {
+    fn of(trait_use: &TraitUse) -> Self {
+        Self {
+            names: trait_use.names.clone(),
+            adaptations: trait_use
+                .adaptations
+                .iter()
+                .map(StoredTraitAdaptation::of)
+                .collect(),
+        }
+    }
+
+    fn to_trait_use(&self) -> TraitUse {
+        TraitUse {
+            names: self.names.clone(),
+            adaptations: self
+                .adaptations
+                .iter()
+                .map(StoredTraitAdaptation::to_adaptation)
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredClassMembers {
+    kind: StoredDeclarationKind,
+    name: Option<String>,
+    namespace: String,
+    ast_index: u32,
+    docblock: Option<String>,
+    members: Vec<StoredMember>,
+    trait_uses: Vec<StoredTraitUse>,
+    attribute_names: Vec<String>,
+    extends: Vec<String>,
+    implements: Vec<String>,
+}
+
+impl StoredClassMembers {
+    fn of(class: &ClassMembers) -> Self {
+        Self {
+            kind: StoredDeclarationKind::of(class.kind),
+            name: class.name.clone(),
+            namespace: class.namespace.clone(),
+            ast_index: class.ast_id.index,
+            docblock: class.docblock.clone(),
+            members: class.members.iter().map(StoredMember::of).collect(),
+            trait_uses: class.trait_uses.iter().map(StoredTraitUse::of).collect(),
+            attribute_names: class.attribute_names.clone(),
+            extends: class.extends.clone(),
+            implements: class.implements.clone(),
+        }
+    }
+
+    fn to_class_members(&self, file: FileId) -> ClassMembers {
+        ClassMembers {
+            kind: self.kind.to_kind(),
+            name: self.name.clone(),
+            namespace: self.namespace.clone(),
+            ast_id: AstId {
+                file,
+                index: self.ast_index,
+            },
+            docblock: self.docblock.clone(),
+            members: self
+                .members
+                .iter()
+                .map(|member| member.to_member(file))
+                .collect(),
+            trait_uses: self
+                .trait_uses
+                .iter()
+                .map(StoredTraitUse::to_trait_use)
+                .collect(),
+            attribute_names: self.attribute_names.clone(),
+            extends: self.extends.clone(),
+            implements: self.implements.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFreeFunction {
+    name: String,
+    namespace: String,
+    signature: StoredMemberSignature,
+    docblock: Option<String>,
+    ast_index: u32,
+}
+
+impl StoredFreeFunction {
+    fn of(function: &FreeFunction) -> Self {
+        Self {
+            name: function.name.clone(),
+            namespace: function.namespace.clone(),
+            signature: StoredMemberSignature::of(&function.signature),
+            docblock: function.docblock.clone(),
+            ast_index: function.ast_id.index,
+        }
+    }
+
+    fn to_free_function(&self, file: FileId) -> FreeFunction {
+        FreeFunction {
+            name: self.name.clone(),
+            namespace: self.namespace.clone(),
+            signature: self.signature.to_signature(),
+            docblock: self.docblock.clone(),
+            ast_id: AstId {
+                file,
+                index: self.ast_index,
+            },
+        }
+    }
+}
+
+/// One file's member tree with its process-local file identity
+/// removed, the `StoredItemTree` mirror pattern transposed: every
+/// `AstId` reduced to `ast_index: u32`, stamped back with the current
+/// identity by `to_member_tree`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct StoredMemberTree {
+    classes: Vec<StoredClassMembers>,
+    functions: Vec<StoredFreeFunction>,
+}
+
+impl StoredMemberTree {
+    pub fn of(tree: &MemberTree) -> Self {
+        Self {
+            classes: tree.classes.iter().map(StoredClassMembers::of).collect(),
+            functions: tree.functions.iter().map(StoredFreeFunction::of).collect(),
+        }
+    }
+
+    pub fn to_member_tree(&self, file: FileId) -> MemberTree {
+        MemberTree {
+            classes: self
+                .classes
+                .iter()
+                .map(|class| class.to_class_members(file))
+                .collect(),
+            functions: self
+                .functions
+                .iter()
+                .map(|function| function.to_free_function(file))
+                .collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum StoredSeverity {
     Warning,
     Error,
@@ -331,18 +745,26 @@ pub struct StoredVerdict {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used)]
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
-    use celerrate_semantics::{ItemTree, ResolutionAnswer};
+    use celerrate_semantics::{ItemTree, MemberKind, MemberTree, ResolutionAnswer, TraitAdaptation};
     use celerrate_source::{FileId, TextRange, TextSize};
     use celerrate_stubs::{StubAvailability, StubDeprecation};
 
-    use super::{StoredAnswer, StoredDiagnostic, StoredItemTree, StoredRecord, StoredSeverity};
+    use super::{
+        StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
+        StoredSeverity,
+    };
 
     fn parsed_tree(file: u32, source: &str) -> ItemTree {
         let parse = celerrate_syntax::parse(source);
         ItemTree::from_root(FileId::new(file), &parse.tree())
+    }
+
+    fn parsed_member_tree(file: u32, source: &str) -> MemberTree {
+        let parse = celerrate_syntax::parse(source);
+        MemberTree::from_root(FileId::new(file), &parse.tree())
     }
 
     #[test]
@@ -364,6 +786,85 @@ mod tests {
         let remapped = stored.to_item_tree(FileId::new(9));
         assert_eq!(remapped, parsed_tree(9, source));
         assert_eq!(remapped.defines, vec!["APP_ROOT".to_owned()]);
+    }
+
+    #[test]
+    fn a_member_tree_round_trips_onto_another_file_identity() {
+        let source = "<?php namespace App;\n\
+             #[AllowDynamicProperties]\n\
+             class Service {\n\
+                 use Sharable { hello as protected hi; }\n\
+                 public function __construct(private readonly int $id) {}\n\
+                 /** @return int */\n\
+                 public function &compute(int $count, string $label = 'x'): int { return $count; }\n\
+             }\n\
+             enum Status { case Active; }\n\
+             /** doc */\n\
+             function build(int $count): void {}\n\
+             function wrapper() { return new class { public function f() {} }; }";
+        let original = parsed_member_tree(3, source);
+
+        // Sanity: the fixture actually carries every feature the mirror
+        // must preserve.
+        let service = original
+            .classes
+            .iter()
+            .find(|class| class.name.as_deref() == Some("Service"))
+            .unwrap();
+        assert_eq!(
+            service.attribute_names,
+            vec!["AllowDynamicProperties".to_owned()],
+        );
+        assert_eq!(
+            service.trait_uses.first().unwrap().adaptations.first(),
+            Some(&TraitAdaptation::Alias {
+                trait_name: None,
+                member: "hello".to_owned(),
+                visibility: Some(celerrate_semantics::Visibility::Protected),
+                alias: Some("hi".to_owned()),
+            }),
+        );
+        let promoted = service
+            .members
+            .iter()
+            .find(|member| member.kind == MemberKind::Property)
+            .unwrap();
+        assert!(promoted.flags.is_readonly);
+        let compute = service
+            .members
+            .iter()
+            .find(|member| member.name == "compute")
+            .unwrap();
+        assert!(compute.signature.by_reference);
+        assert_eq!(compute.docblock.as_deref(), Some("/** @return int */"));
+        assert_eq!(compute.signature.parameters.len(), 2);
+        assert_eq!(
+            compute.signature.parameters[1].default_text.as_deref(),
+            Some("'x'"),
+        );
+        let status = original
+            .classes
+            .iter()
+            .find(|class| class.name.as_deref() == Some("Status"))
+            .unwrap();
+        assert_eq!(
+            status.members.first().map(|member| member.kind),
+            Some(MemberKind::EnumCase),
+        );
+        let build = original
+            .functions
+            .iter()
+            .find(|function| function.name == "build")
+            .unwrap();
+        assert_eq!(build.docblock.as_deref(), Some("/** doc */"));
+        assert!(
+            original.classes.iter().any(|class| class.name.is_none()),
+            "sanity: the anonymous class is projected",
+        );
+
+        let stored = StoredMemberTree::of(&original);
+        let remapped = stored.to_member_tree(FileId::new(9));
+        assert_eq!(remapped, parsed_member_tree(9, source));
     }
 
     #[test]

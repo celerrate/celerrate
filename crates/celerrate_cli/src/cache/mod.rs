@@ -27,11 +27,12 @@ use crate::analysis::{AnalysisInputs, AnalysisOutcome};
 use crate::session::Session;
 
 use pack::{Pack, PackHeader};
-use snapshot::{CacheSnapshot, DIAGNOSTICS_PACK, ITEM_TREES_PACK};
-use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
+use snapshot::{CacheSnapshot, DIAGNOSTICS_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK};
+use stored::{StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredVerdict};
 
 /// One pack's entries in memory: content-addressed, sorted, deduplicated.
 type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
+type MemberTreeEntries = Vec<(ContentHash, StoredMemberTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
 
 /// How one pack write ended.
@@ -47,15 +48,16 @@ enum PackWrite {
 
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
-/// replaced by what was actually WRITTEN, and only when both packs
-/// confirm — whole or nothing, so the next cycle's equality check never
+/// replaced by what was actually WRITTEN, and only when every pack
+/// confirms — whole or nothing, so the next cycle's equality check never
 /// compares against a snapshot the disk does not hold. On failure the
 /// old snapshot stays, the next pass recomputes the same entries and
 /// retries the write; an occasional redundant rewrite of the healthy
-/// pack alongside a retried failing one is harmless and best-effort.
+/// packs alongside a retried failing one is harmless and best-effort.
 ///
 /// Collecting the entries runs the very queries a panicked file left
-/// unmemoized (`item_tree`, `resolution_records`), so it happens behind
+/// unmemoized (`item_tree`, `member_tree`, `resolution_records`), so it
+/// happens behind
 /// `analysis::isolated`: a file `outcome.panicked` names is skipped
 /// before either query runs for it, and anything that panics here
 /// anyway — the guard exists for the unexpected, not the expected —
@@ -69,7 +71,7 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let header = PackHeader::current(current_range);
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
-    let Ok((trees, verdicts)) =
+    let Ok((trees, member_trees, verdicts)) =
         crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked))
     else {
         return;
@@ -79,7 +81,7 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         session
             .statistics
             .persist_failed
-            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(3, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     // The header the on-disk packs were last confirmed to hold, derived
@@ -98,6 +100,13 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.item_trees,
         header_moved,
     );
+    let member_trees_written = write_when_changed(
+        &session.cache_directory.join(MEMBER_TREES_PACK),
+        &header,
+        &member_trees,
+        &session.cache.member_trees,
+        header_moved,
+    );
     let verdicts_written = write_when_changed(
         &session.cache_directory.join(DIAGNOSTICS_PACK),
         &header,
@@ -105,7 +114,7 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.verdicts,
         header_moved,
     );
-    for write in [&trees_written, &verdicts_written] {
+    for write in [&trees_written, &member_trees_written, &verdicts_written] {
         let counter = match write {
             PackWrite::Unchanged => &session.statistics.persist_skipped,
             PackWrite::Written => &session.statistics.persist_written,
@@ -113,29 +122,33 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         };
         counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    if !matches!(trees_written, PackWrite::Failed) && !matches!(verdicts_written, PackWrite::Failed)
+    if !matches!(trees_written, PackWrite::Failed)
+        && !matches!(member_trees_written, PackWrite::Failed)
+        && !matches!(verdicts_written, PackWrite::Failed)
     {
         session.cache = Arc::new(CacheSnapshot {
             item_trees: trees.into_iter().collect(),
+            member_trees: member_trees.into_iter().collect(),
             verdicts: verdicts.into_iter().collect(),
         });
         session.cache_loaded_range = current_range;
     }
 }
 
-/// The trees and verdicts one pass may persist: every analyzed file's
-/// item tree, and every reported file's composed verdict, save for
-/// whatever `panicked` names. A panicked file's per-query memoization is
-/// empty (`guarded` never lets a panicked query's result reach salsa's
-/// cache), so recomputing `item_tree` or `resolution_records` for it here
-/// would deterministically reproduce the same panic; skipping it in both
-/// loops, before either query runs, is what keeps this call free of that
+/// The trees, member trees, and verdicts one pass may persist: every
+/// analyzed file's item tree and member tree, and every reported file's
+/// composed verdict, save for whatever `panicked` names. A panicked
+/// file's per-query memoization is empty (`guarded` never lets a
+/// panicked query's result reach salsa's cache), so recomputing
+/// `item_tree`, `member_tree`, or `resolution_records` for it here would
+/// deterministically reproduce the same panic; skipping it in every
+/// loop, before any query runs, is what keeps this call free of that
 /// panic rather than merely surviving it.
 fn collect_entries(
     sources: &BTreeMap<FileId, SourceFile>,
     inputs: &AnalysisInputs,
     panicked: &BTreeSet<FileId>,
-) -> (TreeEntries, VerdictEntries) {
+) -> (TreeEntries, MemberTreeEntries, VerdictEntries) {
     let database = &inputs.database;
 
     let mut trees: TreeEntries = sources
@@ -149,6 +162,18 @@ fn collect_entries(
         })
         .collect();
     sort_entries(&mut trees);
+
+    let mut member_trees: MemberTreeEntries = sources
+        .iter()
+        .filter(|(file_id, _)| !panicked.contains(file_id))
+        .map(|(_, &file)| {
+            (
+                celerrate_db::content_hash(database, file),
+                StoredMemberTree::of(celerrate_semantics::member_tree(database, file)),
+            )
+        })
+        .collect();
+    sort_entries(&mut member_trees);
 
     let mut verdicts: VerdictEntries = Vec::new();
     for &file in inputs.reported.iter() {
@@ -174,7 +199,7 @@ fn collect_entries(
     }
     sort_entries(&mut verdicts);
 
-    (trees, verdicts)
+    (trees, member_trees, verdicts)
 }
 
 /// One reported file's verdict — its diagnostics through the
@@ -326,6 +351,11 @@ mod tests {
             1,
             "the panicked file's tree is absent too: its query was never memoized",
         );
+        assert_eq!(
+            session.cache.member_trees.len(),
+            1,
+            "and its member tree is absent for the same reason",
+        );
     }
 
     /// When one pack cannot be written, neither the pack that could not
@@ -377,7 +407,7 @@ mod tests {
         assert_eq!(
             session.cache.verdicts.len(),
             1,
-            "both packs confirmed, so the snapshot now swaps",
+            "every pack confirmed, so the snapshot now swaps",
         );
     }
 
@@ -520,17 +550,17 @@ mod tests {
         super::persist(&mut session, &outcome);
         assert_eq!(
             session.statistics.persist_written.load(Ordering::Relaxed),
-            2
+            3
         );
 
         super::persist(&mut session, &outcome);
         assert_eq!(
             session.statistics.persist_skipped.load(Ordering::Relaxed),
-            2
+            3
         );
 
         // Obstruct one pack: its rename fails deterministically (rename
-        // onto a directory), the other pack is unchanged.
+        // onto a directory), the other packs are unchanged.
         let cache_directory = root.path().join(".celerrate/cache");
         std::fs::remove_file(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
         std::fs::create_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();

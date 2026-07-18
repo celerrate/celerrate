@@ -23,6 +23,10 @@ pub struct CacheStatistics {
     pub tree_hits: AtomicU64,
     /// Item-tree lookups the pack could not answer.
     pub tree_misses: AtomicU64,
+    /// Member-tree lookups answered from the pack.
+    pub member_tree_hits: AtomicU64,
+    /// Member-tree lookups the pack could not answer.
+    pub member_tree_misses: AtomicU64,
     /// Verdicts served: present, every record revalidated, every
     /// diagnostic converted.
     pub verdicts_served: AtomicU64,
@@ -55,9 +59,11 @@ impl CacheStatistics {
     pub fn render(&self) -> String {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         format!(
-            "cache: trees {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider; persist {} written / {} skipped / {} failed",
+            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider; persist {} written / {} skipped / {} failed",
             load(&self.tree_hits),
             load(&self.tree_misses),
+            load(&self.member_tree_hits),
+            load(&self.member_tree_misses),
             load(&self.verdicts_served),
             load(&self.verdicts_discarded),
             load(&self.verdicts_absent),
@@ -137,6 +143,7 @@ mod tests {
     fn the_rendered_line_carries_every_counter() {
         let statistics = CacheStatistics::default();
         statistics.tree_hits.fetch_add(3, Ordering::Relaxed);
+        statistics.member_tree_hits.fetch_add(2, Ordering::Relaxed);
         statistics.verdicts_served.fetch_add(2, Ordering::Relaxed);
         statistics.typed_bodies.fetch_add(4, Ordering::Relaxed);
         statistics
@@ -151,7 +158,7 @@ mod tests {
         statistics.persist_failed.fetch_add(1, Ordering::Relaxed);
         assert_eq!(
             statistics.render(),
-            "cache: trees 3 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider; persist 0 written / 0 skipped / 1 failed",
+            "cache: trees 3 hit / 0 miss; members 2 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider; persist 0 written / 0 skipped / 1 failed",
         );
     }
 
