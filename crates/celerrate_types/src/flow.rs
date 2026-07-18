@@ -1323,6 +1323,16 @@ impl<'db> Walker<'db, '_, '_> {
             self.dependencies
                 .inferred_functions
                 .push((key.to_owned(), raw));
+            // Plan 9a task 10: also record the callee's declared-
+            // signature-guarding dependency, keyed on `function_
+            // signature_digest`, even though only the inferred tier
+            // answered this call. Without this, a docblock `@return`
+            // later appearing on `key` (flipping it from `Trust::
+            // NativeOnly`/`mixed` to a usable declared return) has no
+            // recorded fact for revalidation to notice — it only
+            // re-demands `inferred_function_return`, which never reads
+            // docblocks, and serves the stale pre-docblock verdict.
+            self.dependencies.functions.insert(key.to_owned());
             return raw;
         }
         TypeId::mixed(db)
@@ -1458,6 +1468,22 @@ impl<'db> Walker<'db, '_, '_> {
                     inferred,
                 ));
                 let owner = self.member_owner(key, MemberKind::Method, name);
+                // Plan 9a task 10: also record the owning class as a
+                // dependency, keyed on `class_surface_digest` (task 2's
+                // surface digest resolves each member's declared
+                // signature), even though only the inferred tier
+                // answered this call. Without this, a docblock
+                // `@return` later appearing on this method has no
+                // recorded fact for revalidation to notice — it only
+                // re-demands `inferred_method_return`, which never
+                // reads docblocks, and serves the stale pre-docblock
+                // verdict. Recorded against `owner` (the actual
+                // declaring class lookup_member resolved), not merely
+                // `key` (the receiver key `member_owner` already
+                // records), since inheritance can make them differ.
+                if let Some(owner_key) = &owner {
+                    self.dependencies.classes.insert(owner_key.clone());
+                }
                 self.member_boundary_type(inferred, owner.as_deref(), receiver)
             };
             result = Some(match result {
@@ -3416,6 +3442,13 @@ impl<'db> Walker<'db, '_, '_> {
             self.dependencies
                 .inferred_functions
                 .push((key.to_owned(), raw));
+            // Plan 9a task 10: also record the callee's declared-
+            // signature-guarding dependency (mirrors `function_call_
+            // result`'s own fix) — a docblock `@return` later appearing
+            // on `key` must be visible to revalidation even though only
+            // the inferred tier answered this first-class-callable
+            // projection.
+            self.dependencies.functions.insert(key.to_owned());
             raw
         } else {
             TypeId::mixed(db)

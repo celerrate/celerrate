@@ -284,10 +284,19 @@ pub struct TypedDependencies<'db> {
     /// Folded keys of every class whose surface was consulted (every
     /// `lookup_member`/`linearized_class` consultation the walker
     /// performed: receiver resolution, the iteration protocol, property
-    /// types, the body owner's own class).
+    /// types, the body owner's own class). Plan 9a task 10: also
+    /// includes a method callee's owning class whenever the call
+    /// resolved through the INFERRED tier, so a docblock `@return`
+    /// later appearing on that method (flipping `class_surface_digest`)
+    /// is visible to revalidation even though the inferred edge alone
+    /// would not catch it.
     pub classes: BTreeSet<String>,
     /// Function-space keys whose declared signature was consulted
-    /// (every call resolved through the declared tier).
+    /// (every call resolved through the declared tier). Plan 9a task
+    /// 10: also includes a callee resolved through the INFERRED tier,
+    /// so a docblock `@return` later appearing on that callee (flipping
+    /// `function_signature_digest`) is visible to revalidation even
+    /// though the inferred edge alone would not catch it.
     pub functions: BTreeSet<String>,
     /// (function key, consumed inferred return) — one entry per call
     /// resolved through the inferred tier, `returned` the raw
