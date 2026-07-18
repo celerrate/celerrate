@@ -540,10 +540,14 @@ fn an_unrelated_declaration_spares_other_files_reference_checks() {
     let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
 
     let log = db.take_executed();
+    // `reference_diagnostics` is a thin, independently backdating
+    // projection over `reference_outcomes` (plan 9a task 4): the walk
+    // itself, and therefore the query whose re-execution this test
+    // observes, now lives in `reference_outcomes`.
     assert_eq!(
-        executions_of(&log, "reference_diagnostics"),
+        executions_of(&log, "reference_outcomes"),
         1,
-        "only the edited file re-checks; the consumer's lookups backdate: {log:?}",
+        "only the edited file's walk re-runs; the consumer's lookups backdate: {log:?}",
     );
 }
 
@@ -606,10 +610,14 @@ fn a_comment_only_edit_elsewhere_spares_the_consumer() {
     let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
 
     let log = db.take_executed();
+    // See the comment on the same assertion above: the walk
+    // (`reference_outcomes`) is what re-executes; `reference_diagnostics`
+    // is a projection that backdates independently once the walk's
+    // output is unchanged (plan 9a task 4).
     assert_eq!(
-        executions_of(&log, "reference_diagnostics"),
+        executions_of(&log, "reference_outcomes"),
         1,
-        "the edited file re-checks over its new tree; the consumer's \
+        "the edited file's walk re-runs over its new tree; the consumer's \
          lookups backdate behind the unchanged symbol table: {log:?}",
     );
 }

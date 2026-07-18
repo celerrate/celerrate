@@ -319,8 +319,12 @@ pub(crate) fn refined_element<'db>(
 
 /// The ancestor keys of one linearized class, nearest first (edge
 /// walk order), the root and duplicates removed. Stub ancestors take
-/// no part: annotations live in source docblocks.
-fn ancestors_in_walk_order(root_key: &str, linearized: &LinearizedClass) -> Vec<String> {
+/// no part: annotations live in source docblocks. `pub(crate)`:
+/// `records.rs`'s class-surface digest reuses this exact walk order —
+/// the same list `declared_member_signature`'s own inheritance walk
+/// consults, so the digest's ancestry facet can never disagree with
+/// what annotation resolution actually reads.
+pub(crate) fn ancestors_in_walk_order(root_key: &str, linearized: &LinearizedClass) -> Vec<String> {
     let mut seen: Vec<String> = Vec::new();
     for edge in &linearized.ancestry {
         let Some(resolved) = edge.resolved.as_deref() else {

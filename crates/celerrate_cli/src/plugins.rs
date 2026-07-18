@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use celerrate_plugin::{PLUGIN_API_VERSION, PluginDescriptor};
+use celerrate_semantics::PluginIdentity;
 
 use crate::database::AnalysisDatabase;
 
@@ -125,6 +126,47 @@ fn admit_dynamic_providers(
     (registrations, excluded)
 }
 
+/// The plugin-set cache key the `PluginIdentity` rustdoc promised (plan
+/// 4a decision 1): a blake3 digest over the sorted registered plugin
+/// identities' `(name, version, configuration)` triples. Adding,
+/// removing, or reconfiguring a plugin changes this digest, and the
+/// pack header's `plugins` field discards every existing pack wholesale
+/// — exactly like a stub-blob change.
+///
+/// Collects from the same descriptor list `register_plugins` above
+/// registers (bridge first, stdlib provider second), but the digest
+/// sorts before hashing, so registration order does not key the cache.
+pub fn plugin_set_digest() -> [u8; 32] {
+    digest_identities(&[
+        celerrate_phpdoc_bridge::descriptor().identity,
+        celerrate_stdlib_provider::descriptor().identity,
+    ])
+}
+
+/// The digest logic itself, taking the identities as data: sorted so
+/// the caller's order never matters, postcard-encoded, then
+/// blake3-hashed. An encoding failure answers `[0u8; 32]` — the
+/// degenerate case, never triggered in practice by
+/// `Vec<(String, String, String)>`, and even so a constant digest still
+/// discards nothing wrongly, it merely never varies.
+fn digest_identities(identities: &[PluginIdentity]) -> [u8; 32] {
+    let mut triples: Vec<(String, String, String)> = identities
+        .iter()
+        .map(|identity| {
+            (
+                identity.name.clone(),
+                identity.version.clone(),
+                identity.configuration.clone(),
+            )
+        })
+        .collect();
+    triples.sort();
+    match postcard::to_stdvec(&triples) {
+        Ok(encoded) => *blake3::hash(&encoded).as_bytes(),
+        Err(_) => [0u8; 32],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -134,7 +176,7 @@ mod tests {
         clippy::panic
     )]
 
-    use super::{admission, register_plugins};
+    use super::{admission, digest_identities, register_plugins};
     use crate::database::AnalysisDatabase;
 
     #[test]
@@ -232,6 +274,52 @@ mod tests {
         ) -> Option<celerrate_types::TypeId<'db>> {
             None
         }
+    }
+
+    fn fake_identity(
+        name: &str,
+        version: &str,
+        configuration: &str,
+    ) -> celerrate_semantics::PluginIdentity {
+        celerrate_semantics::PluginIdentity {
+            name: name.to_owned(),
+            version: version.to_owned(),
+            configuration: configuration.to_owned(),
+        }
+    }
+
+    #[test]
+    fn the_plugin_set_digest_is_order_independent_and_identity_sensitive() {
+        let alpha = fake_identity("alpha", "1.0.0", "");
+        let beta = fake_identity("beta", "2.0.0", "config");
+
+        let forward = digest_identities(&[alpha.clone(), beta.clone()]);
+        let reversed = digest_identities(&[beta.clone(), alpha.clone()]);
+        assert_eq!(
+            forward, reversed,
+            "the same members in a different order digest equal: the digest sorts",
+        );
+
+        let renamed = fake_identity("gamma", "2.0.0", "config");
+        assert_ne!(
+            forward,
+            digest_identities(&[alpha.clone(), renamed]),
+            "a changed name digests different",
+        );
+
+        let reversioned = fake_identity("beta", "3.0.0", "config");
+        assert_ne!(
+            forward,
+            digest_identities(&[alpha.clone(), reversioned]),
+            "a changed version digests different",
+        );
+
+        let reconfigured = fake_identity("beta", "2.0.0", "other");
+        assert_ne!(
+            forward,
+            digest_identities(&[alpha, reconfigured]),
+            "a changed configuration digests different",
+        );
     }
 
     fn fake_registration(

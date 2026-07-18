@@ -72,12 +72,18 @@ pub fn reconcile(changes: &[ChangedFile], analyzed: &BTreeSet<FileId>) -> Vec<In
 /// after every completed analysis, including every `--watch` iteration"
 /// clause (audit finding I6) — without needing a channel event to stop
 /// the loop.
+///
+/// Answers the completed outcome alongside a change already queued on
+/// the burst channel, when persisting this cycle was skipped because of
+/// one (see below) — `watch`'s own loop folds that path into the very
+/// next burst rather than losing it to a blocking `wait_for_a_burst`
+/// call that would never have blocked anyway.
 fn completed_cycle(
     session: &mut Session,
     watcher: &mut Watch,
     output: &mut dyn Write,
     reanalyzed: usize,
-) -> Result<AnalysisOutcome, Outcome> {
+) -> Result<(AnalysisOutcome, Option<PathBuf>), Outcome> {
     let started = Instant::now();
     // Every cycle re-analyzes, so every cycle also recomputes what the
     // analysis can go wrong about. Last cycle's panics are dropped
@@ -98,9 +104,63 @@ fn completed_cycle(
     if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
         return Err(Outcome::InternalError);
     }
-    crate::cache::persist(session, &outcome);
+    let pending = persist_unless_a_burst_is_already_waiting(session, watcher, &outcome);
     session.statistics.report();
-    Ok(outcome)
+    Ok((outcome, pending))
+}
+
+/// Plan 9a, task 11, decision 15's per-cycle-persist economics: a real
+/// corpus measurement (symfony/demo, 9341 files, release build) found
+/// persist's own entry-collection cost — `collect_entries` and
+/// `collect_signature_entries` walk every reported file every call, not
+/// just the one a single-line edit touched — holding steady around
+/// 50-60ms per cycle, several times over the ~13ms median warm cycle the
+/// same edits reanalyzed in. That is well past the 10% ceiling, so
+/// per-cycle persist does not keep audit finding I6's property as
+/// cheaply as hoped, and this is the recorded fallback: skip the write
+/// when a change is already queued on the burst channel, because
+/// `wait_for_a_burst` would not have blocked at all in that case —
+/// another cycle is already about to start, and this write would be
+/// redundant with the one that cycle attempts in turn. `try_recv` both
+/// checks and consumes; the consumed path is handed back to the caller
+/// rather than dropped, so `watch`'s own loop can fold it into the very
+/// next burst.
+///
+/// This trades away part of I6's crash-window property: any termination
+/// mid-burst now loses every cycle since the last quiet persist, not
+/// just one. `watch`'s own loop persists once more on its way out, but
+/// only along the branch reached when the burst channel disconnects
+/// (below) — and that branch is not reached by an interactive Ctrl+C,
+/// which gets the operating system's default handling (immediate
+/// termination, no destructors run, this function never returns) with
+/// no signal handler anywhere in this crate to route it through a
+/// graceful exit instead. So in practice this final persist covers only
+/// the narrow case of the channel's sender actually dropping while the
+/// watch is alive — the module's own comment on that branch already
+/// says this "cannot happen while the watch is alive" — and essentially
+/// every real way a `--watch` session ends (Ctrl+C included) loses every
+/// cycle back to the last quiet persist, the same as an unclean kill.
+/// Recorded as a known gap for a follow-up outside plan 9a's scope:
+/// SIGINT/SIGTERM handling that routes an interactive Ctrl+C through
+/// this same graceful-exit path.
+///
+/// Split out from `completed_cycle` so this decision — and the path it
+/// hands back — is pinned directly against a channel a test controls,
+/// rather than against `cycle`'s own real-time analysis polling of that
+/// same channel (which, by construction, drains any message already
+/// queued before analysis even starts, so a message pre-seeded for a
+/// `completed_cycle` test would never survive to reach this check at
+/// all).
+fn persist_unless_a_burst_is_already_waiting(
+    session: &mut Session,
+    watcher: &Watch,
+    outcome: &AnalysisOutcome,
+) -> Option<PathBuf> {
+    let pending = watcher.events().try_recv().ok();
+    if pending.is_none() {
+        crate::cache::persist(session, outcome);
+    }
+    pending
 }
 
 /// Watches, analyzes, reprints, forever. Returns only when the watch
@@ -114,12 +174,18 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
 
     let mut reanalyzed = session.sources.len();
     loop {
-        let outcome = match completed_cycle(session, &mut watcher, output, reanalyzed) {
-            Ok(outcome) => outcome,
+        let (outcome, pending) = match completed_cycle(session, &mut watcher, output, reanalyzed) {
+            Ok(result) => result,
             Err(ended) => return ended,
         };
 
-        let changed = wait_for_a_burst(watcher.events());
+        // A change already queued (task 11's fallback above) starts the
+        // next burst instead of blocking for one that has, in effect,
+        // already arrived.
+        let changed = match pending {
+            Some(path) => burst_starting_with(watcher.events(), path),
+            None => wait_for_a_burst(watcher.events()),
+        };
         if changed.is_empty() {
             // The channel holds its sender inside the watcher's event
             // handler, and the watcher outlives this loop, so a
@@ -129,6 +195,18 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
             // rendered. Returning `Outcome::Clean` unconditionally would
             // report success over a screen full of diagnostics, which is
             // the one thing the fixed exit codes forbid.
+            //
+            // A final persist closes task 11's fallback back to I6's
+            // guarantee along this one branch: whatever the last busy
+            // cycle skipped is flushed before the process actually
+            // returns. This branch is reached only when the channel
+            // disconnects, which an interactive Ctrl+C does not trigger
+            // (see `persist_unless_a_burst_is_already_waiting`'s own
+            // doc comment) — it is a no-op WRITE when that cycle's own
+            // persist already ran, since `write_when_changed` compares
+            // before writing, though the collection cost is still paid
+            // once either way.
+            crate::cache::persist(session, &outcome);
             return Outcome::of(outcome.diagnostics.len(), session.internal_errors.len());
         }
         session.absorb(&changed);
@@ -620,11 +698,18 @@ fn cycle(session: &mut Session, watcher: &mut Watch) -> notify::Result<AnalysisO
 
 /// Blocks until something changes, then collects the rest of the burst.
 fn wait_for_a_burst(events: &Receiver<PathBuf>) -> Vec<PathBuf> {
-    let mut changed = Vec::new();
     match events.recv() {
-        Ok(path) => changed.push(path),
-        Err(_) => return changed,
+        Ok(path) => burst_starting_with(events, path),
+        Err(_) => Vec::new(),
     }
+}
+
+/// Collects the rest of a burst that has already started with `first` —
+/// either `wait_for_a_burst`'s own blocking read, or (task 11) a change
+/// `completed_cycle` already found queued on the channel while deciding
+/// whether to persist.
+fn burst_starting_with(events: &Receiver<PathBuf>, first: PathBuf) -> Vec<PathBuf> {
+    let mut changed = vec![first];
     drain_burst(events, &mut changed);
     changed
 }
@@ -659,6 +744,29 @@ mod tests {
     use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
     use crate::render;
     use crate::session::{InternalError, Session};
+
+    /// A `Watch` whose channel never receives anything: nothing is
+    /// registered with the operating system, and the sender is dropped
+    /// immediately, so `try_recv` always answers `Disconnected` and
+    /// `recv_timeout` never actually waits out its timeout.
+    ///
+    /// For a test that mutates the session directly (`session.absorb`)
+    /// rather than through a real filesystem edit, this is what keeps
+    /// task 11's persist-skip check deterministic: a real `Watch::spawn`
+    /// over a temporary directory really does observe the test's own
+    /// `std::fs::write` calls, and the OS event's arrival time relative
+    /// to `completed_cycle`'s own `try_recv` peek is a race this helper
+    /// removes rather than accepts.
+    fn silent_watch(session: &Session) -> Watch {
+        let (_sender, receiver) = std::sync::mpsc::channel();
+        Watch {
+            _watcher: notify::recommended_watcher(|_event: notify::Result<notify::Event>| {})
+                .unwrap(),
+            events: receiver,
+            declared: session.discovery.project_walk_roots.clone(),
+            unwatchable: Vec::new(),
+        }
+    }
 
     /// The invariant the whole loop is built on, and the one the umbrella
     /// design called unretrofittable: a setter on the main thread's `&mut`
@@ -1431,13 +1539,18 @@ mod tests {
         let edited = root.path().join("a.php");
         std::fs::write(&edited, "<?php class A {}").unwrap();
         let mut session = Session::start(root.path());
-        let mut watcher = Watch::spawn(&session).unwrap();
+        let mut watcher = silent_watch(&session);
         let mut output = Vec::new();
 
-        let first = super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        let (first, pending) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
         assert!(
             first.diagnostics.is_empty(),
             "sanity: the initial state is clean"
+        );
+        assert!(
+            pending.is_none(),
+            "the silent watch never has anything queued, so this cycle persists",
         );
         let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
         let after_first = std::fs::read(&diagnostics_pack).unwrap();
@@ -1445,7 +1558,8 @@ mod tests {
         let edited_source = "<?php class A {} new Missing();";
         std::fs::write(&edited, edited_source).unwrap();
         session.absorb(std::slice::from_ref(&edited));
-        let second = super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        let (second, _) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
         assert_eq!(second.diagnostics.len(), 1, "the cycle sees the edit");
 
         let after_second = std::fs::read(&diagnostics_pack).unwrap();
@@ -1454,14 +1568,243 @@ mod tests {
             "the cycle's persist rewrote the pack"
         );
 
-        let header =
-            PackHeader::current(session.configuration.php_version_range(&session.database));
+        let header = PackHeader::current(
+            session.configuration.php_version_range(&session.database),
+            session.plugin_set_digest,
+        );
         let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
         assert!(
             pack.entries
                 .iter()
                 .any(|(key, _)| key == blake3::hash(edited_source.as_bytes()).as_bytes()),
             "the pack on disk is keyed by the edited content",
+        );
+    }
+
+    /// Plan 9a, task 11, decision 15's fallback: a measured corpus run
+    /// (symfony/demo, 9341 files, release build) found per-cycle persist
+    /// costing several times the ~13ms median warm cycle it was folded
+    /// into, well past the 10% ceiling — so a busy cycle, one where a
+    /// change is already queued on the burst channel by the time this
+    /// cycle would persist, skips the write instead, and the very next
+    /// quiet cycle persists what the busy one deferred. This pins the
+    /// trade directly on `completed_cycle`: nothing is dropped, only
+    /// deferred, and the queued path is threaded back rather than lost —
+    /// `persist_written`/`persist_skipped` move on neither pack during
+    /// the busy cycle and do move on the quiet one that follows.
+    #[test]
+    fn a_skipped_persist_lands_on_the_next_quiet_cycle() {
+        use std::sync::atomic::Ordering;
+
+        // `super::persist_unless_a_burst_is_already_waiting` directly:
+        // `cycle`'s own inner analysis loop polls the very same channel
+        // this decision reads, and drains any message already queued
+        // before analysis even starts (that is what lets it cancel and
+        // restart an in-flight analysis at all) — so a message
+        // pre-seeded ahead of a full `completed_cycle` call would never
+        // survive to reach this decision, and only a message that truly
+        // arrives in the narrow window between `cycle` returning and
+        // this check would exercise it, which no synchronous test can
+        // land deterministically. The decision is a small, self-
+        // contained function precisely so it can be pinned without that
+        // race.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let outcome = AnalysisOutcome::default();
+
+        let persisted = |session: &Session| -> u64 {
+            session.statistics.persist_written.load(Ordering::Relaxed)
+                + session.statistics.persist_skipped.load(Ordering::Relaxed)
+        };
+
+        // Warm the pack once on a channel with nothing queued, so the
+        // busy cycle below has an unchanged entry set to compare
+        // against and skip a rewrite of, exactly as an ordinary quiet
+        // cycle would.
+        let watcher = silent_watch(&session);
+        let pending =
+            super::persist_unless_a_burst_is_already_waiting(&mut session, &watcher, &outcome);
+        assert!(pending.is_none(), "sanity: nothing was ever queued yet");
+        let written_before = persisted(&session);
+        assert!(written_before > 0, "sanity: the first cycle did persist");
+
+        // A change lands on the channel exactly as if the user kept
+        // editing while this cycle's analysis ran — `wait_for_a_burst`
+        // would not have blocked at all had this cycle reached it.
+        let mut busy_watcher = silent_watch(&session);
+        let (sender, receiver) = std::sync::mpsc::channel();
+        busy_watcher.events = receiver;
+        let queued = root.path().join("a.php");
+        sender.send(queued.clone()).unwrap();
+
+        let pending =
+            super::persist_unless_a_burst_is_already_waiting(&mut session, &busy_watcher, &outcome);
+        assert_eq!(
+            pending,
+            Some(queued),
+            "the queued change is threaded back, never dropped",
+        );
+        assert_eq!(
+            persisted(&session),
+            written_before,
+            "the busy cycle skips persist entirely: neither written nor skipped moves",
+        );
+
+        // The channel is quiet now — the queued path was consumed by
+        // the `try_recv` peek above and nothing replaced it — so the
+        // very next cycle persists, landing what the busy cycle
+        // deferred.
+        let pending =
+            super::persist_unless_a_burst_is_already_waiting(&mut session, &busy_watcher, &outcome);
+        assert!(pending.is_none(), "nothing is queued on a quiet channel");
+        assert!(
+            persisted(&session) > written_before,
+            "the next quiet cycle actually persists",
+        );
+    }
+
+    /// Plan 9a, task 10, decision 14's no-provisional pin (design section
+    /// 6): "no provisional value served or persisted". `completed_cycle`
+    /// calls `crate::cache::persist` exactly once, AFTER `cycle` settles
+    /// on a completed `AnalysisOutcome` — `cycle`'s own internal restart
+    /// loop, entered whenever a change lands mid-analysis and cancels
+    /// the in-flight `analyze` (the same primitive
+    /// `a_setter_cancels_an_analysis_that_is_already_running` above
+    /// pins), never calls `persist` itself. This drives that exact
+    /// cancellation primitive directly — not through the OS `notify`
+    /// watcher, which the other test already establishes is sufficient
+    /// to reach the same `Cancelled` arm inside `cycle`'s own loop, so
+    /// re-deriving it through real filesystem events here would only add
+    /// timing flakiness for no additional coverage — and asserts persist
+    /// genuinely never ran during the cancelled attempt: the packs on
+    /// disk stay byte-identical, mtime included, to the prior COMPLETED
+    /// cycle's own persist, right up until the NEXT cycle actually
+    /// completes and persists in turn.
+    #[test]
+    fn a_cancelled_cycle_persists_nothing() {
+        use crate::cache::pack::{Pack, PackHeader, decode};
+        use crate::cache::stored::StoredVerdict;
+
+        let root = tempfile::tempdir().unwrap();
+        let total = 400;
+        for index in 0..total {
+            std::fs::write(
+                root.path().join(format!("Service{index}.php")),
+                format!(
+                    "<?php class Service{index} extends Service{} {{}}",
+                    (index + 1) % total,
+                ),
+            )
+            .unwrap();
+        }
+        let mut session = Session::start(root.path());
+        let mut watcher = silent_watch(&session);
+        let mut output = Vec::new();
+
+        // One completed cycle: the packs exist, and this is the "prior
+        // completed cycle's" state the cancelled attempt below must
+        // leave untouched.
+        let (first, _) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, total).unwrap();
+        assert!(
+            first.diagnostics.is_empty(),
+            "sanity: the initial circular-inheritance fixture is clean"
+        );
+
+        let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
+        let item_trees_pack = root.path().join(".celerrate/cache/item_trees.bin");
+        let after_first_diagnostics = std::fs::read(&diagnostics_pack).unwrap();
+        let after_first_trees = std::fs::read(&item_trees_pack).unwrap();
+        let mtime_before = std::fs::metadata(&diagnostics_pack)
+            .unwrap()
+            .modified()
+            .unwrap();
+
+        // The exact cancellation primitive `a_setter_cancels_an_analysis_
+        // that_is_already_running` above pins: a mutation lands on the
+        // main thread's `&mut Session` handle while a worker thread is
+        // mid-fan-out over `analyze`, raising `salsa::Cancelled` in the
+        // worker. Neither `absorb_outcome` nor `persist` is reachable
+        // from this loop at all — both live only inside `completed_
+        // cycle`, downstream of a settled `cycle()` result — so this is
+        // the whole point under test: cancellation cannot persist
+        // anything by construction, and this asserts that empirically
+        // too, on the actual bytes on disk.
+        let edited = root.path().join("Service0.php");
+        let mut cancelled = false;
+        for attempt in 0..20 {
+            let inputs = session.inputs();
+            let worker = std::thread::spawn(move || analyze(&inputs));
+
+            std::fs::write(
+                &edited,
+                format!("<?php class Service0 {{ public int $x = {attempt}; }} new Missing();"),
+            )
+            .unwrap();
+            session.absorb(std::slice::from_ref(&edited));
+
+            if matches!(worker.join(), Ok(Err(Cancelled))) {
+                cancelled = true;
+                break;
+            }
+        }
+        assert!(
+            cancelled,
+            "the analysis was never caught in flight: cancellation was never observed",
+        );
+
+        assert_eq!(
+            std::fs::read(&diagnostics_pack).unwrap(),
+            after_first_diagnostics,
+            "a cancelled analysis must persist nothing: the diagnostics pack bytes are unchanged",
+        );
+        assert_eq!(
+            std::fs::read(&item_trees_pack).unwrap(),
+            after_first_trees,
+            "a cancelled analysis must persist nothing: the item-tree pack bytes are unchanged",
+        );
+        assert_eq!(
+            std::fs::metadata(&diagnostics_pack)
+                .unwrap()
+                .modified()
+                .unwrap(),
+            mtime_before,
+            "a cancelled analysis must not even rewrite the pack with identical bytes",
+        );
+
+        // The next COMPLETED cycle sees the settled edit (real bytes on
+        // disk: `new Missing();`) and persists it — proving the
+        // comparison above was not vacuous, since the packs on disk CAN
+        // and DO change once a cycle actually completes.
+        let (second, _) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+        assert!(
+            second
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("Missing")),
+            "the next completed cycle sees the settled edit: {:?}",
+            second.diagnostics,
+        );
+        assert_ne!(
+            std::fs::read(&diagnostics_pack).unwrap(),
+            after_first_diagnostics,
+            "the next completed cycle's persist does rewrite the pack",
+        );
+
+        let header = PackHeader::current(
+            session.configuration.php_version_range(&session.database),
+            session.plugin_set_digest,
+        );
+        let after_second = std::fs::read(&diagnostics_pack).unwrap();
+        let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
+        assert!(
+            pack.entries.iter().any(|(_, verdict)| verdict
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.message.contains("Missing"))),
+            "the persisted pack carries the settled edit's own finding, never a cancelled one",
         );
     }
 

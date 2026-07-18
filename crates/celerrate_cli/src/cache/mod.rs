@@ -3,10 +3,15 @@
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
 //!
-//! The typed families (CEL0030-CEL0038) are plan 9a's artifact class,
-//! not this one's: `StoredVerdict` persists only the syntax, decode,
-//! and semantic families, and stays that way with no format bump. The
-//! typed portion is recomputed fresh on every path, cold or warm.
+//! The typed families (CEL0030-CEL0038) are plan 9a's own artifact
+//! class: `StoredVerdict.typed` (task 9) carries their post-suppression
+//! diagnostics alongside the class, function, and inferred-edge records
+//! `crate::cache::verdict`'s layered validation replays against the live
+//! project — the file-level counterpart of the fourth pack's per-body
+//! `StoredInferredSignature` (task 7). `PERSIST_TYPED_ARTIFACTS` gates
+//! both: off, `StoredVerdict.typed` stays `None` and the typed portion
+//! is recomputed fresh on every path, cold or warm, exactly as before
+//! task 9.
 
 pub mod identity;
 pub mod pack;
@@ -20,19 +25,55 @@ use std::path::Path;
 use std::sync::Arc;
 
 use celerrate_db::{ContentHash, SourceFile};
+use celerrate_semantics::{
+    BodyQuery, ClassQuery, DeclarationKind, MemberKind, SymbolSpace, folded_member_key,
+    folded_symbol_key, fully_qualified_name,
+};
 use celerrate_source::FileId;
+use celerrate_types::{
+    FunctionQuery, InferenceContext, InferredBody, StoredClassDependency, StoredFunctionDependency,
+    StoredInferredEdge, StoredInferredSignature, StoredSignatureKey, StoredType,
+    class_surface_digest, function_signature_digest, inferred_body_types,
+};
 use serde::Serialize;
 
 use crate::analysis::{AnalysisInputs, AnalysisOutcome};
+use crate::database::AnalysisDatabase;
 use crate::session::Session;
 
 use pack::{Pack, PackHeader};
-use snapshot::{CacheSnapshot, DIAGNOSTICS_PACK, ITEM_TREES_PACK};
-use stored::{StoredDiagnostic, StoredItemTree, StoredRecord, StoredVerdict};
+use snapshot::{
+    CacheSnapshot, DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
+};
+use stored::{
+    StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredTypedVerdict,
+    StoredVerdict,
+};
 
-/// One pack's entries in memory: content-addressed, sorted, deduplicated.
+/// One pack's entries in memory: sorted, deduplicated, one entry per key.
 type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
+type MemberTreeEntries = Vec<(ContentHash, StoredMemberTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
+type SignatureEntries = Vec<(StoredSignatureKey, StoredInferredSignature)>;
+
+/// Plan 9a's persist lever for the typed-artifact families (task 7,
+/// extended by task 9): `true` persists the inferred-signature pack
+/// ([`collect_signature_entries`]) AND populates `StoredVerdict.typed`
+/// ([`composed_verdict`]'s typed half); `false` drops both. Fixed at
+/// `true` today (task 12's closing memo: the lever was never pulled) —
+/// no runtime toggle exists yet; until one does, this is the named,
+/// reviewable hook a future flip lands on, and the const is threaded
+/// into [`composed_verdict_with_lever`] so its two branches stay
+/// unit-testable without one.
+///
+/// What pulling it to `false` would mean: every typed warm serve falls
+/// back to fresh interprocedural inference, so the warm number for the
+/// typed families converges toward cold-with-inference rather than
+/// staying near the untyped warm floor — design section 9's tracked
+/// trade-off. Escalating that flip past this const into a real release
+/// decision (a CLI flag, a project setting) is out of this plan's
+/// scope; it is plan 9c's call, informed by plan 9b's measured numbers.
+pub(crate) const PERSIST_TYPED_ARTIFACTS: bool = true;
 
 /// How one pack write ended.
 enum PackWrite {
@@ -47,15 +88,16 @@ enum PackWrite {
 
 /// Persists the packs after one completed pass, best-effort: an I/O
 /// failure skips the write and nothing else. The session's snapshot is
-/// replaced by what was actually WRITTEN, and only when both packs
-/// confirm — whole or nothing, so the next cycle's equality check never
+/// replaced by what was actually WRITTEN, and only when every pack
+/// confirms — whole or nothing, so the next cycle's equality check never
 /// compares against a snapshot the disk does not hold. On failure the
 /// old snapshot stays, the next pass recomputes the same entries and
 /// retries the write; an occasional redundant rewrite of the healthy
-/// pack alongside a retried failing one is harmless and best-effort.
+/// packs alongside a retried failing one is harmless and best-effort.
 ///
 /// Collecting the entries runs the very queries a panicked file left
-/// unmemoized (`item_tree`, `resolution_records`), so it happens behind
+/// unmemoized (`item_tree`, `member_tree`, `resolution_records`), so it
+/// happens behind
 /// `analysis::isolated`: a file `outcome.panicked` names is skipped
 /// before either query runs for it, and anything that panics here
 /// anyway — the guard exists for the unexpected, not the expected —
@@ -63,14 +105,37 @@ enum PackWrite {
 /// raw abort. The old snapshot stays and the next pass retries, exactly
 /// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
+    // Wall-clock read, legal here and only here (task 11): this is the
+    // persist orchestration layer, never a salsa query, and the reading
+    // feeds only `CacheStatistics` — telemetry for the stats line, never
+    // analysis or the rendered diagnostics.
+    let started = std::time::Instant::now();
+    persist_timed(session, outcome);
+    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    session
+        .statistics
+        .persist_milliseconds
+        .fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `persist`'s body, timed by its caller. Split out so every early
+/// `return` below (an isolated collection failing, the cache directory
+/// being unwritable) still has its elapsed time recorded — the timer
+/// wraps the call, not each exit path individually.
+fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
     let current_range = session.configuration.php_version_range(database);
-    let header = PackHeader::current(current_range);
+    let header = PackHeader::current(current_range, session.plugin_set_digest);
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
-    let Ok((trees, verdicts)) =
+    let Ok((trees, member_trees, verdicts)) =
         crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked))
+    else {
+        return;
+    };
+    let Ok(signatures) =
+        crate::analysis::isolated(|| collect_signature_entries(&inputs, &panicked))
     else {
         return;
     };
@@ -79,7 +144,7 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         session
             .statistics
             .persist_failed
-            .fetch_add(2, std::sync::atomic::Ordering::Relaxed);
+            .fetch_add(4, std::sync::atomic::Ordering::Relaxed);
         return;
     }
     // The header the on-disk packs were last confirmed to hold, derived
@@ -98,6 +163,13 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.item_trees,
         header_moved,
     );
+    let member_trees_written = write_when_changed(
+        &session.cache_directory.join(MEMBER_TREES_PACK),
+        &header,
+        &member_trees,
+        &session.cache.member_trees,
+        header_moved,
+    );
     let verdicts_written = write_when_changed(
         &session.cache_directory.join(DIAGNOSTICS_PACK),
         &header,
@@ -105,7 +177,29 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         &session.cache.verdicts,
         header_moved,
     );
-    for write in [&trees_written, &verdicts_written] {
+    // `PERSIST_TYPED_ARTIFACTS` gates the write attempt itself, not just
+    // the collected entries: `collect_signature_entries` already answers
+    // an empty `Vec` when the lever is off, but writing that empty `Vec`
+    // through `write_when_changed` would still create an (empty) pack
+    // file the first time — the lever's contract is that the pack is
+    // never written at all, not written empty.
+    let signatures_written = if PERSIST_TYPED_ARTIFACTS {
+        write_when_changed(
+            &session.cache_directory.join(INFERRED_SIGNATURES_PACK),
+            &header,
+            &signatures,
+            &session.cache.signatures,
+            header_moved,
+        )
+    } else {
+        PackWrite::Unchanged
+    };
+    for write in [
+        &trees_written,
+        &member_trees_written,
+        &verdicts_written,
+        &signatures_written,
+    ] {
         let counter = match write {
             PackWrite::Unchanged => &session.statistics.persist_skipped,
             PackWrite::Written => &session.statistics.persist_written,
@@ -113,29 +207,35 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
         };
         counter.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
-    if !matches!(trees_written, PackWrite::Failed) && !matches!(verdicts_written, PackWrite::Failed)
+    if !matches!(trees_written, PackWrite::Failed)
+        && !matches!(member_trees_written, PackWrite::Failed)
+        && !matches!(verdicts_written, PackWrite::Failed)
+        && !matches!(signatures_written, PackWrite::Failed)
     {
         session.cache = Arc::new(CacheSnapshot {
             item_trees: trees.into_iter().collect(),
+            member_trees: member_trees.into_iter().collect(),
             verdicts: verdicts.into_iter().collect(),
+            signatures: signatures.into_iter().collect(),
         });
         session.cache_loaded_range = current_range;
     }
 }
 
-/// The trees and verdicts one pass may persist: every analyzed file's
-/// item tree, and every reported file's composed verdict, save for
-/// whatever `panicked` names. A panicked file's per-query memoization is
-/// empty (`guarded` never lets a panicked query's result reach salsa's
-/// cache), so recomputing `item_tree` or `resolution_records` for it here
-/// would deterministically reproduce the same panic; skipping it in both
-/// loops, before either query runs, is what keeps this call free of that
+/// The trees, member trees, and verdicts one pass may persist: every
+/// analyzed file's item tree and member tree, and every reported file's
+/// composed verdict, save for whatever `panicked` names. A panicked
+/// file's per-query memoization is empty (`guarded` never lets a
+/// panicked query's result reach salsa's cache), so recomputing
+/// `item_tree`, `member_tree`, or `resolution_records` for it here would
+/// deterministically reproduce the same panic; skipping it in every
+/// loop, before any query runs, is what keeps this call free of that
 /// panic rather than merely surviving it.
 fn collect_entries(
     sources: &BTreeMap<FileId, SourceFile>,
     inputs: &AnalysisInputs,
     panicked: &BTreeSet<FileId>,
-) -> (TreeEntries, VerdictEntries) {
+) -> (TreeEntries, MemberTreeEntries, VerdictEntries) {
     let database = &inputs.database;
 
     let mut trees: TreeEntries = sources
@@ -150,6 +250,18 @@ fn collect_entries(
         .collect();
     sort_entries(&mut trees);
 
+    let mut member_trees: MemberTreeEntries = sources
+        .iter()
+        .filter(|(file_id, _)| !panicked.contains(file_id))
+        .map(|(_, &file)| {
+            (
+                celerrate_db::content_hash(database, file),
+                StoredMemberTree::of(celerrate_semantics::member_tree(database, file)),
+            )
+        })
+        .collect();
+    sort_entries(&mut member_trees);
+
     let mut verdicts: VerdictEntries = Vec::new();
     for &file in inputs.reported.iter() {
         let file_id = file.file_id(database);
@@ -157,14 +269,25 @@ fn collect_entries(
             continue;
         }
         let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
-        // Mirrors `analyze_one`: a validated hit is only reused when
-        // every stored diagnostic still re-interns, or `persist` would
-        // re-persist an entry the pass itself refused to serve.
-        let stored = match verdict::validated_verdict(inputs, file) {
-            Some(stored)
-                if stored.diagnostics.iter().all(|diagnostic| {
-                    diagnostic.to_diagnostic(file_id, content_length).is_some()
-                }) =>
+        // Mirrors `analyze_one`: a validated hit's whole entry is only
+        // reused byte-for-byte when every stored diagnostic still
+        // re-interns AND the typed half itself validated
+        // (`TypedOutcome::Served`) — a `Recompute` typed outcome means
+        // this file's typed portion is already stale against the live
+        // project, and reusing the old entry verbatim would persist that
+        // staleness forward untouched (never re-checked until the whole
+        // entry moves for some unrelated reason). `composed_verdict`
+        // recomputes both halves in that case; every query underneath it
+        // is memoized from the pass that already ran, so this costs
+        // nothing beyond a salsa cache read.
+        let stored = match verdict::lookup_verdict(inputs, file) {
+            verdict::VerdictLookup::Hit {
+                verdict: stored,
+                typed: verdict::TypedOutcome::Served,
+            } if stored
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.to_diagnostic(file_id, content_length).is_some()) =>
             {
                 stored.clone()
             }
@@ -174,15 +297,227 @@ fn collect_entries(
     }
     sort_entries(&mut verdicts);
 
-    (trees, verdicts)
+    (trees, member_trees, verdicts)
+}
+
+/// The inferred-signature pack's entries (plan 9a, task 7): one per
+/// eligible body — every REPORTED file's free functions and
+/// `MemberKind::Method` members — save for whatever `panicked` names,
+/// mirroring `collect_entries`'s own panic guard exactly (this reads
+/// `member_tree` and `inferred_body_types`, the same panic-reproducing
+/// concern). Answers an empty `Vec` outright when
+/// [`PERSIST_TYPED_ARTIFACTS`] is off.
+///
+/// `inputs.reported` (project files only), never the broader `sources`/
+/// `inputs.files` set the item-tree and member-tree packs iterate: this
+/// function calls `inferred_body_types`, and `analysis::analyze` fans
+/// interprocedural inference over `inputs.reported` alone (`analyze`'s
+/// own rustdoc — dependency files exist to resolve names against, never
+/// to be inferred themselves). Persist may only READ a result the
+/// analysis pass already computed (this module's own decision-8
+/// invariant); widening this loop to `sources` would force a FRESH,
+/// unbounded interprocedural inference of every vendor body the pass
+/// never touched — thousands of them on a real Composer project — and
+/// let a panic in code the pass never risked abort every pack this
+/// persist writes, not just this one.
+///
+/// Three conservative exclusions, all falling back to recomputation
+/// rather than persisting a wrong answer:
+/// - a vendor (non-reported) file's own bodies (above) — recorded
+///   debt: persisting the vendor callees a reported file's own
+///   inferred edges transitively reach is a possible plan 9b
+///   optimization, revisited only if the numbers show the
+///   cross-boundary vendor cutoff matters;
+/// - a `DeclarationKind::Trait` class-like's own methods (a trait's
+///   memo key carries the using class's context, which the trait's own
+///   file cannot enumerate);
+/// - a class-like with no stable folded key (an anonymous class — its
+///   key is a synthetic, walk-relative `AstId`, not a name a caller in
+///   another file could ever cite).
+///
+/// The persist key is derived from the member-tree entry itself
+/// (`folded_symbol_key`/`folded_member_key`), never from the
+/// crate-private `celerrate_types::inference::BodyOwner` — this crate
+/// cannot see that type, and does not need to: the two agree by
+/// construction, since both fold the same written name through the
+/// same public helpers.
+fn collect_signature_entries(
+    inputs: &AnalysisInputs,
+    panicked: &BTreeSet<FileId>,
+) -> SignatureEntries {
+    if !PERSIST_TYPED_ARTIFACTS {
+        return Vec::new();
+    }
+    let database = &inputs.database;
+    let mut signatures: SignatureEntries = Vec::new();
+
+    for &file in inputs.reported.iter() {
+        let file_id = file.file_id(database);
+        if panicked.contains(&file_id) {
+            continue;
+        }
+        let content = celerrate_db::content_hash(database, file);
+        let tree = celerrate_semantics::member_tree(database, file);
+
+        for function in &tree.functions {
+            let Some(inferred) = inferred_body_types(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                file,
+                BodyQuery::new(database, function.ast_id),
+                InferenceContext::new(database, None),
+            ) else {
+                continue;
+            };
+            let key = folded_symbol_key(
+                SymbolSpace::Function,
+                &fully_qualified_name(&function.namespace, &function.name),
+            );
+            signatures.push((
+                StoredSignatureKey::Function { key },
+                stored_signature_of(database, inputs, content, inferred),
+            ));
+        }
+
+        for class in &tree.classes {
+            // Decision 8's trait exclusion: a trait's memo key includes
+            // the using class's context, which this file-local walk has
+            // no way to enumerate.
+            if class.kind == DeclarationKind::Trait {
+                continue;
+            }
+            // The anonymous-class exclusion: no stable folded key for a
+            // caller in another file to ever cite.
+            let Some(name) = class.name.as_deref() else {
+                continue;
+            };
+            let class_key = folded_symbol_key(
+                SymbolSpace::ClassLike,
+                &fully_qualified_name(&class.namespace, name),
+            );
+            for member in &class.members {
+                if member.kind != MemberKind::Method {
+                    continue;
+                }
+                let Some(inferred) = inferred_body_types(
+                    database,
+                    inputs.files,
+                    inputs.stubs,
+                    inputs.configuration,
+                    file,
+                    BodyQuery::new(database, member.ast_id),
+                    InferenceContext::new(database, None),
+                ) else {
+                    continue;
+                };
+                let member_key = folded_member_key(MemberKind::Method, &member.name);
+                signatures.push((
+                    StoredSignatureKey::Method {
+                        class_key: class_key.clone(),
+                        member_key,
+                    },
+                    stored_signature_of(database, inputs, content, inferred),
+                ));
+            }
+        }
+    }
+
+    sort_entries(&mut signatures);
+    signatures
+}
+
+/// One body's `InferredBody` mirrored into its persisted form: the
+/// return through `StoredType::of`, and every class, function, and
+/// inferred-tier callee `inferred.dependencies` names, read verbatim —
+/// never re-derived — with a digest stamped on each recorded class and
+/// function key.
+fn stored_signature_of<'db>(
+    database: &'db AnalysisDatabase,
+    inputs: &AnalysisInputs,
+    content: ContentHash,
+    inferred: &InferredBody<'db>,
+) -> StoredInferredSignature {
+    let classes = inferred
+        .dependencies
+        .classes
+        .iter()
+        .map(|key| StoredClassDependency {
+            key: key.clone(),
+            digest: class_surface_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                ClassQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let functions = inferred
+        .dependencies
+        .functions
+        .iter()
+        .map(|key| StoredFunctionDependency {
+            key: key.clone(),
+            digest: function_signature_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                FunctionQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let inferred_edges = inferred
+        .dependencies
+        .inferred_functions
+        .iter()
+        .map(|(key, of)| StoredInferredEdge {
+            callee: StoredSignatureKey::Function { key: key.clone() },
+            return_type: StoredType::of(database, *of),
+        })
+        .chain(inferred.dependencies.inferred_methods.iter().map(
+            |((class_key, member_key), of)| StoredInferredEdge {
+                callee: StoredSignatureKey::Method {
+                    class_key: class_key.clone(),
+                    member_key: member_key.clone(),
+                },
+                return_type: StoredType::of(database, *of),
+            },
+        ))
+        .collect();
+    StoredInferredSignature {
+        content,
+        return_type: StoredType::of(database, inferred.return_type),
+        classes,
+        functions,
+        inferred: inferred_edges,
+    }
 }
 
 /// One reported file's verdict — its diagnostics through the
 /// cache-servable composition point, with the records the entry must
-/// revalidate against. Every query here is memoized from the pass. The
-/// typed families never reach this: `persistable_diagnostics` is
-/// exactly what a pack may carry (module doc above).
+/// revalidate against, and (when the lever is on) the typed half
+/// alongside them. Delegates to [`composed_verdict_with_lever`] with
+/// [`PERSIST_TYPED_ARTIFACTS`]; the lever is parameterized into that
+/// function, rather than read inside it, so its two branches are
+/// unit-testable without a runtime toggle (`the_lever_persists_untyped_
+/// only_verdicts`, this module's own tests).
 fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> StoredVerdict {
+    composed_verdict_with_lever(inputs, file, PERSIST_TYPED_ARTIFACTS)
+}
+
+/// [`composed_verdict`]'s body, with the persist lever threaded in as a
+/// parameter. The untyped half is computed exactly as it always was
+/// (`persistable_diagnostics` plus `resolution_records`'s projection,
+/// unconditionally); the typed half is `Some` only when `persist_typed`
+/// is set, through [`composed_typed_verdict`].
+fn composed_verdict_with_lever(
+    inputs: &AnalysisInputs,
+    file: celerrate_db::SourceFile,
+    persist_typed: bool,
+) -> StoredVerdict {
     let database = &inputs.database;
     let diagnostics = crate::analysis::persistable_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
@@ -192,14 +527,108 @@ fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> 
         inputs.stubs,
         inputs.configuration,
     );
+    let typed = if persist_typed {
+        Some(composed_typed_verdict(inputs, file))
+    } else {
+        None
+    };
     StoredVerdict {
         diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
         records: records.iter().map(StoredRecord::of).collect(),
+        typed,
     }
 }
 
-/// Deterministic pack order: by key, one entry per key.
-fn sort_entries<Entry>(entries: &mut Vec<(ContentHash, Entry)>) {
+/// The typed half of one reported file's persisted verdict (plan 9a,
+/// task 9): `typed_portion`'s post-suppression diagnostics, stored,
+/// alongside the class, function, and inferred-edge records
+/// `typed_file_verdicts(...).dependencies` recorded — the file-level
+/// mirror of [`stored_signature_of`] above, reading the exact same
+/// `FileDependencies` shape `analyze_one`'s recompute path already
+/// produces (never a separate walk), digests stamped through the same
+/// task-2 queries [`stored_signature_of`] stamps them through, and every
+/// inferred edge's `StoredType` carried as `FileDependencies` already
+/// recorded it (no re-derivation, no `TypeId` involved: task 3's
+/// `FileDependencies::extend_from_body` already mirrored it at the
+/// walk's own boundary).
+fn composed_typed_verdict(
+    inputs: &AnalysisInputs,
+    file: celerrate_db::SourceFile,
+) -> StoredTypedVerdict {
+    let database = &inputs.database;
+    let diagnostics = crate::analysis::typed_portion(inputs, file);
+    let result = celerrate_types::typed_file_verdicts(
+        database,
+        inputs.files,
+        inputs.stubs,
+        inputs.configuration,
+        file,
+    );
+    let classes = result
+        .dependencies
+        .classes
+        .iter()
+        .map(|key| StoredClassDependency {
+            key: key.clone(),
+            digest: class_surface_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                ClassQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let functions = result
+        .dependencies
+        .functions
+        .iter()
+        .map(|key| StoredFunctionDependency {
+            key: key.clone(),
+            digest: function_signature_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                FunctionQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let inferred = result
+        .dependencies
+        .inferred_functions
+        .iter()
+        .map(|(key, return_type)| StoredInferredEdge {
+            callee: StoredSignatureKey::Function { key: key.clone() },
+            return_type: return_type.clone(),
+        })
+        .chain(result.dependencies.inferred_methods.iter().map(
+            |((class_key, member_key), return_type)| StoredInferredEdge {
+                callee: StoredSignatureKey::Method {
+                    class_key: class_key.clone(),
+                    member_key: member_key.clone(),
+                },
+                return_type: return_type.clone(),
+            },
+        ))
+        .collect();
+    StoredTypedVerdict {
+        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        classes,
+        functions,
+        inferred,
+    }
+}
+
+/// Deterministic pack order: by key, one entry per key. Generic over the
+/// key type (plan 9a, task 7: the signature pack keys by
+/// `StoredSignatureKey`, not by `ContentHash`) — `dedup_by` keeps the
+/// FIRST of any run of equal keys, which is what lets a duplicate
+/// definition (two files declaring the same function name, an
+/// already-diagnosed unknown-symbol condition upstream) resolve
+/// deterministically by sorted-key order rather than by traversal
+/// happenstance.
+fn sort_entries<Key: Ord, Entry>(entries: &mut Vec<(Key, Entry)>) {
     entries.sort_by(|left, right| left.0.cmp(&right.0));
     entries.dedup_by(|left, right| left.0 == right.0);
 }
@@ -256,11 +685,14 @@ fn sweep_crash_debris(directory: &Path) {
 /// succeeded; `Failed` when encoding or the atomic write failed, in
 /// which case whatever was on disk before (if anything) is untouched.
 /// `persist` only swaps the session's snapshot when neither pack failed.
-fn write_when_changed<Entry: Serialize + PartialEq + Clone>(
+fn write_when_changed<
+    Key: Eq + std::hash::Hash + Serialize + Clone,
+    Entry: Serialize + PartialEq + Clone,
+>(
     path: &Path,
     header: &PackHeader,
-    entries: &[(ContentHash, Entry)],
-    loaded: &HashMap<ContentHash, Entry>,
+    entries: &[(Key, Entry)],
+    loaded: &HashMap<Key, Entry>,
     header_moved: bool,
 ) -> PackWrite {
     let unchanged = !header_moved
@@ -326,6 +758,96 @@ mod tests {
             1,
             "the panicked file's tree is absent too: its query was never memoized",
         );
+        assert_eq!(
+            session.cache.member_trees.len(),
+            1,
+            "and its member tree is absent for the same reason",
+        );
+    }
+
+    /// Plan 9a's persist lever (task 7): `PERSIST_TYPED_ARTIFACTS` is
+    /// fixed `true` today, so this pins the ON branch — the
+    /// inferred-signature pack IS written and the snapshot IS
+    /// populated from it. The OFF branch (`StoredVerdict.typed` staying
+    /// `None`) is `the_lever_persists_untyped_only_verdicts` just below
+    /// (task 9): no runtime toggle exists yet to drive it end to end
+    /// from `persist`, and a `const` cannot be mutated from a test, so
+    /// that test pins `composed_verdict_with_lever`'s two branches
+    /// directly instead. `PERSIST_TYPED_ARTIFACTS` and
+    /// `collect_signature_entries` are `pub(crate)`/private — invisible
+    /// to the external `tests/cache_seeding.rs` integration crate — so
+    /// this lever test lives here instead of there.
+    #[test]
+    fn the_persist_lever_drops_the_typed_artifacts() {
+        // `PERSIST_TYPED_ARTIFACTS` is a `const`, fixed on until a later
+        // task threads a runtime toggle; this exercises exactly the
+        // value it is fixed to today (`assert!` on a compile-time
+        // constant is itself flagged, so the const's value is asserted
+        // through its effect below instead).
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("a.php"),
+            "<?php function f() { return 1; }",
+        )
+        .unwrap();
+        let mut session = Session::start(root.path());
+        let outcome = AnalysisOutcome {
+            diagnostics: Vec::new(),
+            panicked: Vec::new(),
+        };
+        super::persist(&mut session, &outcome);
+
+        assert!(
+            root.path()
+                .join(".celerrate/cache")
+                .join(super::snapshot::INFERRED_SIGNATURES_PACK)
+                .is_file(),
+            "the lever is on: the pack is written",
+        );
+        assert_eq!(session.cache.signatures.len(), 1, "one free function");
+    }
+
+    /// Plan 9a, task 9's own persist lever test: `composed_verdict_with_
+    /// lever`'s two branches, pinned directly since `composed_verdict`
+    /// and the lever are both private/`pub(crate)` — invisible to the
+    /// external `tests/cache_seeding.rs` integration crate, exactly the
+    /// same visibility seam `the_persist_lever_drops_the_typed_artifacts`
+    /// above already worked around for task 7's own lever. Off,
+    /// `StoredVerdict.typed` stays `None`; on, it is populated — the two
+    /// branches a runtime toggle would otherwise flip, exercised here as
+    /// a plain function argument instead.
+    #[test]
+    fn the_lever_persists_untyped_only_verdicts() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("a.php"),
+            "<?php function f() { return 1; }",
+        )
+        .unwrap();
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let &file = inputs.reported.first().unwrap();
+
+        let off = super::composed_verdict_with_lever(&inputs, file, false);
+        assert!(
+            off.typed.is_none(),
+            "the lever off: StoredVerdict.typed must stay None",
+        );
+
+        let on = super::composed_verdict_with_lever(&inputs, file, true);
+        assert!(
+            on.typed.is_some(),
+            "the lever on: StoredVerdict.typed must be populated",
+        );
+        assert_eq!(
+            off.diagnostics, on.diagnostics,
+            "the untyped half is identical either way: the lever only ever \
+             touches the typed field",
+        );
+        assert_eq!(
+            off.records, on.records,
+            "the untyped half's records are identical either way too",
+        );
     }
 
     /// When one pack cannot be written, neither the pack that could not
@@ -377,7 +899,7 @@ mod tests {
         assert_eq!(
             session.cache.verdicts.len(),
             1,
-            "both packs confirmed, so the snapshot now swaps",
+            "every pack confirmed, so the snapshot now swaps",
         );
     }
 
@@ -401,7 +923,8 @@ mod tests {
         };
         super::persist(&mut session, &outcome);
         let original_range = session.cache_loaded_range;
-        let original_header = super::pack::PackHeader::current(original_range);
+        let original_header =
+            super::pack::PackHeader::current(original_range, session.plugin_set_digest);
 
         let item_trees_path = session
             .cache_directory
@@ -430,7 +953,7 @@ mod tests {
             session.cache_loaded_range, moved_range,
             "persist adopts the new range once the rewrite is confirmed",
         );
-        let moved_header = super::pack::PackHeader::current(moved_range);
+        let moved_header = super::pack::PackHeader::current(moved_range, session.plugin_set_digest);
         let rewritten = std::fs::read(&item_trees_path).unwrap();
         assert!(
             super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(
@@ -520,17 +1043,18 @@ mod tests {
         super::persist(&mut session, &outcome);
         assert_eq!(
             session.statistics.persist_written.load(Ordering::Relaxed),
-            2
+            4,
+            "item trees, member trees, diagnostics, and inferred signatures",
         );
 
         super::persist(&mut session, &outcome);
         assert_eq!(
             session.statistics.persist_skipped.load(Ordering::Relaxed),
-            2
+            4
         );
 
         // Obstruct one pack: its rename fails deterministically (rename
-        // onto a directory), the other pack is unchanged.
+        // onto a directory), the other packs are unchanged.
         let cache_directory = root.path().join(".celerrate/cache");
         std::fs::remove_file(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();
         std::fs::create_dir(cache_directory.join(super::snapshot::ITEM_TREES_PACK)).unwrap();

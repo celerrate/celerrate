@@ -8,6 +8,15 @@
 //! of scope, and a symbol declared anywhere in project, vendor, or
 //! stubs counts as declared, no reachability analysis of conditional
 //! declarations.
+//!
+//! [`reference_outcomes`] walks the file's references exactly once,
+//! resolving each name a single time and deriving both the diagnostics
+//! above and the revalidation records of `revalidation.rs` from that
+//! same resolution. `reference_diagnostics` and
+//! `crate::revalidation::resolution_records` are thin projections over
+//! it: one walk produces findings and answers, so drift between them is
+//! structurally impossible — the `composed_diagnostics` closure,
+//! applied to the second mirror, plan 9a.
 
 use std::collections::HashMap;
 
@@ -21,6 +30,7 @@ use crate::lookup::SymbolResolution;
 use crate::queries::item_tree;
 use crate::references::{Reference, collect_references};
 use crate::resolve::{SymbolSources, UseTables, resolve_name};
+use crate::revalidation::{ResolutionRecord, answer_of};
 use crate::symbols::SymbolSpace;
 
 /// A class-like reference that resolves to no declaration.
@@ -49,19 +59,32 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     crate::syntax_gating::SYNTAX_NOT_AVAILABLE,
 ];
 
-/// The per-file reference diagnostics: for every statically named
-/// reference, either an unknown-symbol diagnostic when it fails to
-/// resolve, or a symbol version-gating diagnostic when it resolves to a
-/// stub symbol whose availability does not fully cover the project's
-/// supported PHP version range.
+/// The findings and answers of one file's reference walk, produced by
+/// [`reference_outcomes`] from the same pass over the same resolutions:
+/// `diagnostics` is what `reference_diagnostics` used to compute alone,
+/// `records` is what `resolution_records` used to compute alone. See
+/// the module doc.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceOutcomes {
+    pub diagnostics: Vec<Diagnostic>,
+    pub records: Vec<ResolutionRecord>,
+}
+
+/// The single walk over the statically named references of one file:
+/// for every reference, `resolve_name` runs exactly once, and its
+/// result feeds both outputs — the diagnostic match that may report an
+/// unknown-symbol or symbol version-gating finding, and the
+/// revalidation record that reduces the same resolution to its answer.
+/// Diagnostics are sorted; records keep walk (tree) order, the
+/// convention `resolution_records`' tests pin.
 #[salsa::tracked(returns(ref))]
-pub fn reference_diagnostics(
+pub fn reference_outcomes(
     db: &dyn salsa::Database,
     file: SourceFile,
     files: AnalyzedFileSet,
     stubs: StubIndexInput,
     configuration: ProjectConfiguration,
-) -> Vec<Diagnostic> {
+) -> ReferenceOutcomes {
     let sources = SymbolSources {
         files,
         stubs,
@@ -73,18 +96,26 @@ pub fn reference_diagnostics(
     let version_range = configuration.php_version_range(db);
     let mut tables_by_namespace: HashMap<String, UseTables> = HashMap::new();
     let mut diagnostics = Vec::new();
+    let mut records = Vec::new();
     for reference in collect_references(&root) {
         let tables = tables_by_namespace
             .entry(reference.namespace.clone())
             .or_insert_with(|| UseTables::for_namespace(tree, &reference.namespace));
-        match resolve_name(
+        let resolution = resolve_name(
             db,
             sources,
             &reference.namespace,
             tables,
             &reference.written,
             reference.space,
-        ) {
+        );
+        records.push(ResolutionRecord {
+            written: reference.written.clone(),
+            space: reference.space,
+            namespace: reference.namespace.clone(),
+            answer: answer_of(resolution),
+        });
+        match resolution {
             None => diagnostics.push(unknown_symbol(&reference, file_id)),
             Some(SymbolResolution::Stub { availability, .. }) => {
                 availability_diagnostics(
@@ -99,7 +130,30 @@ pub fn reference_diagnostics(
         }
     }
     diagnostics.sort();
-    diagnostics
+    ReferenceOutcomes {
+        diagnostics,
+        records,
+    }
+}
+
+/// The per-file reference diagnostics: for every statically named
+/// reference, either an unknown-symbol diagnostic when it fails to
+/// resolve, or a symbol version-gating diagnostic when it resolves to a
+/// stub symbol whose availability does not fully cover the project's
+/// supported PHP version range. A projection of [`reference_outcomes`]
+/// (module doc): backdates independently of `resolution_records`, but
+/// both read the same walk.
+#[salsa::tracked(returns(ref))]
+pub fn reference_diagnostics(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+) -> Vec<Diagnostic> {
+    reference_outcomes(db, file, files, stubs, configuration)
+        .diagnostics
+        .clone()
 }
 
 /// Emits diagnostics for a stub symbol whose availability window does

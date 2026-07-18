@@ -12,8 +12,8 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use celerrate_cli::analysis::{composed_diagnostics, typed_portion};
-use celerrate_cli::cache::verdict::{VerdictLookup, lookup_verdict};
+use celerrate_cli::analysis::{composed_diagnostics, served_typed_diagnostics};
+use celerrate_cli::cache::verdict::{TypedOutcome, VerdictLookup, lookup_verdict};
 use celerrate_cli::run;
 use celerrate_cli::session::Session;
 
@@ -57,7 +57,11 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
     let mut served_identifiers = BTreeSet::new();
     let mut validated = 0;
     for &file in session.sources.values() {
-        let VerdictLookup::Hit(stored) = lookup_verdict(&inputs, file) else {
+        let VerdictLookup::Hit {
+            verdict: stored,
+            typed,
+        } = lookup_verdict(&inputs, file)
+        else {
             continue;
         };
         validated += 1;
@@ -69,10 +73,17 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
             .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
             .collect();
         let mut served = served.expect("a revalidated verdict's diagnostics all convert");
-        // The pack serves only the untyped verdict (decision 13): a
-        // cache hit appends the typed portion fresh, exactly as
-        // `analyze_one` does, before the two sides can be compared.
-        served.extend(typed_portion(&inputs, file));
+        // The typed half is layered independently (plan 9a, task 9): a
+        // served typed outcome speaks from `stored.typed`, a recomputed
+        // one falls through to a fresh `typed_portion` — through
+        // `served_typed_diagnostics`, the exact function `analyze_one`
+        // itself calls on a hit, so the two compositions cannot
+        // independently drift.
+        let typed_source = match typed {
+            TypedOutcome::Served => stored.typed.as_ref(),
+            TypedOutcome::Recompute => None,
+        };
+        served.extend(served_typed_diagnostics(&inputs, file, typed_source));
         served.sort();
         let recomputed = composed_diagnostics(&inputs, file);
         assert_eq!(
@@ -140,10 +151,21 @@ fn cross_file_source_answers_replay_equal() {
     ]);
 }
 
-/// A typed finding (CEL0034, a possibly-null dereference): the pack
-/// persists none of it, so the equivalence net must recompute the typed
-/// portion fresh, the same way `analyze_one` does on a warm hit, to
-/// cover the union rather than just the untyped half.
+/// Task 10's own extension: a typed fixture firing all three of the
+/// typed families' representative identifiers in one project. The pack
+/// now persists typed findings too (plan 9a, task 9), so a warm second
+/// pass over an unchanged project must serve them back rather than
+/// recompute — the net still covers the full union (untyped plus
+/// typed), the same way `analyze_one` does on a warm hit, through
+/// `served_typed_diagnostics`. `Consumer.php` carries all three:
+/// `$user->svae()` (a typo, CEL0030, resolved against `User`'s
+/// cross-file declaration in `Widget.php`), `$maybe->save()` (CEL0034,
+/// a possibly-null dereference through the nullable parameter type),
+/// and `takes($plain)` (CEL0035, an argument mismatch against the
+/// annotated `takes(int $n)` signature under `strict_types`). If tasks
+/// 8-9 are sound this passes immediately, exactly as it did before this
+/// task widened the fixture; a failure here is a bug in them, not in
+/// this test — treat it as a stop signal, not a test to adjust.
 #[test]
 fn typed_answers_replay_equal() {
     let identifiers = served_equals_recomputed(&[
@@ -152,12 +174,18 @@ fn typed_answers_replay_equal() {
             r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
         ),
         (
-            "src/Service.php",
-            "<?php\ndeclare(strict_types=1);\nnamespace App;\n\nclass User { public function save(): void {} }\n\nclass Service\n{\n    public function run(?User $user): void\n    {\n        $user->save();\n    }\n}\n",
+            "src/Widget.php",
+            "<?php\nnamespace App;\n\nclass User { public function save(): void {} }\nclass Plain {}\n",
+        ),
+        (
+            "src/Consumer.php",
+            "<?php\ndeclare(strict_types=1);\nnamespace App;\n\nfunction takes(int $n): void {}\n\nclass Consumer\n{\n    public function run(User $user, ?User $maybe, Plain $plain): void\n    {\n        $user->svae();\n        $maybe->save();\n        takes($plain);\n    }\n}\n",
         ),
     ]);
-    assert!(
-        identifiers.contains("CEL0034"),
-        "the fixture must exercise a typed finding: {identifiers:?}",
-    );
+    for expected in ["CEL0030", "CEL0034", "CEL0035"] {
+        assert!(
+            identifiers.contains(expected),
+            "the fixture must exercise {expected}: {identifiers:?}",
+        );
+    }
 }

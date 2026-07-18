@@ -167,7 +167,9 @@ pub enum TypeData<'db> {
 /// The opaque interned handle of one canonical type: cheap `Eq`/`Hash`
 /// for early cutoff. Handle equality is structural equality because
 /// every constructor canonicalizes bottom-up before interning. The id
-/// never escapes the process (plan 9a serializes structurally).
+/// never escapes the process — [`crate::stored::StoredType`] (plan 9a)
+/// is the structural form that does, produced by `StoredType::of` and
+/// converted back by `StoredType::to_type_id`.
 #[salsa::interned(debug)]
 pub struct TypeId<'db> {
     #[returns(ref)]

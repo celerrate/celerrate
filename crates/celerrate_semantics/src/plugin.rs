@@ -8,7 +8,10 @@
 /// the implementation records a dependency on the identity too: a
 /// version bump or a reconfiguration invalidates exactly like an
 /// implementation change would, and the persistent cache's plugin-set
-/// key (plan 9a) reads the same fact.
+/// key reads the same fact — `celerrate_cli::plugins::plugin_set_digest`
+/// (plan 9a) sorts every registered identity's `(name, version,
+/// configuration)` triple into the pack header, fulfilling this
+/// promise.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct PluginIdentity {
     /// The public plugin name (for the bridge: `phpdoc-bridge`).

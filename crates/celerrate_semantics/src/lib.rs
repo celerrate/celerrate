@@ -70,8 +70,9 @@ pub use members::{
 pub use plugin::PluginIdentity;
 pub use queries::{ast_id_map, item_tree, member_tree, semantic_diagnostics};
 pub use reference_checks::{
-    ALLOCATED_IDENTIFIERS, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS,
-    UNKNOWN_CONSTANT, UNKNOWN_FUNCTION, reference_diagnostics,
+    ALLOCATED_IDENTIFIERS, ReferenceOutcomes, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE,
+    SYMBOL_REMOVED, UNKNOWN_CLASS, UNKNOWN_CONSTANT, UNKNOWN_FUNCTION, reference_diagnostics,
+    reference_outcomes,
 };
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};

@@ -4,46 +4,60 @@
 //! rewrites it.
 
 use std::collections::HashMap;
+use std::hash::Hash;
 use std::path::Path;
 use std::sync::Arc;
 
 use celerrate_db::ContentHash;
-use celerrate_semantics::{ArtifactCache, ItemTree};
+use celerrate_semantics::{ArtifactCache, ItemTree, MemberTree};
 use celerrate_source::FileId;
+use celerrate_types::{StoredInferredSignature, StoredSignatureKey, TypedArtifactCache};
 use serde::de::DeserializeOwned;
 
 use super::pack::{PackHeader, decode};
 use super::statistics::CacheStatistics;
-use super::stored::{StoredItemTree, StoredVerdict};
+use super::stored::{StoredItemTree, StoredMemberTree, StoredVerdict};
 
 pub const ITEM_TREES_PACK: &str = "item_trees.bin";
+pub const MEMBER_TREES_PACK: &str = "member_trees.bin";
 pub const DIAGNOSTICS_PACK: &str = "diagnostics.bin";
+/// Plan 9a, task 7: the fourth pack, one per-body inferred signature
+/// keyed by [`StoredSignatureKey`] rather than by content hash — the
+/// defining file's content hash still rides inside
+/// [`StoredInferredSignature::content`], but the pack key must survive
+/// a body's OWN file being edited without moving the callers that cite
+/// it, which a content-hash key cannot do.
+pub const INFERRED_SIGNATURES_PACK: &str = "inferred_signatures.bin";
 
-/// Whatever the packs validated to. Both maps may be empty; nothing
+/// Whatever the packs validated to. All maps may be empty; nothing
 /// downstream distinguishes "no cache" from "no valid cache".
 #[derive(Debug, Default)]
 pub struct CacheSnapshot {
     pub item_trees: HashMap<ContentHash, StoredItemTree>,
+    pub member_trees: HashMap<ContentHash, StoredMemberTree>,
     pub verdicts: HashMap<ContentHash, StoredVerdict>,
+    pub signatures: HashMap<StoredSignatureKey, StoredInferredSignature>,
 }
 
 impl CacheSnapshot {
     pub fn load(cache_directory: &Path, expected: &PackHeader) -> Self {
         Self {
             item_trees: load_pack(&cache_directory.join(ITEM_TREES_PACK), expected),
+            member_trees: load_pack(&cache_directory.join(MEMBER_TREES_PACK), expected),
             verdicts: load_pack(&cache_directory.join(DIAGNOSTICS_PACK), expected),
+            signatures: load_pack(&cache_directory.join(INFERRED_SIGNATURES_PACK), expected),
         }
     }
 }
 
-fn load_pack<Entry: DeserializeOwned>(
+fn load_pack<Key: DeserializeOwned + Eq + Hash, Entry: DeserializeOwned>(
     path: &Path,
     expected: &PackHeader,
-) -> HashMap<ContentHash, Entry> {
+) -> HashMap<Key, Entry> {
     let Ok(bytes) = std::fs::read(path) else {
         return HashMap::new();
     };
-    match decode::<Vec<(ContentHash, Entry)>>(&bytes, expected) {
+    match decode::<Vec<(Key, Entry)>>(&bytes, expected) {
         Some(pack) => pack.entries.into_iter().collect(),
         None => HashMap::new(),
     }
@@ -67,6 +81,53 @@ impl ArtifactCache for SnapshotCache {
             }
             None => {
                 self.statistics.tree_misses.fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+
+    fn member_tree(&self, file: FileId, content: ContentHash) -> Option<MemberTree> {
+        use std::sync::atomic::Ordering;
+        match self.snapshot.member_trees.get(&content) {
+            Some(stored) => {
+                self.statistics
+                    .member_tree_hits
+                    .fetch_add(1, Ordering::Relaxed);
+                Some(stored.to_member_tree(file))
+            }
+            None => {
+                self.statistics
+                    .member_tree_misses
+                    .fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+}
+
+/// The typed-artifact-cache half of the snapshot: a lookup by
+/// [`StoredSignatureKey`] over the fourth pack's map, counting
+/// `signatures_found`/`signatures_absent` on PRESENCE alone — whether
+/// this key has a recorded entry at all, never whether it went on to
+/// validate. The validation outcome (a matching content hash, every
+/// digest, every inferred edge) lives entirely in
+/// `celerrate_types::inference::validated_stored_return`, a salsa query;
+/// counters are forbidden inside a query (determinism), so this is the
+/// only layer that may count, and it counts only what it itself can see.
+impl TypedArtifactCache for SnapshotCache {
+    fn inferred_signature(&self, key: &StoredSignatureKey) -> Option<StoredInferredSignature> {
+        use std::sync::atomic::Ordering;
+        match self.snapshot.signatures.get(key) {
+            Some(stored) => {
+                self.statistics
+                    .signatures_found
+                    .fetch_add(1, Ordering::Relaxed);
+                Some(stored.clone())
+            }
+            None => {
+                self.statistics
+                    .signatures_absent
+                    .fetch_add(1, Ordering::Relaxed);
                 None
             }
         }

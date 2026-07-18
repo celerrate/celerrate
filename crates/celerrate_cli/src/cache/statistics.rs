@@ -7,6 +7,12 @@
 //! revalidation acceptance, and persist health, per class. The
 //! environment variable is read here, at the orchestration layer,
 //! never inside a query.
+//!
+//! Recorded ledger note (task 12): whether an in-memory LRU capacity
+//! belongs on top of these counters remains plan 9b's decision — this
+//! plan's task 11 measured persist wall-clock only, never peak memory,
+//! and set no `lru` anywhere in this module. Plan 9b's peak-memory
+//! measurement owns that call.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -23,6 +29,10 @@ pub struct CacheStatistics {
     pub tree_hits: AtomicU64,
     /// Item-tree lookups the pack could not answer.
     pub tree_misses: AtomicU64,
+    /// Member-tree lookups answered from the pack.
+    pub member_tree_hits: AtomicU64,
+    /// Member-tree lookups the pack could not answer.
+    pub member_tree_misses: AtomicU64,
     /// Verdicts served: present, every record revalidated, every
     /// diagnostic converted.
     pub verdicts_served: AtomicU64,
@@ -48,16 +58,66 @@ pub struct CacheStatistics {
     /// Pack writes that failed — the silent failure of audit finding
     /// M5, now at least countable.
     pub persist_failed: AtomicU64,
+    /// Wall-clock milliseconds `cache::persist` spent, accumulated
+    /// across every call in the session (plan 9a, task 11). Read with
+    /// `std::time::Instant` at the persist orchestration layer only,
+    /// never inside a salsa query: this is telemetry for the stats
+    /// line, and never feeds analysis or the rendered diagnostics.
+    pub persist_milliseconds: AtomicU64,
+    /// Typed-signature lookups (plan 9a, task 8) that found a recorded
+    /// entry under the queried key — presence alone, counted at
+    /// `SnapshotCache`, never the query-layer validation outcome
+    /// (counters are forbidden inside a salsa query).
+    pub signatures_found: AtomicU64,
+    /// Typed-signature lookups with no recorded entry under the queried
+    /// key.
+    pub signatures_absent: AtomicU64,
+    /// Files whose typed half (plan 9a, task 9) was served from the
+    /// cache: present, every class and function digest unchanged, every
+    /// inferred edge's live return unchanged — no body walked, no
+    /// inference ran.
+    pub typed_served: AtomicU64,
+    /// Files whose typed half was recomputed: absent, stale, or the
+    /// untyped half itself discarded (which takes the typed half down
+    /// with it). Counted at the same fork `typed_served` is, in
+    /// `analysis::served_typed_diagnostics` — the orchestration layer,
+    /// never inside a query.
+    pub typed_recomputed: AtomicU64,
 }
 
 impl CacheStatistics {
     /// The one-line summary the environment variable asks for.
+    ///
+    /// The persist clause carries its accumulated duration (task 11)
+    /// only when `persist_milliseconds` is positive: a session that
+    /// never persisted (or ran before the instrument, for any stored
+    /// baseline) prints exactly the clause it always did, and the
+    /// figure never becomes a clause of its own (decision 13).
     pub fn render(&self) -> String {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+        let persist_milliseconds = load(&self.persist_milliseconds);
+        let persist_clause = if persist_milliseconds > 0 {
+            format!(
+                "persist {} written / {} skipped / {} failed, {}ms",
+                load(&self.persist_written),
+                load(&self.persist_skipped),
+                load(&self.persist_failed),
+                persist_milliseconds,
+            )
+        } else {
+            format!(
+                "persist {} written / {} skipped / {} failed",
+                load(&self.persist_written),
+                load(&self.persist_skipped),
+                load(&self.persist_failed),
+            )
+        };
         format!(
-            "cache: trees {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider; persist {} written / {} skipped / {} failed",
+            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider, verdicts {} served / {} recomputed; {}",
             load(&self.tree_hits),
             load(&self.tree_misses),
+            load(&self.member_tree_hits),
+            load(&self.member_tree_misses),
             load(&self.verdicts_served),
             load(&self.verdicts_discarded),
             load(&self.verdicts_absent),
@@ -65,9 +125,9 @@ impl CacheStatistics {
             load(&self.typed_declared_edges),
             load(&self.typed_inferred_edges),
             load(&self.typed_provider_edges),
-            load(&self.persist_written),
-            load(&self.persist_skipped),
-            load(&self.persist_failed),
+            load(&self.typed_served),
+            load(&self.typed_recomputed),
+            persist_clause,
         )
     }
 
@@ -137,6 +197,7 @@ mod tests {
     fn the_rendered_line_carries_every_counter() {
         let statistics = CacheStatistics::default();
         statistics.tree_hits.fetch_add(3, Ordering::Relaxed);
+        statistics.member_tree_hits.fetch_add(2, Ordering::Relaxed);
         statistics.verdicts_served.fetch_add(2, Ordering::Relaxed);
         statistics.typed_bodies.fetch_add(4, Ordering::Relaxed);
         statistics
@@ -148,10 +209,46 @@ mod tests {
         statistics
             .typed_provider_edges
             .fetch_add(7, Ordering::Relaxed);
+        statistics.typed_served.fetch_add(8, Ordering::Relaxed);
+        statistics.typed_recomputed.fetch_add(9, Ordering::Relaxed);
         statistics.persist_failed.fetch_add(1, Ordering::Relaxed);
         assert_eq!(
             statistics.render(),
-            "cache: trees 3 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider; persist 0 written / 0 skipped / 1 failed",
+            "cache: trees 3 hit / 0 miss; members 2 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider, verdicts 8 served / 9 recomputed; persist 0 written / 0 skipped / 1 failed",
+        );
+    }
+
+    #[test]
+    fn the_persist_clause_carries_its_duration_when_positive() {
+        let statistics = CacheStatistics::default();
+        statistics.persist_written.fetch_add(2, Ordering::Relaxed);
+        statistics.persist_skipped.fetch_add(1, Ordering::Relaxed);
+        statistics
+            .persist_milliseconds
+            .fetch_add(37, Ordering::Relaxed);
+        assert!(
+            statistics
+                .render()
+                .contains("persist 2 written / 1 skipped / 0 failed, 37ms"),
+            "the duration is folded into the existing persist clause, not a \
+             separate one: {}",
+            statistics.render(),
+        );
+    }
+
+    #[test]
+    fn the_persist_clause_omits_the_duration_when_zero() {
+        let statistics = CacheStatistics::default();
+        statistics.persist_written.fetch_add(2, Ordering::Relaxed);
+        assert!(
+            statistics
+                .render()
+                .contains("persist 2 written / 0 skipped / 0 failed"),
+        );
+        assert!(
+            !statistics.render().contains("ms"),
+            "no timing was ever recorded, so no duration figure appears: {}",
+            statistics.render(),
         );
     }
 
