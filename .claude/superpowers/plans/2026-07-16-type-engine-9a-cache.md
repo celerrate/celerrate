@@ -2236,6 +2236,142 @@ git commit -m "📝 docs(cache): the typed-artifact closure ledger"
   `CheckContext`, and the stdlib provider's registration — do not
   start it before plans 7 and 8 have merged.
 
+## Closing memo
 
+All 12 tasks complete. Workspace green; `corpus-snapshot.txt`
+byte-identical (see the final gate below) — the cache changed how fast
+`celerrate check` answers, never what it reports.
+
+### The `PERSIST_TYPED_ARTIFACTS` lever (decision 11)
+
+Still `true`. The lever was never pulled during this plan: every task
+that could have flipped it (7, 9, 11) instead exercised both branches
+under unit test (`composed_verdict_with_lever`) without changing the
+shipped default. Pulling it to `false` would fall every typed warm
+serve back to fresh interprocedural inference, so the warm number for
+the typed families converges toward cold-with-inference — a real
+release trade-off (design section 9), escalated past this const only
+by a future CLI flag or project setting. That escalation is plan 9c's
+call, informed by plan 9b's measured numbers.
+
+### Watch-persist economics (decision 15, task 11) — the FALLBACK ran
+
+The task's own instruction was conditional: implement the recorded
+fallback *only if* a measured number showed per-cycle persist exceeding
+10% of the median warm cycle. It did, by a wide margin, so the fallback
+branch ran — not the "keep unconditional per-cycle persist" branch a
+naive reading of the task brief might have assumed.
+
+Measurement (real, `--release`, on the pinned corpus `symfony/demo` at
+9341 files, `xtask/corpus.pin`):
+
+- cold run, one persist: **315ms**.
+- ten scripted single-line body edits under `--watch`, warm throughout:
+  median cycle (analysis + render, excludes persist) **13.5ms**; median
+  per-cycle persist **57.5ms**.
+- **persist / median warm cycle ≈ 426%** — far past the 10% ceiling, in
+  the opposite direction from the task's stated expectation.
+- root cause, read from the code: `cache::persist`'s `collect_entries`
+  and `collect_signature_entries` walk *every* analyzed source file and
+  *every* reported file's functions/methods on *every* call, never just
+  the file(s) a cycle's own edit touched — on a 9341-file corpus this
+  collection-and-compare cost dwarfs the ~13ms an incremental,
+  salsa-cached single-file reanalysis costs once the corpus is warm.
+
+Fallback implemented in `crates/celerrate_cli/src/watch.rs`:
+`completed_cycle` no longer persists unconditionally — it peeks the
+burst channel (`persist_unless_a_burst_is_already_waiting`) and skips
+the write when a change is already queued (another cycle is already on
+its way, so the write would be redundant with the one that cycle
+attempts in turn); the deferred path folds into the very next burst;
+`watch`'s loop persists once more on the channel-disconnected exit
+branch to flush whatever the last busy cycle deferred.
+
+**Crash-window trade-off, stated honestly.** Audit finding I6's
+original guarantee ("a crash loses at most one cycle") no longer holds
+unconditionally, and the loss is wider than "an unclean kill" alone.
+There is no signal handler anywhere in `celerrate_cli` (no `ctrlc`, no
+`signal-hook`, no `SIGINT`/`SIGTERM` handler; `main.rs` calls `run()`
+directly), and the loop's final persist is reachable only along the
+branch reached when the burst channel's sender disconnects — a branch
+the module's own pre-existing comment already says "cannot happen while
+the watch is alive." An interactive Ctrl+C does not go through that
+branch: it gets the operating system's default handling (immediate
+termination, no destructors run, `watch` never returns), the same as
+SIGKILL or a power loss for this purpose. So in practice, **essentially
+any way a `--watch` session ends — Ctrl+C included, which is how most
+sessions end — loses every cycle back to the last quiet persist**, not
+just an unclean kill. This is a cache-*warmth* loss (the next run
+recomputes and re-persists), never a correctness loss. The final
+persist this task added narrows the crash window back to I6's original
+per-cycle property only for the one case the loop's own normal-exit
+code path is reached, which is a real but narrow win, not a general
+mitigation for interactive use — accepted because per-cycle persist's
+flat ~50-60ms cost, dominated by a project-wide entry collection rather
+than the edit's own size, made paying that cost every single cycle more
+expensive than keeping I6's crash-window property intact for a project
+this corpus's size.
+
+### Two bugs the harness surfaced during execution
+
+**(a) DOCBLOCK bug — FIXED in this plan (commit `22f75fd`, task 10).**
+A docblock `@return` appearing on a previously-undeclared callee didn't
+invalidate the caller's warm typed verdict: a silent false-negative
+(warm answer disagreed with fresh, warm under-reported). Root cause:
+task 3's dependency records logged only the inferred edge, never the
+callee's declared-signature dependency, when the callee was undeclared
+at record time. Fixed by recording the declared-signature-guarding
+dependency alongside the inferred edge at all three inferred-edge sites
+in `flow.rs` (`function_call_result`, `method_call_result_for_keys`,
+`projected_callable_of_function`). Digest-guarded, so an unchanged
+callee still serves warm — not over-invalidating. CLOSED.
+
+**(b) CYCLIC bug — DEFERRED, HIGH PRIORITY, NOT fixed. Top standing
+follow-up of this plan.** `celerrate_types::checks::body_typed_verdicts`
+and `typed_file_verdicts` call `inferred_body_types` directly
+(`BodyQuery`), bypassing the cycle-safe `inferred_function_return` /
+`inferred_method_return` entry points — the only ones carrying
+`cycle_fn`/`cycle_initial`. A recursive function typed-checked *before*
+any caller warms its return re-enters the active `inferred_body_types`
+claim, hitting salsa's `CycleRecoveryStrategy::Panic`: caught into an
+"internal error" verdict where the isolation boundary catches it, or a
+hard panic where it escapes — a **zero-panic / error-resilience
+violation on valid recursive PHP**. Reproduced with a bare
+`function down(int $n){ ...; return down($n - 1); }` (no class, no
+cache). Needs a dedicated fix with its own TDD cycle: route
+`body_typed_verdicts` through the cycle-safe path, or give
+`inferred_body_types` its own `cycle_fn`/`cycle_initial`. Two of task
+8's decision-9 cyclic tests were de-vacuumed to work around it in the
+interim (rewritten with caller-first fixtures that never trip the
+panic) rather than left silently vacuous — the bug itself stays open.
+**Record this as the plan's top follow-up for plan 9c / a dedicated
+fix task.**
+
+### Other recorded follow-ups
+
+- **SIGINT/SIGTERM handling** so the watch loop's graceful-exit persist
+  is reachable from an interactive Ctrl+C, not just the channel's
+  sender disconnecting (see the crash-window trade-off above).
+- **`watch()`'s own loop has no test coverage** — a pre-existing gap,
+  not introduced by this plan: driving its `loop { ... }` end to end
+  requires either a live filesystem watch or refactoring the loop body
+  out from under `notify`, neither attempted here. `completed_cycle`
+  and the smaller functions factored out of it are tested; the loop
+  itself is not.
+- **`method_call_result_for_keys_with_provider`'s provider path records
+  no dependency** (decision 5's provider-purity constraint governs this
+  by construction — a provider's answer must already be a pure function
+  of its `Invocation`/`PluginIdentity` — but the omission itself is
+  unexercised territory, noted at whole-branch review, out of this
+  plan's scope).
+- **The LRU-capacity question stays plan 9b's**: this plan measured
+  persist wall-clock only (task 11), never peak memory, and set no
+  in-memory capacity anywhere in `statistics.rs`. Plan 9b's peak-memory
+  measurement owns that call.
+- **The vendor-body signature exclusion** (`collect_signature_entries`,
+  decision 8's third conservative exclusion): persisting the vendor
+  callees a reported file's own inferred edges transitively reach is a
+  possible plan 9b optimization, revisited only if the numbers show the
+  cross-boundary vendor cutoff matters.
 
 

@@ -285,6 +285,17 @@ pub struct StoredInferredEdge {
 /// (a caller whose callee has a declared return consults the declared
 /// tier, `StoredFunctionDependency`/`StoredClassDependency`, never
 /// `StoredInferredEdge`), never this record's own existence.
+///
+/// Recorded coarsening: the design's typed-cache section keys a
+/// signature "by body content"; this record keys by the *defining
+/// file's* content hash instead — any edit anywhere in the file
+/// invalidates every one of its bodies' persisted signatures, not just
+/// the edited body's. Sound (consistent with every other pack key,
+/// which is file-grained) and cheap, and the early-cutoff loss it costs
+/// is bounded by task 8's cross-boundary cutoff (a recomputed body
+/// whose return still matches still validates its callers). Plan 9b's
+/// measured numbers own whether the coarseness matters enough to key
+/// per body instead — a pack-only change behind this same record shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredInferredSignature {
     /// The defining file at persist time: body identity by proxy.

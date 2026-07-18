@@ -60,10 +60,19 @@ type SignatureEntries = Vec<(StoredSignatureKey, StoredInferredSignature)>;
 /// extended by task 9): `true` persists the inferred-signature pack
 /// ([`collect_signature_entries`]) AND populates `StoredVerdict.typed`
 /// ([`composed_verdict`]'s typed half); `false` drops both. Fixed at
-/// `true` today — no runtime toggle exists yet; until one does, this is
-/// the named, reviewable hook a future flip lands on, and the const is
-/// threaded into [`composed_verdict_with_lever`] so its two branches
-/// stay unit-testable without one.
+/// `true` today (task 12's closing memo: the lever was never pulled) —
+/// no runtime toggle exists yet; until one does, this is the named,
+/// reviewable hook a future flip lands on, and the const is threaded
+/// into [`composed_verdict_with_lever`] so its two branches stay
+/// unit-testable without one.
+///
+/// What pulling it to `false` would mean: every typed warm serve falls
+/// back to fresh interprocedural inference, so the warm number for the
+/// typed families converges toward cold-with-inference rather than
+/// staying near the untyped warm floor — design section 9's tracked
+/// trade-off. Escalating that flip past this const into a real release
+/// decision (a CLI flag, a project setting) is out of this plan's
+/// scope; it is plan 9c's call, informed by plan 9b's measured numbers.
 pub(crate) const PERSIST_TYPED_ARTIFACTS: bool = true;
 
 /// How one pack write ended.

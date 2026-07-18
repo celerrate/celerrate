@@ -7,6 +7,12 @@
 //! revalidation acceptance, and persist health, per class. The
 //! environment variable is read here, at the orchestration layer,
 //! never inside a query.
+//!
+//! Recorded ledger note (task 12): whether an in-memory LRU capacity
+//! belongs on top of these counters remains plan 9b's decision — this
+//! plan's task 11 measured persist wall-clock only, never peak memory,
+//! and set no `lru` anywhere in this module. Plan 9b's peak-memory
+//! measurement owns that call.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
