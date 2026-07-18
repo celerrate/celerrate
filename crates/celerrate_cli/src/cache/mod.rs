@@ -96,6 +96,24 @@ enum PackWrite {
 /// raw abort. The old snapshot stays and the next pass retries, exactly
 /// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
+    // Wall-clock read, legal here and only here (task 11): this is the
+    // persist orchestration layer, never a salsa query, and the reading
+    // feeds only `CacheStatistics` — telemetry for the stats line, never
+    // analysis or the rendered diagnostics.
+    let started = std::time::Instant::now();
+    persist_timed(session, outcome);
+    let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+    session
+        .statistics
+        .persist_milliseconds
+        .fetch_add(elapsed, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// `persist`'s body, timed by its caller. Split out so every early
+/// `return` below (an isolated collection failing, the cache directory
+/// being unwritable) still has its elapsed time recorded — the timer
+/// wraps the call, not each exit path individually.
+fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
     let current_range = session.configuration.php_version_range(database);

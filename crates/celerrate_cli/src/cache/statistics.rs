@@ -52,6 +52,12 @@ pub struct CacheStatistics {
     /// Pack writes that failed — the silent failure of audit finding
     /// M5, now at least countable.
     pub persist_failed: AtomicU64,
+    /// Wall-clock milliseconds `cache::persist` spent, accumulated
+    /// across every call in the session (plan 9a, task 11). Read with
+    /// `std::time::Instant` at the persist orchestration layer only,
+    /// never inside a salsa query: this is telemetry for the stats
+    /// line, and never feeds analysis or the rendered diagnostics.
+    pub persist_milliseconds: AtomicU64,
     /// Typed-signature lookups (plan 9a, task 8) that found a recorded
     /// entry under the queried key — presence alone, counted at
     /// `SnapshotCache`, never the query-layer validation outcome
@@ -75,10 +81,33 @@ pub struct CacheStatistics {
 
 impl CacheStatistics {
     /// The one-line summary the environment variable asks for.
+    ///
+    /// The persist clause carries its accumulated duration (task 11)
+    /// only when `persist_milliseconds` is positive: a session that
+    /// never persisted (or ran before the instrument, for any stored
+    /// baseline) prints exactly the clause it always did, and the
+    /// figure never becomes a clause of its own (decision 13).
     pub fn render(&self) -> String {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
+        let persist_milliseconds = load(&self.persist_milliseconds);
+        let persist_clause = if persist_milliseconds > 0 {
+            format!(
+                "persist {} written / {} skipped / {} failed, {}ms",
+                load(&self.persist_written),
+                load(&self.persist_skipped),
+                load(&self.persist_failed),
+                persist_milliseconds,
+            )
+        } else {
+            format!(
+                "persist {} written / {} skipped / {} failed",
+                load(&self.persist_written),
+                load(&self.persist_skipped),
+                load(&self.persist_failed),
+            )
+        };
         format!(
-            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider, verdicts {} served / {} recomputed; persist {} written / {} skipped / {} failed",
+            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider, verdicts {} served / {} recomputed; {}",
             load(&self.tree_hits),
             load(&self.tree_misses),
             load(&self.member_tree_hits),
@@ -92,9 +121,7 @@ impl CacheStatistics {
             load(&self.typed_provider_edges),
             load(&self.typed_served),
             load(&self.typed_recomputed),
-            load(&self.persist_written),
-            load(&self.persist_skipped),
-            load(&self.persist_failed),
+            persist_clause,
         )
     }
 
@@ -182,6 +209,40 @@ mod tests {
         assert_eq!(
             statistics.render(),
             "cache: trees 3 hit / 0 miss; members 2 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider, verdicts 8 served / 9 recomputed; persist 0 written / 0 skipped / 1 failed",
+        );
+    }
+
+    #[test]
+    fn the_persist_clause_carries_its_duration_when_positive() {
+        let statistics = CacheStatistics::default();
+        statistics.persist_written.fetch_add(2, Ordering::Relaxed);
+        statistics.persist_skipped.fetch_add(1, Ordering::Relaxed);
+        statistics
+            .persist_milliseconds
+            .fetch_add(37, Ordering::Relaxed);
+        assert!(
+            statistics
+                .render()
+                .contains("persist 2 written / 1 skipped / 0 failed, 37ms"),
+            "the duration is folded into the existing persist clause, not a \
+             separate one: {}",
+            statistics.render(),
+        );
+    }
+
+    #[test]
+    fn the_persist_clause_omits_the_duration_when_zero() {
+        let statistics = CacheStatistics::default();
+        statistics.persist_written.fetch_add(2, Ordering::Relaxed);
+        assert!(
+            statistics
+                .render()
+                .contains("persist 2 written / 0 skipped / 0 failed"),
+        );
+        assert!(
+            !statistics.render().contains("ms"),
+            "no timing was ever recorded, so no duration figure appears: {}",
+            statistics.render(),
         );
     }
 
