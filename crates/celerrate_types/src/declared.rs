@@ -551,15 +551,11 @@ pub fn declared_member_signature<'db>(
             }));
         }
     };
-    // Recorded debt: `declaring_site` (below `owner_class_docblock` at
-    // the `Virtual` arm above) is a plain, non-tracked function that
-    // reads the file-granular `member_tree` directly, with no memo
-    // boundary in between. So this query re-executes on ANY docblock
-    // edit anywhere in the owner's file, not only the queried member's
-    // own or its declaring ancestor's (pinned by
-    // `invalidation_scope.rs`'s
-    // `a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict`).
-    // An honest, already-documented cost, not fixed here.
+    // The declaring-site reads below are tracked queries (issue #37):
+    // a docblock edit elsewhere in the owner's file re-executes them,
+    // their unchanged answers backdate, and this query is spared. The
+    // pin `a_prose_only_class_docblock_edit_of_another_class_spares_the_signature`
+    // holds the boundary.
     let site_parts = declaring_site(db, files, class_like_query(db, &owner))?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {
@@ -586,7 +582,11 @@ pub fn declared_member_signature<'db>(
                 &owner,
                 &parameter_names,
                 &ancestors,
-                |ancestor| declares_member(db, files, ancestor, kind, member_key),
+                |ancestor| {
+                    let ancestor_query =
+                        MemberQuery::new(db, ancestor.to_owned(), kind, member_key.clone());
+                    declares_member(db, files, ancestor_query)
+                },
                 |ancestor| {
                     let ancestor_query =
                         MemberQuery::new(db, ancestor.to_owned(), kind, member_key.clone());
@@ -757,26 +757,31 @@ pub(crate) fn with_declaring_site<T>(
     }
 }
 
-/// Whether `class_key`'s OWN member group declares a member of this
-/// kind and key (inherited entries do not count: the annotation site
-/// is the declaring docblock).
-fn declares_member(
-    db: &dyn salsa::Database,
+/// Whether the queried class's OWN member group declares a member of
+/// this kind and key (inherited entries do not count: the annotation
+/// site is the declaring docblock). Tracked (issue #37): the merge
+/// walk consults this per ancestor from inside
+/// `declared_member_signature`'s frame, so without a boundary here any
+/// docblock edit in the ancestor's file would force the signature to
+/// re-execute.
+#[salsa::tracked]
+pub(crate) fn declares_member<'db>(
+    db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
-    class_key: &str,
-    kind: MemberKind,
-    member_key: &str,
+    query: MemberQuery<'db>,
 ) -> bool {
-    let Some(site) = declaring_site(db, files, class_like_query(db, class_key)) else {
+    let Some(site) = declaring_site(db, files, class_like_query(db, query.class_key(db))) else {
         return false;
     };
+    let kind = query.kind(db);
+    let member_key = query.member_key(db);
     member_tree(db, site.file)
         .classes
         .iter()
         .find(|group| group.ast_id == site.ast_id)
         .is_some_and(|group| {
             group.members.iter().any(|member| {
-                member.kind == kind && folded_member_key(kind, &member.name) == member_key
+                member.kind == kind && folded_member_key(kind, &member.name) == *member_key
             })
         })
 }
