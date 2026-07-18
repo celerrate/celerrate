@@ -25,6 +25,17 @@ const EDIT_TEXT: &str = "\\n// celerrate benchmark edit\\n";
 const BODY_EDIT_NEEDLE: &str = "['query' => (string) $request->query->get('q', '')]";
 const BODY_EDIT_REPLACEMENT: &str = "['query' => trim((string) $request->query->get('q', ''))]";
 
+/// The signature-edit scenario's target and scripted edit:
+/// `Post::getSlug()` loses its `?` — one member signature changes
+/// nullability, and its call sites span three other files (PostType,
+/// BlogController, CommentNotificationSubscriber): a real dependent
+/// fan-out through the member boundary. Dropping `?` adds no
+/// diagnostic on the pinned corpus, so the scenario measures
+/// invalidation, not rendering.
+const SIGNATURE_TARGET: &str = "src/Entity/Post.php";
+const SIGNATURE_EDIT_NEEDLE: &str = "public function getSlug(): ?string";
+const SIGNATURE_EDIT_REPLACEMENT: &str = "public function getSlug(): string";
+
 /// The CI guard rail's generous ceilings, in seconds. Shared runners
 /// are too noisy to measure on, so these catch structural regressions
 /// (the cache silently ceasing to work) and claim nothing more. The
@@ -34,6 +45,7 @@ const COLD_CEILING_SECONDS: f64 = 30.0;
 const WARM_NO_CHANGE_CEILING_SECONDS: f64 = 3.0;
 const WARM_ONE_EDIT_CEILING_SECONDS: f64 = 3.0;
 const WARM_BODY_EDIT_CEILING_SECONDS: f64 = 3.0;
+const WARM_SIGNATURE_EDIT_CEILING_SECONDS: f64 = 3.0;
 
 /// One protocol scenario: its name, how many timed runs, what runs
 /// before each timed run, and the guard-rail ceiling.
@@ -75,6 +87,20 @@ pub fn run(check_ceilings: bool) -> Result<()> {
         edited_variant(&pristine, BODY_EDIT_NEEDLE, BODY_EDIT_REPLACEMENT)?,
     )?;
 
+    let signature_target = working.join(SIGNATURE_TARGET);
+    let signature_original = bench_directory.join("signature-target-original.bak");
+    std::fs::copy(&signature_target, &signature_original)?;
+    let signature_pristine = std::fs::read_to_string(&signature_target)?;
+    let signature_variant = bench_directory.join("signature-target-variant.php");
+    std::fs::write(
+        &signature_variant,
+        edited_variant(
+            &signature_pristine,
+            SIGNATURE_EDIT_NEEDLE,
+            SIGNATURE_EDIT_REPLACEMENT,
+        )?,
+    )?;
+
     let quoted_binary = quoted(&binary);
     let scenarios = [
         Scenario {
@@ -111,6 +137,17 @@ pub fn run(check_ceilings: bool) -> Result<()> {
                 &body_variant,
             )),
             ceiling_seconds: WARM_BODY_EDIT_CEILING_SECONDS,
+        },
+        Scenario {
+            name: "warm signature-edit",
+            runs: 10,
+            prepare: Some(restore_prime_apply(
+                &signature_original,
+                &signature_target,
+                &quoted_binary,
+                &signature_variant,
+            )),
+            ceiling_seconds: WARM_SIGNATURE_EDIT_CEILING_SECONDS,
         },
     ];
 
@@ -373,5 +410,22 @@ mod tests {
             command,
             "cp '/b/orig.bak' '/w/File.php' && ('/bin/celerrate' check . > /dev/null || true) && cp '/b/variant.php' '/w/File.php'"
         );
+    }
+
+    #[test]
+    fn the_signature_edit_drops_null_from_the_pinned_getter() {
+        // A copy of the pinned declaration in src/Entity/Post.php
+        // (symfony/demo at 03fe2567); same pinning rationale as the
+        // body-edit needle test.
+        let pristine =
+            "    public function getSlug(): ?string\n    {\n        return $this->slug;\n    }\n";
+        let variant = super::edited_variant(
+            pristine,
+            super::SIGNATURE_EDIT_NEEDLE,
+            super::SIGNATURE_EDIT_REPLACEMENT,
+        )
+        .unwrap();
+        assert!(variant.contains("public function getSlug(): string"));
+        assert!(!variant.contains("?string"));
     }
 }
