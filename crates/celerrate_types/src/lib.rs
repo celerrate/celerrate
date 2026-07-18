@@ -106,6 +106,7 @@ mod operators;
 mod ordering;
 mod representation;
 mod solver;
+pub mod stored;
 mod substitution;
 mod type_syntax;
 mod widening;
@@ -132,6 +133,7 @@ pub use inference::{
 pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
 pub use judgments::{CoercionMode, Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
+pub use stored::StoredType;
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
     ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,

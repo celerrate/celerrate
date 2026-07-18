@@ -9,6 +9,9 @@ repository.workspace = true
 
 [dependencies]
 salsa = { workspace = true }
+blake3 = { workspace = true }
+postcard = { workspace = true }
+serde = { workspace = true }
 celerrate_db = { path = "../celerrate_db" }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_project = { path = "../celerrate_project" }

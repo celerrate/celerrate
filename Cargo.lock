@@ -274,6 +274,7 @@ dependencies = [
 name = "celerrate_types"
 version = "0.0.2"
 dependencies = [
+ "blake3",
  "celerrate_db",
  "celerrate_diagnostics",
  "celerrate_project",
@@ -282,7 +283,9 @@ dependencies = [
  "celerrate_stdlib_provider",
  "celerrate_stubs",
  "celerrate_syntax",
+ "postcard",
  "salsa",
+ "serde",
 ]
 
 [[package]]
