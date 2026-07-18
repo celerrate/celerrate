@@ -7,6 +7,7 @@
 
 use std::path::Path;
 
+use celerrate_cli::Outcome;
 use celerrate_cli::analysis::analyze;
 use celerrate_cli::cache::pack::{Pack, PackHeader, encode, write_atomically};
 use celerrate_cli::cache::snapshot::{
@@ -1168,11 +1169,51 @@ fn a_changed_class_surface_invalidates_the_dependent_signature() {
 
 #[test]
 fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
-    // Two mutually recursive functions with a real base case: the
-    // recorded stance (decision 9) is that a cyclic cluster always
-    // falls through to the fixpoint on a warm run — served or
-    // recomputed is unspecified, but the rendering must equal fresh.
-    let source = "<?php
+    // `useBoth` is declared FIRST, ahead of the mutually recursive
+    // `evenOrOdd`/`oddOrEven` pair, and this ordering is load-bearing,
+    // not stylistic — the same reason documented in detail on
+    // `a_mutually_recursive_typed_callee_validates_correctly_warm`
+    // below. `typed_file_verdicts` walks a file's bodies in declaration
+    // order via `body_typed_verdicts`, which calls `inferred_body_types`
+    // DIRECTLY, bypassing the cycle-safe `inferred_function_return`
+    // entry point. Were the recursive pair declared before any caller,
+    // the recursive call inside `evenOrOdd`'s own direct body walk
+    // would re-enter that SAME direct `inferred_body_types` claim while
+    // it is still active — a salsa `Panic`-strategy cycle, a
+    // pre-existing `celerrate_types` defect (`body_typed_verdicts`/
+    // `inferred_body_types` bypassing the cycle-safe entry points),
+    // tracked as a follow-up and deliberately NOT fixed here. This is
+    // exactly the bug this test used to trip over silently: with the
+    // recursive pair declared first, cold, warm, and fresh runs all
+    // panicked identically, so the byte-equality assertions below
+    // passed on matching panic text rather than on any genuine
+    // decision-9 behavior. With `useBoth` declared first, its own
+    // argument expression `takesInt(evenOrOdd(3))` reaches the
+    // cluster's return through `inferred_function_return` FIRST — the
+    // cycle-safe entry point, which memoizes both `evenOrOdd`'s and
+    // `oddOrEven`'s `inferred_body_types` results as a side effect of
+    // resolving the fixpoint — so their own later direct walks (from
+    // `typed_file_verdicts`'s own loop) each hit an already-memoized
+    // value instead of re-entering an active claim.
+    //
+    // The cluster's fixpoint is a plain `string` (the base case returns
+    // a string literal), never `never`: the stance under test here is
+    // decision 9's general one — a cyclic cluster always falls through
+    // to the fixpoint on a warm run, served or recomputed unspecified,
+    // but the rendering must equal fresh. (The never-returning
+    // provisional-mismatch rule is the next test's concern.) Passing
+    // the string return into an `int`-typed parameter, under
+    // `declare(strict_types=1)` (weak mode statically treats any
+    // string argument against an `int` parameter as a possible runtime
+    // coercion and stays silent — `checks::arguments`'s own
+    // `a_weak_file_does_not_report_runtime_coercions`), forces a
+    // genuine CEL0035 (argument type mismatch) finding, asserted
+    // BEFORE the byte-equality chain, so a wrong answer or a
+    // regression back to the internal-error render breaks this test
+    // instead of passing vacuously.
+    let source = "<?php declare(strict_types=1);
+        function takesInt(int $n): void {}
+        function useBoth() { takesInt(evenOrOdd(3)); takesInt(oddOrEven(3)); }
         function evenOrOdd($n) {
             if ($n === 0) { return 'even'; }
             return oddOrEven($n - 1);
@@ -1181,13 +1222,24 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
             if ($n === 0) { return 'odd'; }
             return evenOrOdd($n - 1);
         }
-        function useBoth() { return evenOrOdd(3) . oddOrEven(3); }
     ";
     let root = project(&[("cycle.php", source)]);
     run_check(root.path());
     // No edit: a second, independently-started warm run over the exact
     // same files is still the scenario ("cached, warm run").
-    let (_, first_warm) = run_check(root.path());
+    let (first_warm_outcome, first_warm) = run_check(root.path());
+    assert!(
+        first_warm.contains("CEL0035"),
+        "the fixture must exercise the cyclic cluster's argument-type \
+         finding warm, not an internal-error render: {first_warm}",
+    );
+    assert_ne!(
+        first_warm_outcome,
+        Outcome::InternalError,
+        "the cyclic cluster must never panic through the direct \
+         `inferred_body_types` walk: {first_warm}",
+    );
+
     let (_, second_warm) = run_check(root.path());
     assert_eq!(
         first_warm, second_warm,
@@ -1204,16 +1256,51 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
 
 #[test]
 fn a_never_returning_cycle_participant_never_validates_warm() {
+    // `first` and `second` are deliberately left with NO caller ahead of
+    // them (unlike `a_cyclic_cluster_recomputes_and_stays_deterministic`
+    // above and `a_mutually_recursive_typed_callee_validates_correctly_warm`
+    // below, both single-FILE clusters where the caller-first ordering
+    // is load-bearing) — because `first`/`second` split across two
+    // FILES sidesteps that hazard by construction, not by ordering.
+    // `analyze`'s own fan-out (`crate::analysis::analyze`, see the
+    // `AnalysisInputs` doc comment) clones the salsa database once per
+    // reported file and hands each clone to its own rayon task, so
+    // `first.php`'s and `second.php`'s direct `inferred_body_types`
+    // walks run as two independent entries into the SAME underlying
+    // query results rather than one Rust call frame synchronously
+    // re-entering itself. The single-file hazard documented on the two
+    // tests above — `body_typed_verdicts`'s direct `inferred_body_types`
+    // call re-entering its OWN still-active claim on the SAME thread,
+    // a salsa `Panic`-strategy cycle with no `cycle_fn` to fall back on
+    // (a pre-existing `celerrate_types` defect, tracked as a follow-up,
+    // NOT fixed here) — requires that same-stack self-reentrancy;
+    // splitting the pair across two independently-cloned files avoids
+    // it structurally. Verified empirically (ten back-to-back runs of
+    // this exact fixture, cold and warm alike): the cluster never
+    // panics through this path, with or without a caller declared
+    // ahead of the recursive pair.
+    //
     // `first` and `second` call each other with no non-throwing base
     // case: the whole cluster's fixpoint is `never`. Decision 9's
     // provisional-mismatch rule fires on every live demand inside this
     // cluster (a live `never` is always a mismatch, even against a
     // record that itself expects `never`), so neither participant ever
     // validates warm — both always fall through to real recomputation.
-    // The observable here is termination plus byte-identical rendering,
-    // across two independent entry points into the same cluster
-    // (`first` and `second` are each analyzed as their own file, both
-    // fanned out by the same `check` run) and across repeated warm
+    // What made this test vacuous before was never the panic risk (this
+    // topology was never exposed to it): it was that the assertions
+    // only ever compared cold/warm/fresh output to EACH OTHER, so a
+    // regressed analyzer that started reporting a false diagnostic (or
+    // one that started panicking for some unrelated reason) would still
+    // pass as long as it did so consistently. The genuine, non-vacuous
+    // observable added here is the typed `Outcome` itself: a
+    // `never`-returning cluster raises no diagnostic of its own, so
+    // every run — cold, warm, fresh — must render `Outcome::Clean`,
+    // asserted BEFORE the byte-equality chain, so a stray false-positive
+    // diagnostic or an unexpected internal error breaks this test
+    // instead of passing vacuously. The termination-plus-rendering
+    // observable spans two independent entry points into the same
+    // cluster (`first` and `second` are each analyzed as their own
+    // file, both fanned out by the same `check` run) and repeated warm
     // runs, never a stale served `never` widening a live join ascent.
     let first_source = "<?php
         function first(int $n) {
@@ -1228,7 +1315,14 @@ fn a_never_returning_cycle_participant_never_validates_warm() {
     ";
     let root = project(&[("first.php", first_source), ("second.php", second_source)]);
     run_check(root.path());
-    let (_, first_warm) = run_check(root.path());
+    let (first_warm_outcome, first_warm) = run_check(root.path());
+    assert_eq!(
+        first_warm_outcome,
+        Outcome::Clean,
+        "the never-returning cluster must raise no false diagnostic of \
+         its own and must not report an internal error: {first_warm}",
+    );
+
     let (_, second_warm) = run_check(root.path());
     assert_eq!(
         first_warm, second_warm,
@@ -1441,16 +1535,24 @@ fn a_stale_typed_record_recomputes_only_the_typed_portion() {
 /// later direct walk (from `typed_file_verdicts`'s own loop) hits an
 /// already-memoized value instead of re-entering an active claim.
 ///
-/// This also means `a_cyclic_cluster_recomputes_and_stays_deterministic`
-/// and `a_never_returning_cycle_participant_never_validates_warm` above
-/// (both pre-dating this task) declare their recursive pair BEFORE their
-/// caller and, on inspection, panic on every single run (cold, warm,
-/// fresh alike) — their assertions only ever compare the resulting
-/// (identical) internal-error text across runs, so they pass vacuously
-/// today. Flagged as a concern in the task report rather than silently
-/// fixed here: reordering or otherwise repairing those two tests is a
-/// pre-existing `celerrate_types` typed-checks defect, outside task 9's
-/// scope (the persistent typed-artifact cache).
+/// `a_cyclic_cluster_recomputes_and_stays_deterministic` above (both
+/// pre-dating this task, and both, like this test, single-file clusters)
+/// originally declared its recursive pair BEFORE any caller and, on
+/// inspection, panicked on every single run (cold, warm, fresh alike) —
+/// its assertions only ever compared the resulting (identical)
+/// internal-error text across runs, so it passed vacuously. It was
+/// de-vacuumed with this same caller-first ordering technique (a
+/// dedicated follow-up commit), now asserting genuine decision-9 content
+/// before the byte-equality chain. `a_never_returning_cycle_participant_
+/// never_validates_warm` (also pre-dating this task) turned out, on the
+/// same inspection, to split its recursive pair across two FILES rather
+/// than one — a topology this exact single-file hazard never reaches
+/// (see its own doc comment for why) — so it was de-vacuumed differently:
+/// by asserting the run's `Outcome` is genuinely `Clean`, rather than by
+/// reordering. The underlying `celerrate_types` typed-checks defect
+/// itself — reordering is a workaround for the single-file case, not a
+/// fix — is still outside this task's scope (the persistent
+/// typed-artifact cache) and remains a tracked follow-up.
 ///
 /// `crate::cache::verdict::validate_typed` demands the cluster's return
 /// through the LIVE `inferred_function_return` query from
