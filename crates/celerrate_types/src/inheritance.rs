@@ -80,7 +80,9 @@ pub fn class_annotations<'db>(
     class: ClassQuery<'db>,
 ) -> ClassAnnotations<'db> {
     let key = class.key(db);
-    if crate::declared::declaring_site(db, files, key).is_none() {
+    if crate::declared::declaring_site(db, files, crate::declared::class_like_query(db, key))
+        .is_none()
+    {
         // No source class-like at all: either an unresolvable name or
         // a genuine stub. A stub's own `@template`/`@extends` never
         // lives in a docblock (there is none to parse) — only in the

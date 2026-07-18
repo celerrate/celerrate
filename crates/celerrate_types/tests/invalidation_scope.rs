@@ -1663,6 +1663,66 @@ class User extends Entity {}
     );
 }
 
+/// Issue #37, stage 1: `declaring_site` is now a tracked query of its
+/// own. A prose-only edit to another class's docblock still reaches it
+/// (its `member_tree` input changed), but as a tracked query it
+/// appears in the execution log under its own name and its unchanged
+/// answer backdates, which the closing pin of this family turns into a
+/// spared `declared_member_signature`.
+#[test]
+fn a_class_docblock_prose_edit_reruns_declaring_site_as_a_tracked_query() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/**
+ * The repository.
+ * @template T
+ */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("The repository.", "The repository, but described better.");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    let log = f.db.take_executed();
+    assert!(
+        executions_of(&log, "declaring_site") >= 1,
+        "declaring_site must be a tracked query in its own right, visible \
+         in the execution log when its member_tree input changes: {log:?}",
+    );
+}
+
 /// Task 13's closing pin, the counterexample to the pin above: editing
 /// the `@extends` argument itself (`Repository<User>` ->
 /// `Repository<Admin>`) genuinely changes `class_annotations`'s parsed

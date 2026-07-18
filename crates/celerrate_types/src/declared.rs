@@ -560,7 +560,7 @@ pub fn declared_member_signature<'db>(
     // `invalidation_scope.rs`'s
     // `a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict`).
     // An honest, already-documented cost, not fixed here.
-    let site_parts = declaring_site(db, files, &owner)?;
+    let site_parts = declaring_site(db, files, class_like_query(db, &owner))?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {
         namespace: &site_parts.namespace,
@@ -658,25 +658,40 @@ pub fn declared_member_signature<'db>(
 /// namespace, and declaration AST id, found through the same
 /// firewalls linearization uses. An anonymous class's synthetic key
 /// (`anonymous_class_key`) carries its `AstId` directly, so its site
-/// resolves without a symbol-table lookup — it has no name to look up
-/// (mirrors `linearize.rs`'s `fetch`).
+/// resolves without a symbol-table lookup (it has no name to look up,
+/// mirroring `linearize.rs`'s `fetch`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
     ast_id: AstId,
 }
 
-pub(crate) fn declaring_site(
-    db: &dyn salsa::Database,
-    files: AnalyzedFileSet,
+/// Interns one owner key as the ClassLike-space `SymbolQuery` the
+/// tracked site queries key on. Keys arrive pre-folded (or as
+/// `anonymous_class_key` synthetics), exactly as the callers already
+/// held them; no folding happens here.
+pub(crate) fn class_like_query<'db>(
+    db: &'db dyn salsa::Database,
     owner_key: &str,
+) -> SymbolQuery<'db> {
+    SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned())
+}
+
+/// Tracked (issue #37): this is the memo boundary between the
+/// file-granular `member_tree` and every signature-level consumer. A
+/// docblock edit anywhere in the file re-executes this query, but its
+/// answer (file, namespace, AST id) is untouched by docblocks, so it
+/// backdates and the consumers behind it are spared.
+#[salsa::tracked]
+pub(crate) fn declaring_site<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    query: SymbolQuery<'db>,
 ) -> Option<DeclaringSite> {
-    let ast_id = match parse_anonymous_class_key(owner_key) {
+    let ast_id = match parse_anonymous_class_key(query.key(db)) {
         Some(ast_id) => ast_id,
-        None => {
-            let query = SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned());
-            lookup_class_declaration(db, files, query)?.1
-        }
+        None => lookup_class_declaration(db, files, query)?.1,
     };
     let index = analyzed_file_index(db, files);
     let position = index
@@ -703,7 +718,7 @@ pub(crate) fn owner_class_docblock(
     files: AnalyzedFileSet,
     owner_key: &str,
 ) -> Option<String> {
-    let site = declaring_site(db, files, owner_key)?;
+    let site = declaring_site(db, files, class_like_query(db, owner_key))?;
     member_tree(db, site.file)
         .classes
         .iter()
@@ -725,7 +740,7 @@ pub(crate) fn with_declaring_site<T>(
     owner_key: &str,
     parse: impl FnOnce(&NameSite<'_>) -> T,
 ) -> T {
-    match declaring_site(db, files, owner_key) {
+    match declaring_site(db, files, class_like_query(db, owner_key)) {
         Some(site_parts) => {
             let tables =
                 UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
@@ -749,7 +764,7 @@ fn declares_member(
     kind: MemberKind,
     member_key: &str,
 ) -> bool {
-    let Some(site) = declaring_site(db, files, class_key) else {
+    let Some(site) = declaring_site(db, files, class_like_query(db, class_key)) else {
         return false;
     };
     member_tree(db, site.file)
