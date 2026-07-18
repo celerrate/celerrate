@@ -1547,3 +1547,45 @@ mixed rate 1059 / 4233 = 25.0 %; element-position mixed rate
 ### Acceptance (task 5)
 
 Acceptance: sub-second warm across the scenario set — holds.
+
+## Closing memo
+
+Closed 2026-07-18, commit `903407d`.
+
+- Scenario set: five scenarios, flagship warm body-edit (0.521 s).
+- Recorded deviation (fixed decision 2): no scenario measures the
+  warm cost of the changed-inferred-return invalidation path, because
+  the corpus's declared-return coverage makes that edit class
+  unreachable in application code; correctness is pinned by the
+  plans 6 and 9a invalidation-scope tests, and the residual is
+  published through the per-scenario cache statistics.
+- Acceptance (sub-second warm across the set): holds.
+- Peak memory: cold 709 MiB against the 1536 MiB budget; LRU
+  not configured.
+- Substance: 25.0 % residual whole-expression mixed rate and
+  7.4 % element-position mixed rate (issue #45), published in the
+  protocol.
+- Signature-pack keying (plan 9a's ledger assigns this plan's numbers
+  the revisit of its file-hash coarsening): the coarseness does not
+  matter, judged from `typed_served` / `typed_recomputed` on the edit
+  scenarios: a single-file edit (warm one-edit, warm body-edit)
+  recomputes only 1 verdict and 5 typed bodies, and warm
+  signature-edit's larger fan-out (9 verdicts, 65 typed bodies) is a
+  genuine member-boundary change rather than pack coarsening; every
+  warm median stays comfortably sub-second, so the file-hash pack
+  keying imposes no measurable penalty and a per-body hash is
+  re-deferred as unwarranted.
+
+Handoffs to plan 9c (release):
+- The README performance section and the benchmark SVGs
+  (`assets/benchmark-dark.svg`, `assets/benchmark-light.svg`) still
+  show the semantic-core numbers and the old flagship; the rewrite
+  aligns them with `benchmarks/PROTOCOL.md`.
+- No acceptance escalation was recorded (the sub-second criterion
+  holds), so `PERSIST_TYPED_ARTIFACTS` was not flipped; any future
+  release decision on it remains plan 9c's call per its ledger.
+- The `mixed-rate` and `ground-truth` subcommands stay hidden; whether
+  the release notes mention the substance number is 9c's editorial
+  decision.
+- Issue #45: task 5 published both the whole-expression and element
+  rates, so closing #45 is the merge's call.
