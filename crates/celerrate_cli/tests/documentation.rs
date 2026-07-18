@@ -32,3 +32,19 @@ fn every_registered_identifier_is_documented() {
         );
     }
 }
+
+#[test]
+fn the_bridge_page_documents_every_suppression_form() {
+    let page = workspace_page("docs/phpdoc-bridge.md");
+    for form in [
+        "@phpstan-ignore-line",
+        "@phpstan-ignore-next-line",
+        "@phpstan-ignore",
+        "@psalm-suppress",
+    ] {
+        assert!(
+            page.contains(form),
+            "docs/phpdoc-bridge.md does not document `{form}`",
+        );
+    }
+}

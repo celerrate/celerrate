@@ -6,8 +6,9 @@
 //! table is `lowering`'s rustdoc; the suppression mapping table (the
 //! written tags to the directive vocabulary) is `directives`' rustdoc;
 //! the pinned-reference coverage statement lives in
-//! `tests/phpstan_corpus/verdicts.txt` (repository documentation is
-//! the interim publication home until plan 9c).
+//! `tests/phpstan_corpus/verdicts.txt` (published at
+//! `docs/phpdoc-bridge.md`; this rustdoc stays the authoritative
+//! source).
 //! Depends on `celerrate_plugin` and nothing else in the workspace —
 //! enforced by `cargo xtask dependency-shape`. No docblock
 //! diagnostics: malformed annotations are silently ignored, per
