@@ -12,8 +12,16 @@
 //! `expression_types` folded together (this line includes stub
 //! *method* calls, the task-5 class-refinement channel, which move
 //! this counter but never enter the per-callee table below — decision
-//! 14's stated scope) — then one `<callee>\t<mixed>\t<total>` line per
-//! stub free-function callee, sorted by callee, trailing newline.
+//! 14's stated scope) — then line 2
+//! `element-positions <total>\telement-mixed <count>`, the
+//! element-level mixed metric (design decision 12, issue #45): every
+//! reported expression's `TypeId::element_positions` folded together,
+//! counting structural constituent slots (array/list key and value,
+//! shape field values, union constituents recursed but the union node
+//! itself never a position) rather than whole expressions, additive
+//! alongside line 1 and never a reclassification of it — then one
+//! `<callee>\t<mixed>\t<total>` line per stub free-function callee,
+//! sorted by callee, trailing newline.
 
 use std::io::{self, Write};
 
@@ -39,6 +47,8 @@ pub fn run(session: &Session, output: &mut dyn Write) -> io::Result<()> {
 
     let mut expressions = 0usize;
     let mut mixed = 0usize;
+    let mut element_total = 0usize;
+    let mut element_mixed = 0usize;
     let mut calls: Vec<StubCallRecord> = Vec::new();
 
     for &file in inputs.reported.iter() {
@@ -52,6 +62,8 @@ pub fn run(session: &Session, output: &mut dyn Write) -> io::Result<()> {
                 function.ast_id,
                 &mut expressions,
                 &mut mixed,
+                &mut element_total,
+                &mut element_mixed,
                 &mut calls,
             );
         }
@@ -68,13 +80,19 @@ pub fn run(session: &Session, output: &mut dyn Write) -> io::Result<()> {
                     member.ast_id,
                     &mut expressions,
                     &mut mixed,
+                    &mut element_total,
+                    &mut element_mixed,
                     &mut calls,
                 );
             }
         }
     }
 
-    write!(output, "{}", render_report(expressions, mixed, &calls))
+    write!(
+        output,
+        "{}",
+        render_report(expressions, mixed, element_total, element_mixed, &calls)
+    )
 }
 
 /// One body's contribution to the running totals: absent when the
@@ -90,6 +108,8 @@ fn accumulate(
     ast_id: AstId,
     expressions: &mut usize,
     mixed: &mut usize,
+    element_total: &mut usize,
+    element_mixed: &mut usize,
     calls: &mut Vec<StubCallRecord>,
 ) {
     let Some(inferred) = inferred_body_types(
@@ -109,6 +129,11 @@ fn accumulate(
         .iter()
         .filter(|of| of.is_mixed(database))
         .count();
+    for &of in &inferred.expression_types {
+        let positions = of.element_positions(database);
+        *element_total += positions.total;
+        *element_mixed += positions.mixed;
+    }
     calls.extend(inferred.stub_calls.iter().cloned());
 }
 
@@ -118,7 +143,13 @@ fn accumulate(
 /// byte-reproducibility (`BTreeMap` iterates in key order — the
 /// `--bless`/byte-compare pattern this instrument's `xtask` gate
 /// depends on).
-pub(crate) fn render_report(expressions: usize, mixed: usize, calls: &[StubCallRecord]) -> String {
+pub(crate) fn render_report(
+    expressions: usize,
+    mixed: usize,
+    element_total: usize,
+    element_mixed: usize,
+    calls: &[StubCallRecord],
+) -> String {
     use std::collections::BTreeMap;
     let mut per_callee: BTreeMap<&str, (usize, usize)> = BTreeMap::new();
     for record in calls {
@@ -129,6 +160,9 @@ pub(crate) fn render_report(expressions: usize, mixed: usize, calls: &[StubCallR
         }
     }
     let mut report = format!("expressions {expressions}\tmixed {mixed}\n");
+    report.push_str(&format!(
+        "element-positions {element_total}\telement-mixed {element_mixed}\n"
+    ));
     for (callee, (mixed_calls, total)) in per_callee {
         report.push_str(&format!("{callee}\t{mixed_calls}\t{total}\n"));
     }
@@ -151,6 +185,8 @@ mod tests {
         let report = render_report(
             7,
             3,
+            11,
+            5,
             &[
                 StubCallRecord {
                     callee: "b".to_owned(),
@@ -169,6 +205,7 @@ mod tests {
         assert_eq!(
             report,
             "expressions 7\tmixed 3\n\
+             element-positions 11\telement-mixed 5\n\
              a\t0\t1\n\
              b\t1\t2\n",
         );
@@ -176,8 +213,12 @@ mod tests {
 
     #[test]
     fn an_empty_call_set_still_prints_the_summary_line() {
-        let report = render_report(0, 0, &[]);
-        assert_eq!(report, "expressions 0\tmixed 0\n");
+        let report = render_report(0, 0, 0, 0, &[]);
+        assert_eq!(
+            report,
+            "expressions 0\tmixed 0\n\
+             element-positions 0\telement-mixed 0\n",
+        );
     }
 
     /// The production entry point, invoked end to end: a stub-only

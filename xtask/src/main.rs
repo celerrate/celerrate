@@ -5,6 +5,8 @@ fn main() -> ExitCode {
     let outcome = match (arguments.next().as_deref(), arguments.next().as_deref()) {
         (Some("bench"), None) => xtask::bench::run(false),
         (Some("bench"), Some("--ceilings")) => xtask::bench::run(true),
+        (Some("memory"), None) => xtask::memory::run(false),
+        (Some("memory"), Some("--ceiling")) => xtask::memory::run(true),
         (Some("codegen"), None) => xtask::codegen::run(),
         (Some("dependency-shape"), None) => xtask::dependency_shape::run(),
         (Some("fetch-stubs"), None) => xtask::stubs::fetch(),
@@ -23,7 +25,7 @@ fn main() -> ExitCode {
         (Some("release-notes"), Some(version)) => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | mixed-rate [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | release-notes <version>>"
+                "usage: cargo xtask <codegen | dependency-shape | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | mixed-rate [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | memory [--ceiling] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }

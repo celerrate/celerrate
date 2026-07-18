@@ -175,3 +175,177 @@ pub struct TypeId<'db> {
     #[returns(ref)]
     pub data: TypeData<'db>,
 }
+
+/// The element-level mixed metric (design decision 12, issue #45): how
+/// many structural constituent slots a type carries, and how many of
+/// those slots are exactly `mixed`. See [`TypeId::element_positions`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct ElementPositions {
+    pub total: usize,
+    pub mixed: usize,
+}
+
+impl<'db> TypeId<'db> {
+    /// Walks the structural constituent slots of a type, counting each
+    /// as one position and how many are exactly `mixed` (decision 12):
+    /// an array or list's key and value slots, a shape field's value
+    /// slot, each counted as one position and then recursed into; a
+    /// union's constituents are recursed into but the union node itself
+    /// is never a position. Every other variant — `Mixed` itself,
+    /// scalars, `Class` (its generic arguments are not positions and
+    /// are not recursed into), `Callable` (its parameter and return
+    /// slots are the recorded v0 exclusion), `Intersection`,
+    /// `ClassString`, `KeyOf`, `ValueOf`, `Conditional`, `Template`,
+    /// `EnumCase`, the placeholders — contributes zero positions and is
+    /// not recursed into. `iterable<K, V>` is not special-cased: its
+    /// `Union[Array<K, V>, Class("Traversable", …)]` desugaring already
+    /// yields exactly the key and value slots through the `Array` arm.
+    /// Types are interned and structurally finite (acyclic), so no
+    /// depth guard is needed.
+    pub fn element_positions(self, db: &'db dyn salsa::Database) -> ElementPositions {
+        let mut positions = ElementPositions::default();
+        self.walk_element_positions(db, &mut positions);
+        positions
+    }
+
+    fn walk_element_positions(
+        self,
+        db: &'db dyn salsa::Database,
+        positions: &mut ElementPositions,
+    ) {
+        match self.data(db) {
+            TypeData::Array { key, value, .. } => {
+                let key = *key;
+                let value = *value;
+                count_position(db, key, positions);
+                count_position(db, value, positions);
+                key.walk_element_positions(db, positions);
+                value.walk_element_positions(db, positions);
+            }
+            TypeData::Shape { fields } => {
+                for field in fields {
+                    count_position(db, field.value, positions);
+                    field.value.walk_element_positions(db, positions);
+                }
+            }
+            TypeData::Union { constituents } => {
+                for &constituent in constituents {
+                    constituent.walk_element_positions(db, positions);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// One structural slot's contribution: always a position, and a mixed
+/// one when the slot's own type is exactly `mixed`.
+fn count_position<'db>(
+    db: &'db dyn salsa::Database,
+    of: TypeId<'db>,
+    positions: &mut ElementPositions,
+) {
+    positions.total += 1;
+    if of.is_mixed(db) {
+        positions.mixed += 1;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use celerrate_db::testing::TestDatabase;
+
+    use crate::representation::ElementPositions;
+    use crate::{CallableParameter, ShapeField, ShapeKey, TypeId};
+
+    #[test]
+    fn an_array_counts_its_key_and_value_as_positions() {
+        let db = TestDatabase::default();
+        let of = TypeId::array(&db, TypeId::string(&db), TypeId::mixed(&db));
+        assert_eq!(
+            of.element_positions(&db),
+            ElementPositions { total: 2, mixed: 1 }
+        );
+    }
+
+    #[test]
+    fn a_wholly_mixed_type_is_not_itself_a_position() {
+        let db = TestDatabase::default();
+        assert_eq!(
+            TypeId::mixed(&db).element_positions(&db),
+            ElementPositions { total: 0, mixed: 0 }
+        );
+    }
+
+    #[test]
+    fn a_shape_counts_each_field_value_as_a_position_but_not_its_key() {
+        let db = TestDatabase::default();
+        let of = TypeId::shape(
+            &db,
+            vec![
+                ShapeField {
+                    key: ShapeKey::String("a".to_owned()),
+                    optional: false,
+                    value: TypeId::mixed(&db),
+                },
+                ShapeField {
+                    key: ShapeKey::String("b".to_owned()),
+                    optional: false,
+                    value: TypeId::int(&db),
+                },
+            ],
+        );
+        assert_eq!(
+            of.element_positions(&db),
+            ElementPositions { total: 2, mixed: 1 }
+        );
+    }
+
+    #[test]
+    fn nested_arrays_recurse_into_the_value_slot() {
+        let db = TestDatabase::default();
+        let inner = TypeId::array(&db, TypeId::int(&db), TypeId::mixed(&db));
+        let outer = TypeId::array(&db, TypeId::int(&db), inner);
+        assert_eq!(
+            outer.element_positions(&db),
+            ElementPositions { total: 4, mixed: 1 }
+        );
+    }
+
+    #[test]
+    fn a_union_is_walked_but_is_never_itself_a_position() {
+        let db = TestDatabase::default();
+        let of = TypeId::union(
+            &db,
+            [
+                TypeId::array(&db, TypeId::int(&db), TypeId::mixed(&db)),
+                TypeId::array(&db, TypeId::int(&db), TypeId::int(&db)),
+            ],
+        );
+        assert_eq!(
+            of.element_positions(&db),
+            ElementPositions { total: 4, mixed: 1 }
+        );
+    }
+
+    #[test]
+    fn a_callables_parameter_and_return_slots_contribute_no_positions() {
+        let db = TestDatabase::default();
+        let of = TypeId::callable(
+            &db,
+            vec![CallableParameter {
+                parameter_type: TypeId::array(&db, TypeId::int(&db), TypeId::mixed(&db)),
+                optional: false,
+                variadic: false,
+                by_reference: false,
+            }],
+            TypeId::array(&db, TypeId::string(&db), TypeId::mixed(&db)),
+        );
+        assert_eq!(
+            of.element_positions(&db),
+            ElementPositions { total: 0, mixed: 0 }
+        );
+    }
+}

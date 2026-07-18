@@ -138,7 +138,9 @@ pub use judgments::{CoercionMode, Nullability, Proof, assignable_to, nullability
 pub use records::{
     FileDependencies, TypedDependencies, class_surface_digest, function_signature_digest,
 };
-pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
+pub use representation::{
+    CallableParameter, ElementPositions, FloatBits, ShapeField, ShapeKey, TypeId,
+};
 pub use stored::{
     StoredClassDependency, StoredFunctionDependency, StoredInferredEdge, StoredInferredSignature,
     StoredParameter, StoredSignature, StoredSignatureKey, StoredTrust, StoredType,

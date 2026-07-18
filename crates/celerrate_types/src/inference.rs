@@ -5,12 +5,12 @@
 //! body IR, so LRU eviction of parse trees is structurally safe.
 //!
 //! Memory lever, named for plan 9b (design section 6): the full
-//! expression type tables produced by [`inferred_body_types`] are the
-//! LRU candidates (`salsa` supports `lru = N` on tracked functions),
-//! while inferred returns stay resident — small, hot, and the
-//! fixpoint's currency. No capacity is set here: plan 9b owns the
-//! peak-memory measurement against its budget and pulls the lever
-//! with a number.
+//! expression type tables produced by [`inferred_body_types`] remain
+//! the named LRU candidates (`salsa` supports `lru = N` on tracked
+//! functions), while inferred returns stay resident — small, hot, and
+//! the fixpoint's currency. Plan 9b measured the corpus cold peak at
+//! 709 MiB against the 1536 MiB budget and set no capacity — the lever
+//! stays dormant until a measurement demands it.
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
