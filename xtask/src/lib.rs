@@ -12,10 +12,12 @@
 //! snapshot baseline; `fetch-phpdoc-parser` and
 //! `phpdoc-cases` fetch the pinned phpstan/phpdoc-parser snapshot and
 //! extract its `TypeParserTest` inputs into the committed case file the
-//! phpdoc-bridge coverage test consumes. xtask deliberately depends on
-//! no `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
-//! `hyperfine`, and the built `celerrate` binary, so a broken generated
-//! file, blob, or build can never prevent regenerating what fixes it.
+//! phpdoc-bridge coverage test consumes; `memory` measures peak RSS on
+//! the corpus against its budget. xtask deliberately depends on no
+//! `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
+//! `hyperfine`, `/usr/bin/time`, and the built `celerrate` binary, so a
+//! broken generated file, blob, or build can never prevent
+//! regenerating what fixes it.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -25,6 +27,7 @@ pub mod codegen;
 pub mod corpus;
 pub mod dependency_shape;
 pub mod ground_truth;
+pub mod memory;
 pub mod mixed_rate;
 pub mod phpdoc_corpus;
 pub mod pin;
