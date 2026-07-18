@@ -18,6 +18,7 @@ use celerrate_project::{
 use celerrate_semantics::{ArtifactCacheInput, CacheHandle};
 use celerrate_source::FileId;
 use celerrate_stubs::{StubBlobError, StubIndex, StubIndexInput, embedded_stub_index};
+use celerrate_types::{TypedCacheHandle, TypedCacheInput};
 use celerrate_vfs::{Vfs, Walk, enumerate_php_files};
 use salsa::Setter as _;
 
@@ -138,6 +139,16 @@ impl Session {
             &PackHeader::current(cache_loaded_range, plugin_set_digest),
         ));
         let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache {
+            snapshot: cache.clone(),
+            statistics: statistics.clone(),
+        })))
+        .durability(salsa::Durability::HIGH)
+        .new(&database);
+        // The typed-cache sibling (plan 9a, task 8): the same
+        // `SnapshotCache`, registered a second time under the
+        // `celerrate_types`-owned trait, at the same HIGH durability —
+        // reading it never invalidates anything either.
+        let _ = TypedCacheInput::builder(TypedCacheHandle(Arc::new(SnapshotCache {
             snapshot: cache.clone(),
             statistics: statistics.clone(),
         })))

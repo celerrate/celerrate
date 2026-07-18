@@ -52,6 +52,14 @@ pub struct CacheStatistics {
     /// Pack writes that failed — the silent failure of audit finding
     /// M5, now at least countable.
     pub persist_failed: AtomicU64,
+    /// Typed-signature lookups (plan 9a, task 8) that found a recorded
+    /// entry under the queried key — presence alone, counted at
+    /// `SnapshotCache`, never the query-layer validation outcome
+    /// (counters are forbidden inside a salsa query).
+    pub signatures_found: AtomicU64,
+    /// Typed-signature lookups with no recorded entry under the queried
+    /// key.
+    pub signatures_absent: AtomicU64,
 }
 
 impl CacheStatistics {

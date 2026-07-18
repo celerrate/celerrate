@@ -15,17 +15,19 @@
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberOrigin, MemberResolution,
-    MemberSignature, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, anonymous_class_key,
-    body_ir, folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
-    lookup_function_declaration, lookup_member, member_tree,
+    BodyQuery, ClassQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberOrigin,
+    MemberQuery, MemberResolution, MemberSignature, SymbolQuery, SymbolSpace, UseTables,
+    analyzed_file_index, anonymous_class_key, body_ir, folded_member_key, folded_symbol_key,
+    fully_qualified_name, item_tree, lookup_function_declaration, lookup_member, member_tree,
 };
 use celerrate_stubs::StubIndexInput;
 
+use crate::cache::TypedCacheInput;
 use crate::declared::{FunctionQuery, declared_function_signature, declared_member_signature};
 use crate::flow::{FlowContext, walk_body};
-use crate::records::TypedDependencies;
+use crate::records::{TypedDependencies, class_surface_digest, function_signature_digest};
 use crate::representation::TypeId;
+use crate::stored::StoredSignatureKey;
 
 /// The interprocedural edge classes one body's inference took, as
 /// pure data: the design's residual instrument ("how many results
@@ -411,11 +413,163 @@ fn return_cycle_recover<'db>(
     ascend(db, cycle.iteration(), *last_provisional, computed)
 }
 
+/// Resolves a persisted signature key to the file that defines it: the
+/// same key -> file resolution [`inferred_function_return`] and
+/// [`inferred_method_return`] themselves perform on the way to their own
+/// body identity (a Function-space symbol lookup for a function; the
+/// resolved member's owning file for a method), factored here so
+/// [`validated_stored_return`]'s content-hash compare shares exactly one
+/// resolution with them rather than reimplementing it. Every step is a
+/// salsa-tracked query call, so the resolution's dependency is real and
+/// recorded on whichever tracked query (a computing path or the
+/// validating path) is executing when this runs. `None` when the key
+/// names nothing a source file declares — a recordable miss, not a bug.
+fn defining_file(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    key: &StoredSignatureKey,
+) -> Option<SourceFile> {
+    match key {
+        StoredSignatureKey::Function { key } => {
+            let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, key.clone());
+            let ast_id = lookup_function_declaration(db, files, symbol_query)?;
+            let index = analyzed_file_index(db, files);
+            let position = index
+                .binary_search_by_key(&ast_id.file, |(id, _)| *id)
+                .ok()?;
+            index.get(position).map(|&(_, file)| file)
+        }
+        StoredSignatureKey::Method {
+            class_key,
+            member_key,
+        } => {
+            let member_query = MemberQuery::new(
+                db,
+                class_key.clone(),
+                MemberKind::Method,
+                member_key.clone(),
+            );
+            let Some(MemberResolution::Source { member, .. }) =
+                lookup_member(db, files, stubs, configuration, member_query)
+            else {
+                return None;
+            };
+            let index = analyzed_file_index(db, files);
+            let position = index
+                .binary_search_by_key(&member.ast_id.file, |(id, _)| *id)
+                .ok()?;
+            index.get(position).map(|&(_, file)| file)
+        }
+    }
+}
+
+/// The recursive memoized revalidation of one persisted signature (plan
+/// 9a decision 9). Every read here is a salsa read — the cache lookup
+/// itself reads the `TypedCacheInput` singleton, and every fact checked
+/// afterward (`content_hash`, `class_surface_digest`,
+/// `function_signature_digest`, and the live demand on each recorded
+/// inferred edge's callee through `inferred_function_return` /
+/// `inferred_method_return`) is a salsa-tracked query call — so a served
+/// return carries real dependencies and invalidates correctly on a later
+/// in-process edit. Salsa memoizes the enclosing return query per key
+/// (this function itself is plain, not tracked, but it only ever runs
+/// from inside a tracked `inferred_function_return` /
+/// `inferred_method_return` call), so each signature validates once per
+/// run: a caller that consults the same callee twice pays for the
+/// validation once, "constructive-trace style".
+///
+/// Decision 9's cyclic-cluster rule sits in the inferred-edge loop below:
+/// a live `never` answer on a recorded callee is a mismatch BY RULE, even
+/// when the record itself expects `never` — `never` is the cycle's
+/// provisional bottom, so this keeps a mid-cycle iterate from ever
+/// validating a record (which would let the join ascent absorb a stale
+/// served return and widen past the fresh fixpoint). A callee that
+/// legitimately never returns simply recomputes: rare, sound,
+/// deterministic, and no new cycle machinery.
+pub(crate) fn validated_stored_return<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    key: &StoredSignatureKey,
+) -> Option<TypeId<'db>> {
+    let handle = TypedCacheInput::try_get(db)?;
+    let record = handle.cache(db).0.inferred_signature(key)?;
+    let file = defining_file(db, files, stubs, configuration, key)?;
+    if celerrate_db::content_hash(db, file) != record.content {
+        return None;
+    }
+    for class in &record.classes {
+        let current = class_surface_digest(
+            db,
+            files,
+            stubs,
+            configuration,
+            ClassQuery::new(db, class.key.clone()),
+        );
+        if current != class.digest {
+            return None;
+        }
+    }
+    for function in &record.functions {
+        let current = function_signature_digest(
+            db,
+            files,
+            stubs,
+            configuration,
+            FunctionQuery::new(db, function.key.clone()),
+        );
+        if current != function.digest {
+            return None;
+        }
+    }
+    for edge in &record.inferred {
+        let live = match &edge.callee {
+            StoredSignatureKey::Function { key } => inferred_function_return(
+                db,
+                files,
+                stubs,
+                configuration,
+                FunctionQuery::new(db, key.clone()),
+            ),
+            StoredSignatureKey::Method {
+                class_key,
+                member_key,
+            } => inferred_method_return(
+                db,
+                files,
+                stubs,
+                configuration,
+                MethodQuery::new(db, class_key.clone(), member_key.clone()),
+            ),
+        };
+        if live.is_never(db) {
+            // The cycle-provisional value: a mismatch by rule (decision
+            // 9), even when the record expects `never`. A mid-cycle
+            // iterate can never validate a record, and the join ascent
+            // never absorbs a stale served return.
+            return None;
+        }
+        if Some(live) != edge.return_type.to_type_id(db) {
+            return None;
+        }
+    }
+    record.return_type.to_type_id(db)
+}
+
 /// The inferred return of one free function: the projection of its
 /// body's inference — small, resident (never LRU-evicted), the
 /// fixpoint's currency. Early cutoff is the point: a body edit that
 /// leaves the inferred return identical backdates here, and callers
 /// are spared. Unresolvable functions answer `mixed` (silence).
+///
+/// Consults the persisted typed-artifact cache first, through
+/// [`validated_stored_return`]: a validated hit serves a re-interned
+/// `TypeId` without ever building the body's flow walk; a miss (no
+/// registered cache, no recorded entry, or a failed revalidation) falls
+/// through to the same computation this query has always performed.
 #[salsa::tracked(cycle_fn = return_cycle_recover, cycle_initial = return_cycle_initial)]
 pub fn inferred_function_return<'db>(
     db: &'db dyn salsa::Database,
@@ -424,6 +578,12 @@ pub fn inferred_function_return<'db>(
     configuration: ProjectConfiguration,
     query: FunctionQuery<'db>,
 ) -> TypeId<'db> {
+    let stored_key = StoredSignatureKey::Function {
+        key: query.key(db).clone(),
+    };
+    if let Some(served) = validated_stored_return(db, files, stubs, configuration, &stored_key) {
+        return served;
+    }
     let symbol_query = SymbolQuery::new(db, SymbolSpace::Function, query.key(db).clone());
     let Some(ast_id) = lookup_function_declaration(db, files, symbol_query) else {
         return TypeId::mixed(db);
@@ -505,6 +665,11 @@ fn method_return_cycle_recover<'db>(
 /// is plan 5's, unchanged, so termination is inherited rather than
 /// re-argued: the participant set is the finite set of (class-like,
 /// member) pairs, the ascent is monotone, and the budget bounds it.
+///
+/// Consults the persisted typed-artifact cache first, through
+/// [`validated_stored_return`], exactly like [`inferred_function_return`]
+/// — a validated hit serves without ever building the body's flow walk;
+/// a miss falls through to the computation below, unchanged.
 #[salsa::tracked(cycle_fn = method_return_cycle_recover, cycle_initial = method_return_cycle_initial)]
 pub fn inferred_method_return<'db>(
     db: &'db dyn salsa::Database,
@@ -513,6 +678,13 @@ pub fn inferred_method_return<'db>(
     configuration: ProjectConfiguration,
     query: MethodQuery<'db>,
 ) -> TypeId<'db> {
+    let stored_key = StoredSignatureKey::Method {
+        class_key: query.class_key(db).clone(),
+        member_key: query.member_key(db).clone(),
+    };
+    if let Some(served) = validated_stored_return(db, files, stubs, configuration, &stored_key) {
+        return served;
+    }
     let member_query = celerrate_semantics::MemberQuery::new(
         db,
         query.class_key(db).clone(),

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use celerrate_db::ContentHash;
 use celerrate_semantics::{ArtifactCache, ItemTree, MemberTree};
 use celerrate_source::FileId;
-use celerrate_types::{StoredInferredSignature, StoredSignatureKey};
+use celerrate_types::{StoredInferredSignature, StoredSignatureKey, TypedArtifactCache};
 use serde::de::DeserializeOwned;
 
 use super::pack::{PackHeader, decode};
@@ -98,6 +98,35 @@ impl ArtifactCache for SnapshotCache {
             None => {
                 self.statistics
                     .member_tree_misses
+                    .fetch_add(1, Ordering::Relaxed);
+                None
+            }
+        }
+    }
+}
+
+/// The typed-artifact-cache half of the snapshot: a lookup by
+/// [`StoredSignatureKey`] over the fourth pack's map, counting
+/// `signatures_found`/`signatures_absent` on PRESENCE alone — whether
+/// this key has a recorded entry at all, never whether it went on to
+/// validate. The validation outcome (a matching content hash, every
+/// digest, every inferred edge) lives entirely in
+/// `celerrate_types::inference::validated_stored_return`, a salsa query;
+/// counters are forbidden inside a query (determinism), so this is the
+/// only layer that may count, and it counts only what it itself can see.
+impl TypedArtifactCache for SnapshotCache {
+    fn inferred_signature(&self, key: &StoredSignatureKey) -> Option<StoredInferredSignature> {
+        use std::sync::atomic::Ordering;
+        match self.snapshot.signatures.get(key) {
+            Some(stored) => {
+                self.statistics
+                    .signatures_found
+                    .fetch_add(1, Ordering::Relaxed);
+                Some(stored.clone())
+            }
+            None => {
+                self.statistics
+                    .signatures_absent
                     .fetch_add(1, Ordering::Relaxed);
                 None
             }

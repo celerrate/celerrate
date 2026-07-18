@@ -19,6 +19,7 @@
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::indexing_slicing)]
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use celerrate_db::testing::TestDatabase;
@@ -34,9 +35,10 @@ use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
     AnnotationSite, DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery,
     InferenceContext, MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate, Proof,
-    TypeId, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature,
-    inferred_body_types, inferred_function_return, inferred_method_return, subtype_of,
-    typed_diagnostics, typed_file_verdicts,
+    StoredInferredEdge, StoredInferredSignature, StoredSignatureKey, StoredType, TypeId,
+    TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry, TypedArtifactCache, TypedCacheHandle,
+    TypedCacheInput, declared_member_signature, inferred_body_types, inferred_function_return,
+    inferred_method_return, subtype_of, typed_diagnostics, typed_file_verdicts,
 };
 use salsa::Setter;
 
@@ -1970,5 +1972,142 @@ function caller(string $json) { return decoding($json); }
     assert_ne!(
         first, second,
         "the array branch became the object branch through the caller",
+    );
+}
+
+// ---------------------------------------------------------------------
+// Task 8 (plan 9a): the typed-cache unit seams. A hand-built
+// `TypedArtifactCache` test double plants a probe record whose return
+// deliberately differs from what real computation would answer (the
+// `cache_seeding` probe convention transposed to this crate's own
+// fixtures): a served probe value is therefore proof the cache was
+// actually consulted, not a coincidence of the real answer.
+// ---------------------------------------------------------------------
+
+/// A `TypedArtifactCache` test double answering a fixed map of
+/// hand-built records, nothing more.
+struct ProbeTypedCache(HashMap<StoredSignatureKey, StoredInferredSignature>);
+
+impl TypedArtifactCache for ProbeTypedCache {
+    fn inferred_signature(&self, key: &StoredSignatureKey) -> Option<StoredInferredSignature> {
+        self.0.get(key).cloned()
+    }
+}
+
+/// Registers a [`ProbeTypedCache`] over `entries` as the database's
+/// `TypedCacheInput` singleton, at HIGH durability like every other
+/// registered extension point in this workspace.
+fn register_typed_cache(
+    db: &TestDatabase,
+    entries: Vec<(StoredSignatureKey, StoredInferredSignature)>,
+) {
+    let _ = TypedCacheInput::builder(TypedCacheHandle(Arc::new(ProbeTypedCache(
+        entries.into_iter().collect(),
+    ))))
+    .durability(salsa::Durability::HIGH)
+    .new(db);
+}
+
+/// Task 8, unit seam 1: a record whose content hash still matches the
+/// defining file is served verbatim — proven by planting a return type
+/// (`string`) the real computation (`return 1;`, an int literal) would
+/// never produce. Editing the file afterward moves its content hash away
+/// from the record's own (still `string`-carrying, unedited) `content`
+/// field, so the very same query falls through to real computation and
+/// answers the literal `1` instead.
+#[test]
+fn a_valid_record_is_served_and_a_stale_content_hash_is_not() {
+    let mut f = fixture(&["<?php function callee() { return 1; }"]);
+    let key = StoredSignatureKey::Function {
+        key: "callee".to_owned(),
+    };
+    let file = f.handles[0];
+    let content = celerrate_db::content_hash(&f.db, file);
+    let record = StoredInferredSignature {
+        content,
+        return_type: StoredType::of(&f.db, TypeId::string(&f.db)),
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: Vec::new(),
+    };
+    register_typed_cache(&f.db, vec![(key, record)]);
+
+    let served = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "callee".to_owned()),
+    );
+    assert_eq!(
+        served.display(&f.db),
+        "string",
+        "a record whose content hash still matches is served verbatim, \
+         proven by a return type real computation would never produce",
+    );
+
+    f.set_source(0, "<?php function callee() { return 1; /* edited */ }");
+    let served_after_edit = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "callee".to_owned()),
+    );
+    assert_eq!(
+        served_after_edit.display(&f.db),
+        "1",
+        "a stale content hash falls through to real computation, \
+         answering the true literal instead of the planted probe",
+    );
+}
+
+/// Task 8, unit seam 2: a record whose top-level facts (content hash,
+/// classes, functions) all still validate, but whose ONE recorded
+/// inferred edge no longer matches the live callee's answer, falls
+/// through to real computation. `caller`'s own planted return
+/// (`string`) never speaks: the mismatch is caught inside the edge loop,
+/// before the top-level `return_type` is ever reached, so a passing
+/// assertion here is proof the edge check itself gates the serve, not
+/// merely that some check somewhere does.
+#[test]
+fn a_stale_inferred_edge_falls_through_to_computation() {
+    let f =
+        fixture(&["<?php function helper() { return 1; } function caller() { return helper(); }"]);
+    let helper_key = StoredSignatureKey::Function {
+        key: "helper".to_owned(),
+    };
+    let caller_key = StoredSignatureKey::Function {
+        key: "caller".to_owned(),
+    };
+    let file = f.handles[0];
+    let content = celerrate_db::content_hash(&f.db, file);
+    let record = StoredInferredSignature {
+        content,
+        return_type: StoredType::of(&f.db, TypeId::string(&f.db)),
+        classes: Vec::new(),
+        functions: Vec::new(),
+        inferred: vec![StoredInferredEdge {
+            callee: helper_key,
+            // `helper`'s live answer is the int literal `1`; this
+            // recorded edge deliberately expects `string` instead — a
+            // stale edge no live demand could ever satisfy.
+            return_type: StoredType::of(&f.db, TypeId::string(&f.db)),
+        }],
+    };
+    register_typed_cache(&f.db, vec![(caller_key, record)]);
+
+    let served = inferred_function_return(
+        &f.db,
+        f.files,
+        f.stubs,
+        f.configuration,
+        FunctionQuery::new(&f.db, "caller".to_owned()),
+    );
+    assert_eq!(
+        served.display(&f.db),
+        "1",
+        "the stale inferred edge falls through to real computation, \
+         never the planted top-level return",
     );
 }

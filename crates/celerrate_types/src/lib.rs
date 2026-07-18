@@ -91,6 +91,7 @@
 //! form stays recorded debt, owner: the type lattice, future, revisited
 //! only if a call-signature-precise diagnostic needs it.
 
+mod cache;
 pub mod checks;
 mod construction;
 mod declared;
@@ -113,6 +114,7 @@ mod type_syntax;
 mod widening;
 mod written;
 
+pub use cache::{TypedArtifactCache, TypedCacheHandle, TypedCacheInput};
 pub use checks::{
     ALLOCATED_IDENTIFIERS, ArgumentLabel, TypedFileResult, TypedVerdict, TypedVerdictKind,
     typed_diagnostics, typed_file_verdicts,

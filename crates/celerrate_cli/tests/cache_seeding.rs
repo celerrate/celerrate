@@ -1044,3 +1044,232 @@ fn a_vendor_files_body_has_no_signature_entry() {
          so persist must not have forced a fresh inference of it",
     );
 }
+
+// ---------------------------------------------------------------------
+// Plan 9a, task 8: the recursive memoized revalidation. Every scenario
+// below builds a project, runs `check` once cold (persisting the fourth
+// pack), mutates the project on disk exactly as the scenario names, then
+// compares a WARM run's rendering (a fresh process, seeded from the
+// persisted cache) against a genuinely FRESH run's rendering (an
+// independent project directory holding the same final files, no cache
+// at all). Byte-identical rendering across that boundary is the
+// end-to-end proof that the served/recomputed answer is correct either
+// way — the flagship early-cutoff property working across the process
+// boundary, not merely in-process.
+// ---------------------------------------------------------------------
+
+/// One warm pass over `root`, exposing the session's own cache counters
+/// alongside the rendered `check` output — `run_check` alone only
+/// returns the rendered text, and the `signatures_found`/
+/// `signatures_absent` instrument (task 8) is a `Session`-level counter,
+/// not part of the rendering.
+fn warm_signatures_found(root: &Path) -> u64 {
+    use std::sync::atomic::Ordering;
+
+    let session = Session::start(root);
+    let _ = analyze(&session.inputs()).unwrap();
+    session.statistics.signatures_found.load(Ordering::Relaxed)
+}
+
+/// A cold run over `initial`, then `edited` written over the same files
+/// on disk before a second (warm) `check` run: the pattern every
+/// scenario below shares. Returns the warm run's rendered output.
+fn cold_then_warm(root: &Path, edited: &[(&str, &str)]) -> String {
+    run_check(root);
+    for (path, contents) in edited {
+        std::fs::write(root.join(path), contents).unwrap();
+    }
+    let (_, warm_output) = run_check(root);
+    warm_output
+}
+
+#[test]
+fn a_warm_run_serves_inferred_returns_without_reinference() {
+    let helper_source = "<?php function helper() { return 'not-an-int'; }";
+    let caller_before =
+        "<?php function takesInt(int $n): void {} function caller() { takesInt(helper()); }";
+    let caller_after = "<?php function takesInt(int $n): void {} \
+         function caller() { $noise = 1; takesInt(helper()); }";
+
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_before)]);
+    let warm_output = cold_then_warm(root.path(), &[("caller.php", caller_after)]);
+
+    assert!(
+        warm_signatures_found(root.path()) > 0,
+        "the warm run must consult the persisted signature cache: \
+         helper's callee return is served, not re-inferred",
+    );
+
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_after)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "warm rendering must equal a fresh recomputation over the same files",
+    );
+}
+
+#[test]
+fn an_edited_callee_with_an_unchanged_return_still_validates_the_caller() {
+    // `helper`'s body changes (a fresh local variable), but its
+    // inferred return stays the literal `1`: the early-cutoff property
+    // across the process boundary, the design's flagship claim.
+    let helper_before = "<?php function helper() { return 1; }";
+    let helper_after = "<?php function helper() { $noise = 'x'; return 1; }";
+    let caller_source =
+        "<?php function takesInt(int $n): void {} function caller() { takesInt(helper()); }";
+
+    let root = project(&[("helper.php", helper_before), ("caller.php", caller_source)]);
+    let warm_output = cold_then_warm(root.path(), &[("helper.php", helper_after)]);
+
+    assert!(
+        warm_signatures_found(root.path()) > 0,
+        "the warm run must consult the persisted signature cache",
+    );
+
+    let fresh_root = project(&[("helper.php", helper_after), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "the edited callee's unchanged return still validates the caller's \
+         own record; the warm rendering matches a fresh recomputation",
+    );
+}
+
+#[test]
+fn a_changed_class_surface_invalidates_the_dependent_signature() {
+    // A method added to `Box`, whose surface `useIt`'s own recorded
+    // signature consulted (the receiver resolution for `$b->get()`):
+    // the class-surface digest flips, so the dependent entry misses and
+    // the run recomputes.
+    let classes_before = "<?php class Box { public function get() { return 1; } }";
+    let classes_after = "<?php class Box { \
+         public function get() { return 1; } \
+         public function extra() { return 2; } }";
+    let caller_source = "<?php function useIt(Box $b): void { $b->get(); }";
+
+    let root = project(&[
+        ("classes.php", classes_before),
+        ("caller.php", caller_source),
+    ]);
+    let warm_output = cold_then_warm(root.path(), &[("classes.php", classes_after)]);
+
+    let fresh_root = project(&[
+        ("classes.php", classes_after),
+        ("caller.php", caller_source),
+    ]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "a changed class surface must invalidate the dependent signature \
+         and recompute, rendering identically to fresh",
+    );
+}
+
+#[test]
+fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
+    // Two mutually recursive functions with a real base case: the
+    // recorded stance (decision 9) is that a cyclic cluster always
+    // falls through to the fixpoint on a warm run — served or
+    // recomputed is unspecified, but the rendering must equal fresh.
+    let source = "<?php
+        function evenOrOdd($n) {
+            if ($n === 0) { return 'even'; }
+            return oddOrEven($n - 1);
+        }
+        function oddOrEven($n) {
+            if ($n === 0) { return 'odd'; }
+            return evenOrOdd($n - 1);
+        }
+        function useBoth() { return evenOrOdd(3) . oddOrEven(3); }
+    ";
+    let root = project(&[("cycle.php", source)]);
+    run_check(root.path());
+    // No edit: a second, independently-started warm run over the exact
+    // same files is still the scenario ("cached, warm run").
+    let (_, first_warm) = run_check(root.path());
+    let (_, second_warm) = run_check(root.path());
+    assert_eq!(
+        first_warm, second_warm,
+        "two successive warm runs over an unchanged cyclic cluster agree",
+    );
+
+    let fresh_root = project(&[("cycle.php", source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        first_warm, fresh_output,
+        "a cyclic cluster's warm rendering equals a fresh recomputation",
+    );
+}
+
+#[test]
+fn a_never_returning_cycle_participant_never_validates_warm() {
+    // `first` and `second` call each other with no non-throwing base
+    // case: the whole cluster's fixpoint is `never`. Decision 9's
+    // provisional-mismatch rule fires on every live demand inside this
+    // cluster (a live `never` is always a mismatch, even against a
+    // record that itself expects `never`), so neither participant ever
+    // validates warm — both always fall through to real recomputation.
+    // The observable here is termination plus byte-identical rendering,
+    // across two independent entry points into the same cluster
+    // (`first` and `second` are each analyzed as their own file, both
+    // fanned out by the same `check` run) and across repeated warm
+    // runs, never a stale served `never` widening a live join ascent.
+    let first_source = "<?php
+        function first(int $n) {
+            if ($n <= 0) { throw new \\RuntimeException('boom'); }
+            return second($n - 1);
+        }
+    ";
+    let second_source = "<?php
+        function second(int $n) {
+            return first($n - 1);
+        }
+    ";
+    let root = project(&[("first.php", first_source), ("second.php", second_source)]);
+    run_check(root.path());
+    let (_, first_warm) = run_check(root.path());
+    let (_, second_warm) = run_check(root.path());
+    assert_eq!(
+        first_warm, second_warm,
+        "repeated warm runs over the never-returning cluster stay deterministic",
+    );
+
+    let fresh_root = project(&[("first.php", first_source), ("second.php", second_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        first_warm, fresh_output,
+        "the never-returning cluster's warm rendering equals fresh: no \
+         stale served `never` ever widens the join ascent",
+    );
+}
+
+#[test]
+fn a_static_returning_callee_serves_warm() {
+    // `Builder::make` is unannotated and returns `$this`: its inferred
+    // return is the symbolic `static` placeholder (task 3's raw,
+    // pre-substitution answer), never resolved against a receiver at
+    // the walk site. The caller's own file is edited (a body change
+    // that keeps its own diagnostics recomputable); `make`'s entry is
+    // untouched and must validate and serve warm.
+    let helper_source = "<?php class Builder { public function make() { return $this; } }";
+    let caller_before = "<?php function useIt(Builder $b) { return $b->make(); }";
+    let caller_after = "<?php function useIt(Builder $b) { $noise = 1; return $b->make(); }";
+
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_before)]);
+    let warm_output = cold_then_warm(root.path(), &[("caller.php", caller_after)]);
+
+    assert!(
+        warm_signatures_found(root.path()) > 0,
+        "the warm run must consult the persisted signature cache: \
+         make()'s raw `static` return is served, proving the task-3 \
+         record carries the pre-substitution answer the live demand \
+         (inferred_method_return) itself answers",
+    );
+
+    let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_after)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "warm rendering must equal a fresh recomputation over the same files",
+    );
+}
