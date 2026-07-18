@@ -54,6 +54,13 @@ pub struct Invocation<'db> {
 /// contribution hits the iteration budget and the result widens to
 /// `mixed`, the deterministic bailout: a plugin never controls
 /// termination.
+///
+/// **The persisted-cache purity obligation (plan 9a, decision 5).** A
+/// provider's answer must be a pure function of its `Invocation` and
+/// its `PluginIdentity`: the persistent cache records no per-answer
+/// dependency (plan 9a decision 5), so a provider that reads cross-file
+/// state would silently break warm revalidation — extend the record
+/// vocabulary in `celerrate_types::records` before shipping one.
 pub trait DynamicTypeProvider: Send + Sync {
     /// All symbols this provider claims to handle. Used for
     /// overlap detection at registration time.

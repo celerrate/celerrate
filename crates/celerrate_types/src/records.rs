@@ -32,6 +32,17 @@
 //! `abstract`/`final`/`readonly` deliberately do not — see
 //! [`class_surface_digest`]'s own rustdoc for the fact and the standing
 //! obligation this leaves behind.
+//!
+//! **Constructive dependency records (plan 9a, task 3).**
+//! [`TypedDependencies`] and [`FileDependencies`] are the other half of
+//! this module's revalidation story: not a digest over what a class
+//! COULD answer, but the exact set of keys and callee returns one
+//! body's flow walk (or the plan-8 checks) actually consulted, recorded
+//! constructively at the walk's own existing consultation sites — never
+//! a separate mirror traversal. Tasks 7 and 9 read these verbatim to
+//! decide whether a cached signature or verdict may still be trusted.
+
+use std::collections::BTreeSet;
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
@@ -43,7 +54,8 @@ use celerrate_stubs::StubIndexInput;
 use serde::Serialize;
 
 use crate::declared::{FunctionQuery, declared_function_signature, declared_member_signature};
-use crate::stored::{StoredSignature, digest_of};
+use crate::representation::TypeId;
+use crate::stored::{StoredSignature, StoredType, digest_of};
 
 /// The canonical projection of one class's whole lookup surface:
 /// everything `lookup_member`, `member_existence`, a judgment's
@@ -239,6 +251,126 @@ pub fn function_signature_digest<'db>(
 ) -> Option<[u8; 32]> {
     let signature = declared_function_signature(db, files, stubs, configuration, query)?;
     digest_of(&StoredSignature::of(db, &signature))
+}
+
+/// Everything one body's flow walk (`crate::flow::walk_body`) actually
+/// consulted, recorded constructively at the walker's own existing
+/// consultation sites (task 3, decision 4) — never a separate mirror
+/// walk. `InferredBody` carries one of these; a cached body's
+/// revalidation (task 9) replays exactly this set against the live
+/// project, never a wider guess.
+///
+/// **The raw pre-substitution invariant (decision 4).** Both
+/// `inferred_functions` and `inferred_methods` carry the RAW callee-
+/// query answer — `inferred_function_return`'s or
+/// `inferred_method_return`'s own result — captured before
+/// `crate::flow::Walker::member_boundary_type` substitutes placeholders
+/// or threaded generic arguments for the call site. Recording the
+/// substituted, call-site-relative value instead would silently and
+/// permanently mismatch task 8's live-demand validator: that validator
+/// re-invokes the same callee query and compares its RAW answer against
+/// the recorded one, so the two must speak the same (unsubstituted)
+/// vocabulary — no rendering test would ever catch the drift.
+///
+/// **The eq-cutoff contract.** `InferredBody` (which embeds this type)
+/// is compared for equality to drive salsa backdating (its own rustdoc):
+/// two inference-identical bodies must produce an equal
+/// `TypedDependencies`, regardless of the walk's own traversal order.
+/// [`Self::sort_and_dedup`] is the walk-end step that gives the two
+/// `Vec` fields that deterministic order; `classes` and `functions` are
+/// already ordered, being `BTreeSet`s.
+#[derive(Debug, Clone, PartialEq, Eq, Default, salsa::Update)]
+pub struct TypedDependencies<'db> {
+    /// Folded keys of every class whose surface was consulted (every
+    /// `lookup_member`/`linearized_class` consultation the walker
+    /// performed: receiver resolution, the iteration protocol, property
+    /// types, the body owner's own class).
+    pub classes: BTreeSet<String>,
+    /// Function-space keys whose declared signature was consulted
+    /// (every call resolved through the declared tier).
+    pub functions: BTreeSet<String>,
+    /// (function key, consumed inferred return) — one entry per call
+    /// resolved through the inferred tier, `returned` the raw
+    /// pre-substitution callee answer (decision 4).
+    pub inferred_functions: Vec<(String, TypeId<'db>)>,
+    /// ((defining class key, member key), consumed inferred return) —
+    /// the method sibling of `inferred_functions`, same raw-answer
+    /// invariant.
+    pub inferred_methods: Vec<((String, String), TypeId<'db>)>,
+}
+
+impl<'db> TypedDependencies<'db> {
+    /// The walk-end determinism step (decision 4's eq-cutoff
+    /// obligation): sorts `inferred_functions`/`inferred_methods` by
+    /// their key and drops exact duplicate entries — repeat calls to
+    /// the same callee always push the identical `(key, returned)` pair
+    /// (the callee query is pure), so a stable sort-by-key already
+    /// leaves duplicates adjacent for `Vec::dedup` to collapse. Leaves
+    /// `classes`/`functions` untouched: a `BTreeSet` is already ordered
+    /// and duplicate-free by construction.
+    pub(crate) fn sort_and_dedup(&mut self) {
+        self.inferred_functions
+            .sort_by(|left, right| left.0.cmp(&right.0));
+        self.inferred_functions.dedup();
+        self.inferred_methods
+            .sort_by(|left, right| left.0.cmp(&right.0));
+        self.inferred_methods.dedup();
+    }
+}
+
+/// The lifetime-free, file-level aggregate of every body's
+/// [`TypedDependencies`] plus the plan-8 checks' own consulted-class
+/// set (task 3): `TypedFileResult.dependencies`. `TypeId` never enters
+/// this shape (the crate-wide invariant that `TypeId` never hits disk):
+/// every recorded inferred return is mirrored through
+/// [`crate::stored::StoredType::of`] on the way in, exactly like
+/// `SurfaceProjection` mirrors every declared type through
+/// [`crate::stored::StoredSignature::of`] above. Tasks 7 and 9 read
+/// this verbatim to persist and revalidate a file's cached typed
+/// verdicts.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct FileDependencies {
+    pub classes: BTreeSet<String>,
+    pub functions: BTreeSet<String>,
+    pub inferred_functions: Vec<(String, StoredType)>,
+    pub inferred_methods: Vec<((String, String), StoredType)>,
+}
+
+impl FileDependencies {
+    /// Folds one body's [`TypedDependencies`] into this file-level
+    /// aggregate, converting every `TypeId` to `StoredType` at the
+    /// boundary (`db` never escapes this call) — the one place a
+    /// process-local interner handle becomes the disk-safe mirror.
+    pub fn extend_from_body<'db>(
+        &mut self,
+        db: &'db dyn salsa::Database,
+        body: &TypedDependencies<'db>,
+    ) {
+        self.classes.extend(body.classes.iter().cloned());
+        self.functions.extend(body.functions.iter().cloned());
+        self.inferred_functions.extend(
+            body.inferred_functions
+                .iter()
+                .map(|(key, of)| (key.clone(), StoredType::of(db, *of))),
+        );
+        self.inferred_methods.extend(
+            body.inferred_methods
+                .iter()
+                .map(|(pair, of)| (pair.clone(), StoredType::of(db, *of))),
+        );
+    }
+
+    /// The same walk-end determinism step as
+    /// [`TypedDependencies::sort_and_dedup`], run once aggregation
+    /// (every body plus the checks' own set) is complete.
+    pub fn finish(&mut self) {
+        self.inferred_functions
+            .sort_by(|left, right| left.0.cmp(&right.0));
+        self.inferred_functions.dedup();
+        self.inferred_methods
+            .sort_by(|left, right| left.0.cmp(&right.0));
+        self.inferred_methods.dedup();
+    }
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ use celerrate_stubs::StubIndexInput;
 
 use crate::declared::{FunctionQuery, declared_function_signature, declared_member_signature};
 use crate::flow::{FlowContext, walk_body};
+use crate::records::TypedDependencies;
 use crate::representation::TypeId;
 
 /// The interprocedural edge classes one body's inference took, as
@@ -78,6 +79,15 @@ pub struct InferredBody<'db> {
     /// `edge_counts`/`expression_types`' mixed count but never enter
     /// this table — scope, stated in decision 14.
     pub stub_calls: Vec<StubCallRecord>,
+    /// Plan 9a, task 3: every class, function, and inferred callee
+    /// return this body's walk consulted, recorded constructively at
+    /// `flow.rs`'s own existing consultation sites. Participates in
+    /// this struct's `Eq` like every other field — the eq-cutoff
+    /// backdating contract (this struct's own doc comment) covers it
+    /// too, which is why `TypedDependencies` sorts and dedups its two
+    /// `Vec` fields once at walk end rather than leaving their order to
+    /// traversal happenstance.
+    pub dependencies: TypedDependencies<'db>,
 }
 
 impl<'db> InferredBody<'db> {
@@ -294,6 +304,7 @@ pub fn inferred_body_types<'db>(
         return_type: result.return_type,
         edge_counts: result.edge_counts,
         stub_calls: result.stub_calls,
+        dependencies: result.dependencies,
     })
 }
 
@@ -2283,6 +2294,230 @@ function caller() { return make(); }
         assert_eq!(inferred.edge_counts.declared_return_edges, 1);
         assert_eq!(inferred.edge_counts.inferred_return_edges, 1);
         assert_eq!(inferred.edge_counts.provider_edges, 1);
+    }
+
+    /// Plan 9a, task 3: one body calling an annotated free function
+    /// (declared tier), an unannotated free function (inferred tier),
+    /// and a method on a class (class surface + inferred method tier) —
+    /// every one of `TypedDependencies`' four fields gets at least one
+    /// entry, recorded constructively at the same sites
+    /// `the_edge_count_instrument_counts_each_tier_once` pins the
+    /// counts at.
+    #[test]
+    fn the_walker_records_each_dependency_it_consults() {
+        let fixture = fixture(&["<?php
+            class C { public function m() { return 1; } }
+            function declared_edge(): int { return 1; }
+            function inferred_edge() { return 'x'; }
+            function f(C $c) { $c->m(); return [declared_edge(), inferred_edge()]; }"]);
+        let file = fixture.handles[0];
+        // Numbering: class C = 0, method m = 1, declared_edge = 2,
+        // inferred_edge = 3, f = 4 (`methods_seed_their_declared_
+        // parameters_too`'s own "class = 0, method = 1" convention).
+        let body = body_query(&fixture, 4);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+            InferenceContext::new(&fixture.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        let dependencies = &inferred.dependencies;
+        assert!(
+            dependencies.functions.contains("declared_edge"),
+            "the declared free-function edge records its key: {dependencies:?}",
+        );
+        assert!(
+            dependencies
+                .inferred_functions
+                .iter()
+                .any(|(key, _)| key == "inferred_edge"),
+            "the inferred free-function edge records (key, returned): {dependencies:?}",
+        );
+        assert!(
+            dependencies.classes.contains("c"),
+            "the receiver's class surface is recorded: {dependencies:?}",
+        );
+        assert!(
+            dependencies
+                .inferred_methods
+                .iter()
+                .any(|((class_key, member_key), _)| class_key == "c" && member_key == "m"),
+            "the inferred method edge records ((class, member), returned): {dependencies:?}",
+        );
+    }
+
+    /// The backdating contract (`InferredBody`'s own rustdoc) must
+    /// survive the new field: two TEXTUALLY DIFFERENT (a renamed
+    /// parameter, an inline comment) but inference-identical bodies —
+    /// same class dependency, same declared and inferred callees, same
+    /// return shape — must still produce an EQUAL `InferredBody`,
+    /// `dependencies` included. Two SIBLING functions in one file and
+    /// one database, rather than mutating a single file's bytes in
+    /// place: `TypeId` equality is only meaningful within one interner,
+    /// and salsa's tracked `InferredBody<'db>` carries a borrow of the
+    /// database itself, so comparing a "before" value against an
+    /// "after" value obtained by mutating that same database would not
+    /// even borrow-check. Two separate FILES would dodge the borrow
+    /// issue too, but at the cost of declaring `class C`/`g` twice —
+    /// duplicate top-level symbols across files that this crate's name
+    /// resolution does not promise to treat identically. Sibling
+    /// functions avoid both problems while still pinning the same
+    /// contract: the walk's own traversal order must never leak into
+    /// the recorded result.
+    ///
+    /// Each sibling consults TWO inferred callees (`g_one`/`g_two`), in
+    /// OPPOSITE textual order between `f1` and `f2` — otherwise a
+    /// single-entry `inferred_functions` Vec never exercises
+    /// `sort_and_dedup`'s ordering guarantee, since one entry is
+    /// trivially "sorted" no matter the walk order that produced it.
+    /// `g_one`/`g_two` share an identical body (`return 1;`) so their
+    /// inferred return types are themselves equal — the array literal's
+    /// FIELD TYPES stay identical whichever order the two calls appear
+    /// in, isolating the thing under test (the recorded *dependency*
+    /// order) from an incidental difference in the *return shape*.
+    #[test]
+    fn recording_preserves_the_eq_cutoff() {
+        let fixture = fixture(&["<?php
+            class C { public function m() { return 1; } }
+            function g_one() { return 1; }
+            function g_two() { return 1; }
+            function f1(C $c) { $c->m(); return [g_one(), g_two()]; }
+            function f2(C $renamed) { $renamed->m(); /* noop */ return [g_two(), g_one()]; }"]);
+        let file = fixture.handles[0];
+        // Numbering: class C = 0, method m = 1, g_one = 2, g_two = 3,
+        // f1 = 4, f2 = 5.
+        let first = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body_query(&fixture, 4),
+            InferenceContext::new(&fixture.db, None),
+        )
+        .clone();
+        let second = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body_query(&fixture, 5),
+            InferenceContext::new(&fixture.db, None),
+        )
+        .clone();
+        assert!(first.is_some(), "f1's body resolved");
+        assert_eq!(
+            first
+                .as_ref()
+                .map(|body| body.dependencies.inferred_functions.len()),
+            Some(2),
+            "both inferred callees are recorded, not collapsed by dedup: {first:?}",
+        );
+        assert_eq!(first, second);
+    }
+
+    /// Plan 9a, task 3 fix wave, IMPORTANT #1: a first-class callable of
+    /// a FREE function (`someFunc(...)`) must record a dependency at the
+    /// same site `function_call_result` (the direct-call path) already
+    /// does — `projected_callable_of_function` was previously counting
+    /// the `edge_counts` increment without pushing the matching
+    /// dependency, a silent revalidation gap on first-class-callable
+    /// syntax. Declared tier -> `dependencies.functions`; inferred tier
+    /// -> `dependencies.inferred_functions` with the RAW pre-
+    /// substitution `inferred_function_return` answer (decision 4; a
+    /// free function has no member boundary to substitute against, so
+    /// the raw value is exactly what gets pushed).
+    #[test]
+    fn a_first_class_callable_of_a_free_function_records_its_dependency() {
+        let fixture = fixture(&["<?php
+            function declared_edge(): int { return 1; }
+            function inferred_edge() { return 'x'; }
+            function f() { $a = declared_edge(...); $b = inferred_edge(...); return [$a, $b]; }"]);
+        let file = fixture.handles[0];
+        // Numbering: declared_edge = 0, inferred_edge = 1, f = 2.
+        let body = body_query(&fixture, 2);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+            InferenceContext::new(&fixture.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        let dependencies = &inferred.dependencies;
+        assert!(
+            dependencies.functions.contains("declared_edge"),
+            "the declared free-function first-class callable records its key: {dependencies:?}",
+        );
+        assert!(
+            dependencies
+                .inferred_functions
+                .iter()
+                .any(|(key, _)| key == "inferred_edge"),
+            "the inferred free-function first-class callable records (key, returned): {dependencies:?}",
+        );
+    }
+
+    /// Decision 4, the load-bearing invariant: the recorded inferred
+    /// method edge carries the RAW pre-substitution callee answer, not
+    /// the call site's substituted class type. A callee returning
+    /// `static` (unannotated, so it resolves through the inferred tier)
+    /// must record the placeholder-carrying raw answer — the exact
+    /// value task 8's live-demand validator re-derives by calling
+    /// `inferred_method_return` itself — never `C` (the substituted
+    /// concrete class `member_boundary_type` would otherwise bake in).
+    #[test]
+    fn recorded_inferred_edges_carry_the_raw_pre_substitution_return() {
+        let fixture = fixture(&["<?php
+            class C { public function make() { return $this; } }
+            function f(C $c) { return $c->make(); }"]);
+        let file = fixture.handles[0];
+        // Numbering: class C = 0, make = 1, f = 2. `f` is a FREE
+        // function taking a concrete `C $c` (never `self`/`static`
+        // itself), so the call site's receiver is the concrete class —
+        // exactly the shape that lets substitution turn the callee's
+        // raw `static` placeholder into a concrete `c` at the call
+        // site, while the RECORDED edge must still carry the
+        // unsubstituted placeholder.
+        let body = body_query(&fixture, 2);
+        let inferred = inferred_body_types(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            file,
+            body,
+            InferenceContext::new(&fixture.db, None),
+        )
+        .as_ref()
+        .unwrap();
+        let raw_recorded = inferred
+            .dependencies
+            .inferred_methods
+            .iter()
+            .find(|((class_key, member_key), _)| class_key == "c" && member_key == "make")
+            .map(|(_, returned)| *returned)
+            .unwrap_or_else(|| {
+                panic!(
+                    "no recorded edge for c::make in {:?}",
+                    inferred.dependencies
+                )
+            });
+        // The raw answer is the symbolic `$this` placeholder
+        // (`inferred_method_return` on `make` never substitutes it —
+        // only a member boundary crossing does), never the substituted
+        // concrete `C` the call site's own return type resolves to.
+        assert_eq!(raw_recorded.display(&fixture.db), "static");
+        assert_eq!(inferred.return_type.display(&fixture.db), "c");
     }
 
     #[test]

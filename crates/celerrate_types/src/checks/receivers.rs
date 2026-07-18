@@ -167,6 +167,11 @@ pub(crate) fn atom_existence(
     scoped: bool,
 ) -> MemberExistence {
     let db = context.db;
+    // Plan 9a, task 3: the choke point every `member_existence` atom
+    // and every scoped-member check (`members.rs`'s direct
+    // `atom_existence` calls) funnels through — recorded here rather
+    // than at each caller so both paths share one recording site.
+    context.dependencies.borrow_mut().insert(key.to_owned());
     let lookup = |kind: MemberKind, name: &str| {
         lookup_member(
             db,

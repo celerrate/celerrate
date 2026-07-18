@@ -4,6 +4,9 @@
 //! body source map only at the `typed_diagnostics` layer, so an edit
 //! above a body backdates every verdict and re-runs only the mapping.
 
+use std::cell::RefCell;
+use std::collections::BTreeSet;
+
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
 use celerrate_project::ProjectConfiguration;
@@ -17,6 +20,7 @@ use crate::InterproceduralEdgeCounts;
 use crate::inference::{
     BodyOwner, InferenceContext, InferredBody, body_owner, inferred_body_types,
 };
+use crate::records::FileDependencies;
 
 pub(crate) mod arguments;
 pub(crate) mod members;
@@ -193,6 +197,14 @@ pub struct TypedFileResult {
     pub verdicts: Vec<TypedVerdict>,
     pub bodies: u32,
     pub edge_counts: InterproceduralEdgeCounts,
+    /// Plan 9a, task 3: every body's [`crate::records::TypedDependencies`]
+    /// (converted to [`FileDependencies`]'s `TypeId`-free shape) unioned
+    /// with the checks' own consulted-class set
+    /// (`CheckContext::dependencies`) — recorded even for a body that
+    /// produced no verdict at all, because absence is a verdict too, and
+    /// its revalidation needs the record just as much as a reported
+    /// one's does.
+    pub dependencies: FileDependencies,
 }
 
 /// Everything one body's walkers need, borrowed once. `namespace` and
@@ -218,6 +230,33 @@ pub(crate) struct CheckContext<'db, 'body> {
     pub owner: Option<&'body BodyOwner>,
     pub namespace: String,
     pub tables: UseTables,
+    /// Plan 9a, task 3: every class whose surface the checks family
+    /// consulted (`member_existence`/`atom_existence`,
+    /// `resolved_call_signature`, the coercion family's own
+    /// `lookup_member`). A `RefCell`, not a plain field: `CheckContext`
+    /// is passed as `&CheckContext` throughout `receivers.rs`,
+    /// `members.rs`, `nullability.rs`, and `arguments.rs` (the shared
+    /// read-only-context idiom every check function already uses), so
+    /// interior mutability is the only way to thread a mutable
+    /// recording set through without rewriting every one of those
+    /// signatures to `&mut CheckContext` — a change task 3 does not
+    /// otherwise call for. Each recording site only ever inserts into
+    /// this set (never reads it back mid-walk), so a borrow is never
+    /// held across a call into another function: no risk of the
+    /// `RefCell`'s own panic-on-conflict path.
+    pub dependencies: RefCell<BTreeSet<String>>,
+}
+
+/// One body's typed findings plus the classes the checks family
+/// consulted reaching them — [`body_typed_verdicts`]'s return shape.
+/// Drained from `CheckContext::dependencies` once the three check
+/// families finish (task 3): recorded even when `verdicts` stays empty,
+/// because absence is a verdict too, and its revalidation needs the
+/// record just as much as a reported one's does.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub(crate) struct BodyTypedResult {
+    pub verdicts: Vec<TypedVerdict>,
+    pub classes: BTreeSet<String>,
 }
 
 /// The typed findings of one body. Tracked per body on purpose:
@@ -231,9 +270,9 @@ pub(crate) fn body_typed_verdicts<'db>(
     configuration: ProjectConfiguration,
     file: SourceFile,
     body: BodyQuery<'db>,
-) -> Vec<TypedVerdict> {
+) -> BodyTypedResult {
     let Some(ir) = body_ir(db, file, body).as_ref() else {
-        return Vec::new();
+        return BodyTypedResult::default();
     };
     // `InferenceContext::new(db, None)`: the checks walk a body's own
     // analysis, never a trait body analyzed for a using class (task 3
@@ -249,7 +288,7 @@ pub(crate) fn body_typed_verdicts<'db>(
         inference_context,
     )
     .as_ref() else {
-        return Vec::new();
+        return BodyTypedResult::default();
     };
     let owner = body_owner(db, file, body).as_ref();
     let namespace = match owner {
@@ -269,12 +308,16 @@ pub(crate) fn body_typed_verdicts<'db>(
         owner,
         tables: UseTables::for_namespace(item_tree(db, file), &namespace),
         namespace,
+        dependencies: RefCell::new(BTreeSet::new()),
     };
     let mut verdicts = Vec::new();
     members::check(&context, &mut verdicts);
     nullability::check(&context, &mut verdicts);
     arguments::check(&context, &mut verdicts);
-    verdicts
+    BodyTypedResult {
+        verdicts,
+        classes: context.dependencies.into_inner(),
+    }
 }
 
 /// The typed findings of one file: every body the member tree names
@@ -312,11 +355,12 @@ pub fn typed_file_verdicts(
         });
     for ast_id in function_bodies.chain(method_bodies) {
         let body = BodyQuery::new(db, ast_id);
-        result.verdicts.extend(
-            body_typed_verdicts(db, files, stubs, configuration, file, body)
-                .iter()
-                .cloned(),
-        );
+        let body_result = body_typed_verdicts(db, files, stubs, configuration, file, body);
+        result.verdicts.extend(body_result.verdicts.iter().cloned());
+        result
+            .dependencies
+            .classes
+            .extend(body_result.classes.iter().cloned());
         if let Some(inferred) = inferred_body_types(
             db,
             files,
@@ -330,8 +374,15 @@ pub fn typed_file_verdicts(
         {
             result.bodies += 1;
             result.edge_counts.accumulate(&inferred.edge_counts);
+            result
+                .dependencies
+                .extend_from_body(db, &inferred.dependencies);
         }
     }
+    // The eq-cutoff contract (`TypedDependencies`'s own rustdoc)
+    // extends to this file-level aggregate too: deterministic order
+    // regardless of the member tree's own body ordering.
+    result.dependencies.finish();
     result
 }
 
@@ -373,7 +424,7 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use super::test_support::{fixture, handle_of};
-    use super::{ArgumentLabel, TypedVerdictKind, typed_diagnostics};
+    use super::{ArgumentLabel, TypedVerdictKind, typed_diagnostics, typed_file_verdicts};
 
     #[test]
     fn every_kind_names_its_identifier_and_message() {
@@ -484,5 +535,45 @@ function greet(string $name): string { return "hello " . $name; }
             handle_of(&fixture, 0),
         );
         assert!(diagnostics.is_empty());
+    }
+
+    /// Plan 9a, task 3: a file whose body dereferences `$user->name`
+    /// (`User` defined in a SEPARATE file, resolved through the
+    /// project's global symbol index) — `typed_file_verdicts` must
+    /// record `App\User`'s folded key in `dependencies.classes` even
+    /// though the property genuinely exists and no diagnostic fires.
+    /// Absence is a verdict too, and its revalidation (tasks 7 and 9)
+    /// needs the record exactly as much as a reported unknown-member
+    /// finding's does — otherwise a later edit to `User` (e.g. removing
+    /// `$name`) would leave this file's stale "no defect" verdict
+    /// uninvalidated.
+    #[test]
+    fn the_checks_record_the_receivers_they_consult() {
+        let fixture = fixture(&[
+            r#"<?php
+function scene(\App\User $u): void { $u->name; }
+"#,
+            r#"<?php
+namespace App;
+class User { public string $name = ''; }
+"#,
+        ]);
+        let result = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        );
+        assert!(
+            result.verdicts.is_empty(),
+            "the property genuinely exists: {:?}",
+            result.verdicts,
+        );
+        assert!(
+            result.dependencies.classes.contains("app\\user"),
+            "the cross-file receiver's class is recorded: {:?}",
+            result.dependencies,
+        );
     }
 }

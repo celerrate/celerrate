@@ -509,6 +509,9 @@ fn resolved_member_call<'db>(
     name: &str,
 ) -> Option<ResolvedCall<'db>> {
     let db = context.db;
+    // Plan 9a, task 3: `resolved_call_signature`'s method/scoped-call
+    // consultation of `key`'s declared surface.
+    context.dependencies.borrow_mut().insert(key.to_owned());
     let query = MemberQuery::new(
         db,
         key.to_owned(),
@@ -540,6 +543,9 @@ fn source_method_body<'db>(
     name: &str,
 ) -> Option<(SourceFile, BodyQuery<'db>)> {
     let db = context.db;
+    // Plan 9a, task 3: the coercion/argument family's own direct
+    // `lookup_member` consultation site.
+    context.dependencies.borrow_mut().insert(key.to_owned());
     let query = MemberQuery::new(
         db,
         key.to_owned(),
@@ -589,6 +595,9 @@ fn resolved_constructor_signature<'db>(
         }
     };
     let db = context.db;
+    // Plan 9a, task 3: `resolved_call_signature`'s constructor-call
+    // consultation of `key`'s declared surface.
+    context.dependencies.borrow_mut().insert(key.clone());
     let query = MemberQuery::new(
         db,
         key.clone(),

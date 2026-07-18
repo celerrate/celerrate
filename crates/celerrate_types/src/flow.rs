@@ -25,6 +25,7 @@ use crate::declared::{
 use crate::inference::{InterproceduralEdgeCounts, StubCallRecord};
 use crate::narrowing::{NarrowingSubject, subject_of};
 use crate::operators;
+use crate::records::TypedDependencies;
 use crate::representation::{TypeData, TypeId};
 use crate::widening::{join, widened_literals};
 
@@ -67,6 +68,10 @@ pub(crate) struct FlowResult<'db> {
     /// Task 10, decision 14: every stub-function call this body made,
     /// with its mixed verdict — drained from `Walker::stub_calls`.
     pub stub_calls: Vec<StubCallRecord>,
+    /// Task 3 (plan 9a): every class, function, and inferred callee
+    /// return this walk consulted — drained from `Walker::dependencies`,
+    /// already sorted and deduped (the eq-cutoff contract).
+    pub dependencies: TypedDependencies<'db>,
 }
 
 /// The abstract state at one program point. `reachable` is the
@@ -195,6 +200,11 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     /// body made whose resolved key exists only in stubs, appended at
     /// the call boundary and drained into `InferredBody.stub_calls`.
     stub_calls: Vec<StubCallRecord>,
+    /// Task 3 (plan 9a, decision 4): every class, function, and
+    /// inferred callee return this walk consults, appended at the
+    /// existing `edge_counts`/`lookup_member`/`linearized_class`
+    /// consultation sites — constructive, never a second traversal.
+    dependencies: TypedDependencies<'db>,
     /// Set while typing inside a `NullSafeChain` when a `?->` link's
     /// receiver was possibly null: the wrapper re-acquires `|null`
     /// once, at the end (the design's whole-chain rule).
@@ -229,6 +239,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         saw_yield: false,
         edge_counts: InterproceduralEdgeCounts::default(),
         stub_calls: Vec::new(),
+        dependencies: TypedDependencies::default(),
         null_safe_reacquires: false,
         pending_condition_facts: Vec::new(),
         inline_variable_texts,
@@ -262,11 +273,16 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
             (None, false) => TypeId::never(db),
         }
     };
+    // The eq-cutoff contract (decision 4, `TypedDependencies`'s own
+    // rustdoc): deterministic order regardless of the walk's own
+    // traversal, so two inference-identical bodies backdate.
+    walker.dependencies.sort_and_dedup();
     FlowResult {
         expression_types: walker.types,
         return_type,
         edge_counts: walker.edge_counts,
         stub_calls: walker.stub_calls,
+        dependencies: walker.dependencies,
     }
 }
 
@@ -374,7 +390,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// (decision 9's fallback; a dropped or never-narrowed property
     /// still reads as its declaration).
     fn subject_type(
-        &self,
+        &mut self,
         environment: &Environment<'db>,
         subject: &NarrowingSubject,
     ) -> TypeId<'db> {
@@ -390,15 +406,15 @@ impl<'db> Walker<'db, '_, '_> {
                 // (`StaticProperty`), available in a static method where
                 // `this_type`'s `$this`-value gate would wrongly answer
                 // `mixed`.
-                self.context
-                    .owner_class_key
-                    .as_ref()
+                let owner_class_key = self.context.owner_class_key.clone();
+                let current_static_type = self.current_static_type();
+                owner_class_key
                     .and_then(|key| {
                         self.member_value_type(
-                            std::slice::from_ref(key),
+                            std::slice::from_ref(&key),
                             MemberKind::Property,
                             name,
-                            self.current_static_type(),
+                            current_static_type,
                         )
                     })
                     .unwrap_or_else(|| TypeId::mixed(db))
@@ -437,7 +453,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// shape) — the silent stance of decision 11. Union constituents
     /// must all resolve (null skipped: the nullability family's
     /// business); intersection contributes every resolving part.
-    fn receiver_parts(&self, of: TypeId<'db>) -> Option<Vec<String>> {
+    fn receiver_parts(&mut self, of: TypeId<'db>) -> Option<Vec<String>> {
         let db = self.db();
         if of == TypeId::self_placeholder(db) || of == TypeId::static_placeholder(db) {
             return self.context.owner_class_key.clone().map(|key| vec![key]);
@@ -498,7 +514,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// answers each key against its own class, never both against
     /// whichever key happened to resolve first (Finding 3).
     fn member_value_type(
-        &self,
+        &mut self,
         keys: &[String],
         kind: MemberKind,
         name: &str,
@@ -566,7 +582,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// itself be a placeholder and forward, decision 2) — and the
     /// receiver's class arguments bind its class-level templates.
     fn member_boundary_type(
-        &self,
+        &mut self,
         of: TypeId<'db>,
         owner: Option<&str>,
         receiver: TypeId<'db>,
@@ -636,8 +652,14 @@ impl<'db> Walker<'db, '_, '_> {
     /// class for the receiver's, since `self` in a trait does not follow
     /// late static binding. Only the linearization knows which class the
     /// trait was pasted into, so it carries the answer here.
-    fn member_owner(&self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
+    fn member_owner(&mut self, key: &str, kind: MemberKind, name: &str) -> Option<String> {
         let db = self.db();
+        // Task 3: this is the walker's own direct `lookup_member`
+        // consultation site — recorded here, regardless of whether it
+        // resolves, so every caller (receiver resolution, property
+        // types, the iteration-protocol members) shares one recording
+        // point.
+        self.dependencies.classes.insert(key.to_owned());
         let query = MemberQuery::new(db, key.to_owned(), kind, folded_member_key(kind, name));
         match lookup_member(
             db,
@@ -688,10 +710,13 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The first `extends` edge of the defining class's ancestry.
-    fn parent_class_key(&self) -> Option<String> {
-        let owner = self.context.owner_class_key.as_ref()?;
-        self.parent_class_key_of(owner)
+    /// The first `extends` edge of the defining class's ancestry (the
+    /// body owner's own class — one of task 3's four illustrative
+    /// consultation categories, recorded through
+    /// [`Self::parent_class_key_of`]).
+    fn parent_class_key(&mut self) -> Option<String> {
+        let owner = self.context.owner_class_key.clone()?;
+        self.parent_class_key_of(&owner)
     }
 
     /// The first `extends` edge of `class_key`'s own ancestry — the
@@ -699,8 +724,11 @@ impl<'db> Walker<'db, '_, '_> {
     /// class, generalized so `member_boundary_type` can resolve a
     /// `parent` placeholder against any declaring owner, not only the
     /// body's own.
-    fn parent_class_key_of(&self, class_key: &str) -> Option<String> {
+    fn parent_class_key_of(&mut self, class_key: &str) -> Option<String> {
         let db = self.db();
+        // Task 3: the walker's own direct `linearized_class`
+        // consultation site.
+        self.dependencies.classes.insert(class_key.to_owned());
         let linearized = linearized_class(
             db,
             self.context.files,
@@ -1276,17 +1304,26 @@ impl<'db> Walker<'db, '_, '_> {
             && self.declared_present(signature)
         {
             self.edge_counts.declared_return_edges += 1;
+            self.dependencies.functions.insert(key.to_owned());
             return signature.value_type;
         }
         if source_exists {
             self.edge_counts.inferred_return_edges += 1;
-            return crate::inference::inferred_function_return(
+            // Decision 4: `raw` is the callee-query answer as-is — a
+            // free function has no `self`/`static`/receiver boundary to
+            // substitute against, so this IS already the value task 8's
+            // live validator re-derives; recorded verbatim.
+            let raw = crate::inference::inferred_function_return(
                 db,
                 self.context.files,
                 self.context.stubs,
                 self.context.configuration,
                 crate::declared::FunctionQuery::new(db, key.to_owned()),
             );
+            self.dependencies
+                .inferred_functions
+                .push((key.to_owned(), raw));
+            return raw;
         }
         TypeId::mixed(db)
     }
@@ -1407,6 +1444,19 @@ impl<'db> Walker<'db, '_, '_> {
                     self.context.configuration,
                     method,
                 );
+                // Decision 4, the load-bearing capture: `inferred` here
+                // is the RAW callee-query answer — a `static`-typed
+                // callee still carries the placeholder at this point.
+                // Recorded BEFORE `member_boundary_type` below
+                // substitutes it against this call's own owner and
+                // receiver, so the recorded edge matches exactly what
+                // task 8's live validator re-derives by calling
+                // `inferred_method_return` itself, never the call-site-
+                // relative value substitution produces.
+                self.dependencies.inferred_methods.push((
+                    (key.clone(), folded_member_key(MemberKind::Method, name)),
+                    inferred,
+                ));
                 let owner = self.member_owner(key, MemberKind::Method, name);
                 self.member_boundary_type(inferred, owner.as_deref(), receiver)
             };
@@ -1550,8 +1600,11 @@ impl<'db> Walker<'db, '_, '_> {
     /// `stub_ancestors` the arm above reads, so both arms mean the same
     /// thing by construction: only ANCESTORS implement the protocol,
     /// never `name` itself.
-    fn implements_iteration_protocol(&self, name: &str) -> bool {
+    fn implements_iteration_protocol(&mut self, name: &str) -> bool {
         let db = self.db();
+        // Task 3: the walker's own direct `linearized_class`
+        // consultation site (the iteration-protocol category).
+        self.dependencies.classes.insert(name.to_owned());
         match linearized_class(
             db,
             self.context.files,
@@ -3335,15 +3388,35 @@ impl<'db> Walker<'db, '_, '_> {
         let uses_fallback = signature
             .as_ref()
             .is_some_and(|signature| !self.declared_present(signature));
+        // Mirrors `function_call_result` (the direct-call precedent): a
+        // first-class callable of a free function reaches the same two
+        // `edge_counts` increment sites `projected_callable` below counts
+        // (declared here, inferred in the fallback branch), so the same
+        // dependency must be recorded beside each — otherwise a body
+        // forming `g(...)` records the edge count but no identity for
+        // task 8's live-demand validator to re-check.
+        if signature
+            .as_ref()
+            .is_some_and(|signature| self.declared_present(signature))
+        {
+            self.dependencies.functions.insert(key.to_owned());
+        }
         let return_fallback = if uses_fallback && source_exists {
             self.edge_counts.inferred_return_edges += 1;
-            crate::inference::inferred_function_return(
+            // Decision 4: raw, pre-substitution — a free function has no
+            // member boundary to substitute against, matching
+            // `function_call_result`'s own capture.
+            let raw = crate::inference::inferred_function_return(
                 db,
                 self.context.files,
                 self.context.stubs,
                 self.context.configuration,
                 crate::declared::FunctionQuery::new(db, key.to_owned()),
-            )
+            );
+            self.dependencies
+                .inferred_functions
+                .push((key.to_owned(), raw));
+            raw
         } else {
             TypeId::mixed(db)
         };

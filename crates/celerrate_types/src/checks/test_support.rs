@@ -252,6 +252,7 @@ pub(crate) fn context_for(fixture: &Fixture, body_index: u32) -> CheckContext<'_
         owner,
         tables: UseTables::for_namespace(item_tree(db, file), &namespace),
         namespace,
+        dependencies: std::cell::RefCell::new(std::collections::BTreeSet::new()),
     }
 }
 
