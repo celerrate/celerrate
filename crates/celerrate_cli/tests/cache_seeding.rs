@@ -490,8 +490,8 @@ fn a_second_run_leaves_equivalent_packs_behind() {
 /// binary no longer knows is exactly what `a_verdict_with_an_unknown_
 /// identifier_is_discarded` above proves the pass recomputes rather than
 /// serves. `persist` must mirror that refusal: it may not re-persist the
-/// unknown-identifier verdict just because `validated_verdict` returned
-/// it, or the honest recomputation the pass reported never reaches the
+/// unknown-identifier verdict just because `lookup_verdict` reported a
+/// `Hit`, or the honest recomputation the pass reported never reaches the
 /// pack that seeds the next run.
 #[test]
 fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {

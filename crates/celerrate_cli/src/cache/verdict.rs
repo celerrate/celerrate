@@ -174,17 +174,3 @@ fn validate_typed(inputs: &AnalysisInputs, stored: &StoredVerdict) -> TypedOutco
     }
     TypedOutcome::Served
 }
-
-/// The stored verdict if its untyped half may speak; `None` means the
-/// whole entry must recompute. A convenience projection of
-/// [`lookup_verdict`] for callers that only care about the untyped
-/// half's own outcome and not the typed layer's — deliberately without
-/// statistics attached, so a caller that also consults `lookup_verdict`
-/// directly (as `persist`'s own re-lookup does, to see the typed
-/// outcome too) never double-counts a file by calling both.
-pub fn validated_verdict(inputs: &AnalysisInputs, file: SourceFile) -> Option<&StoredVerdict> {
-    match lookup_verdict(inputs, file) {
-        VerdictLookup::Hit { verdict, .. } => Some(verdict),
-        VerdictLookup::Discarded | VerdictLookup::Absent => None,
-    }
-}
