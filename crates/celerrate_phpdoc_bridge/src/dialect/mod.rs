@@ -2,7 +2,7 @@
 //! inter-dialect precedence lives here because the dialects coexist
 //! on one docblock in real code (design section 5).
 //!
-//! # The conflict table (decision 8; published by plan 9c)
+//! # The conflict table (decision 8; published at `docs/phpdoc-bridge.md`)
 //!
 //! For one slot, the tiers resolve as:
 //!
