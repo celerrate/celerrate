@@ -52,7 +52,10 @@ fn the_pack_stores_the_post_filter_verdict_and_serves_it_equal() {
     let database = &inputs.database;
     let &file = session.sources.values().next().unwrap();
 
-    let VerdictLookup::Hit(stored) = lookup_verdict(&inputs, file) else {
+    let VerdictLookup::Hit {
+        verdict: stored, ..
+    } = lookup_verdict(&inputs, file)
+    else {
         panic!("the persisted verdict must revalidate on an unchanged project");
     };
     assert_eq!(

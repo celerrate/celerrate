@@ -4,6 +4,18 @@
 //! load, and a `DiagnosticId` wraps a `'static` string that must be
 //! re-interned through the registry. Every `to_*` conversion is total
 //! except identifier re-interning, whose failure discards the entry.
+//!
+//! **The suppression note (plan 9a, task 9).** `StoredVerdict.diagnostics`
+//! and `StoredTypedVerdict.diagnostics` are both stored POST-suppression
+//! (schema 4's convention, unchanged): every persisted diagnostic has
+//! already survived `celerrate_semantics::suppressed_ranges`'s filter.
+//! Suppression directives are strictly file-local facts read from the
+//! same file the verdict's content-hash key covers, so editing even a
+//! comment — never mind the directive itself — moves the hash and
+//! discards the WHOLE entry, untyped and typed halves alike (`stale
+//! suppression is structurally impossible`, `cache_suppression.rs`'s own
+//! module doc). A stale suppression decision can therefore never survive
+//! into a served verdict, typed or not.
 
 use celerrate_diagnostics::{Diagnostic, Severity, find_identifier};
 use celerrate_project::PhpVersion;
@@ -13,6 +25,7 @@ use celerrate_semantics::{
     ResolutionRecord, SymbolSpace, TraitAdaptation, TraitUse, UseImport, Visibility,
 };
 use celerrate_source::{FileId, TextRange, TextSize};
+use celerrate_types::{StoredClassDependency, StoredFunctionDependency, StoredInferredEdge};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -735,12 +748,35 @@ impl StoredRecord {
     }
 }
 
+/// One reported file's typed portion, persisted (plan 9a, task 9): the
+/// CEL0030-CEL0038 families' diagnostics alongside the revalidation
+/// records `crate::cache::verdict`'s layered validation checks before
+/// serving them again — the file-level counterpart of
+/// [`celerrate_types::StoredInferredSignature`] (task 7's per-body
+/// artifact), shaped the same way (a digest per consulted class and
+/// function, an inferred edge's callee key and raw pre-substitution
+/// return type) but scoped to a whole file's typed findings rather than
+/// one body's inferred return.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredTypedVerdict {
+    /// Post-suppression, schema-4 convention (module doc above).
+    pub diagnostics: Vec<StoredDiagnostic>,
+    pub classes: Vec<StoredClassDependency>,
+    pub functions: Vec<StoredFunctionDependency>,
+    pub inferred: Vec<StoredInferredEdge>,
+}
+
 /// One reported file's persisted verdict: its composed diagnostics and
 /// the records that must revalidate before they may speak again.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredVerdict {
     pub diagnostics: Vec<StoredDiagnostic>,
     pub records: Vec<StoredRecord>,
+    /// The typed half (plan 9a, task 9): `None` when the persist lever
+    /// (`crate::cache::PERSIST_TYPED_ARTIFACTS`) is off, `Some` otherwise
+    /// — never a partial `StoredTypedVerdict`, since `composed_verdict`
+    /// computes both fields of the option together.
+    pub typed: Option<StoredTypedVerdict>,
 }
 
 #[cfg(test)]

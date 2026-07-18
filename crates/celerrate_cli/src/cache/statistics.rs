@@ -60,6 +60,17 @@ pub struct CacheStatistics {
     /// Typed-signature lookups with no recorded entry under the queried
     /// key.
     pub signatures_absent: AtomicU64,
+    /// Files whose typed half (plan 9a, task 9) was served from the
+    /// cache: present, every class and function digest unchanged, every
+    /// inferred edge's live return unchanged — no body walked, no
+    /// inference ran.
+    pub typed_served: AtomicU64,
+    /// Files whose typed half was recomputed: absent, stale, or the
+    /// untyped half itself discarded (which takes the typed half down
+    /// with it). Counted at the same fork `typed_served` is, in
+    /// `analysis::served_typed_diagnostics` — the orchestration layer,
+    /// never inside a query.
+    pub typed_recomputed: AtomicU64,
 }
 
 impl CacheStatistics {
@@ -67,7 +78,7 @@ impl CacheStatistics {
     pub fn render(&self) -> String {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         format!(
-            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider; persist {} written / {} skipped / {} failed",
+            "cache: trees {} hit / {} miss; members {} hit / {} miss; verdicts {} served / {} discarded / {} absent; typed {} bodies, edges {} declared / {} inferred / {} provider, verdicts {} served / {} recomputed; persist {} written / {} skipped / {} failed",
             load(&self.tree_hits),
             load(&self.tree_misses),
             load(&self.member_tree_hits),
@@ -79,6 +90,8 @@ impl CacheStatistics {
             load(&self.typed_declared_edges),
             load(&self.typed_inferred_edges),
             load(&self.typed_provider_edges),
+            load(&self.typed_served),
+            load(&self.typed_recomputed),
             load(&self.persist_written),
             load(&self.persist_skipped),
             load(&self.persist_failed),
@@ -163,10 +176,12 @@ mod tests {
         statistics
             .typed_provider_edges
             .fetch_add(7, Ordering::Relaxed);
+        statistics.typed_served.fetch_add(8, Ordering::Relaxed);
+        statistics.typed_recomputed.fetch_add(9, Ordering::Relaxed);
         statistics.persist_failed.fetch_add(1, Ordering::Relaxed);
         assert_eq!(
             statistics.render(),
-            "cache: trees 3 hit / 0 miss; members 2 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider; persist 0 written / 0 skipped / 1 failed",
+            "cache: trees 3 hit / 0 miss; members 2 hit / 0 miss; verdicts 2 served / 0 discarded / 0 absent; typed 4 bodies, edges 5 declared / 6 inferred / 7 provider, verdicts 8 served / 9 recomputed; persist 0 written / 0 skipped / 1 failed",
         );
     }
 

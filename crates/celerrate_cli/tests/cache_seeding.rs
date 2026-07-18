@@ -248,6 +248,7 @@ fn probe_verdict() -> StoredVerdict {
             namespace: String::new(),
             answer: StoredAnswer::Unknown,
         }],
+        typed: None,
     }
 }
 
@@ -1271,5 +1272,252 @@ fn a_static_returning_callee_serves_warm() {
     assert_eq!(
         warm_output, fresh_output,
         "warm rendering must equal a fresh recomputation over the same files",
+    );
+}
+
+// ---------------------------------------------------------------------
+// Plan 9a, task 9: the typed families' own persistent artifact class.
+// `StoredVerdict.typed` joins the untyped half, with its own layered
+// revalidation (`crate::cache::verdict::TypedOutcome`) — a partial hit
+// (untyped served, typed recomputed) is a first-class outcome.
+// ---------------------------------------------------------------------
+
+/// caller.php dereferences a possibly-null return from helper.php
+/// (`findWidget(): ?Widget`, assigned to `$w` before the call — the
+/// narrowable-receiver shape the nullability family tracks, never the
+/// exempt direct-chain-on-a-call-result shape). Cold run, persist. Warm
+/// run with no edits: rendering byte-identical, `typed_served > 0`, and
+/// — the substance assertion — `typed_bodies == 0` for the whole warm
+/// pass: no inference ran for either served file.
+#[test]
+fn a_warm_run_serves_typed_verdicts_without_inference() {
+    use std::sync::atomic::Ordering;
+
+    let helper_source = "<?php class Widget { public function inspect(): void {} } \
+         function findWidget(): ?Widget { return null; }";
+    let caller_source = "<?php function useIt(): void { $w = findWidget(); $w->inspect(); }";
+    let root = project(&[("helper.php", helper_source), ("caller.php", caller_source)]);
+
+    let (_, cold_output) = run_check(root.path());
+    assert!(
+        cold_output.contains("CEL0034"),
+        "the fixture must exercise the typed finding cold: {cold_output}",
+    );
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.id.as_str() == "CEL0034"),
+        "the warm run must still report the typed finding: {:?}",
+        outcome.diagnostics,
+    );
+    assert!(
+        session.statistics.typed_served.load(Ordering::Relaxed) > 0,
+        "the warm run must serve the typed verdict from the cache",
+    );
+    assert_eq!(
+        session.statistics.typed_bodies.load(Ordering::Relaxed),
+        0,
+        "no inference ran for the served files: nothing was recomputed",
+    );
+
+    let (_, warm_output) = run_check(root.path());
+    assert_eq!(
+        cold_output, warm_output,
+        "rendering is byte-identical across the warm run",
+    );
+}
+
+/// helper.php's unannotated `helper()` returns `1` (an `int`), so
+/// caller.php's `declare(strict_types=1)` call `takesInt(helper())`
+/// passes cleanly and reports nothing. Editing ONLY helper.php so its
+/// inferred return changes to a non-numeric string leaves caller.php's
+/// own bytes untouched: its untyped half still serves (no resolution
+/// answer moved), but its recorded inferred edge for `helper` no longer
+/// matches the live `inferred_function_return`, so its typed portion
+/// recomputes — and now reports `CEL0035` (the argument no longer
+/// assignable to `int` under strict types). A partial hit, pinned.
+#[test]
+fn a_stale_typed_record_recomputes_only_the_typed_portion() {
+    use std::sync::atomic::Ordering;
+
+    let helper_before = "<?php function helper() { return 1; }";
+    let helper_after = "<?php function helper() { return 'not-an-int'; }";
+    let caller_source = "<?php declare(strict_types=1);\n\
+         function takesInt(int $n): void {}\n\
+         function useIt(): void { takesInt(helper()); }";
+
+    let root = project(&[("helper.php", helper_before), ("caller.php", caller_source)]);
+    run_check(root.path());
+    std::fs::write(root.path().join("helper.php"), helper_after).unwrap();
+
+    // One warm pass, no persist yet: the exact moment caller.php's typed
+    // record is stale against the edited callee.
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(
+        outcome
+            .diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.id.as_str() == "CEL0035"),
+        "the edited callee's new inferred return must trip the argument-type \
+         check on caller.php: {:?}",
+        outcome.diagnostics,
+    );
+    assert!(
+        session.statistics.typed_recomputed.load(Ordering::Relaxed) > 0,
+        "caller.php's typed portion must recompute: helper's inferred return changed",
+    );
+    assert_eq!(
+        session
+            .statistics
+            .verdicts_discarded
+            .load(Ordering::Relaxed),
+        0,
+        "caller.php's untyped portion must still serve: caller.php itself was not edited",
+    );
+    assert!(
+        session.statistics.verdicts_served.load(Ordering::Relaxed) >= 1,
+        "caller.php's untyped verdict must be served from the cache",
+    );
+
+    let (_, warm_output) = run_check(root.path());
+    let fresh_root = project(&[("helper.php", helper_after), ("caller.php", caller_source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "warm rendering must equal a fresh recomputation over the same files",
+    );
+}
+
+/// Hardening test (post-approval review): `findEven`/`findOdd` are
+/// mutually recursive with two real base cases each (`null` on an
+/// exhausted chain, the found `Node` otherwise — the same shape
+/// `a_cyclic_cluster_recomputes_and_stays_deterministic` above already
+/// pins for a `string`-returning cluster), so the cluster's inferred
+/// return converges to a genuine, non-`never` fixpoint (`Node|null`) —
+/// never the "whole cluster answers `never`" shape
+/// `a_never_returning_cycle_participant_never_validates_warm` pins.
+/// `useIt` assigns `findEven`'s result to a variable and dereferences it
+/// unguarded, reporting `CEL0034`. `cycle.php`'s persisted typed verdict
+/// records an inferred edge onto `findEven`, and `findEven`'s own
+/// persisted typed verdict (it is a reported body too) records one onto
+/// `findOdd` in turn.
+///
+/// The nullability family (`CEL0034`) is deliberate, not the argument
+/// family (`CEL0035`): `checks::arguments::check_argument_types` only
+/// reports when EVERY constituent of a union argument fails
+/// assignability (its own comment: "a union source that partially fits
+/// its parameter... is silent here too"), and this cluster's `Node|null`
+/// union has one constituent (`Node`) that fits any `?Node` parameter
+/// fine — so an argument-type fixture built on this shape would report
+/// NOTHING, passing vacuously. Nullability has no such partial-fit
+/// exemption: any receiver type that merely CONTAINS `null` reports.
+/// Verified empirically: a first attempt used the argument family with a
+/// scalar `int|null` cluster and produced zero diagnostics on a correct
+/// (non-buggy) build, for exactly this reason.
+///
+/// `useIt` is declared FIRST, ahead of `findEven`/`findOdd`, and this
+/// ordering is load-bearing, not stylistic. `typed_file_verdicts` walks
+/// a file's bodies via `body_typed_verdicts`, which calls
+/// `inferred_body_types` DIRECTLY (bypassing the cycle-safe
+/// `inferred_function_return`/`inferred_method_return` entry points).
+/// If `findEven`'s own body were walked this way BEFORE anything calls
+/// it through `inferred_function_return`, the recursive call inside its
+/// own body would re-enter that SAME direct `inferred_body_types` claim
+/// while it is still active — a salsa `Panic`-strategy cycle, unrelated
+/// to this task, confirmed reproducible even with NO class/typed cache
+/// involved at all (a bare self-recursive `function down(int $n) { ...
+/// return down($n - 1); ... }`, checked cold, panics identically) and
+/// confirmed present for THIS exact `findEven`/`findOdd` pair too when
+/// declared before their caller. With `useIt` declared first, its own
+/// direct `inferred_body_types` walk reaches `findEven`'s return through
+/// `inferred_function_return` FIRST — the cycle-safe entry point, which
+/// memoizes `findEven`'s (and `findOdd`'s) `inferred_body_types` result
+/// as a side effect of resolving the fixpoint — so `findEven`'s own
+/// later direct walk (from `typed_file_verdicts`'s own loop) hits an
+/// already-memoized value instead of re-entering an active claim.
+///
+/// This also means `a_cyclic_cluster_recomputes_and_stays_deterministic`
+/// and `a_never_returning_cycle_participant_never_validates_warm` above
+/// (both pre-dating this task) declare their recursive pair BEFORE their
+/// caller and, on inspection, panic on every single run (cold, warm,
+/// fresh alike) — their assertions only ever compare the resulting
+/// (identical) internal-error text across runs, so they pass vacuously
+/// today. Flagged as a concern in the task report rather than silently
+/// fixed here: reordering or otherwise repairing those two tests is a
+/// pre-existing `celerrate_types` typed-checks defect, outside task 9's
+/// scope (the persistent typed-artifact cache).
+///
+/// `crate::cache::verdict::validate_typed` demands the cluster's return
+/// through the LIVE `inferred_function_return` query from
+/// `analyze_one`'s orchestration layer — outside any active salsa
+/// cycle — so it only ever observes the CONVERGED fixpoint, never a
+/// mid-iteration provisional `never`. That is why, unlike
+/// `celerrate_types::inference::validated_stored_return` (task 8, which
+/// runs recursively INSIDE the query graph and therefore needs its own
+/// `is_never` mismatch rule, decision 9), `validate_typed` carries no
+/// such guard: this pins that asymmetry is correct rather than an
+/// oversight. Cold + persist, then a warm run over the UNCHANGED
+/// project must render byte-identical both to the cold run and to an
+/// independent, cache-free recomputation — served or recomputed, the
+/// converged fixpoint is the only correct answer either way.
+#[test]
+fn a_mutually_recursive_typed_callee_validates_correctly_warm() {
+    let source = "<?php
+        class Node {
+            public ?Node $next = null;
+            public function touch(): void {}
+        }
+        function useIt(?Node $node): void {
+            $found = findEven($node, 3);
+            $found->touch();
+        }
+        function findEven(?Node $node, int $n) {
+            if ($node === null) {
+                return null;
+            }
+            if ($n === 0) {
+                return $node;
+            }
+            return findOdd($node->next, $n - 1);
+        }
+        function findOdd(?Node $node, int $n) {
+            if ($node === null) {
+                return null;
+            }
+            if ($n === 0) {
+                return $node;
+            }
+            return findEven($node->next, $n - 1);
+        }
+    ";
+    let root = project(&[("cycle.php", source)]);
+    let (_, cold_output) = run_check(root.path());
+    assert!(
+        cold_output.contains("CEL0034"),
+        "the fixture must exercise the typed finding cold: {cold_output}",
+    );
+
+    // No edit: a warm run over the exact same files, the persisted cache
+    // (both untyped AND typed halves) in place.
+    let (_, warm_output) = run_check(root.path());
+    assert_eq!(
+        cold_output, warm_output,
+        "the mutually-recursive cluster's presence must not change the \
+         rendering between the cold and the warm run",
+    );
+
+    let fresh_root = project(&[("cycle.php", source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(
+        warm_output, fresh_output,
+        "a mutually-recursive callee's typed verdict must render \
+         identically warm and fresh: served or recomputed, the converged \
+         fixpoint is the only correct answer, never a leaked mid-cycle \
+         provisional",
     );
 }

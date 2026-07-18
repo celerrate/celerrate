@@ -3,10 +3,15 @@
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
 //!
-//! The typed families (CEL0030-CEL0038) are plan 9a's artifact class,
-//! not this one's: `StoredVerdict` persists only the syntax, decode,
-//! and semantic families, and stays that way with no format bump. The
-//! typed portion is recomputed fresh on every path, cold or warm.
+//! The typed families (CEL0030-CEL0038) are plan 9a's own artifact
+//! class: `StoredVerdict.typed` (task 9) carries their post-suppression
+//! diagnostics alongside the class, function, and inferred-edge records
+//! `crate::cache::verdict`'s layered validation replays against the live
+//! project — the file-level counterpart of the fourth pack's per-body
+//! `StoredInferredSignature` (task 7). `PERSIST_TYPED_ARTIFACTS` gates
+//! both: off, `StoredVerdict.typed` stays `None` and the typed portion
+//! is recomputed fresh on every path, cold or warm, exactly as before
+//! task 9.
 
 pub mod identity;
 pub mod pack;
@@ -40,7 +45,10 @@ use pack::{Pack, PackHeader};
 use snapshot::{
     CacheSnapshot, DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
 };
-use stored::{StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredVerdict};
+use stored::{
+    StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredTypedVerdict,
+    StoredVerdict,
+};
 
 /// One pack's entries in memory: sorted, deduplicated, one entry per key.
 type TreeEntries = Vec<(ContentHash, StoredItemTree)>;
@@ -48,13 +56,14 @@ type MemberTreeEntries = Vec<(ContentHash, StoredMemberTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
 type SignatureEntries = Vec<(StoredSignatureKey, StoredInferredSignature)>;
 
-/// Plan 9a's persist lever for the typed-artifact families (task 7):
-/// `true` persists the inferred-signature pack, `false` drops it. Fixed
-/// at `true` today — a later task (9) threads a runtime toggle through
-/// here; until then this is the named, reviewable hook a future flip
-/// lands on, guarding [`collect_signature_entries`] exactly like the
-/// brief's own economics rule ("an artifact class that does not pay for
-/// itself is dropped") demands a lever for.
+/// Plan 9a's persist lever for the typed-artifact families (task 7,
+/// extended by task 9): `true` persists the inferred-signature pack
+/// ([`collect_signature_entries`]) AND populates `StoredVerdict.typed`
+/// ([`composed_verdict`]'s typed half); `false` drops both. Fixed at
+/// `true` today — no runtime toggle exists yet; until one does, this is
+/// the named, reviewable hook a future flip lands on, and the const is
+/// threaded into [`composed_verdict_with_lever`] so its two branches
+/// stay unit-testable without one.
 pub(crate) const PERSIST_TYPED_ARTIFACTS: bool = true;
 
 /// How one pack write ended.
@@ -233,14 +242,25 @@ fn collect_entries(
             continue;
         }
         let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
-        // Mirrors `analyze_one`: a validated hit is only reused when
-        // every stored diagnostic still re-interns, or `persist` would
-        // re-persist an entry the pass itself refused to serve.
-        let stored = match verdict::validated_verdict(inputs, file) {
-            Some(stored)
-                if stored.diagnostics.iter().all(|diagnostic| {
-                    diagnostic.to_diagnostic(file_id, content_length).is_some()
-                }) =>
+        // Mirrors `analyze_one`: a validated hit's whole entry is only
+        // reused byte-for-byte when every stored diagnostic still
+        // re-interns AND the typed half itself validated
+        // (`TypedOutcome::Served`) — a `Recompute` typed outcome means
+        // this file's typed portion is already stale against the live
+        // project, and reusing the old entry verbatim would persist that
+        // staleness forward untouched (never re-checked until the whole
+        // entry moves for some unrelated reason). `composed_verdict`
+        // recomputes both halves in that case; every query underneath it
+        // is memoized from the pass that already ran, so this costs
+        // nothing beyond a salsa cache read.
+        let stored = match verdict::lookup_verdict(inputs, file) {
+            verdict::VerdictLookup::Hit {
+                verdict: stored,
+                typed: verdict::TypedOutcome::Served,
+            } if stored
+                .diagnostics
+                .iter()
+                .all(|diagnostic| diagnostic.to_diagnostic(file_id, content_length).is_some()) =>
             {
                 stored.clone()
             }
@@ -451,10 +471,26 @@ fn stored_signature_of<'db>(
 
 /// One reported file's verdict — its diagnostics through the
 /// cache-servable composition point, with the records the entry must
-/// revalidate against. Every query here is memoized from the pass. The
-/// typed families never reach this: `persistable_diagnostics` is
-/// exactly what a pack may carry (module doc above).
+/// revalidate against, and (when the lever is on) the typed half
+/// alongside them. Delegates to [`composed_verdict_with_lever`] with
+/// [`PERSIST_TYPED_ARTIFACTS`]; the lever is parameterized into that
+/// function, rather than read inside it, so its two branches are
+/// unit-testable without a runtime toggle (`the_lever_persists_untyped_
+/// only_verdicts`, this module's own tests).
 fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> StoredVerdict {
+    composed_verdict_with_lever(inputs, file, PERSIST_TYPED_ARTIFACTS)
+}
+
+/// [`composed_verdict`]'s body, with the persist lever threaded in as a
+/// parameter. The untyped half is computed exactly as it always was
+/// (`persistable_diagnostics` plus `resolution_records`'s projection,
+/// unconditionally); the typed half is `Some` only when `persist_typed`
+/// is set, through [`composed_typed_verdict`].
+fn composed_verdict_with_lever(
+    inputs: &AnalysisInputs,
+    file: celerrate_db::SourceFile,
+    persist_typed: bool,
+) -> StoredVerdict {
     let database = &inputs.database;
     let diagnostics = crate::analysis::persistable_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
@@ -464,9 +500,96 @@ fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> 
         inputs.stubs,
         inputs.configuration,
     );
+    let typed = if persist_typed {
+        Some(composed_typed_verdict(inputs, file))
+    } else {
+        None
+    };
     StoredVerdict {
         diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
         records: records.iter().map(StoredRecord::of).collect(),
+        typed,
+    }
+}
+
+/// The typed half of one reported file's persisted verdict (plan 9a,
+/// task 9): `typed_portion`'s post-suppression diagnostics, stored,
+/// alongside the class, function, and inferred-edge records
+/// `typed_file_verdicts(...).dependencies` recorded — the file-level
+/// mirror of [`stored_signature_of`] above, reading the exact same
+/// `FileDependencies` shape `analyze_one`'s recompute path already
+/// produces (never a separate walk), digests stamped through the same
+/// task-2 queries [`stored_signature_of`] stamps them through, and every
+/// inferred edge's `StoredType` carried as `FileDependencies` already
+/// recorded it (no re-derivation, no `TypeId` involved: task 3's
+/// `FileDependencies::extend_from_body` already mirrored it at the
+/// walk's own boundary).
+fn composed_typed_verdict(
+    inputs: &AnalysisInputs,
+    file: celerrate_db::SourceFile,
+) -> StoredTypedVerdict {
+    let database = &inputs.database;
+    let diagnostics = crate::analysis::typed_portion(inputs, file);
+    let result = celerrate_types::typed_file_verdicts(
+        database,
+        inputs.files,
+        inputs.stubs,
+        inputs.configuration,
+        file,
+    );
+    let classes = result
+        .dependencies
+        .classes
+        .iter()
+        .map(|key| StoredClassDependency {
+            key: key.clone(),
+            digest: class_surface_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                ClassQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let functions = result
+        .dependencies
+        .functions
+        .iter()
+        .map(|key| StoredFunctionDependency {
+            key: key.clone(),
+            digest: function_signature_digest(
+                database,
+                inputs.files,
+                inputs.stubs,
+                inputs.configuration,
+                FunctionQuery::new(database, key.clone()),
+            ),
+        })
+        .collect();
+    let inferred = result
+        .dependencies
+        .inferred_functions
+        .iter()
+        .map(|(key, return_type)| StoredInferredEdge {
+            callee: StoredSignatureKey::Function { key: key.clone() },
+            return_type: return_type.clone(),
+        })
+        .chain(result.dependencies.inferred_methods.iter().map(
+            |((class_key, member_key), return_type)| StoredInferredEdge {
+                callee: StoredSignatureKey::Method {
+                    class_key: class_key.clone(),
+                    member_key: member_key.clone(),
+                },
+                return_type: return_type.clone(),
+            },
+        ))
+        .collect();
+    StoredTypedVerdict {
+        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        classes,
+        functions,
+        inferred,
     }
 }
 
@@ -619,9 +742,11 @@ mod tests {
     /// fixed `true` today, so this pins the ON branch — the
     /// inferred-signature pack IS written and the snapshot IS
     /// populated from it. The OFF branch (`StoredVerdict.typed` staying
-    /// `None`, per the brief's own scope note) is task 9's concern: no
-    /// runtime toggle exists yet to drive it, and a `const` cannot be
-    /// mutated from a test. `PERSIST_TYPED_ARTIFACTS` and
+    /// `None`) is `the_lever_persists_untyped_only_verdicts` just below
+    /// (task 9): no runtime toggle exists yet to drive it end to end
+    /// from `persist`, and a `const` cannot be mutated from a test, so
+    /// that test pins `composed_verdict_with_lever`'s two branches
+    /// directly instead. `PERSIST_TYPED_ARTIFACTS` and
     /// `collect_signature_entries` are `pub(crate)`/private — invisible
     /// to the external `tests/cache_seeding.rs` integration crate — so
     /// this lever test lives here instead of there.
@@ -653,6 +778,49 @@ mod tests {
             "the lever is on: the pack is written",
         );
         assert_eq!(session.cache.signatures.len(), 1, "one free function");
+    }
+
+    /// Plan 9a, task 9's own persist lever test: `composed_verdict_with_
+    /// lever`'s two branches, pinned directly since `composed_verdict`
+    /// and the lever are both private/`pub(crate)` — invisible to the
+    /// external `tests/cache_seeding.rs` integration crate, exactly the
+    /// same visibility seam `the_persist_lever_drops_the_typed_artifacts`
+    /// above already worked around for task 7's own lever. Off,
+    /// `StoredVerdict.typed` stays `None`; on, it is populated — the two
+    /// branches a runtime toggle would otherwise flip, exercised here as
+    /// a plain function argument instead.
+    #[test]
+    fn the_lever_persists_untyped_only_verdicts() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("a.php"),
+            "<?php function f() { return 1; }",
+        )
+        .unwrap();
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let &file = inputs.reported.first().unwrap();
+
+        let off = super::composed_verdict_with_lever(&inputs, file, false);
+        assert!(
+            off.typed.is_none(),
+            "the lever off: StoredVerdict.typed must stay None",
+        );
+
+        let on = super::composed_verdict_with_lever(&inputs, file, true);
+        assert!(
+            on.typed.is_some(),
+            "the lever on: StoredVerdict.typed must be populated",
+        );
+        assert_eq!(
+            off.diagnostics, on.diagnostics,
+            "the untyped half is identical either way: the lever only ever \
+             touches the typed field",
+        );
+        assert_eq!(
+            off.records, on.records,
+            "the untyped half's records are identical either way too",
+        );
     }
 
     /// When one pack cannot be written, neither the pack that could not

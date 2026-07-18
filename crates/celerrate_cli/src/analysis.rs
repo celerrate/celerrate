@@ -189,11 +189,20 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
     diagnostics
 }
 
-/// The typed families, suppression applied — computed fresh on every
-/// path (decision 13): the persistent cache never speaks for them, so
-/// both a cold miss and a warm hit call this and get the same answer.
-/// Debt ledger: the typed families are recomputed on every warm run too
-/// — there is no typed-artifact cache class yet; owner: plan 9a.
+/// The typed families, suppression applied, computed fresh from the live
+/// project — the recompute-path building block, never called on a
+/// typed-serve hit. Plan 9a (task 9) gave the typed families their own
+/// persistent artifact class (`crate::cache::stored::StoredTypedVerdict`,
+/// validated by `crate::cache::verdict::TypedOutcome`); this function is
+/// what every recompute path calls once its outcome is `Recompute`:
+/// `served_typed_diagnostics`'s fallback (the orchestration layer's own
+/// fork, `analyze_one`'s hit path and the equivalence harness alike),
+/// `crate::cache::composed_typed_verdict` (the persist path, computing
+/// what gets stored), and `composed_diagnostics` below (an untyped miss,
+/// where nothing typed could have been served either). A warm hit whose
+/// typed half validates never reaches this at all — that is the whole
+/// point of the artifact class this function now feeds rather than
+/// stands in for.
 pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let mut diagnostics = celerrate_types::typed_diagnostics(
@@ -225,63 +234,120 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
     diagnostics
 }
 
+/// The typed half of one file's diagnostics on a cache hit (plan 9a,
+/// task 9's fork): served from `typed_source` when it is present and
+/// every one of its diagnostics still re-interns (no body walked, no
+/// inference ran — the substance
+/// `a_warm_run_serves_typed_verdicts_without_inference` pins), a fresh
+/// `typed_portion` otherwise. `typed_source` is `Some` exactly when
+/// `crate::cache::verdict::TypedOutcome::Served` and the caller already
+/// holds the verdict's own `typed` field; `None` covers every other
+/// case (`TypedOutcome::Recompute`, a discarded or absent untyped half,
+/// or a whole-verdict diagnostic-conversion failure) uniformly, since
+/// all of them mean the same thing here: nothing typed survived to
+/// serve.
+///
+/// Public and called from both `analyze_one`'s hit path and the
+/// equivalence harness (`tests/cache_equivalence.rs`), so the two
+/// compositions cannot independently drift (audit finding I2's own
+/// concern, extended to task 9's typed half — "the equivalence harness
+/// keeps ONE truth"). The counters this increments
+/// (`typed_served`/`typed_recomputed`) are the orchestration layer's own
+/// (plan 5's decision 13: never inside a query), so calling this from a
+/// test also nudges them; harmless, since no test asserts an exact
+/// count without first driving every file through this same fork.
+pub fn served_typed_diagnostics(
+    inputs: &AnalysisInputs,
+    file: SourceFile,
+    typed_source: Option<&crate::cache::stored::StoredTypedVerdict>,
+) -> Vec<Diagnostic> {
+    use std::sync::atomic::Ordering;
+
+    let database = &inputs.database;
+    let file_id = file.file_id(database);
+    let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
+    let statistics = &inputs.statistics;
+    if let Some(typed) = typed_source
+        && let Some(diagnostics) = typed
+            .diagnostics
+            .iter()
+            .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
+            .collect::<Option<Vec<_>>>()
+    {
+        statistics.typed_served.fetch_add(1, Ordering::Relaxed);
+        return diagnostics;
+    }
+    statistics.typed_recomputed.fetch_add(1, Ordering::Relaxed);
+    let result = celerrate_types::typed_file_verdicts(
+        database,
+        inputs.files,
+        inputs.stubs,
+        inputs.configuration,
+        file,
+    );
+    statistics.record_typed(result);
+    typed_portion(inputs, file)
+}
+
 /// One file's total: decode and syntax, then references and gating,
-/// then the typed families. On a cache hit the served verdict carries
-/// only the untyped half (decision 13), so the typed portion is appended
-/// and the result re-sorted; on a miss `composed_diagnostics` already
-/// produces the full union. Either way the typed instrument is
-/// aggregated once, right after the diagnostics are settled.
+/// then the typed families. On a cache hit the untyped half is served
+/// from the pack and the typed half is layered on top independently
+/// (plan 9a, task 9): served from the cache when its own records
+/// validate, recomputed fresh otherwise — a partial hit (untyped served,
+/// typed recomputed) is a first-class outcome, not a fallback. On a miss
+/// `composed_diagnostics` already produces the full union. Either way
+/// the result is the exact same composed set, sorted once at the end.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
     use std::sync::atomic::Ordering;
 
-    use crate::cache::verdict::VerdictLookup;
+    use crate::cache::verdict::{TypedOutcome, VerdictLookup};
 
     let database = &inputs.database;
     let file_id = file.file_id(database);
     let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
     guarded(file_id, || {
         let statistics = &inputs.statistics;
-        let diagnostics = match crate::cache::verdict::lookup_verdict(inputs, file) {
-            VerdictLookup::Hit(stored) => match stored
-                .diagnostics
-                .iter()
-                .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
-                .collect::<Option<Vec<_>>>()
-            {
-                Some(mut diagnostics) => {
-                    statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
-                    diagnostics.extend(typed_portion(inputs, file));
-                    diagnostics.sort();
-                    diagnostics
-                }
-                None => {
-                    // Revalidated, but a stored diagnostic failed
-                    // conversion: the same refusal as a moved answer.
+        let (mut diagnostics, typed_source) =
+            match crate::cache::verdict::lookup_verdict(inputs, file) {
+                VerdictLookup::Hit { verdict, typed } => match verdict
+                    .diagnostics
+                    .iter()
+                    .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
+                    .collect::<Option<Vec<_>>>()
+                {
+                    Some(diagnostics) => {
+                        statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
+                        let typed_source = match typed {
+                            TypedOutcome::Served => verdict.typed.as_ref(),
+                            TypedOutcome::Recompute => None,
+                        };
+                        (diagnostics, typed_source)
+                    }
+                    None => {
+                        // Revalidated, but a stored diagnostic failed
+                        // conversion: the same refusal as a moved answer,
+                        // and it takes the typed half down with it — a
+                        // discarded untyped half has nothing left to layer
+                        // a typed serve over.
+                        statistics
+                            .verdicts_discarded
+                            .fetch_add(1, Ordering::Relaxed);
+                        (persistable_diagnostics(inputs, file), None)
+                    }
+                },
+                VerdictLookup::Discarded => {
                     statistics
                         .verdicts_discarded
                         .fetch_add(1, Ordering::Relaxed);
-                    composed_diagnostics(inputs, file)
+                    (persistable_diagnostics(inputs, file), None)
                 }
-            },
-            VerdictLookup::Discarded => {
-                statistics
-                    .verdicts_discarded
-                    .fetch_add(1, Ordering::Relaxed);
-                composed_diagnostics(inputs, file)
-            }
-            VerdictLookup::Absent => {
-                statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
-                composed_diagnostics(inputs, file)
-            }
-        };
-        let typed = celerrate_types::typed_file_verdicts(
-            database,
-            inputs.files,
-            inputs.stubs,
-            inputs.configuration,
-            file,
-        );
-        statistics.record_typed(typed);
+                VerdictLookup::Absent => {
+                    statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
+                    (persistable_diagnostics(inputs, file), None)
+                }
+            };
+        diagnostics.extend(served_typed_diagnostics(inputs, file, typed_source));
+        diagnostics.sort();
         diagnostics
     })
 }
