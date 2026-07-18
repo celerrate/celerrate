@@ -1198,32 +1198,12 @@ fn a_changed_class_surface_invalidates_the_dependent_signature() {
 
 #[test]
 fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
-    // `useBoth` is declared FIRST, ahead of the mutually recursive
-    // `evenOrOdd`/`oddOrEven` pair, and this ordering is load-bearing,
-    // not stylistic — the same reason documented in detail on
-    // `a_mutually_recursive_typed_callee_validates_correctly_warm`
-    // below. `typed_file_verdicts` walks a file's bodies in declaration
-    // order via `body_typed_verdicts`, which calls `inferred_body_types`
-    // DIRECTLY, bypassing the cycle-safe `inferred_function_return`
-    // entry point. Were the recursive pair declared before any caller,
-    // the recursive call inside `evenOrOdd`'s own direct body walk
-    // would re-enter that SAME direct `inferred_body_types` claim while
-    // it is still active — a salsa `Panic`-strategy cycle, a
-    // pre-existing `celerrate_types` defect (`body_typed_verdicts`/
-    // `inferred_body_types` bypassing the cycle-safe entry points),
-    // tracked as a follow-up and deliberately NOT fixed here. This is
-    // exactly the bug this test used to trip over silently: with the
-    // recursive pair declared first, cold, warm, and fresh runs all
-    // panicked identically, so the byte-equality assertions below
-    // passed on matching panic text rather than on any genuine
-    // decision-9 behavior. With `useBoth` declared first, its own
-    // argument expression `takesInt(evenOrOdd(3))` reaches the
-    // cluster's return through `inferred_function_return` FIRST — the
-    // cycle-safe entry point, which memoizes both `evenOrOdd`'s and
-    // `oddOrEven`'s `inferred_body_types` results as a side effect of
-    // resolving the fixpoint — so their own later direct walks (from
-    // `typed_file_verdicts`'s own loop) each hit an already-memoized
-    // value instead of re-entering an active claim.
+    // The mutually recursive `evenOrOdd`/`oddOrEven` pair is now
+    // deliberately declared FIRST, ahead of their caller `useBoth` — the
+    // exact topology that used to panic through `body_typed_verdicts`'s
+    // direct `inferred_body_types` walk before the cycle-safe wrapper
+    // (`celerrate_types::inference`, issue #51) landed. This test now
+    // pins that fix as well as decision 9's stance below.
     //
     // The cluster's fixpoint is a plain `string` (the base case returns
     // a string literal), never `never`: the stance under test here is
@@ -1241,8 +1221,6 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
     // regression back to the internal-error render breaks this test
     // instead of passing vacuously.
     let source = "<?php declare(strict_types=1);
-        function takesInt(int $n): void {}
-        function useBoth() { takesInt(evenOrOdd(3)); takesInt(oddOrEven(3)); }
         function evenOrOdd($n) {
             if ($n === 0) { return 'even'; }
             return oddOrEven($n - 1);
@@ -1251,6 +1229,8 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
             if ($n === 0) { return 'odd'; }
             return evenOrOdd($n - 1);
         }
+        function takesInt(int $n): void {}
+        function useBoth() { takesInt(evenOrOdd(3)); takesInt(oddOrEven(3)); }
     ";
     let root = project(&[("cycle.php", source)]);
     run_check(root.path());
@@ -1283,31 +1263,63 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
     );
 }
 
+/// Issue #51's reproduction at the CLI boundary: one file, one
+/// self-recursive function, NO caller anywhere — the exact topology
+/// that used to panic through `body_typed_verdicts`'s direct
+/// `inferred_body_types` walk before the cycle-safe wrapper
+/// (`celerrate_types::inference`, issue #51) landed. Cold, warm, and
+/// fresh must all answer — never an internal error — and agree
+/// byte-for-byte.
+#[test]
+fn a_callerless_recursive_function_never_panics() {
+    let source = "<?php
+        function down(int $n) {
+            if ($n <= 0) { return 0; }
+            return down($n - 1);
+        }
+    ";
+    let root = project(&[("recursive.php", source)]);
+    let (cold_outcome, cold_output) = run_check(root.path());
+    assert_ne!(
+        cold_outcome,
+        Outcome::InternalError,
+        "a callerless recursive function must never crash the typed \
+         checks: {cold_output}",
+    );
+
+    let (warm_outcome, warm_output) = run_check(root.path());
+    assert_ne!(warm_outcome, Outcome::InternalError, "{warm_output}");
+    assert_eq!(
+        cold_output, warm_output,
+        "warm rendering equals cold over the unchanged recursive file",
+    );
+
+    let fresh_root = project(&[("recursive.php", source)]);
+    let (_, fresh_output) = run_check(fresh_root.path());
+    assert_eq!(warm_output, fresh_output, "warm rendering equals fresh");
+}
+
 #[test]
 fn a_never_returning_cycle_participant_never_validates_warm() {
-    // `first` and `second` are deliberately left with NO caller ahead of
-    // them (unlike `a_cyclic_cluster_recomputes_and_stays_deterministic`
-    // above and `a_mutually_recursive_typed_callee_validates_correctly_warm`
-    // below, both single-FILE clusters where the caller-first ordering
-    // is load-bearing) — because `first`/`second` split across two
-    // FILES sidesteps that hazard by construction, not by ordering.
-    // `analyze`'s own fan-out (`crate::analysis::analyze`, see the
-    // `AnalysisInputs` doc comment) clones the salsa database once per
-    // reported file and hands each clone to its own rayon task, so
-    // `first.php`'s and `second.php`'s direct `inferred_body_types`
-    // walks run as two independent entries into the SAME underlying
-    // query results rather than one Rust call frame synchronously
-    // re-entering itself. The single-file hazard documented on the two
-    // tests above — `body_typed_verdicts`'s direct `inferred_body_types`
-    // call re-entering its OWN still-active claim on the SAME thread,
-    // a salsa `Panic`-strategy cycle with no `cycle_fn` to fall back on
-    // (a pre-existing `celerrate_types` defect, tracked as a follow-up,
-    // NOT fixed here) — requires that same-stack self-reentrancy;
-    // splitting the pair across two independently-cloned files avoids
-    // it structurally. Verified empirically (ten back-to-back runs of
-    // this exact fixture, cold and warm alike): the cluster never
-    // panics through this path, with or without a caller declared
-    // ahead of the recursive pair.
+    // `first` and `second` are split across two FILES, unlike
+    // `a_cyclic_cluster_recomputes_and_stays_deterministic` above and
+    // `a_mutually_recursive_typed_callee_validates_correctly_warm`
+    // below (both single-file clusters, now declared callee-first to
+    // pin issue #51's fix). `analyze`'s own fan-out
+    // (`crate::analysis::analyze`, see the `AnalysisInputs` doc
+    // comment) clones the salsa database once per reported file and
+    // hands each clone to its own rayon task, so `first.php`'s and
+    // `second.php`'s direct `inferred_body_types` walks run as two
+    // independent entries into the SAME underlying query results
+    // rather than one Rust call frame synchronously re-entering
+    // itself. The single-file hazard this cross-file split never
+    // needed to reach is closed by the cycle-safe `inferred_body_types`
+    // wrapper (`celerrate_types::inference`, issue #51) — the
+    // cross-file fan-out above is why this fixture never depended on
+    // that fix in the first place. Verified empirically (ten
+    // back-to-back runs of this exact fixture, cold and warm alike):
+    // the cluster never panics through this path, with or without a
+    // caller declared ahead of the recursive pair.
     //
     // `first` and `second` call each other with no non-throwing base
     // case: the whole cluster's fixpoint is `never`. Decision 9's
@@ -1543,45 +1555,16 @@ fn a_stale_typed_record_recomputes_only_the_typed_portion() {
 /// scalar `int|null` cluster and produced zero diagnostics on a correct
 /// (non-buggy) build, for exactly this reason.
 ///
-/// `useIt` is declared FIRST, ahead of `findEven`/`findOdd`, and this
-/// ordering is load-bearing, not stylistic. `typed_file_verdicts` walks
-/// a file's bodies via `body_typed_verdicts`, which calls
-/// `inferred_body_types` DIRECTLY (bypassing the cycle-safe
-/// `inferred_function_return`/`inferred_method_return` entry points).
-/// If `findEven`'s own body were walked this way BEFORE anything calls
-/// it through `inferred_function_return`, the recursive call inside its
-/// own body would re-enter that SAME direct `inferred_body_types` claim
-/// while it is still active — a salsa `Panic`-strategy cycle, unrelated
-/// to this task, confirmed reproducible even with NO class/typed cache
-/// involved at all (a bare self-recursive `function down(int $n) { ...
-/// return down($n - 1); ... }`, checked cold, panics identically) and
-/// confirmed present for THIS exact `findEven`/`findOdd` pair too when
-/// declared before their caller. With `useIt` declared first, its own
-/// direct `inferred_body_types` walk reaches `findEven`'s return through
-/// `inferred_function_return` FIRST — the cycle-safe entry point, which
-/// memoizes `findEven`'s (and `findOdd`'s) `inferred_body_types` result
-/// as a side effect of resolving the fixpoint — so `findEven`'s own
-/// later direct walk (from `typed_file_verdicts`'s own loop) hits an
-/// already-memoized value instead of re-entering an active claim.
-///
-/// `a_cyclic_cluster_recomputes_and_stays_deterministic` above (both
-/// pre-dating this task, and both, like this test, single-file clusters)
-/// originally declared its recursive pair BEFORE any caller and, on
-/// inspection, panicked on every single run (cold, warm, fresh alike) —
-/// its assertions only ever compared the resulting (identical)
-/// internal-error text across runs, so it passed vacuously. It was
-/// de-vacuumed with this same caller-first ordering technique (a
-/// dedicated follow-up commit), now asserting genuine decision-9 content
-/// before the byte-equality chain. `a_never_returning_cycle_participant_
-/// never_validates_warm` (also pre-dating this task) turned out, on the
-/// same inspection, to split its recursive pair across two FILES rather
-/// than one — a topology this exact single-file hazard never reaches
-/// (see its own doc comment for why) — so it was de-vacuumed differently:
-/// by asserting the run's `Outcome` is genuinely `Clean`, rather than by
-/// reordering. The underlying `celerrate_types` typed-checks defect
-/// itself — reordering is a workaround for the single-file case, not a
-/// fix — is still outside this task's scope (the persistent
-/// typed-artifact cache) and remains a tracked follow-up.
+/// `findEven`/`findOdd` are now declared BEFORE their caller `useIt` —
+/// the callee-first ordering is deliberate, pinning issue #51's fix:
+/// this is the exact topology that used to panic through
+/// `body_typed_verdicts`'s direct `inferred_body_types` walk before the
+/// cycle-safe wrapper (`celerrate_types::inference`, issue #51) landed,
+/// the same hazard `a_cyclic_cluster_recomputes_and_stays_deterministic`
+/// above pins for a `string`-returning cluster. The defect the original
+/// version of this test carried as "a tracked follow-up" — reordering
+/// as a workaround for the single-file case rather than a fix — is
+/// closed by that same wrapper.
 ///
 /// `crate::cache::verdict::validate_typed` demands the cluster's return
 /// through the LIVE `inferred_function_return` query from
@@ -1603,10 +1586,6 @@ fn a_mutually_recursive_typed_callee_validates_correctly_warm() {
             public ?Node $next = null;
             public function touch(): void {}
         }
-        function useIt(?Node $node): void {
-            $found = findEven($node, 3);
-            $found->touch();
-        }
         function findEven(?Node $node, int $n) {
             if ($node === null) {
                 return null;
@@ -1624,6 +1603,10 @@ fn a_mutually_recursive_typed_callee_validates_correctly_warm() {
                 return $node;
             }
             return findEven($node->next, $n - 1);
+        }
+        function useIt(?Node $node): void {
+            $found = findEven($node, 3);
+            $found->touch();
         }
     ";
     let root = project(&[("cycle.php", source)]);
