@@ -1511,3 +1511,39 @@ budget 1536 MiB.
 
 Decision: within budget; no LRU capacity set — the levers stay named
 and dormant.
+
+### Protocol run (task 5)
+
+Measured 2026-07-18, commit `a8382be`, reference hardware (Apple M5,
+32 GiB), `cargo xtask bench`, three runs.
+
+Raw hyperfine medians, per run (seconds):
+
+| Scenario | Run 1 | Run 2 | Run 3 | Retained median (median of 3) |
+| --- | --- | --- | --- | --- |
+| Cold full | 1.532 | 1.533 | 2.438 | **1.533** |
+| Warm no-change | 0.435 | 0.427 | 0.434 | **0.434** |
+| Warm one-edit | 0.482 | 0.460 | 0.458 | **0.460** |
+| Warm body-edit | 0.468 | 0.635 | 0.521 | **0.521** |
+| Warm signature-edit | 0.471 | 0.469 | 0.538 | **0.471** |
+
+Run 3's cold outlier (2.438 s) and Run 2's body-edit first-run-slow
+(0.635 s) were both absorbed by the median-of-three.
+
+Per-scenario cache statistics (`CELERRATE_CACHE_STATS=1`, verbatim):
+
+```
+cold full:            cache: trees 0 hit / 9341 miss; members 0 hit / 9341 miss; verdicts 0 served / 0 discarded / 46 absent; typed 217 bodies, edges 794 declared / 25 inferred / 7 provider, verdicts 0 served / 46 recomputed; persist 4 written / 0 skipped / 0 failed, 323ms
+warm no-change:       cache: trees 9341 hit / 0 miss; members 9341 hit / 0 miss; verdicts 46 served / 0 discarded / 0 absent; typed 0 bodies, edges 0 declared / 0 inferred / 0 provider, verdicts 46 served / 0 recomputed; persist 0 written / 4 skipped / 0 failed, 37ms
+warm one-edit:        cache: trees 9340 hit / 1 miss; members 9340 hit / 1 miss; verdicts 45 served / 0 discarded / 1 absent; typed 5 bodies, edges 23 declared / 0 inferred / 0 provider, verdicts 45 served / 1 recomputed; persist 4 written / 0 skipped / 0 failed, 63ms
+warm body-edit:       cache: trees 9340 hit / 1 miss; members 9340 hit / 1 miss; verdicts 45 served / 0 discarded / 1 absent; typed 5 bodies, edges 24 declared / 0 inferred / 0 provider, verdicts 45 served / 1 recomputed; persist 4 written / 0 skipped / 0 failed, 62ms
+warm signature-edit:  cache: trees 9340 hit / 1 miss; members 9340 hit / 1 miss; verdicts 45 served / 0 discarded / 1 absent; typed 65 bodies, edges 367 declared / 3 inferred / 1 provider, verdicts 37 served / 9 recomputed; persist 4 written / 0 skipped / 0 failed, 65ms
+```
+
+Substance numbers (`xtask/mixed-rate-baseline.txt`): whole-expression
+mixed rate 1059 / 4233 = 25.0 %; element-position mixed rate
+56 / 754 = 7.4 % (issue #45).
+
+### Acceptance (task 5)
+
+Acceptance: sub-second warm across the scenario set — holds.
