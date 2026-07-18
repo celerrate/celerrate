@@ -13,8 +13,8 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     AncestorRelation, ArrayEntry, BodyExpression, BodyIr, BodyStatement, ClassQuery,
     ClassReference, ExpressionId, MemberKind, MemberOrigin, MemberQuery, MemberReference,
-    MemberResolution, StatementId, StringPart, UseTables, folded_member_key, linearized_class,
-    lookup_member, stub_ancestors_of, stub_signature_table,
+    MemberResolution, StatementId, StringPart, UseTables, anonymous_class_key, folded_member_key,
+    linearized_class, lookup_member, stub_ancestors_of, stub_signature_table,
 };
 use celerrate_stubs::StubIndexInput;
 use celerrate_syntax::SyntaxKind;
@@ -268,6 +268,73 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
         edge_counts: walker.edge_counts,
         stub_calls: walker.stub_calls,
     }
+}
+
+/// The folded Function-space key a written callee resolves to, and
+/// whether a source declaration exists (the inferred-return gate: only
+/// source bodies can be inferred). Mirrors the reference checks' own
+/// resolution (`resolve_name`): the namespaced spelling first, the
+/// global fallback last, the first existing candidate wins (source,
+/// then stubs), the last candidate as the never-resolves fallback (so a
+/// provider claim on an undeclared helper still matches a deterministic
+/// key). Every candidate is folded before the lookup: `SymbolQuery`'s
+/// key (like `FunctionQuery`'s) is pre-folded, and `resolve_candidates`
+/// itself answers case-preserved spellings.
+///
+/// A free function, not a `Walker` method: task 8's argument-type
+/// family (`checks::arguments`) resolves a call's `NamedReference`
+/// callee through this exact same candidate order, so both call
+/// boundaries agree on one implementation rather than two that could
+/// silently drift apart.
+pub(crate) fn resolved_function_key(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    namespace: &str,
+    tables: &UseTables,
+    written: &str,
+) -> (String, bool) {
+    let candidates = celerrate_semantics::resolve_candidates(
+        written,
+        celerrate_semantics::SymbolSpace::Function,
+        namespace,
+        tables,
+    );
+    let folded: Vec<String> = candidates
+        .iter()
+        .map(|candidate| {
+            celerrate_semantics::folded_symbol_key(
+                celerrate_semantics::SymbolSpace::Function,
+                candidate,
+            )
+        })
+        .collect();
+    for key in &folded {
+        let query = celerrate_semantics::SymbolQuery::new(
+            db,
+            celerrate_semantics::SymbolSpace::Function,
+            key.clone(),
+        );
+        if celerrate_semantics::lookup_function_declaration(db, files, query).is_some() {
+            return (key.clone(), true);
+        }
+    }
+    for key in &folded {
+        if celerrate_semantics::stub_symbol_table(db, stubs, configuration)
+            .lookup(celerrate_semantics::SymbolSpace::Function, key)
+            .is_some()
+        {
+            return (key.clone(), false);
+        }
+    }
+    (
+        folded
+            .into_iter()
+            .last()
+            .unwrap_or_else(|| written.trim_start_matches('\\').to_ascii_lowercase()),
+        false,
+    )
 }
 
 impl<'db> Walker<'db, '_, '_> {
@@ -1076,64 +1143,21 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The folded Function-space key a written callee resolves to,
-    /// and whether a source declaration exists (the inferred-return
-    /// gate: only source bodies can be inferred). Mirrors the
-    /// reference checks' own resolution (`resolve_name`): the
-    /// namespaced spelling first, the global fallback last, the first
-    /// existing candidate wins (source, then stubs), the last
-    /// candidate as the never-resolves fallback (so a provider claim
-    /// on an undeclared helper still matches a deterministic key).
-    /// Every candidate is folded before the lookup: `SymbolQuery`'s key
-    /// (like `FunctionQuery`'s) is pre-folded, and `resolve_candidates`
-    /// itself answers case-preserved spellings.
+    /// The folded Function-space key a written callee resolves to, and
+    /// whether a source declaration exists. Delegates to
+    /// [`resolved_function_key`], the free-function form task 8's
+    /// argument-type family (`checks::arguments`) shares, so both the
+    /// flow walk's call boundary and the checks layer's callee
+    /// resolution agree on exactly one implementation.
     fn resolved_function_key(&self, written: &str) -> (String, bool) {
-        let db = self.db();
-        let candidates = celerrate_semantics::resolve_candidates(
-            written,
-            celerrate_semantics::SymbolSpace::Function,
+        resolved_function_key(
+            self.db(),
+            self.context.files,
+            self.context.stubs,
+            self.context.configuration,
             &self.context.namespace,
             &self.context.tables,
-        );
-        let folded: Vec<String> = candidates
-            .iter()
-            .map(|candidate| {
-                celerrate_semantics::folded_symbol_key(
-                    celerrate_semantics::SymbolSpace::Function,
-                    candidate,
-                )
-            })
-            .collect();
-        for key in &folded {
-            let query = celerrate_semantics::SymbolQuery::new(
-                db,
-                celerrate_semantics::SymbolSpace::Function,
-                key.clone(),
-            );
-            if celerrate_semantics::lookup_function_declaration(db, self.context.files, query)
-                .is_some()
-            {
-                return (key.clone(), true);
-            }
-        }
-        for key in &folded {
-            if celerrate_semantics::stub_symbol_table(
-                db,
-                self.context.stubs,
-                self.context.configuration,
-            )
-            .lookup(celerrate_semantics::SymbolSpace::Function, key)
-            .is_some()
-            {
-                return (key.clone(), false);
-            }
-        }
-        (
-            folded
-                .into_iter()
-                .last()
-                .unwrap_or_else(|| written.trim_start_matches('\\').to_ascii_lowercase()),
-            false,
+            written,
         )
     }
 
@@ -2739,18 +2763,16 @@ impl<'db> Walker<'db, '_, '_> {
                             })
                             .unwrap_or_else(|| TypeId::mixed(db))
                     }
-                    // Recorded debt (decision 14): anonymous-class
-                    // receivers (`new class { }`) stay `mixed` — no
-                    // folded key exists yet for an anonymous class
-                    // literal, and the expression-to-key path belongs
-                    // with the checks' receiver-resolution surface
-                    // (plan 8), not here: no diagnostic consumes
-                    // receiver types before plan 8, so building the
-                    // path here would ship untested-by-consumer
-                    // machinery. `Missing` (a malformed `new` with no
-                    // class reference at all) shares the same silent
-                    // fallback.
-                    ClassReference::Anonymous { .. } | ClassReference::Missing => TypeId::mixed(db),
+                    // An anonymous-class receiver (`new class { }`)
+                    // types as its synthetic folded key, so it
+                    // linearizes, resolves `$this`, and types like any
+                    // named class. `Missing` (a malformed `new` with no
+                    // class reference at all) keeps the silent `mixed`
+                    // fallback: there is no declaration to key by.
+                    ClassReference::Anonymous { declaration } => {
+                        TypeId::class(db, &anonymous_class_key(*declaration), vec![])
+                    }
+                    ClassReference::Missing => TypeId::mixed(db),
                 };
                 let of = self.member_boundary_type(
                     of,

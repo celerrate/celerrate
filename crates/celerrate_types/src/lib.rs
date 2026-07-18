@@ -48,11 +48,15 @@
 //! union or intersection absorption and deduplication rules run, so the
 //! capped result is independent of construction order.
 //!
-//! **Rendering debt.** `TypeId::display` renders class and enum names as
+//! **Rendering.** `TypeId::display` renders class and enum names as
 //! their folded keys (the case-insensitive, backslash-normalized
-//! symbol-table key), not their originally written spelling. Recovering
-//! the original spelling requires the symbol table and is deferred to
-//! plan 8, which renders diagnostics.
+//! symbol-table key), on purpose: the lattice's canonical form must
+//! never depend on spelling. Plan 8's checks layer
+//! (`checks::receivers::written_type_display`) recovers the originally
+//! written spelling through the symbol table when rendering
+//! diagnostics, via the crate-private `TypeId::display_with_names`
+//! (never a new public rendering surface — `display` itself is
+//! unchanged, byte-identical to before this recovery existed).
 //!
 //! **Declared types.** [`declared_member_signature`] and
 //! [`declared_function_signature`] are the per-member and per-function
@@ -81,10 +85,13 @@
 //! silencing the check rather than fabricating an uninhabited
 //! intersection. Bare `callable` lowers to `mixed`: no top-of-callables
 //! form exists in the lattice, so `mixed` is a documented sound
-//! widening (silence, never a false positive); a first-class
-//! bare-callable form is recorded debt, revisited when plan 8 measures
-//! the silence.
+//! widening (silence, never a false positive); the corpus triage
+//! (task 12) measured the silence against a real callable-heavy
+//! codebase and found no false negative. A first-class bare-callable
+//! form stays recorded debt, owner: the type lattice, future, revisited
+//! only if a call-signature-precise diagnostic needs it.
 
+pub mod checks;
 mod construction;
 mod declared;
 mod display;
@@ -104,6 +111,10 @@ mod type_syntax;
 mod widening;
 mod written;
 
+pub use checks::{
+    ALLOCATED_IDENTIFIERS, ArgumentLabel, TypedFileResult, TypedVerdict, TypedVerdictKind,
+    typed_diagnostics, typed_file_verdicts,
+};
 pub use declared::{
     DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
     declared_function_signature, declared_member_signature, function_annotations,
@@ -119,7 +130,7 @@ pub use inference::{
     inferred_method_return,
 };
 pub use inheritance::{ClassAnnotations, ancestor_arguments, class_annotations};
-pub use judgments::{Nullability, Proof, assignable_to, nullability, subtype_of};
+pub use judgments::{CoercionMode, Nullability, Proof, assignable_to, nullability, subtype_of};
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,

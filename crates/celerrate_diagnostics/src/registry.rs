@@ -74,6 +74,15 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "celerrate_project",
     ),
     registered("CEL0029", "invalid installed packages", "celerrate_project"),
+    registered("CEL0030", "unknown method", "celerrate_types"),
+    registered("CEL0031", "unknown property", "celerrate_types"),
+    registered("CEL0032", "unknown class constant", "celerrate_types"),
+    registered("CEL0033", "unknown enum case", "celerrate_types"),
+    registered("CEL0034", "possibly null dereference", "celerrate_types"),
+    registered("CEL0035", "argument type mismatch", "celerrate_types"),
+    registered("CEL0036", "too few arguments", "celerrate_types"),
+    registered("CEL0037", "too many arguments", "celerrate_types"),
+    registered("CEL0038", "unknown named argument", "celerrate_types"),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its
@@ -110,7 +119,7 @@ mod tests {
             );
             previous = number;
         }
-        assert_eq!(previous, 29, "twenty-nine identifiers allocated so far");
+        assert_eq!(previous, 38, "thirty-eight identifiers allocated so far");
     }
 
     #[test]

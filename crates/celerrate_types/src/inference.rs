@@ -16,8 +16,8 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
     BodyQuery, ExpressionId, FreeFunction, Member, MemberKind, MemberOrigin, MemberResolution,
-    MemberSignature, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, body_ir,
-    folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
+    MemberSignature, SymbolQuery, SymbolSpace, UseTables, analyzed_file_index, anonymous_class_key,
+    body_ir, folded_member_key, folded_symbol_key, fully_qualified_name, item_tree,
     lookup_function_declaration, lookup_member, member_tree,
 };
 use celerrate_stubs::StubIndexInput;
@@ -29,11 +29,12 @@ use crate::representation::TypeId;
 /// The interprocedural edge classes one body's inference took, as
 /// pure data: the design's residual instrument ("how many results
 /// depend on *inferred* returns"). Counters never live inside queries
-/// (the workspace rule); this struct is the query-side data plan 8/9a
-/// aggregate into the `CELERRATE_CACHE_STATS` rendering once the
-/// orchestration layer first demands inference (decision 13) — until
-/// then the field exists and is tested (task 12), but nothing renders
-/// it.
+/// (the workspace rule); this struct is the query-side data the
+/// orchestration layer aggregates into the `CELERRATE_CACHE_STATS`
+/// rendering (`celerrate_cli::analysis` demands `typed_file_verdicts`
+/// and feeds its `edge_counts` into
+/// `celerrate_cli::cache::statistics::CacheStatistics::record_typed`,
+/// decision 13, wired by this plan).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
 pub struct InterproceduralEdgeCounts {
     /// Call results taken from a declared (native or annotated) return.
@@ -85,10 +86,28 @@ impl<'db> InferredBody<'db> {
     }
 }
 
+impl InterproceduralEdgeCounts {
+    /// Sums another body's counts into this one, saturating.
+    pub fn accumulate(&mut self, other: &Self) {
+        self.declared_return_edges = self
+            .declared_return_edges
+            .saturating_add(other.declared_return_edges);
+        self.inferred_return_edges = self
+            .inferred_return_edges
+            .saturating_add(other.inferred_return_edges);
+        self.provider_edges = self.provider_edges.saturating_add(other.provider_edges);
+    }
+}
+
 /// The declaration a body belongs to: a free function, or a method of
-/// a class-like (whose folded key is `None` for an anonymous class —
-/// decision 12: no folded symbol key exists to resolve members
-/// against). `Eq` so the tracked projection backdates.
+/// a class-like. `class_key` stays an `Option` (decision 12's shape:
+/// nothing else in this struct forces a class-like to have a name),
+/// but every class-like now answers `Some` — a named class through its
+/// folded symbol key, an anonymous class through its synthetic
+/// `anonymous_class_key` (plan 8, task 1: closes decision 12's
+/// recorded debt, so `self`/`static`/`$this` resolve inside an
+/// anonymous class method exactly like inside a named one). `Eq` so
+/// the tracked projection backdates.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum BodyOwner {
     Function(FreeFunction),
@@ -129,11 +148,12 @@ pub(crate) fn body_owner<'db>(
         if member.kind != MemberKind::Method {
             return None;
         }
-        let class_key = class.name.as_deref().map(|name| {
-            folded_symbol_key(
+        let class_key = Some(match class.name.as_deref() {
+            Some(name) => folded_symbol_key(
                 SymbolSpace::ClassLike,
                 &fully_qualified_name(&class.namespace, name),
-            )
+            ),
+            None => anonymous_class_key(class.ast_id),
         });
         return Some(BodyOwner::Method {
             class_key,
@@ -570,8 +590,8 @@ mod tests {
     use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{
-        AstId, BodyQuery, SymbolSpace, body_ir, folded_symbol_key, fully_qualified_name,
-        member_tree,
+        AstId, BodyQuery, SymbolSpace, anonymous_class_key, body_ir, folded_symbol_key,
+        fully_qualified_name, member_tree,
     };
     use celerrate_source::FileId;
     use celerrate_stubs::{StubIndex, StubIndexInput};
@@ -925,7 +945,12 @@ mod tests {
     }
 
     #[test]
-    fn an_anonymous_class_method_owner_has_no_key() {
+    fn an_anonymous_class_method_owner_keys_by_its_synthetic_class() {
+        // Shipped behavior update (Task 1 of plan 8): an anonymous
+        // class's method used to carry no class key at all (decision
+        // 12's recorded debt); it now keys by the class's synthetic
+        // folded key, so `self`/`static`/`$this` resolve inside it like
+        // any other method.
         let fixture =
             fixture(&["<?php function wrapper() { return new class { public function m() {} }; }"]);
         let file = fixture.handles[0];
@@ -936,7 +961,36 @@ mod tests {
         let BodyOwner::Method { class_key, .. } = owner else {
             panic!("expected a method owner");
         };
-        assert!(class_key.is_none());
+        let expected_key = anonymous_class_key(AstId {
+            file: FileId::new(0),
+            index: 1,
+        });
+        assert_eq!(class_key.as_deref(), Some(expected_key.as_str()));
+    }
+
+    #[test]
+    fn a_new_anonymous_expression_types_as_its_synthetic_class() {
+        let fixture = fixture(&[r#"<?php
+function build(): int {
+    $listener = new class {
+        public function handle(): int { return 1; }
+    };
+    return $listener->handle();
+}
+"#]);
+        assert_eq!(return_display(&fixture, 0), "int");
+    }
+
+    #[test]
+    fn this_resolves_inside_an_anonymous_class_method() {
+        let fixture = fixture(&[r#"<?php
+$listener = new class {
+    public function helper(): string { return 'x'; }
+    public function handle(): string { return $this->helper(); }
+};
+"#]);
+        // Numbering: anonymous class = 0, helper = 1, handle = 2.
+        assert_eq!(return_display(&fixture, 2), "string");
     }
 
     #[test]
@@ -1198,7 +1252,8 @@ mod tests {
             function opaque(mixed $x) { return $x->n(); }"]);
         assert_eq!(return_display(&fixture, 4), "int|string");
         // The null constituent is the nullability family's business
-        // (plan 8); the read types from the non-null part.
+        // (`checks::nullability`, CEL0034); the read types from the
+        // non-null part.
         assert_eq!(return_display(&fixture, 5), "int");
         assert_eq!(return_display(&fixture, 6), "mixed");
     }
@@ -1945,12 +2000,15 @@ function caller() { return make(); }
     }
 
     #[test]
-    fn new_types_as_the_class_and_anonymous_stays_mixed() {
+    fn new_types_as_the_class_named_or_the_synthetic_anonymous_key() {
+        // Shipped behavior update (Task 1 of plan 8): an anonymous
+        // receiver used to stay `mixed` (decision 14's recorded debt);
+        // it now types precisely, rendered coordinate-free.
         let fixture = fixture(&["<?php class A {}
             function named() { return new A(); }
             function anonymous() { return new class {}; }"]);
         assert_eq!(return_display(&fixture, 1), "a");
-        assert_eq!(return_display(&fixture, 2), "mixed");
+        assert_eq!(return_display(&fixture, 2), "class@anonymous");
     }
 
     #[test]

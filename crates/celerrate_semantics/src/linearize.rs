@@ -35,8 +35,9 @@ use celerrate_project::ProjectConfiguration;
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndexInput, StubMember, StubMemberKind};
 
-use crate::index::{stub_frontier, stub_signature_table};
-use crate::items::Declaration;
+use crate::ast_id::AstId;
+use crate::index::{StubSignatureTable, stub_frontier, stub_signature_table};
+use crate::items::{Declaration, DeclarationKind};
 use crate::lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration, lookup_symbol,
 };
@@ -133,7 +134,8 @@ pub struct LinearizedVirtualMember {
 /// and whether the class opts into dynamic properties.
 ///
 /// `stdClass` is not marked here: it is a compiled stub, so a class
-/// extending it records the `stdclass` stub ancestor instead, and plan 8
+/// extending it records the `stdclass` stub ancestor instead, and the
+/// unknown-member family (`celerrate_types::checks::receivers::member_existence`)
 /// reads `stub_ancestors` to grant it dynamic properties. This struct
 /// only carries facts derivable from the source table and its own
 /// attributes.
@@ -141,8 +143,10 @@ pub struct LinearizedVirtualMember {
 pub struct MagicMarkers {
     /// `__get` is defined: unknown *property* reads are suppressed.
     pub has_magic_get: bool,
-    /// `__set` is defined: unknown *property* writes may be suppressed
-    /// (plan 8 decides).
+    /// `__set` is defined: unknown *property* writes are suppressed too
+    /// (`checks::receivers::atom_existence` treats `__get`/`__set`
+    /// uniformly, the conservative side of not distinguishing a read
+    /// from a write context).
     pub has_magic_set: bool,
     /// `__call` is defined: unknown *instance method* calls are
     /// suppressed.
@@ -193,6 +197,24 @@ pub fn folded_member_key(kind: MemberKind, name: &str) -> String {
     }
 }
 
+/// The synthetic folded key of an anonymous class. `@` and `:` are
+/// illegal in PHP names, so the form can never collide with a real
+/// folded key, and `folded_symbol_key` maps it to itself (already
+/// lowercase, no leading backslash).
+pub fn anonymous_class_key(ast_id: AstId) -> String {
+    format!("class@anonymous:{}:{}", ast_id.file.as_u32(), ast_id.index)
+}
+
+/// The inverse of [`anonymous_class_key`]; `None` for any real name.
+pub fn parse_anonymous_class_key(key: &str) -> Option<AstId> {
+    let rest = key.strip_prefix("class@anonymous:")?;
+    let (file, index) = rest.split_once(':')?;
+    Some(AstId {
+        file: FileId::new(file.parse().ok()?),
+        index: index.parse().ok()?,
+    })
+}
+
 /// The linearized member table of one class-like, or `None` when the
 /// queried key is not a source class-like. The walk is iterative with a
 /// visited set inside this one tracked query, so an inheritance cycle is
@@ -206,6 +228,10 @@ pub fn linearized_class<'db>(
     class: ClassQuery<'db>,
 ) -> Option<LinearizedClass> {
     let root_key = class.key(db).clone();
+    // Fetched once, up front: both the implicit enum edges below and
+    // the stub-frontier expansion at the end of the walk read the same
+    // folded signature table.
+    let table = stub_signature_table(db, stubs);
 
     let mut visited: HashSet<String> = HashSet::new();
     let mut members: Vec<LinearizedMember> = Vec::new();
@@ -277,15 +303,21 @@ pub fn linearized_class<'db>(
             }
         }
 
-        let Some(declaration) = found.declaration.as_ref() else {
-            continue;
-        };
         // The adaptations of each trait-use clause, keyed by the folded
         // key of every trait the clause names, so a trait edge can pick
         // up the context to hand its members. Resolved at the using
         // site, reusing the same candidate order as the edges.
         let clause_context = resolve_clause_context(db, files, stubs, configuration, &found);
-        for (relation, written) in edges_of(declaration) {
+        // Named class-likes derive their inheritance edges from their
+        // `Declaration`; a declaration-less anonymous class derives the
+        // same edges from its member group's heritage projection
+        // instead (`ClassMembers::extends`/`implements`, populated by
+        // the same accessors `Declaration` reads).
+        let edges = match found.declaration.as_ref() {
+            Some(declaration) => edges_of(declaration),
+            None => edges_of_group(&found.group),
+        };
+        for (relation, written) in edges {
             let answer = resolve_ancestor(
                 db,
                 files,
@@ -317,6 +349,26 @@ pub fn linearized_class<'db>(
                 }
                 AncestorAnswer::Stub { folded_key } => stub_ancestors.push(folded_key),
                 AncestorAnswer::Unresolved => {}
+            }
+        }
+
+        // Decision 7: every enum implicitly implements `UnitEnum`, and
+        // a backed one additionally `BackedEnum` — real ancestor facts
+        // no PHP grammar lets a class-like write. Only when the
+        // compiled stub graph actually answers the parent key: a stub
+        // set carrying neither interface (a from-scratch fixture with
+        // no engine stubs) synthesizes nothing, never a synthetic
+        // opaque edge that would blanket-silence every enum.
+        if found.group.kind == DeclarationKind::Enum {
+            for (written, folded_key) in implicit_enum_edges(table) {
+                ancestry.push(AncestorEdge {
+                    relation: AncestorRelation::Implements,
+                    written: written.to_owned(),
+                    resolved: None,
+                    stub: Some(folded_key.clone()),
+                    owner: key.clone(),
+                });
+                stub_ancestors.push(folded_key);
             }
         }
     }
@@ -351,7 +403,6 @@ pub fn linearized_class<'db>(
     // reads too). A stub symbol without a compiled surface leaves the
     // boundary opaque; magic methods found on a stub ancestor mark the
     // class.
-    let table = stub_signature_table(db, stubs);
     let frontier = stub_frontier(table, stub_ancestors.iter().cloned());
     has_opaque_edge |= frontier.opaque;
     let mut stub_magic = MagicMarkers::default();
@@ -729,6 +780,30 @@ fn contains_cycle(ancestry: &[AncestorEdge]) -> bool {
     peeled < in_degree.len()
 }
 
+/// Decision 7's implicit enum parents: `\UnitEnum` always, `\BackedEnum`
+/// additionally — real ancestor facts synthesized because the source
+/// member projection carries no fact distinguishing a backed enum from
+/// a plain one (an enum's backing type is not part of `ClassMembers`),
+/// so both are synthesized uniformly for every source enum:
+/// over-suppression is the conservative direction (decision 5), and
+/// neither parent can ever declare a property (interfaces cannot), so
+/// this can only ever grant methods, never fabricate a property
+/// surface. Only the parents the compiled stub graph actually answers
+/// are returned, each paired with its already-folded key — a stub set
+/// naming neither interface contributes nothing.
+fn implicit_enum_edges(table: &StubSignatureTable) -> Vec<(&'static str, String)> {
+    [("\\UnitEnum", "UnitEnum"), ("\\BackedEnum", "BackedEnum")]
+        .into_iter()
+        .filter_map(|(written, bare)| {
+            let folded_key = folded_symbol_key(SymbolSpace::ClassLike, bare);
+            table
+                .class(&folded_key)
+                .is_some()
+                .then_some((written, folded_key))
+        })
+        .collect()
+}
+
 /// One source class-like loaded by its folded key: its member group,
 /// its top-level declaration (absent for an anonymous class), the file
 /// that declared it, and the namespace to resolve its ancestors in.
@@ -741,16 +816,25 @@ struct Fetched {
 
 /// Loads the source class-like named by one folded key: `None` when the
 /// key names no source class-like (a stub, an unknown name, or a
-/// non-class symbol).
+/// non-class symbol). An anonymous synthetic key (`anonymous_class_key`)
+/// loads its member group directly by `AstId`, bypassing the symbol
+/// table entirely — an anonymous class declares no name to index.
 fn fetch(db: &dyn salsa::Database, files: AnalyzedFileSet, key: &str) -> Option<Fetched> {
+    if let Some(ast_id) = parse_anonymous_class_key(key) {
+        let file = file_of(db, files, ast_id.file)?;
+        let group = group_at(db, file, ast_id)?;
+        let namespace = group.namespace.clone();
+        return Some(Fetched {
+            group,
+            declaration: None,
+            file,
+            namespace,
+        });
+    }
     let query = SymbolQuery::new(db, SymbolSpace::ClassLike, key.to_owned());
     let (_, ast_id) = lookup_class_declaration(db, files, query)?;
     let file = file_of(db, files, ast_id.file)?;
-    let group = member_tree(db, file)
-        .classes
-        .iter()
-        .find(|group| group.ast_id == ast_id)?
-        .clone();
+    let group = group_at(db, file, ast_id)?;
     let declaration = item_tree(db, file)
         .declarations
         .iter()
@@ -763,6 +847,56 @@ fn fetch(db: &dyn salsa::Database, files: AnalyzedFileSet, key: &str) -> Option<
         file,
         namespace,
     })
+}
+
+/// The member group declared at `ast_id` in `file`, when the tree
+/// still carries one there.
+fn group_at(db: &dyn salsa::Database, file: SourceFile, ast_id: AstId) -> Option<ClassMembers> {
+    member_tree(db, file)
+        .classes
+        .iter()
+        .find(|group| group.ast_id == ast_id)
+        .cloned()
+}
+
+/// The member group of one class-like by its folded key: the same
+/// resolution `fetch` performs (an anonymous synthetic key loads
+/// directly by `AstId`; a named key resolves through the symbol
+/// table), stopping short of `fetch`'s declaration and namespace
+/// lookups since a caller wanting only the group's `kind` has no use
+/// for them. Shares `group_at`'s scan with `fetch` rather than
+/// duplicating it. Crate-private: `celerrate_types`' receiver surface
+/// (`class_kind`) wants only the `kind` field, not the whole group, so
+/// it reads that narrower fact through [`class_declaration_kind`]
+/// instead of this — decision 17 (no new public API beyond the
+/// checks) draws the crate boundary at the narrowest fact a consumer
+/// actually needs.
+fn class_members_of(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    key: &str,
+) -> Option<ClassMembers> {
+    if let Some(ast_id) = parse_anonymous_class_key(key) {
+        let file = file_of(db, files, ast_id.file)?;
+        return group_at(db, file, ast_id);
+    }
+    let query = SymbolQuery::new(db, SymbolSpace::ClassLike, key.to_owned());
+    let (_, ast_id) = lookup_class_declaration(db, files, query)?;
+    let file = file_of(db, files, ast_id.file)?;
+    group_at(db, file, ast_id)
+}
+
+/// The declaring group's `DeclarationKind` of one class-like by its
+/// folded key, `None` when the key names no source class-like. The
+/// narrow public fact `celerrate_types`' receiver surface needs for
+/// enum detection (`class_kind`, `CEL0033`) — reads through
+/// [`class_members_of`] rather than duplicating its lookup.
+pub fn class_declaration_kind(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    key: &str,
+) -> Option<DeclarationKind> {
+    class_members_of(db, files, key).map(|group| group.kind)
 }
 
 /// The salsa handle of one file, found by binary search in the sorted
@@ -788,6 +922,25 @@ fn edges_of(declaration: &Declaration) -> Vec<(AncestorRelation, String)> {
         edges.push((AncestorRelation::Extends, name.clone()));
     }
     for name in &declaration.implements {
+        edges.push((AncestorRelation::Implements, name.clone()));
+    }
+    edges
+}
+
+/// The inheritance edges of a declaration-less (anonymous) class, from
+/// the member group's heritage projection: traits first, then
+/// `extends`, then `implements` — the same precedence as `edges_of`.
+fn edges_of_group(group: &ClassMembers) -> Vec<(AncestorRelation, String)> {
+    let mut edges = Vec::new();
+    for trait_use in &group.trait_uses {
+        for name in &trait_use.names {
+            edges.push((AncestorRelation::UsesTrait, name.clone()));
+        }
+    }
+    for name in &group.extends {
+        edges.push((AncestorRelation::Extends, name.clone()));
+    }
+    for name in &group.implements {
         edges.push((AncestorRelation::Implements, name.clone()));
     }
     edges
@@ -867,7 +1020,13 @@ mod tests {
         StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
-    use super::{ClassQuery, LinearizedClass, MemberOrigin, linearized_class};
+    use super::{
+        ClassQuery, LinearizedClass, MemberOrigin, anonymous_class_key, class_declaration_kind,
+        linearized_class, parse_anonymous_class_key,
+    };
+    use crate::ast_id::AstId;
+    use crate::items::DeclarationKind;
+    use crate::member_lookup::{MemberQuery, MemberResolution, lookup_member};
     use crate::members::MemberKind;
     use crate::plugin::PluginIdentity;
     use crate::symbols::{SymbolSpace, folded_symbol_key};
@@ -1563,5 +1722,144 @@ mod tests {
             keys,
             vec![("alpha", "post"), ("alpha", "post"), ("beta", "post")]
         );
+    }
+
+    #[test]
+    fn a_source_enum_gains_the_implicit_unitenum_and_backedenum_edges() {
+        // Decision 7: the compiled stub graph knows both engine
+        // interfaces, so a source enum's linearization gains resolved
+        // edges to each and the boundary stays fully walked.
+        let fixture = fixture_with_stub_classes(
+            &["<?php enum Status: string { case Active = 'active'; }"],
+            vec![
+                ("UnitEnum".to_owned(), StubClassSurface::default()),
+                (
+                    "BackedEnum".to_owned(),
+                    StubClassSurface {
+                        parents: vec!["UnitEnum".to_owned()],
+                        members: vec![],
+                    },
+                ),
+            ],
+        );
+        let status = linearize(&fixture, "Status").unwrap();
+        assert!(!status.has_opaque_edge, "the stub graph knows both parents");
+        assert!(!status.cyclic);
+        assert_eq!(
+            status.stub_ancestors,
+            vec!["backedenum".to_owned(), "unitenum".to_owned()],
+        );
+        assert!(
+            status.ancestry.iter().any(
+                |edge| edge.written == "\\UnitEnum" && edge.stub.as_deref() == Some("unitenum")
+            )
+        );
+        assert!(status.ancestry.iter().any(
+            |edge| edge.written == "\\BackedEnum" && edge.stub.as_deref() == Some("backedenum")
+        ));
+    }
+
+    #[test]
+    fn a_source_enum_with_no_compiled_enum_interfaces_gains_no_synthetic_edge() {
+        // The default fixture's stub set carries no `UnitEnum`: nothing
+        // is synthesized, and — crucially — no synthetic OPAQUE edge
+        // either, which would otherwise blanket-silence every enum in
+        // a stub-less fixture.
+        let fixture = fixture_one("<?php enum Status { case Active; }");
+        let status = linearize(&fixture, "Status").unwrap();
+        assert!(status.ancestry.is_empty());
+        assert!(!status.has_opaque_edge);
+        assert!(status.stub_ancestors.is_empty());
+    }
+
+    #[test]
+    fn class_declaration_kind_answers_the_declaring_groups_kind() {
+        let fixture = fixture(&["<?php class Plain {} enum Status { case Active; }"]);
+        assert_eq!(
+            class_declaration_kind(&fixture.db, fixture.files, "plain"),
+            Some(DeclarationKind::Class),
+        );
+        assert_eq!(
+            class_declaration_kind(&fixture.db, fixture.files, "status"),
+            Some(DeclarationKind::Enum),
+        );
+        assert_eq!(
+            class_declaration_kind(&fixture.db, fixture.files, "ghost"),
+            None,
+        );
+    }
+
+    #[test]
+    fn the_anonymous_key_round_trips_and_never_collides() {
+        let ast_id = AstId {
+            file: FileId::new(3),
+            index: 7,
+        };
+        let key = anonymous_class_key(ast_id);
+        assert_eq!(key, "class@anonymous:3:7");
+        assert_eq!(parse_anonymous_class_key(&key), Some(ast_id));
+        // Real folded keys never parse: the prefix is not a PHP name.
+        assert_eq!(parse_anonymous_class_key("app\\kernel"), None);
+        assert_eq!(parse_anonymous_class_key("class@anonymous:x:y"), None);
+    }
+
+    #[test]
+    fn an_anonymous_class_linearizes_by_its_synthetic_key() {
+        let fixture = fixture(&[r#"<?php
+function build(): void {
+    $listener = new class {
+        public function handle(): int { return 1; }
+    };
+}
+"#]);
+        // Numbering: function = 0, anonymous class = 1, method = 2.
+        let key = anonymous_class_key(AstId {
+            file: FileId::new(0),
+            index: 1,
+        });
+        let linearized = linearized_class(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            ClassQuery::new(&fixture.db, key),
+        )
+        .as_ref()
+        .unwrap();
+        assert!(
+            linearized
+                .members
+                .iter()
+                .any(|member| member.key == "handle")
+        );
+    }
+
+    #[test]
+    fn an_anonymous_class_inherits_through_its_heritage() {
+        let fixture = fixture(&[r#"<?php
+class Base { public function inherited(): int { return 1; } }
+function build(): void {
+    $listener = new class extends Base {};
+}
+"#]);
+        // Numbering: Base = 0, its method = 1, build = 2, anonymous = 3.
+        let key = anonymous_class_key(AstId {
+            file: FileId::new(0),
+            index: 3,
+        });
+        let resolution = lookup_member(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            MemberQuery::new(&fixture.db, key, MemberKind::Method, "inherited".to_owned()),
+        );
+        assert!(matches!(
+            resolution,
+            Some(MemberResolution::Source {
+                origin: MemberOrigin::Inherited,
+                ..
+            })
+        ));
     }
 }

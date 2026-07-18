@@ -23,6 +23,7 @@ use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
     DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, InferenceContext,
     MethodQuery, inferred_body_types, inferred_function_return, inferred_method_return,
+    typed_diagnostics,
 };
 
 struct Fixture {
@@ -705,4 +706,33 @@ function consume(mixed $anything): void {
     .as_ref()
     .unwrap();
     assert_eq!(inferred.edge_counts.provider_edges, 0);
+}
+
+/// Task 13's closing determinism pin: the typed checks layer over a
+/// body exercising the unknown-method and nullability families
+/// answers identically across two fresh, unrelated databases. Interner
+/// handles differ across databases (each owns its own `salsa`
+/// interner), so the comparison renders each diagnostic through its
+/// stable identifier plus its pre-rendered message rather than
+/// comparing any interned value directly — the thread-count
+/// byte-identity over the full product is the corpus/equivalence
+/// harness's job (extended in task 10); this pin is the single-database,
+/// single-thread baseline the checks layer itself owns.
+#[test]
+fn typed_diagnostics_are_identical_across_fresh_databases() {
+    let render = || {
+        let f = fixture(&[r#"<?php
+class A { public function shared(): void {} }
+class B {}
+function f(A|B $either, ?A $nullable): void {
+    $either->nowhere();
+    $nullable->shared();
+}
+"#]);
+        typed_diagnostics(&f.db, f.files, f.stubs, f.configuration, f.handles[0])
+            .iter()
+            .map(|d| format!("{} {}", d.id.as_str(), d.message))
+            .collect::<Vec<String>>()
+    };
+    assert_eq!(render(), render());
 }

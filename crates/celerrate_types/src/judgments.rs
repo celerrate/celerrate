@@ -6,7 +6,8 @@
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{
-    ClassQuery, SymbolSpace, folded_symbol_key, linearized_class, stub_signature_table,
+    ClassQuery, MemberKind, MemberQuery, SymbolSpace, folded_member_key, folded_symbol_key,
+    linearized_class, lookup_member, stub_ancestors_of, stub_signature_table,
 };
 use celerrate_stubs::StubIndexInput;
 
@@ -20,7 +21,10 @@ use crate::representation::{StringConstraint, TypeData, TypeId};
 /// it into `Fails`, folding it into `Holds`, or dropping it before it
 /// reaches a diagnostic. Each diagnostic family states its own posture
 /// toward `CannotProve` (report, suppress, or downgrade) explicitly at
-/// its own boundary; plan 8 is where those postures are declared.
+/// its own boundary: `checks::receivers`'s member-existence family
+/// suppresses it (`PossiblyExists`, never a guess), `checks::nullability`
+/// suppresses an undecidable receiver the same way, and
+/// `checks::arguments` folds it into "not failing" alongside `Holds`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Proof {
     Holds,
@@ -94,10 +98,23 @@ pub fn subtype_of<'db>(
     )
 }
 
-/// May a `source` value be assigned where `target` is declared? Today
-/// this is exactly the subtype judgment; the coercion posture (weak-mode
-/// files, `Stringable`) is the argument family's and lands in plan 8
-/// behind this signature.
+/// The calling file's coercion posture (design section 8): strict
+/// under `declare(strict_types=1)`, weak otherwise.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum CoercionMode {
+    Strict,
+    Weak,
+}
+
+/// May a `source` value be assigned where `target` is declared?
+/// **Coercion never proves, it only un-fails**: this answers exactly
+/// `subtype_of`'s verdict, except a `Fails` is upgraded to
+/// `CannotProve` when a mode-legal runtime coercion could make the
+/// call work. `Holds` and `CannotProve` verdicts pass through
+/// untouched — the judgment never claims a set-theoretic proof that
+/// does not hold, so an upgraded verdict is silence, exactly what
+/// "coercions PHP performs at runtime are not reported" (the argument
+/// family, `checks::arguments::check`, CEL0035) demands.
 #[salsa::tracked]
 pub fn assignable_to<'db>(
     db: &'db dyn salsa::Database,
@@ -106,8 +123,159 @@ pub fn assignable_to<'db>(
     configuration: ProjectConfiguration,
     source: TypeId<'db>,
     target: TypeId<'db>,
+    mode: CoercionMode,
 ) -> Proof {
-    subtype_of(db, files, stubs, configuration, source, target)
+    match subtype_of(db, files, stubs, configuration, source, target) {
+        Proof::Fails
+            if coercion_could_apply(db, files, stubs, configuration, source, target, mode) =>
+        {
+            Proof::CannotProve
+        }
+        verdict => verdict,
+    }
+}
+
+/// Whether a runtime coercion the mode permits could make the value
+/// pass: int to float always (PHP performs it under strict types too);
+/// in weak mode, scalar interchange (never from `null`, never
+/// `mixed`) and a `Stringable` object against a string target. Union
+/// sources must be entirely coercible (every constituent already
+/// non-`Fails` or itself coercible); union targets need one coercible
+/// arm.
+///
+/// This never consults the `Proof` a `mixed` candidate carries: a
+/// `mixed` source can reach this function with a genuine `Fails` in
+/// hand (the shipped `judge` refutes `mixed` candidates on purpose),
+/// and `is_coercible_scalar`/`is_scalar_target` answer `false` for it
+/// (and for `null`) so it is never silently un-failed here. The
+/// argument family's walk (`checks::arguments`, decision 10) guards
+/// `mixed` and per-constituent union fits before ever calling the
+/// judgment.
+fn coercion_could_apply<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    source: TypeId<'db>,
+    target: TypeId<'db>,
+    mode: CoercionMode,
+) -> bool {
+    let sources = source.constituents(db);
+    if sources.len() > 1 {
+        return sources.into_iter().all(|part| {
+            subtype_of(db, files, stubs, configuration, part, target) != Proof::Fails
+                || coercion_could_apply(db, files, stubs, configuration, part, target, mode)
+        });
+    }
+    let targets = target.constituents(db);
+    if targets.len() > 1 {
+        return targets
+            .into_iter()
+            .any(|part| coercion_could_apply(db, files, stubs, configuration, source, part, mode));
+    }
+    if is_int_family(db, source) && is_float_family(db, target) {
+        return true;
+    }
+    if mode == CoercionMode::Weak {
+        if is_coercible_scalar(db, source) && is_scalar_target(db, target) {
+            return true;
+        }
+        if is_string_family(db, target) && is_stringable(db, files, stubs, configuration, source) {
+            return true;
+        }
+    }
+    false
+}
+
+/// The `int` family: both a literal (a singleton range) and the
+/// general, unbounded, or partially bounded range share `TypeData::Int`.
+fn is_int_family<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(of.data(db), TypeData::Int { .. })
+}
+
+/// The `float` family: a literal or the general type, both
+/// `TypeData::Float`.
+fn is_float_family<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(of.data(db), TypeData::Float { .. })
+}
+
+/// The `string` family: every `StringConstraint` variant is a
+/// `TypeData::String`, never a `ClassString`.
+fn is_string_family<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(of.data(db), TypeData::String { .. })
+}
+
+/// A scalar in PHP's sense: `bool`, `int`, `float`, or `string`.
+/// Deliberately excludes `null` and `mixed` — the mixed caveat above —
+/// so neither reaches weak-mode scalar interchange or the
+/// `Stringable` probe as a source, and neither is ever accepted as a
+/// scalar target.
+fn is_scalar<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    matches!(
+        of.data(db),
+        TypeData::Bool { .. }
+            | TypeData::Int { .. }
+            | TypeData::Float { .. }
+            | TypeData::String { .. }
+    )
+}
+
+/// The weak-mode scalar-interchange source test: never `null`, never
+/// `mixed`.
+fn is_coercible_scalar<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    is_scalar(db, of)
+}
+
+/// The weak-mode scalar-interchange target test: the same predicate as
+/// the source side (PHP's scalar interchange is symmetric in kind).
+fn is_scalar_target<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
+    is_scalar(db, of)
+}
+
+/// Whether `source` denotes a class whose instances PHP converts to a
+/// string at the `string` parameter boundary: one that resolves
+/// `__toString` through [`lookup_member`] (own, inherited, or through
+/// a stub boundary), or whose ancestry (source or stub) names
+/// `Stringable` directly.
+fn is_stringable<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    source: TypeId<'db>,
+) -> bool {
+    let TypeData::Class { name, .. } = source.data(db) else {
+        return false;
+    };
+    let query = MemberQuery::new(
+        db,
+        name.clone(),
+        MemberKind::Method,
+        folded_member_key(MemberKind::Method, "__toString"),
+    );
+    if lookup_member(db, files, stubs, configuration, query).is_some() {
+        return true;
+    }
+    let class = ClassQuery::new(db, name.clone());
+    match linearized_class(db, files, stubs, configuration, class) {
+        Some(linearized) => {
+            linearized
+                .ancestry
+                .iter()
+                .any(|edge| edge.resolved.as_deref() == Some("stringable"))
+                || linearized
+                    .stub_ancestors
+                    .iter()
+                    .any(|key| key == "stringable")
+        }
+        None => {
+            let table = stub_signature_table(db, stubs);
+            stub_ancestors_of(table, name)
+                .reached
+                .iter()
+                .any(|key| key == "stringable")
+        }
+    }
 }
 
 /// The nullability of one type. `void` is `AlwaysNull`: reading a void
@@ -801,7 +969,7 @@ mod tests {
         StubAvailability, StubClassSurface, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
     };
 
-    use super::{Nullability, Proof, assignable_to, nullability, subtype_of};
+    use super::{CoercionMode, Nullability, Proof, assignable_to, nullability, subtype_of};
     use crate::TypeId;
 
     struct Fixture {
@@ -1231,7 +1399,8 @@ mod tests {
                 f.stubs,
                 f.configuration,
                 TypeId::int(db),
-                TypeId::mixed(db)
+                TypeId::mixed(db),
+                CoercionMode::Strict,
             ),
             Proof::Holds
         );
@@ -1527,5 +1696,154 @@ mod tests {
         // The nested value-of expands through the array-value recursion:
         // a deliberate, recorded widening of the plan's top-level wording.
         assert_eq!(judge(&fixture, candidate, target), Proof::Holds);
+    }
+
+    #[test]
+    fn coercion_never_proves_it_only_un_fails() {
+        let fixture = fixture(&[
+            "<?php class WithString { public function __toString(): string { return ''; } } class Plain {}",
+        ]);
+        let db = &fixture.db;
+        let judge = |source, target, mode| {
+            assignable_to(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                source,
+                target,
+                mode,
+            )
+        };
+        let int = TypeId::int(db);
+        let float = TypeId::float(db);
+        let string = TypeId::string(db);
+        let bool_type = TypeId::bool(db);
+        let null = TypeId::null(db);
+        let stringable = TypeId::class(db, "withstring", vec![]);
+        let plain = TypeId::class(db, "plain", vec![]);
+        use CoercionMode::{Strict, Weak};
+        use Proof::{CannotProve, Fails, Holds};
+        // Subtyping is untouched by the mode.
+        assert_eq!(judge(int, int, Strict), Holds);
+        assert_eq!(judge(int, string, Strict), Fails);
+        // The one strict-mode coercion PHP performs: int to float.
+        assert_eq!(judge(int, float, Strict), CannotProve);
+        // Weak mode un-fails scalar interchange…
+        assert_eq!(judge(string, int, Weak), CannotProve);
+        assert_eq!(judge(bool_type, string, Weak), CannotProve);
+        assert_eq!(judge(int, string, Weak), CannotProve);
+        // …but never null, and never non-scalar targets.
+        assert_eq!(judge(null, string, Weak), Fails);
+        assert_eq!(judge(string, plain, Weak), Fails);
+        // Stringable passes a string parameter in weak mode only.
+        assert_eq!(judge(stringable, string, Weak), CannotProve);
+        assert_eq!(judge(stringable, string, Strict), Fails);
+        assert_eq!(judge(plain, string, Weak), Fails);
+    }
+
+    /// `coercion_could_apply`'s union arms in isolation: a source union
+    /// needs every constituent coercible (`all`), a target union needs
+    /// only one (`any`). Each assertion is built so the verdict
+    /// genuinely depends on the reduction, not on a single-constituent
+    /// shortcut: `int|Plain` and `Plain|Address` mix one coercible and
+    /// one refuted-and-uncoercible constituent (or two refuted ones),
+    /// so a broken `all`/`any` (say, `any` swapped in for the source
+    /// side, or the target loop stopping at the first constituent)
+    /// would flip these answers.
+    #[test]
+    fn union_source_and_target_reduction_is_load_bearing() {
+        let fixture = fixture(&[
+            "<?php class WithString { public function __toString(): string { return ''; } } class Plain {} class Address {}",
+        ]);
+        let db = &fixture.db;
+        let judge = |source, target, mode| {
+            assignable_to(
+                db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                source,
+                target,
+                mode,
+            )
+        };
+        use CoercionMode::Weak;
+        use Proof::{CannotProve, Fails};
+        let int = TypeId::int(db);
+        let bool_type = TypeId::bool(db);
+        let string = TypeId::string(db);
+        let plain = TypeId::class(db, "plain", vec![]);
+        let address = TypeId::class(db, "address", vec![]);
+
+        // Source union: one non-coercible constituent (`Plain`, no
+        // `__toString`, no `Stringable` ancestry) sinks the whole
+        // `all()`, even though `int` alone would un-fail.
+        let int_or_plain = TypeId::union(db, [int, plain]);
+        assert_eq!(judge(int_or_plain, string, Weak), Fails);
+
+        // Source union: every constituent individually coercible to a
+        // scalar target un-fails the whole union.
+        let int_or_bool = TypeId::union(db, [int, bool_type]);
+        assert_eq!(judge(int_or_bool, string, Weak), CannotProve);
+
+        // Target union: `int` cannot subtype `string` or `Plain`, but
+        // one arm (`string`) is reachable through weak-mode scalar
+        // interchange, so `any()` un-fails the whole union.
+        let string_or_plain = TypeId::union(db, [string, plain]);
+        assert_eq!(judge(int, string_or_plain, Weak), CannotProve);
+
+        // Target union with no coercible arm at all (two plain classes,
+        // neither scalar nor `Stringable`) stays refuted.
+        let plain_or_address = TypeId::union(db, [plain, address]);
+        assert_eq!(judge(int, plain_or_address, Weak), Fails);
+    }
+
+    /// `is_stringable`'s stub-only branch: a class with no source
+    /// declaration at all, known only through a synthetic stub surface
+    /// whose parent names `Stringable` — reached only through
+    /// `stub_ancestors_of`, never through `lookup_member` (this stub
+    /// surface declares no members, so no `__toString` is ever found)
+    /// nor through `linearized_class` (which answers `None` for a
+    /// class with no source declaration).
+    #[test]
+    fn a_stub_only_stringable_ancestry_un_fails_in_weak_mode_only() {
+        let fixture = fixture_with_stub_classes(
+            &["<?php"],
+            vec![(
+                "StubStringable".to_owned(),
+                StubClassSurface {
+                    parents: vec!["Stringable".to_owned()],
+                    members: vec![],
+                },
+            )],
+        );
+        let db = &fixture.db;
+        let stub_stringable = TypeId::class(db, "StubStringable", vec![]);
+        let string = TypeId::string(db);
+        assert_eq!(
+            assignable_to(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                stub_stringable,
+                string,
+                CoercionMode::Weak,
+            ),
+            Proof::CannotProve
+        );
+        assert_eq!(
+            assignable_to(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                stub_stringable,
+                string,
+                CoercionMode::Strict,
+            ),
+            Proof::Fails
+        );
     }
 }

@@ -354,3 +354,97 @@ fn a_relative_root_analyzes_like_its_absolute_spelling() {
         "both spellings name the same project, so they print the same report",
     );
 }
+
+/// The typed families (CEL0030-CEL0038) render through `check` exactly
+/// like the untyped ones: same command, same report, no separate flag.
+#[test]
+fn the_typed_families_render_through_check() {
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "src/Service.php",
+            r#"<?php
+declare(strict_types=1);
+namespace App;
+
+class User
+{
+    public function save(): void
+    {
+    }
+}
+
+class Service
+{
+    public function run(?User $user): void
+    {
+        $user->save();
+        $user?->svae();
+    }
+}
+"#,
+        ),
+    ]);
+    let (outcome, output) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported);
+    let output = normalize_location_separators(&output);
+    assert!(
+        output.contains("CEL0034"),
+        "the null dereference renders: {output}"
+    );
+    assert!(
+        output.contains("CEL0030"),
+        "the unknown method renders: {output}"
+    );
+    assert!(
+        output.contains("accessing `save` on a possibly null `App\\User|null`"),
+        "{output}",
+    );
+}
+
+/// The pack serves only the untyped verdict (decision 13): the typed
+/// families are recomputed fresh on every path, cold or warm. A warm
+/// run must still report the same typed diagnostics as the cold run
+/// that produced the cache.
+#[test]
+fn a_warm_run_reports_the_same_typed_diagnostics() {
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "src/Service.php",
+            r#"<?php
+declare(strict_types=1);
+namespace App;
+
+class User
+{
+    public function save(): void
+    {
+    }
+}
+
+class Service
+{
+    public function run(?User $user): void
+    {
+        $user->save();
+        $user?->svae();
+    }
+}
+"#,
+        ),
+    ]);
+    let (_, cold) = check(root.path());
+    let (_, warm) = check(root.path());
+    assert_eq!(
+        normalize_location_separators(&cold),
+        normalize_location_separators(&warm),
+        "the pack serves untyped verdicts; typed recompute must agree",
+    );
+}

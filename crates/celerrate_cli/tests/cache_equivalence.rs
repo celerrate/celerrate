@@ -12,7 +12,7 @@
 use std::collections::BTreeSet;
 use std::path::Path;
 
-use celerrate_cli::analysis::composed_diagnostics;
+use celerrate_cli::analysis::{composed_diagnostics, typed_portion};
 use celerrate_cli::cache::verdict::{VerdictLookup, lookup_verdict};
 use celerrate_cli::run;
 use celerrate_cli::session::Session;
@@ -68,7 +68,12 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
             .iter()
             .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
             .collect();
-        let served = served.expect("a revalidated verdict's diagnostics all convert");
+        let mut served = served.expect("a revalidated verdict's diagnostics all convert");
+        // The pack serves only the untyped verdict (decision 13): a
+        // cache hit appends the typed portion fresh, exactly as
+        // `analyze_one` does, before the two sides can be compared.
+        served.extend(typed_portion(&inputs, file));
+        served.sort();
         let recomputed = composed_diagnostics(&inputs, file);
         assert_eq!(
             served, recomputed,
@@ -133,4 +138,26 @@ fn cross_file_source_answers_replay_equal() {
         ("src/Consumer.php", "<?php new Widget(); new Gone();"),
         ("src/Widget.php", "<?php class Widget {}"),
     ]);
+}
+
+/// A typed finding (CEL0034, a possibly-null dereference): the pack
+/// persists none of it, so the equivalence net must recompute the typed
+/// portion fresh, the same way `analyze_one` does on a warm hit, to
+/// cover the union rather than just the untyped half.
+#[test]
+fn typed_answers_replay_equal() {
+    let identifiers = served_equals_recomputed(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "src/Service.php",
+            "<?php\ndeclare(strict_types=1);\nnamespace App;\n\nclass User { public function save(): void {} }\n\nclass Service\n{\n    public function run(?User $user): void\n    {\n        $user->save();\n    }\n}\n",
+        ),
+    ]);
+    assert!(
+        identifiers.contains("CEL0034"),
+        "the fixture must exercise a typed finding: {identifiers:?}",
+    );
 }

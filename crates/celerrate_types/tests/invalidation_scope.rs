@@ -36,6 +36,7 @@ use celerrate_types::{
     InferenceContext, MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate, Proof,
     TypeId, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry, declared_member_signature,
     inferred_body_types, inferred_function_return, inferred_method_return, subtype_of,
+    typed_diagnostics, typed_file_verdicts,
 };
 use salsa::Setter;
 
@@ -1684,6 +1685,129 @@ class Admin {}
         second,
         TypeId::class(&f.db, "app\\admin", vec![]),
         "the threaded argument flows through on the next demand",
+    );
+}
+
+/// Task 13's closing pins: harness 2 replayed over the typed-checks
+/// layer itself (`typed_file_verdicts`/`typed_diagnostics`), the design's
+/// central claim that a verdict is keyed range-free by `(AstId,
+/// ExpressionId)` and reconciled to `TextRange` only at the mapping
+/// layer. `checks_fixture` is the plain [`InferenceFixture`] this
+/// suite's inference-layer pins already share (an empty stub index at
+/// HIGH durability, issue #36's fixed decision 3): every scenario below
+/// resolves entirely through source-declared classes and methods, so
+/// no stub surface is needed, and `.handle`/`.set_source` spell this
+/// task's brief onto the fixture's existing shape.
+fn checks_fixture(sources: &[&str]) -> InferenceFixture {
+    fixture(sources)
+}
+
+impl InferenceFixture {
+    /// The source file handle at `index`, the brief's `f.handle(0)`.
+    fn handle(&self, index: usize) -> SourceFile {
+        self.handles[index]
+    }
+
+    /// Overwrites the file at `index` in place, the brief's
+    /// `f.set_source(0, &after)` (delegates to [`set_inference_source`]).
+    fn set_source(&mut self, index: usize, source: &str) {
+        set_inference_source(self, index, source);
+    }
+}
+
+/// Harness-2 over the typed checks: a body edit re-checks only the
+/// editing body. `bystander` calls the exact same method on the exact
+/// same receiver type and is never touched — its own
+/// `body_typed_verdicts` memo is keyed on its own unedited body, so it
+/// has no dependency edge into `editing`'s edit at all.
+#[test]
+fn a_body_edit_rechecks_only_the_editing_body() {
+    let before = r#"<?php
+class User { public function save(): void {} }
+function editing(User $u): void { $u->save(); }
+function bystander(User $u): void { $u->save(); }
+"#;
+    let after = before.replace(
+        "function editing(User $u): void { $u->save(); }",
+        "function editing(User $u): void { $u->save(); $u->save(); }",
+    );
+    let mut f = checks_fixture(&[before]);
+    let _ = typed_file_verdicts(&f.db, f.files, f.stubs, f.configuration, f.handle(0));
+    f.db.take_executed();
+    f.set_source(0, &after);
+    let _ = typed_file_verdicts(&f.db, f.files, f.stubs, f.configuration, f.handle(0));
+    let log = f.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "body_typed_verdicts"),
+        1,
+        "only the editing body re-checks: {log:?}",
+    );
+}
+
+/// Harness-2's load-bearing pin: a comment line prepended above every
+/// body shifts every subsequent offset without changing the parsed
+/// structure at all. If verdicts were keyed by `TextRange` anywhere
+/// above the mapping layer, this edit would force every body's
+/// `body_typed_verdicts` to re-run (the file bytes genuinely changed).
+/// The design's claim is the opposite: the verdict is keyed by
+/// `(AstId, ExpressionId)`, range-free, so it backdates under the
+/// shift and only the offset-to-range reconciliation
+/// (`typed_diagnostics`) redoes its cheap mapping work — the reported
+/// diagnostic still renders, moved to its new location.
+#[test]
+fn an_edit_above_a_body_reruns_only_the_mapping() {
+    // A comment line prepended above every body: offsets shift, the
+    // source map changes, the verdicts backdate.
+    let before = r#"<?php
+class User { public function save(): void {} }
+function f(?User $u): void { $u->save(); }
+"#;
+    let after = before.replace("<?php", "<?php\n// a comment line");
+    let mut f = checks_fixture(&[before]);
+    let _ = typed_diagnostics(&f.db, f.files, f.stubs, f.configuration, f.handle(0));
+    f.db.take_executed();
+    f.set_source(0, &after);
+    let second = typed_diagnostics(&f.db, f.files, f.stubs, f.configuration, f.handle(0));
+    let log = f.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "body_typed_verdicts"),
+        0,
+        "range-free verdicts backdate under an offset shift: {log:?}",
+    );
+    assert_eq!(second.len(), 1, "the diagnostic moved with its range");
+}
+
+/// Harness-2 at the interprocedural edge: a callee's parameter type
+/// edit genuinely changes what the caller's own argument-type check
+/// sees, so the caller's verdict flips from empty to one CEL0035 — the
+/// non-coercible pair (`Plain`/`Other`, two distinct classes with no
+/// relation) holds before the edit and fails after it under either
+/// coercion mode, so the edit is a real interprocedural signal, not an
+/// artifact of strict-vs-weak typing.
+#[test]
+fn a_callee_signature_edit_rechecks_the_calling_body() {
+    // Non-coercible on purpose: a class argument against `Plain`
+    // holds before the edit and fails against `Other` after it, in
+    // either coercion mode — the edit genuinely flips the verdict.
+    let before = r#"<?php
+class Plain {}
+class Other {}
+function takes(Plain $p): void {}
+function caller(Plain $p): void { takes($p); }
+"#;
+    let after = before.replace("function takes(Plain $p)", "function takes(Other $p)");
+    let mut f = checks_fixture(&[before]);
+    assert!(
+        typed_file_verdicts(&f.db, f.files, f.stubs, f.configuration, f.handle(0))
+            .verdicts
+            .is_empty()
+    );
+    f.set_source(0, &after);
+    let second = typed_file_verdicts(&f.db, f.files, f.stubs, f.configuration, f.handle(0));
+    assert_eq!(
+        second.verdicts.len(),
+        1,
+        "the callee's new parameter type reaches the caller",
     );
 }
 

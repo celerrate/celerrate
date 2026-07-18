@@ -131,6 +131,39 @@ pub fn lookup_member<'db>(
     None
 }
 
+/// What kind of surface one folded class key has: a source class-like
+/// (absence of a member is provable through linearization), a
+/// compiled stub class (the stub graph is closed — absence is provable
+/// there too), or nothing (the unknown-symbol family already reported
+/// it; nothing typed may pile on).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClassSurface {
+    Source,
+    Stub,
+    Unknown,
+}
+
+/// Classifies one folded class-like key by where its member surface is
+/// provable: a source class-like first (even a synthetic anonymous
+/// key, through `linearized_class`), then the compiled stub signature
+/// table (the same table [`stub_member`] reads), else `Unknown`.
+pub fn class_surface(
+    db: &dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    key: &str,
+) -> ClassSurface {
+    let class = ClassQuery::new(db, key.to_owned());
+    if linearized_class(db, files, stubs, configuration, class).is_some() {
+        return ClassSurface::Source;
+    }
+    if stub_signature_table(db, stubs).class(key).is_some() {
+        return ClassSurface::Stub;
+    }
+    ClassSurface::Unknown
+}
+
 /// Breadth-first over the compiled parent links from `start`: the first
 /// stub member of the queried kind and folded key that exists in the
 /// version range. The visited set only guards revisits, so the queue's
@@ -194,7 +227,7 @@ mod tests {
         StubSignature, StubSymbol, StubSymbolKind, StubVisibility, VersionedTypeText,
     };
 
-    use super::{MemberQuery, MemberResolution, lookup_member};
+    use super::{ClassSurface, MemberQuery, MemberResolution, class_surface, lookup_member};
     use crate::linearize::{MemberOrigin, folded_member_key};
     use crate::members::MemberKind;
     use crate::plugin::PluginIdentity;
@@ -344,6 +377,16 @@ mod tests {
             stubs,
             configuration,
         }
+    }
+
+    /// A fixture whose stub payload carries one named class with no
+    /// parents or members — enough to exercise `class_surface`'s
+    /// `Stub` branch. Built on the `fixture_with_stub_classes` idiom.
+    fn fixture_with_stub_class(sources: &[&str], name: &str) -> Fixture {
+        fixture_with_stub_classes(
+            sources,
+            vec![(name.to_owned(), StubClassSurface::default())],
+        )
     }
 
     /// A `getMessage(): string` public instance method surface member.
@@ -516,5 +559,22 @@ mod tests {
         let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
         register_fake_provider(&fixture, vec![virtual_property("TITLE")]);
         assert!(lookup(&fixture, "Post", MemberKind::ClassConstant, "TITLE").is_none());
+    }
+
+    #[test]
+    fn class_surface_distinguishes_source_stub_and_unknown() {
+        let fixture = fixture_with_stub_class(&["<?php class Own {}"], "DateTime");
+        let surface = |key: &str| {
+            class_surface(
+                &fixture.db,
+                fixture.files,
+                fixture.stubs,
+                fixture.configuration,
+                key,
+            )
+        };
+        assert_eq!(surface("own"), ClassSurface::Source);
+        assert_eq!(surface("datetime"), ClassSurface::Stub);
+        assert_eq!(surface("app\\ghost"), ClassSurface::Unknown);
     }
 }

@@ -2,6 +2,11 @@
 //! cache above salsa, persisted to `.celerrate/cache/` and used to
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
+//!
+//! The typed families (CEL0030-CEL0038) are plan 9a's artifact class,
+//! not this one's: `StoredVerdict` persists only the syntax, decode,
+//! and semantic families, and stays that way with no format bump. The
+//! typed portion is recomputed fresh on every path, cold or warm.
 
 pub mod identity;
 pub mod pack;
@@ -172,12 +177,14 @@ fn collect_entries(
     (trees, verdicts)
 }
 
-/// One reported file's verdict — its diagnostics through the shared
-/// composition point, with the records the entry must revalidate
-/// against. Every query here is memoized from the pass.
+/// One reported file's verdict — its diagnostics through the
+/// cache-servable composition point, with the records the entry must
+/// revalidate against. Every query here is memoized from the pass. The
+/// typed families never reach this: `persistable_diagnostics` is
+/// exactly what a pack may carry (module doc above).
 fn composed_verdict(inputs: &AnalysisInputs, file: celerrate_db::SourceFile) -> StoredVerdict {
     let database = &inputs.database;
-    let diagnostics = crate::analysis::composed_diagnostics(inputs, file);
+    let diagnostics = crate::analysis::persistable_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
         database,
         file,

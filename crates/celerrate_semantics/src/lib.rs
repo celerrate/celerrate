@@ -28,6 +28,7 @@ mod reference_checks;
 mod references;
 mod resolve;
 mod revalidation;
+mod strict_types;
 mod symbols;
 mod syntax_gating;
 mod virtual_symbols;
@@ -52,13 +53,16 @@ pub use index::{
 pub use items::{Declaration, DeclarationKind, DefineId, ImportKind, ItemTree, UseImport};
 pub use linearize::{
     AncestorEdge, AncestorRelation, ClassQuery, LinearizedClass, LinearizedMember,
-    LinearizedVirtualMember, MagicMarkers, MemberOrigin, folded_member_key, linearized_class,
+    LinearizedVirtualMember, MagicMarkers, MemberOrigin, anonymous_class_key,
+    class_declaration_kind, folded_member_key, linearized_class, parse_anonymous_class_key,
 };
 pub use lookup::{
     SymbolQuery, SymbolResolution, analyzed_file_index, lookup_class_declaration,
     lookup_function_declaration, lookup_symbol,
 };
-pub use member_lookup::{MemberQuery, MemberResolution, lookup_member};
+pub use member_lookup::{
+    ClassSurface, MemberQuery, MemberResolution, class_surface, lookup_member,
+};
 pub use members::{
     ClassMembers, FreeFunction, Member, MemberFlags, MemberKind, MemberSignature, MemberTree,
     ParameterSignature, TraitAdaptation, TraitUse, Visibility,
@@ -72,6 +76,7 @@ pub use reference_checks::{
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution_records};
+pub use strict_types::file_strict_types;
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};
 pub use virtual_symbols::{

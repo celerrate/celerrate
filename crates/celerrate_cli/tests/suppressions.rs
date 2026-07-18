@@ -113,3 +113,36 @@ fn an_unrelated_line_still_reports_beside_a_suppressed_one() {
     assert!(!text.contains("MissingOne"), "{text}");
     assert!(text.contains("MissingTwo"), "{text}");
 }
+
+#[test]
+fn a_suppression_extinguishes_a_typed_diagnostic() {
+    // Design section 5's family-agnostic rule extends to the typed
+    // families too: a suppression covers whatever family reports on its
+    // scope, not just the two that predate them.
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "src/Service.php",
+            r#"<?php
+namespace App;
+
+class User { public function save(): void {} }
+
+function run(?User $user): void
+{
+    /** @phpstan-ignore-next-line */
+    $user->save();
+}
+"#,
+        ),
+    ]);
+    let (outcome, output) = check(root.path());
+    assert_eq!(
+        outcome,
+        Outcome::Clean,
+        "suppression is family-agnostic: {output}"
+    );
+}

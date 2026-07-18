@@ -467,9 +467,12 @@ impl<'db> TypeId<'db> {
 
     /// A class-like type. The name strips a leading backslash, then
     /// folds, so spelling variants (fully qualified or not, any casing)
-    /// intern to one type; `display` therefore renders the folded key
-    /// (recorded debt: plan 8 recovers the original spelling through the
-    /// symbol table when rendering diagnostics).
+    /// intern to one type; `display` therefore renders the folded key,
+    /// on purpose — canonical form must never depend on spelling. The
+    /// checks layer (`celerrate_types::checks::receivers`'s
+    /// `written_type_display`) recovers the originally written
+    /// spelling through the symbol table when rendering diagnostics,
+    /// via [`TypeId::display_with_names`].
     pub fn class(db: &'db dyn salsa::Database, name: &str, arguments: Vec<TypeId<'db>>) -> Self {
         let name = name.strip_prefix('\\').unwrap_or(name);
         let folded = folded_symbol_key(SymbolSpace::ClassLike, name);
@@ -686,6 +689,25 @@ impl<'db> TypeId<'db> {
     /// The deterministic, PHPStan-flavored rendering.
     pub fn display(self, db: &'db dyn salsa::Database) -> String {
         crate::display::display_type(db, self)
+    }
+
+    /// `display`, but a class or enum name tries `resolve` first,
+    /// falling back to the folded key when it answers `None` — the
+    /// checks layer's written-spelling recovery (decision 3), never a
+    /// new public rendering surface: `resolve` is not looked up
+    /// through any registry, just handed straight to the recursive
+    /// walk. Its only caller today is `checks::receivers`'s own
+    /// `written_type_display`, itself unread from production code
+    /// until tasks 4-6 wire the walkers to call it — hence the
+    /// `dead_code` allow, the same situation as `checks/mod.rs`'s
+    /// `CheckContext` fields.
+    #[allow(dead_code)]
+    pub(crate) fn display_with_names(
+        self,
+        db: &'db dyn salsa::Database,
+        resolve: crate::display::NameResolver<'_>,
+    ) -> String {
+        crate::display::display_type_resolved(db, self, Some(resolve))
     }
 }
 
