@@ -8,6 +8,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::TypeId;
+use crate::declared::{DeclaredSignature, Trust};
 use crate::representation::{CallableParameter, ShapeField, ShapeKey, StringConstraint, TypeData};
 
 /// The nesting-depth budget shared by [`StoredType::to_type_id`] and the
@@ -129,6 +130,93 @@ pub struct StoredCallableParameter {
     pub optional: bool,
     pub variadic: bool,
     pub by_reference: bool,
+}
+
+/// The structural mirror of [`Trust`] (declared.rs task 4): how one
+/// declared element's final type was obtained. Digested alongside its
+/// type, so an annotation-layer change that only flips the trust verdict
+/// (a `RejectedAnnotation` becoming `Refined` with the SAME resolved
+/// type, for instance) still flips the class-surface digest — the
+/// verdict is itself judgment-visible.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum StoredTrust {
+    NativeOnly,
+    Refined,
+    RefinedUnproven,
+    RejectedAnnotation,
+}
+
+impl StoredTrust {
+    pub fn of(trust: Trust) -> StoredTrust {
+        match trust {
+            Trust::NativeOnly => StoredTrust::NativeOnly,
+            Trust::Refined => StoredTrust::Refined,
+            Trust::RefinedUnproven => StoredTrust::RefinedUnproven,
+            Trust::RejectedAnnotation => StoredTrust::RejectedAnnotation,
+        }
+    }
+}
+
+/// The structural mirror of one [`crate::declared::DeclaredParameter`].
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StoredParameter {
+    pub name: String,
+    /// `None` mirrors the empty-intersection stub guard verbatim: it
+    /// is a judgment-visible fact, so it participates in the digest.
+    pub parameter_type: Option<StoredType>,
+    pub trust: StoredTrust,
+    pub optional: bool,
+    pub variadic: bool,
+    pub by_reference: bool,
+}
+
+/// The structural mirror of one resolved
+/// [`crate::declared::DeclaredSignature`]: the persisted (and digested)
+/// shape of a member's or a function's whole declared signature.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct StoredSignature {
+    pub parameters: Vec<StoredParameter>,
+    pub value_type: StoredType,
+    pub value_trust: StoredTrust,
+    pub by_reference: bool,
+}
+
+impl StoredSignature {
+    /// Mirrors one resolved `DeclaredSignature`'s data into the
+    /// structural form, through [`StoredType::of`] exclusively — `TypeId`
+    /// never enters a stored shape directly.
+    pub fn of<'db>(
+        db: &'db dyn salsa::Database,
+        signature: &DeclaredSignature<'db>,
+    ) -> StoredSignature {
+        StoredSignature {
+            parameters: signature
+                .parameters
+                .iter()
+                .map(|parameter| StoredParameter {
+                    name: parameter.name.clone(),
+                    parameter_type: parameter
+                        .parameter_type
+                        .map(|type_id| StoredType::of(db, type_id)),
+                    trust: StoredTrust::of(parameter.trust),
+                    optional: parameter.optional,
+                    variadic: parameter.variadic,
+                    by_reference: parameter.by_reference,
+                })
+                .collect(),
+            value_type: StoredType::of(db, signature.value_type),
+            value_trust: StoredTrust::of(signature.value_trust),
+            by_reference: signature.by_reference,
+        }
+    }
+}
+
+/// blake3 over the postcard encoding; `None` when encoding fails (never
+/// observed for these plain shapes, but the zero-panic rule forbids
+/// assuming it).
+pub(crate) fn digest_of<T: Serialize>(value: &T) -> Option<[u8; 32]> {
+    let bytes = postcard::to_allocvec(value).ok()?;
+    Some(*blake3::hash(&bytes).as_bytes())
 }
 
 // --- Deserialize: a manual, depth-counting implementation -----------
