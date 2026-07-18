@@ -1635,6 +1635,63 @@ class User extends Entity {}
     );
 }
 
+/// The counterexample guarding issue #37's boundary from the other
+/// side: an edit that CHANGES the declaring site must still reach the
+/// signature. Declaring a new class ahead of Repository shifts every
+/// tree-order `AstId` after it, so `declaring_site`'s answer genuinely
+/// changes, `declared_member_signature` re-executes, and the resolved
+/// value is still correct.
+#[test]
+fn a_declaration_added_ahead_of_the_owner_recomputes_the_signature() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("class Entity {}", "class Early {}\nclass Entity {}");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![]),
+        "the shifted site must still resolve the inherited return correctly",
+    );
+    let log = f.db.take_executed();
+    assert!(
+        executions_of(&log, "declared_member_signature") >= 1,
+        "a genuinely changed declaring site must reach the signature: {log:?}",
+    );
+}
+
 /// Issue #37, stage 1: `declaring_site` is now a tracked query of its
 /// own. A prose-only edit to another class's docblock still reaches it
 /// (its `member_tree` input changed), but as a tracked query it
