@@ -137,7 +137,10 @@ pub use records::{
     FileDependencies, TypedDependencies, class_surface_digest, function_signature_digest,
 };
 pub use representation::{CallableParameter, FloatBits, ShapeField, ShapeKey, TypeId};
-pub use stored::{StoredParameter, StoredSignature, StoredTrust, StoredType};
+pub use stored::{
+    StoredClassDependency, StoredFunctionDependency, StoredInferredEdge, StoredInferredSignature,
+    StoredParameter, StoredSignature, StoredSignatureKey, StoredTrust, StoredType,
+};
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
     ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,

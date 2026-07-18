@@ -5,6 +5,7 @@
 //! canonicalize, so a forged or stale value re-canonicalizes instead of
 //! panicking.
 
+use celerrate_db::ContentHash;
 use serde::{Deserialize, Serialize};
 
 use crate::TypeId;
@@ -209,6 +210,89 @@ impl StoredSignature {
             by_reference: signature.by_reference,
         }
     }
+}
+
+/// The persisted key of one inferred signature (plan 9a, task 7): a
+/// free function through its folded Function-space key, or a method
+/// through its enclosing class-like's folded key plus the member's own
+/// folded key — the same two-part identity [`crate::inference::BodyOwner`]
+/// carries, reconstructed here from public projections
+/// (`celerrate_semantics::member_tree`, `folded_symbol_key`,
+/// `folded_member_key`) rather than that crate-private type, so the
+/// persist path in `celerrate_cli` never needs it visible. Derives
+/// `Ord` so the persist path can sort entries into a deterministic pack
+/// order, keeping the first of any duplicate key.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum StoredSignatureKey {
+    Function {
+        key: String,
+    },
+    Method {
+        class_key: String,
+        member_key: String,
+    },
+}
+
+/// One class a recorded body's flow walk consulted (task 3's
+/// `TypedDependencies::classes`), alongside its class-surface digest at
+/// persist time: task 8 revalidates by recomputing the live digest
+/// through [`crate::records::class_surface_digest`] and comparing.
+/// `digest` is `None` when the digest query itself answered `None` (the
+/// key no longer names a source class-like) — a recordable fact, not a
+/// missing one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredClassDependency {
+    pub key: String,
+    pub digest: Option<[u8; 32]>,
+}
+
+/// The free-function sibling of [`StoredClassDependency`]: one
+/// function-space key a recorded body consulted through the DECLARED
+/// tier (task 3's `TypedDependencies::functions`), and its signature
+/// digest at persist time through
+/// [`crate::records::function_signature_digest`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredFunctionDependency {
+    pub key: String,
+    pub digest: Option<[u8; 32]>,
+}
+
+/// One call a recorded body resolved through the INFERRED tier: the
+/// callee's own persisted key, and the raw pre-substitution return type
+/// the walk actually consumed. Mirrors
+/// [`crate::records::TypedDependencies`]'s own raw-answer invariant
+/// (its rustdoc) — recorded before any call-site substitution, so task
+/// 8's revalidation re-invokes the same callee query and compares the
+/// same, unsubstituted vocabulary.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredInferredEdge {
+    pub callee: StoredSignatureKey,
+    pub return_type: StoredType,
+}
+
+/// One body's persisted inferred signature (plan 9a, task 7). The
+/// defining file's content hash stands in for body identity — plan 9a
+/// decision 6 keeps the warm serve path from ever reading a body IR —
+/// and every class, function, and inferred-tier callee the body's flow
+/// walk actually consulted is carried verbatim from task 3's
+/// `TypedDependencies`/`FileDependencies`, never re-derived by a
+/// separate mirror walk.
+///
+/// Persisted unconditionally: an annotated body (a declared return
+/// type or a proven `@return`) still carries an inferred return here —
+/// the artifact itself never depends on whether a declaration exists.
+/// Only the EDGES *into* this record are what a declared return cuts
+/// (a caller whose callee has a declared return consults the declared
+/// tier, `StoredFunctionDependency`/`StoredClassDependency`, never
+/// `StoredInferredEdge`), never this record's own existence.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredInferredSignature {
+    /// The defining file at persist time: body identity by proxy.
+    pub content: ContentHash,
+    pub return_type: StoredType,
+    pub classes: Vec<StoredClassDependency>,
+    pub functions: Vec<StoredFunctionDependency>,
+    pub inferred: Vec<StoredInferredEdge>,
 }
 
 /// blake3 over the postcard encoding; `None` when encoding fails (never

@@ -3,13 +3,15 @@
 //! entries deliberately violate the exactness contract, because a
 //! correct entry is indistinguishable from a recomputation.
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::indexing_slicing)]
 
 use std::path::Path;
 
 use celerrate_cli::analysis::analyze;
 use celerrate_cli::cache::pack::{Pack, PackHeader, encode, write_atomically};
-use celerrate_cli::cache::snapshot::{DIAGNOSTICS_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK};
+use celerrate_cli::cache::snapshot::{
+    DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
+};
 use celerrate_cli::cache::stored::{
     StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredSeverity,
     StoredSpace, StoredVerdict,
@@ -20,6 +22,7 @@ use celerrate_semantics::{
     AstId, ClassMembers, Declaration, DeclarationKind, ItemTree, MemberTree, SymbolSpace,
     item_tree, member_tree, source_symbol_table,
 };
+use celerrate_types::{StoredInferredSignature, StoredSignatureKey};
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
@@ -829,4 +832,215 @@ fn a_cold_session_counts_misses_and_absences() {
     assert!(statistics.tree_misses.load(Ordering::Relaxed) >= 1);
     assert_eq!(statistics.verdicts_absent.load(Ordering::Relaxed), 1);
     assert_eq!(statistics.verdicts_served.load(Ordering::Relaxed), 0);
+}
+
+/// Plan 9a, task 7: one inferred-signature entry per eligible body.
+/// `a.php` carries a declared-return function and an unannotated one —
+/// both get an entry, because the artifact is unconditional; only the
+/// EDGES a declared return cuts, never the callee's own record. `b.php`
+/// carries a trait a class `use`s: the trait's own method gets no
+/// entry under the trait's key (decision 8's exclusion), the class's
+/// own method does. `c.php` carries an anonymous class: its method
+/// gets no entry either (no stable folded key for a caller elsewhere
+/// to cite). `annotated` calls `plain` — no declared return exists for
+/// `plain`, so the call resolves through the INFERRED tier, giving
+/// `annotated`'s own entry a concrete `StoredInferredEdge` to check
+/// alongside the plain declared-tier `functions` dependency `plain`
+/// itself never has any of (it calls nothing).
+#[test]
+fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
+    let source_a = "<?php function plain() { return 'hello'; } function annotated(): int { return plain() === 'hello' ? 1 : 2; }";
+    let source_b = "<?php trait Greets { public function greet() { return 'hi'; } } \
+         class Greeter { use Greets; public function shout() { return 'HI'; } }";
+    let source_c = "<?php function wrapper() { return new class { public function compute() { return 42; } }; }";
+    let root = project(&[
+        ("a.php", source_a),
+        ("b.php", source_b),
+        ("c.php", source_c),
+    ]);
+    let (_, _) = run_check(root.path());
+
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    let bytes = std::fs::read(
+        root.path()
+            .join(".celerrate/cache/")
+            .join(INFERRED_SIGNATURES_PACK),
+    )
+    .unwrap();
+    let pack: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+
+    let entry = |key: &StoredSignatureKey| {
+        pack.entries
+            .iter()
+            .find(|(candidate, _)| candidate == key)
+            .map(|(_, entry)| entry)
+    };
+
+    let plain_key = StoredSignatureKey::Function {
+        key: "plain".to_owned(),
+    };
+    let annotated_key = StoredSignatureKey::Function {
+        key: "annotated".to_owned(),
+    };
+    let shout_key = StoredSignatureKey::Method {
+        class_key: "greeter".to_owned(),
+        member_key: "shout".to_owned(),
+    };
+    let greet_key = StoredSignatureKey::Method {
+        class_key: "greets".to_owned(),
+        member_key: "greet".to_owned(),
+    };
+
+    let plain = entry(&plain_key).expect("the unannotated free function has an entry");
+    let annotated = entry(&annotated_key).expect("the annotated free function still has one too");
+    let shout = entry(&shout_key).expect("the class's own method has an entry");
+    assert!(
+        entry(&greet_key).is_none(),
+        "no entry under the trait's own key",
+    );
+    assert!(
+        pack.entries
+            .iter()
+            .all(|(key, _)| !matches!(key, StoredSignatureKey::Method { member_key, .. } if member_key == "compute")),
+        "no entry for the anonymous class's method under any key",
+    );
+
+    assert_eq!(plain.content, *blake3::hash(source_a.as_bytes()).as_bytes());
+    assert_eq!(
+        annotated.content,
+        *blake3::hash(source_a.as_bytes()).as_bytes()
+    );
+    assert_eq!(shout.content, *blake3::hash(source_b.as_bytes()).as_bytes());
+
+    assert!(
+        plain.classes.is_empty() && plain.functions.is_empty() && plain.inferred.is_empty(),
+        "plain calls nothing and consults no class",
+    );
+    assert!(
+        shout.classes.is_empty() && shout.functions.is_empty() && shout.inferred.is_empty(),
+        "shout's body never references self/parent/static or a member",
+    );
+    assert_eq!(
+        annotated.inferred,
+        vec![celerrate_types::StoredInferredEdge {
+            callee: plain_key,
+            return_type: annotated.inferred[0].return_type.clone(),
+        }],
+        "annotated's call to the undeclared plain() resolves through the inferred tier",
+    );
+    assert!(
+        annotated.classes.is_empty() && annotated.functions.is_empty(),
+        "annotated consults no declared-tier callee and no class",
+    );
+}
+
+/// Two identical runs in fresh directories produce byte-identical
+/// `inferred_signatures.bin` — the same determinism contract the other
+/// three packs already carry.
+#[test]
+fn the_signature_pack_is_sorted_and_deterministic() {
+    let files: &[(&str, &str)] = &[
+        (
+            "a.php",
+            "<?php function plain() { return 'hello'; } function annotated(): int { return 1; }",
+        ),
+        (
+            "b.php",
+            "<?php class Greeter { public function shout() { return 'HI'; } }",
+        ),
+    ];
+
+    let first_root = project(files);
+    run_check(first_root.path());
+    let first = std::fs::read(
+        first_root
+            .path()
+            .join(".celerrate/cache/")
+            .join(INFERRED_SIGNATURES_PACK),
+    )
+    .unwrap();
+
+    let second_root = project(files);
+    run_check(second_root.path());
+    let second = std::fs::read(
+        second_root
+            .path()
+            .join(".celerrate/cache/")
+            .join(INFERRED_SIGNATURES_PACK),
+    )
+    .unwrap();
+
+    assert_eq!(first, second, "byte-identical across two fresh directories");
+
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
+    let pack: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
+        celerrate_cli::cache::pack::decode(&first, &header).unwrap();
+    let keys: Vec<&StoredSignatureKey> = pack.entries.iter().map(|(key, _)| key).collect();
+    assert!(keys.is_sorted(), "entries are written in key order");
+    assert_eq!(pack.entries.len(), 3, "plain, annotated, and shout");
+}
+
+/// A vendor file's own body must get NO signature entry: `analyze`
+/// fans `inferred_body_types` over `inputs.reported` alone (the
+/// project's own files — `analysis.rs`'s own rustdoc on
+/// `AnalysisInputs::reported`), never over the whole `sources`/
+/// `inputs.files` set the item-tree and member-tree packs cover. If
+/// `collect_signature_entries` widened its own loop to that broader
+/// set, it would force a FRESH interprocedural inference of every
+/// vendor body the analysis pass never touched — this is exactly the
+/// persist-may-only-read invariant (decision 8) the fourth pack must
+/// not violate. The vendor class here (`Lib\Helper`) is referenced
+/// from the project file, so its class surface IS consulted (through
+/// `resolve_candidates`/name resolution), but its own method body is
+/// never walked.
+#[test]
+fn a_vendor_files_body_has_no_signature_entry() {
+    let vendor_source =
+        "<?php namespace Lib; class Helper { public function compute() { return 1; } }";
+    let project_source = "<?php namespace App; use Lib\\Helper; new Helper();";
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.2"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        ("vendor/lib/src/Helper.php", vendor_source),
+        (
+            "vendor/composer/installed.json",
+            r#"{"packages": [{"name": "acme/lib", "install-path": "../lib",
+               "autoload": {"psr-4": {"Lib\\": "src/"}}}]}"#,
+        ),
+        ("src/App.php", project_source),
+    ]);
+    let (_, _) = run_check(root.path());
+
+    let session = Session::start(root.path());
+    let header = PackHeader::current(
+        session.configuration.php_version_range(&session.database),
+        session.plugin_set_digest,
+    );
+    let bytes = std::fs::read(
+        root.path()
+            .join(".celerrate/cache/")
+            .join(INFERRED_SIGNATURES_PACK),
+    )
+    .unwrap();
+    let pack: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
+        celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
+
+    assert!(
+        pack.entries.iter().all(|(key, _)| !matches!(
+            key,
+            StoredSignatureKey::Method { class_key, member_key }
+                if class_key == "lib\\helper" && member_key == "compute"
+        )),
+        "the vendor method's body was never walked by the analysis pass, \
+         so persist must not have forced a fresh inference of it",
+    );
 }
