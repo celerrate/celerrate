@@ -1723,6 +1723,68 @@ class User extends Entity {}
     );
 }
 
+/// Issue #37, stage 2: `owner_class_docblock` is now tracked per
+/// class-like, so a prose edit to Repository's docblock re-parses
+/// Repository's class annotations only. UserRepository's
+/// `class_annotations` sees its own docblock query backdate (its
+/// `@extends` text is untouched) and stays memoized, where before the
+/// boundary both classes re-parsed on any same-file docblock edit.
+#[test]
+fn a_class_docblock_prose_edit_spares_the_sibling_classes_annotations() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/**
+ * The repository.
+ * @template T
+ */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("The repository.", "The repository, but described better.");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    let log = f.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "class_annotations"),
+        1,
+        "only the EDITED class's annotations re-parse: Repository's own \
+         docblock changed, UserRepository's did not, and the tracked \
+         owner_class_docblock boundary keeps them apart: {log:?}",
+    );
+}
+
 /// Task 13's closing pin, the counterexample to the pin above: editing
 /// the `@extends` argument itself (`Repository<User>` ->
 /// `Repository<Admin>`) genuinely changes `class_annotations`'s parsed

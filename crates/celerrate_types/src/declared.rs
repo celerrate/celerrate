@@ -209,7 +209,7 @@ pub fn member_annotations<'db>(
     // paths can never disagree.
     let member_key = folded_member_key(member.kind, &member.name);
     let declaring_scope = format!("{owner}::{member_key}");
-    let enclosing_docblock = owner_class_docblock(db, files, &owner);
+    let enclosing_docblock = owner_class_docblock(db, files, class_like_query(db, &owner));
     let parsed = with_declaring_site(db, files, &owner, |site| {
         let context = AnnotationContext {
             declaring_scope: &declaring_scope,
@@ -511,7 +511,7 @@ pub fn declared_member_signature<'db>(
         // `(mixed, NativeOnly)`.
         MemberResolution::Virtual { member, owner } => {
             let mixed = TypeId::mixed(db);
-            let enclosing_docblock = owner_class_docblock(db, files, &owner);
+            let enclosing_docblock = owner_class_docblock(db, files, class_like_query(db, &owner));
             return Some(with_declaring_site(db, files, &owner, |site| {
                 let context = AnnotationContext {
                     declaring_scope: &owner,
@@ -712,13 +712,16 @@ pub(crate) fn declaring_site<'db>(
 }
 
 /// The owner class-like's own docblock text: class-level `@template`
-/// declarations are visible inside member annotations.
-pub(crate) fn owner_class_docblock(
-    db: &dyn salsa::Database,
+/// declarations are visible inside member annotations. Tracked (issue
+/// #37) and keyed per class-like, so consumers re-run only when THIS
+/// class's docblock changes, not on any docblock edit in the file.
+#[salsa::tracked]
+pub(crate) fn owner_class_docblock<'db>(
+    db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
-    owner_key: &str,
+    query: SymbolQuery<'db>,
 ) -> Option<String> {
-    let site = declaring_site(db, files, class_like_query(db, owner_key))?;
+    let site = declaring_site(db, files, query)?;
     member_tree(db, site.file)
         .classes
         .iter()

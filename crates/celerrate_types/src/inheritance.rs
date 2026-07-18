@@ -109,7 +109,11 @@ pub fn class_annotations<'db>(
             ancestors: Vec::new(),
         };
     }
-    let Some(docblock) = crate::declared::owner_class_docblock(db, files, key) else {
+    let Some(docblock) = crate::declared::owner_class_docblock(
+        db,
+        files,
+        crate::declared::class_like_query(db, key),
+    ) else {
         return ClassAnnotations::default();
     };
     crate::declared::with_declaring_site(db, files, key, |site| {
