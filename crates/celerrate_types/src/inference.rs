@@ -193,12 +193,19 @@ pub struct InferenceContext<'db> {
     pub using_class_key: Option<String>,
 }
 
+/// The unguarded tracked query behind [`inferred_body_types`]: entering
+/// it while its own claim is active panics (salsa's `Panic` strategy —
+/// this query carries no `cycle_fn`). Module-private on purpose
+/// (issue #51): the only legal callers are the two cycle-safe return
+/// queries, which ARE the recovery-carrying heads, and the public
+/// wrapper, which warms one of them first. Do not re-export.
+///
 /// The inference of one body: `None` when the identity carries no
 /// body in `file` (mirroring `body_ir`). Task 3 replaces the
 /// all-`mixed` table with the flow walk.
 #[salsa::tracked(returns(ref))]
 #[allow(clippy::too_many_arguments)]
-pub fn inferred_body_types<'db>(
+fn inferred_body_types_unguarded<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
     stubs: StubIndexInput,
@@ -308,6 +315,82 @@ pub fn inferred_body_types<'db>(
         stub_calls: result.stub_calls,
         dependencies: result.dependencies,
     })
+}
+
+/// Completes any inference fixpoint `body` participates in by demanding
+/// its owner's cycle-safe return query — the only entry points carrying
+/// `cycle_fn`/`cycle_initial`. Ownerless bodies (and the impossible
+/// keyless-method case) need no warming: a body the member tree does
+/// not own cannot be re-entered through the symbol index under its own
+/// name, so no same-claim cycle exists (issue #51).
+fn warm_the_cycle_safe_entry_point<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    file: SourceFile,
+    body: BodyQuery<'db>,
+) {
+    match body_owner(db, file, body) {
+        Some(BodyOwner::Function(function)) => {
+            let key = folded_symbol_key(
+                SymbolSpace::Function,
+                &fully_qualified_name(&function.namespace, &function.name),
+            );
+            inferred_function_return(
+                db,
+                files,
+                stubs,
+                configuration,
+                crate::declared::FunctionQuery::new(db, key),
+            );
+        }
+        Some(BodyOwner::Method {
+            class_key: Some(class_key),
+            member,
+            ..
+        }) => {
+            inferred_method_return(
+                db,
+                files,
+                stubs,
+                configuration,
+                MethodQuery::new(
+                    db,
+                    class_key.clone(),
+                    folded_member_key(MemberKind::Method, &member.name),
+                ),
+            );
+        }
+        Some(BodyOwner::Method {
+            class_key: None, ..
+        })
+        | None => {}
+    }
+}
+
+/// The inference of one body: `None` when the identity carries no body
+/// in `file`. This public name is a cycle-safe wrapper over the
+/// module-private tracked query (issue #51): it first warms the owner's
+/// recovery-carrying return query, completing any fixpoint the body
+/// participates in, then demands the raw query — which either hits its
+/// memo or recomputes with every recursive edge answered from the
+/// completed return memo. Either way, salsa's `Panic` strategy is
+/// never reachable from here. The warming covers the
+/// `InferenceContext::new(db, None)` entry every present caller uses;
+/// a future external caller passing a `Some` (trait-body) context
+/// extends the warming symmetrically before it ships.
+pub fn inferred_body_types<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+    file: SourceFile,
+    body: BodyQuery<'db>,
+    context: InferenceContext<'db>,
+) -> &'db Option<InferredBody<'db>> {
+    warm_the_cycle_safe_entry_point(db, files, stubs, configuration, file, body);
+    inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
 }
 
 /// Parameter names paired with their seeded types: the declared
@@ -595,7 +678,7 @@ pub fn inferred_function_return<'db>(
     let Some(&(_, file)) = index.get(position) else {
         return TypeId::mixed(db);
     };
-    inferred_body_types(
+    inferred_body_types_unguarded(
         db,
         files,
         stubs,
@@ -751,7 +834,7 @@ pub fn inferred_method_return<'db>(
         return TypeId::mixed(db);
     };
     let body = BodyQuery::new(db, member.ast_id);
-    inferred_body_types(db, files, stubs, configuration, file, body, context)
+    inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
         .as_ref()
         .map(|inferred| inferred.return_type)
         .unwrap_or_else(|| TypeId::mixed(db))
@@ -780,7 +863,7 @@ mod tests {
     use celerrate_stubs::{StubIndex, StubIndexInput};
 
     use super::{
-        BodyOwner, InferenceContext, MethodQuery, body_owner, inferred_body_types,
+        BodyOwner, InferenceContext, MethodQuery, body_owner, inferred_body_types_unguarded,
         inferred_function_return, inferred_method_return,
     };
     use crate::declared::FunctionQuery;
@@ -884,7 +967,7 @@ mod tests {
         let fixture = fixture(&["<?php function f() { return 1 + 2; }"]);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 0);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -915,7 +998,7 @@ mod tests {
     fn return_display(fixture: &Fixture, index: u32) -> String {
         let file = fixture.handles[0];
         let body = body_query(fixture, index);
-        inferred_body_types(
+        inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -972,7 +1055,7 @@ mod tests {
                     continue;
                 };
                 let body = BodyQuery::new(&fixture.db, member.ast_id);
-                return inferred_body_types(
+                return inferred_body_types_unguarded(
                     &fixture.db,
                     fixture.files,
                     fixture.stubs,
@@ -1085,7 +1168,7 @@ mod tests {
         // Numbering: class = 0 (no body), method = 1 (the 1a contract).
         let class = body_query(&fixture, 0);
         assert!(
-            inferred_body_types(
+            inferred_body_types_unguarded(
                 &fixture.db,
                 fixture.files,
                 fixture.stubs,
@@ -1367,7 +1450,7 @@ $listener = new class {
         assert_eq!(return_display(&fixture, 2), "string");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -1409,7 +1492,7 @@ $listener = new class {
         let fixture = fixture(&["<?php enum E { case A; } function f() { return E::A; }"]);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2356,7 +2439,7 @@ function caller() { return make(); }
         assert_eq!(return_display(&fixture, 2), "string");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2418,7 +2501,7 @@ function caller() { return make(); }
         assert_eq!(return_display(&fixture, 1), "int");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 1);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2452,7 +2535,7 @@ function caller() { return make(); }
         register_fake_provider(&fixture);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 3);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2487,7 +2570,7 @@ function caller() { return make(); }
         // inferred_edge = 3, f = 4 (`methods_seed_their_declared_
         // parameters_too`'s own "class = 0, method = 1" convention).
         let body = body_query(&fixture, 4);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2563,7 +2646,7 @@ function caller() { return make(); }
         let file = fixture.handles[0];
         // Numbering: class C = 0, method m = 1, g_one = 2, g_two = 3,
         // f1 = 4, f2 = 5.
-        let first = inferred_body_types(
+        let first = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2573,7 +2656,7 @@ function caller() { return make(); }
             InferenceContext::new(&fixture.db, None),
         )
         .clone();
-        let second = inferred_body_types(
+        let second = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2614,7 +2697,7 @@ function caller() { return make(); }
         let file = fixture.handles[0];
         // Numbering: declared_edge = 0, inferred_edge = 1, f = 2.
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2661,7 +2744,7 @@ function caller() { return make(); }
         // site, while the RECORDED edge must still carry the
         // unsubstituted placeholder.
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &fixture.db,
             fixture.files,
             fixture.stubs,
@@ -2977,7 +3060,7 @@ class RightChild extends Base {}
         assert_eq!(left_return.display(&f.db), "42");
         let log = f.db.take_executed();
         assert_eq!(
-            executions_of(&log, "inferred_body_types"),
+            executions_of(&log, "inferred_body_types_unguarded"),
             1,
             "one body, inferred once: {log:?}",
         );
@@ -3184,7 +3267,7 @@ class StringBox { use Reader; public string $value = ''; }
         );
         let log = f.db.take_executed();
         assert_eq!(
-            executions_of(&log, "inferred_body_types"),
+            executions_of(&log, "inferred_body_types_unguarded"),
             2,
             "the per-receiver key exists exactly where substitution is impossible: {log:?}",
         );
@@ -4281,7 +4364,7 @@ function consume(): void {
     $value = unserialize('x');
 }
 "#]);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &f.db,
             f.files,
             f.stubs,
@@ -4311,7 +4394,7 @@ function consume(): void {
 function helper(): int { return 1; }
 function consume(): void { $x = helper(); }
 "#]);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &f.db,
             f.files,
             f.stubs,
@@ -4340,7 +4423,7 @@ function consume(): void { $x = helper(); }
         let f = fixture(&[r#"<?php
 function consume(): void { $x = totally_undefined_function(); }
 "#]);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &f.db,
             f.files,
             f.stubs,
@@ -4367,7 +4450,7 @@ function consume(array $arguments): void {
     preg_match(...$arguments);
 }
 "#]);
-        let inferred = inferred_body_types(
+        let inferred = inferred_body_types_unguarded(
             &f.db,
             f.files,
             f.stubs,

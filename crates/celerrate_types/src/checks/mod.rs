@@ -576,4 +576,62 @@ class User { public string $name = ''; }
             result.dependencies,
         );
     }
+
+    /// Issue #51's exact reproduction: a self-recursive free function
+    /// declared with NO caller ahead of it. `typed_file_verdicts` walks it
+    /// through `body_typed_verdicts`, whose `inferred_body_types` demand
+    /// used to re-enter its own still-active claim when the body's
+    /// recursive call resolved back through `inferred_function_return` —
+    /// salsa's `Panic` strategy, a crash on valid recursive PHP. The
+    /// public `inferred_body_types` now warms the cycle-safe return query
+    /// first, so this must answer (no verdicts: the body is clean) rather
+    /// than panic.
+    #[test]
+    fn a_recursive_function_type_checks_without_a_caller() {
+        let fixture = fixture(&[r#"<?php
+function down(int $n) {
+    if ($n <= 0) { return 0; }
+    return down($n - 1);
+}
+"#]);
+        let result = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        );
+        assert!(
+            result.verdicts.is_empty(),
+            "a clean self-recursive function raises no typed verdict: {:?}",
+            result.verdicts,
+        );
+    }
+
+    /// The method-recursion twin, entering the cycle through
+    /// `inferred_method_return` instead: `$this->down(...)` inside the
+    /// method's own body, again with no caller anywhere.
+    #[test]
+    fn a_recursive_method_type_checks_without_a_caller() {
+        let fixture = fixture(&[r#"<?php
+class Walker {
+    public function down(int $n) {
+        if ($n <= 0) { return 0; }
+        return $this->down($n - 1);
+    }
+}
+"#]);
+        let result = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        );
+        assert!(
+            result.verdicts.is_empty(),
+            "a clean self-recursive method raises no typed verdict: {:?}",
+            result.verdicts,
+        );
+    }
 }
