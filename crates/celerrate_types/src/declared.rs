@@ -209,7 +209,7 @@ pub fn member_annotations<'db>(
     // paths can never disagree.
     let member_key = folded_member_key(member.kind, &member.name);
     let declaring_scope = format!("{owner}::{member_key}");
-    let enclosing_docblock = owner_class_docblock(db, files, &owner);
+    let enclosing_docblock = owner_class_docblock(db, files, class_like_query(db, &owner));
     let parsed = with_declaring_site(db, files, &owner, |site| {
         let context = AnnotationContext {
             declaring_scope: &declaring_scope,
@@ -511,7 +511,7 @@ pub fn declared_member_signature<'db>(
         // `(mixed, NativeOnly)`.
         MemberResolution::Virtual { member, owner } => {
             let mixed = TypeId::mixed(db);
-            let enclosing_docblock = owner_class_docblock(db, files, &owner);
+            let enclosing_docblock = owner_class_docblock(db, files, class_like_query(db, &owner));
             return Some(with_declaring_site(db, files, &owner, |site| {
                 let context = AnnotationContext {
                     declaring_scope: &owner,
@@ -551,16 +551,12 @@ pub fn declared_member_signature<'db>(
             }));
         }
     };
-    // Recorded debt: `declaring_site` (below `owner_class_docblock` at
-    // the `Virtual` arm above) is a plain, non-tracked function that
-    // reads the file-granular `member_tree` directly, with no memo
-    // boundary in between. So this query re-executes on ANY docblock
-    // edit anywhere in the owner's file, not only the queried member's
-    // own or its declaring ancestor's (pinned by
-    // `invalidation_scope.rs`'s
-    // `a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict`).
-    // An honest, already-documented cost, not fixed here.
-    let site_parts = declaring_site(db, files, &owner)?;
+    // The declaring-site reads below are tracked queries (issue #37):
+    // a docblock edit elsewhere in the owner's file re-executes them,
+    // their unchanged answers backdate, and this query is spared. The
+    // pin `a_prose_only_class_docblock_edit_of_another_class_spares_the_signature`
+    // holds the boundary.
+    let site_parts = declaring_site(db, files, class_like_query(db, &owner))?;
     let tables = UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
     let site = NameSite::Source {
         namespace: &site_parts.namespace,
@@ -586,7 +582,11 @@ pub fn declared_member_signature<'db>(
                 &owner,
                 &parameter_names,
                 &ancestors,
-                |ancestor| declares_member(db, files, ancestor, kind, member_key),
+                |ancestor| {
+                    let ancestor_query =
+                        MemberQuery::new(db, ancestor.to_owned(), kind, member_key.clone());
+                    declares_member(db, files, ancestor_query)
+                },
                 |ancestor| {
                     let ancestor_query =
                         MemberQuery::new(db, ancestor.to_owned(), kind, member_key.clone());
@@ -658,25 +658,40 @@ pub fn declared_member_signature<'db>(
 /// namespace, and declaration AST id, found through the same
 /// firewalls linearization uses. An anonymous class's synthetic key
 /// (`anonymous_class_key`) carries its `AstId` directly, so its site
-/// resolves without a symbol-table lookup — it has no name to look up
-/// (mirrors `linearize.rs`'s `fetch`).
+/// resolves without a symbol-table lookup (it has no name to look up,
+/// mirroring `linearize.rs`'s `fetch`).
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct DeclaringSite {
     file: celerrate_db::SourceFile,
     namespace: String,
     ast_id: AstId,
 }
 
-pub(crate) fn declaring_site(
-    db: &dyn salsa::Database,
-    files: AnalyzedFileSet,
+/// Interns one owner key as the ClassLike-space `SymbolQuery` the
+/// tracked site queries key on. Keys arrive pre-folded (or as
+/// `anonymous_class_key` synthetics), exactly as the callers already
+/// held them; no folding happens here.
+pub(crate) fn class_like_query<'db>(
+    db: &'db dyn salsa::Database,
     owner_key: &str,
+) -> SymbolQuery<'db> {
+    SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned())
+}
+
+/// Tracked (issue #37): this is the memo boundary between the
+/// file-granular `member_tree` and every signature-level consumer. A
+/// docblock edit anywhere in the file re-executes this query, but its
+/// answer (file, namespace, AST id) is untouched by docblocks, so it
+/// backdates and the consumers behind it are spared.
+#[salsa::tracked]
+pub(crate) fn declaring_site<'db>(
+    db: &'db dyn salsa::Database,
+    files: AnalyzedFileSet,
+    query: SymbolQuery<'db>,
 ) -> Option<DeclaringSite> {
-    let ast_id = match parse_anonymous_class_key(owner_key) {
+    let ast_id = match parse_anonymous_class_key(query.key(db)) {
         Some(ast_id) => ast_id,
-        None => {
-            let query = SymbolQuery::new(db, SymbolSpace::ClassLike, owner_key.to_owned());
-            lookup_class_declaration(db, files, query)?.1
-        }
+        None => lookup_class_declaration(db, files, query)?.1,
     };
     let index = analyzed_file_index(db, files);
     let position = index
@@ -697,13 +712,16 @@ pub(crate) fn declaring_site(
 }
 
 /// The owner class-like's own docblock text: class-level `@template`
-/// declarations are visible inside member annotations.
-pub(crate) fn owner_class_docblock(
-    db: &dyn salsa::Database,
+/// declarations are visible inside member annotations. Tracked (issue
+/// #37) and keyed per class-like, so consumers re-run only when THIS
+/// class's docblock changes, not on any docblock edit in the file.
+#[salsa::tracked]
+pub(crate) fn owner_class_docblock<'db>(
+    db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
-    owner_key: &str,
+    query: SymbolQuery<'db>,
 ) -> Option<String> {
-    let site = declaring_site(db, files, owner_key)?;
+    let site = declaring_site(db, files, query)?;
     member_tree(db, site.file)
         .classes
         .iter()
@@ -725,7 +743,7 @@ pub(crate) fn with_declaring_site<T>(
     owner_key: &str,
     parse: impl FnOnce(&NameSite<'_>) -> T,
 ) -> T {
-    match declaring_site(db, files, owner_key) {
+    match declaring_site(db, files, class_like_query(db, owner_key)) {
         Some(site_parts) => {
             let tables =
                 UseTables::for_namespace(item_tree(db, site_parts.file), &site_parts.namespace);
@@ -739,26 +757,31 @@ pub(crate) fn with_declaring_site<T>(
     }
 }
 
-/// Whether `class_key`'s OWN member group declares a member of this
-/// kind and key (inherited entries do not count: the annotation site
-/// is the declaring docblock).
-fn declares_member(
-    db: &dyn salsa::Database,
+/// Whether the queried class's OWN member group declares a member of
+/// this kind and key (inherited entries do not count: the annotation
+/// site is the declaring docblock). Tracked (issue #37): the merge
+/// walk consults this per ancestor from inside
+/// `declared_member_signature`'s frame, so without a boundary here any
+/// docblock edit in the ancestor's file would force the signature to
+/// re-execute.
+#[salsa::tracked]
+pub(crate) fn declares_member<'db>(
+    db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
-    class_key: &str,
-    kind: MemberKind,
-    member_key: &str,
+    query: MemberQuery<'db>,
 ) -> bool {
-    let Some(site) = declaring_site(db, files, class_key) else {
+    let Some(site) = declaring_site(db, files, class_like_query(db, query.class_key(db))) else {
         return false;
     };
+    let kind = query.kind(db);
+    let member_key = query.member_key(db);
     member_tree(db, site.file)
         .classes
         .iter()
         .find(|group| group.ast_id == site.ast_id)
         .is_some_and(|group| {
             group.members.iter().any(|member| {
-                member.kind == kind && folded_member_key(kind, &member.name) == member_key
+                member.kind == kind && folded_member_key(kind, &member.name) == *member_key
             })
         })
 }

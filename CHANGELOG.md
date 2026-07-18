@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- `declared_member_signature` no longer re-executes on docblock edits
+  elsewhere in the owner's file: the declaring-site helpers
+  (`declaring_site`, `owner_class_docblock`, `declares_member`) are now
+  tracked queries keyed per class-like, so a docblock edit invalidates
+  only the members it can actually affect. (#37)
+
 ## [0.0.3] - 2026-07-18
 
 The type-engine preview: the incremental engine is now type-aware.

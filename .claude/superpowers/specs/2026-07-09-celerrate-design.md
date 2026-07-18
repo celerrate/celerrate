@@ -1,6 +1,6 @@
 # Celerrate — Vision and Engine Architecture Design
 
-Date: 2026-07-09 (amended 2026-07-11)
+Date: 2026-07-09 (amended 2026-07-19)
 Status: Approved (brainstorming output; each sub-project gets its own detailed spec)
 
 Amendment history:
@@ -26,6 +26,17 @@ Amendment history:
   section 11 named one preview (end of sub-project 2); this is an
   addition, with the same anti-false-positive gate per family and a
   minimum shippable set defined in the sub-project's design.
+- 2026-07-19: resolved an internal contradiction about where the
+  persistent cache lives. Section 3 lists the disk cache under
+  `celerrate_cli`, while section 11 says the cache was "pulled forward
+  from the CLI sub-project" into semantic core and later that "the disk
+  cache moved to sub-project 2", which reads as a relocation in the
+  layering. The pull-forward was sequencing only (when the cache was
+  built), not placement: the cache seams (the artifact-cache inputs and
+  the pure queries that consult and revalidate them) live
+  dependency-inverted in the domain crates, and the persistence
+  orchestration stays at the composition root until a second binary
+  needs it. Section 3 now carries the clarification.
 
 ## 1. Vision
 
@@ -235,7 +246,7 @@ of them (a pure-syntax style rule does not pull in `celerrate_types`).
 `celerrate_ide` is reserved for the LSP-era feature layer between
 `celerrate_rules` and the binaries.
 
-Two clarifications the list alone does not carry:
+Three clarifications the list alone does not carry:
 
 - **The concrete salsa database lives at the top, not the bottom.** Query
   definitions live with their domain crates; `celerrate_db` holds only the
@@ -251,6 +262,18 @@ Two clarifications the list alone does not carry:
   composition root; `celerrate_plugin` is the aggregation facade that
   re-exports the stable API surface and, later, hosts the WASM adapter
   implementing those same traits. Nothing ever depends upward.
+- **The persistent cache splits across the same boundary** (amendment
+  2026-07-19). The cache seams (the artifact-cache inputs and the pure
+  queries that consult and revalidate them) live dependency-inverted in
+  the domain crates (`celerrate_semantics`, `celerrate_types`); the
+  persistence orchestration (on-disk format, pack collection, write
+  policy) is a composition-root concern in `celerrate_cli`, like the
+  concrete database. Section 11's "pulled forward from the CLI
+  sub-project" is sequencing, not placement: the cache was built during
+  semantic core because the flagship incremental number cannot be
+  measured without it, and it landed in this layout, not below it.
+  Extracting the persistence machinery into a shared library crate is
+  deferred until the second binary (LSP or daemon) exists to consume it.
 
 The stub compiler uses `celerrate_syntax` as a build-dependency (a separate
 dependency graph in Cargo, so no layering violation), and the compiled
@@ -656,7 +679,8 @@ Each sub-project gets its own spec → plan → implementation cycle:
    infrastructure.
 2. **Semantic core** — the salsa query database; project discovery (Composer
    autoload); symbol indexing; name resolution; compiled stubs; the
-   persistent artifact cache (pulled forward from the CLI sub-project: the
+   persistent artifact cache (pulled forward in time from the CLI
+   sub-project, not in layering, see the section 3 clarification: the
    flagship incremental number cannot be measured without it); incremental
    by construction. Also carries an assumed debt from Foundations: the
    extraction of the shared diagnostic data model into
@@ -683,7 +707,8 @@ Each sub-project gets its own spec → plan → implementation cycle:
    autofix engine; rustc-style rendering; `celerrate explain`.
 5. **CLI product v0.1** — `celerrate check` with the `correctness` group:
    configuration, baseline, `migrate --from-phpstan`, output formats, the
-   public release (the disk cache moved to sub-project 2).
+   public release (the disk cache was built in sub-project 2; its
+   placement stays at the composition root, section 3).
 6. **Framework providers** — the first post-v0.1 sub-project: dynamic type
    providers for Eloquent (magic members, builder chains), Laravel facades,
    and the Symfony container. Laravel joins the measured corpus and the

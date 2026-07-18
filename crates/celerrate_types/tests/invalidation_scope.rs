@@ -1522,43 +1522,20 @@ fn fixture_with_inheritance_syntax(sources: &[&str]) -> InferenceFixture {
     built
 }
 
-/// Task 13's closing pin: a prose-only edit to a CLASS's own docblock
-/// (the `@template` declaration site) is a genuine cutoff hole flushed
-/// by this probe (Step 3's own anticipated outcome), just not the one
-/// the brief named. `class_annotations` re-runs (its
-/// `owner_class_docblock` input's text changed) and produces a
-/// byte-identical parsed template list — but `declared_member_signature`
-/// ALSO re-runs, unconditionally. `declared_member_signature` has two
-/// separate reads that reach the same file-granular `member_tree` —
-/// bundling every class's own docblock text into one
-/// `Vec<ClassMembers>` — but only one of them lacks a memo boundary
-/// for THIS edit: its direct call to the plain (non-tracked)
-/// `declaring_site`/`owner_class_docblock` helpers (`declared.rs:444`),
-/// which read `member_tree` with nothing memoized in between, so
-/// Repository's changed docblock forces a re-execution
-/// unconditionally. Its other read, `lookup_member`
-/// (`declared.rs:382`), reaches `member_tree` too, transitively
-/// through `linearized_class`'s own `fetch` helper
-/// (`linearize.rs:758`) — but `linearized_class` IS a tracked query,
-/// so when Repository's changed docblock leaves `UserRepository`'s own
-/// linearized member list byte-identical, that query's early cutoff
-/// absorbs the change before `lookup_member` is ever re-invoked
-/// (confirmed empirically: instrumenting the log shows `lookup_member`
-/// executing zero times across this edit). So the direct helper calls,
-/// not `lookup_member`, are the forcing mechanism for THIS pin's edit
-/// — an honest, already-documented cost (the sibling pin
-/// `a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict`
-/// names `lookup_member` for a DIFFERENT edit, the queried member's OWN
-/// docblock, where `lookup_member`'s own returned payload genuinely
-/// changes; this pin shows a second, independent file-granular cost
-/// reaching any OTHER class's docblock in the same file). The
-/// two-stage cutoff this pin can actually demonstrate is one layer
-/// further down: the refined VALUE stays identical, so a downstream
-/// verdict computed from it — routed through the class hierarchy
-/// exactly as the sibling pins insist on, so "spared" is not a vacuous
-/// structural short-circuit — stays memoized.
+/// Issue #37's closing pin, flipping task 13's recorded debt: a
+/// prose-only edit to ANOTHER class's docblock (Repository's, while
+/// the queried member belongs to UserRepository) now spares
+/// `declared_member_signature` entirely. Every file-granular read the
+/// signature query makes is behind a tracked boundary: `lookup_member`
+/// rides `linearized_class`'s cutoff (pinned before the fix),
+/// `declaring_site`, `owner_class_docblock`, and `declares_member` are
+/// tracked queries whose answers a docblock prose edit cannot change,
+/// and `item_tree` carries no docblocks. The annotation parse still
+/// re-runs over the edited docblock (`class_annotations >= 1`, its
+/// docblock input genuinely changed) and backdates, so the signature
+/// and the downstream verdict both stay memoized.
 #[test]
-fn a_prose_only_class_docblock_edit_recomputes_the_signature_but_spares_the_verdict() {
+fn a_prose_only_class_docblock_edit_of_another_class_spares_the_signature() {
     let before = r#"<?php
 namespace App;
 class Entity {}
@@ -1643,23 +1620,197 @@ class User extends Entity {}
     );
     assert_eq!(
         executions_of(&log, "declared_member_signature"),
-        1,
-        "declared_member_signature re-runs unconditionally on ANY docblock \
-         edit in the file: its direct calls to the plain (non-tracked) \
-         declaring_site/owner_class_docblock helpers (declared.rs:444) read \
-         the file-granular member_tree with no memo boundary in between. \
-         Its other file-granular read, lookup_member (declared.rs:382), \
-         reaches the same member_tree transitively through \
-         linearized_class, but that query IS tracked and backdates here \
-         (lookup_member executes 0 times across this edit), so it is not \
-         the forcing mechanism for this particular edit — an honest, \
-         already-documented cost, not a defect this task fixes: {log:?}",
+        0,
+        "issue #37: every file-granular read of declared_member_signature \
+         sits behind a tracked boundary (declaring_site, \
+         owner_class_docblock, declares_member, lookup_member via \
+         linearized_class), so a docblock edit in another class of the \
+         same file backdates below the signature: {log:?}",
     );
     assert_eq!(
         executions_of(&log, "subtype_of"),
         0,
         "the identical refined value spares the downstream verdict — the \
          two-stage cutoff this pin can actually demonstrate: {log:?}",
+    );
+}
+
+/// The counterexample guarding issue #37's boundary from the other
+/// side: an edit that CHANGES the declaring site must still reach the
+/// signature. Declaring a new class ahead of Repository shifts every
+/// tree-order `AstId` after it, so `declaring_site`'s answer genuinely
+/// changes, `declared_member_signature` re-executes, and the resolved
+/// value is still correct.
+#[test]
+fn a_declaration_added_ahead_of_the_owner_recomputes_the_signature() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/** @template T */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("class Entity {}", "class Early {}\nclass Entity {}");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![]),
+        "the shifted site must still resolve the inherited return correctly",
+    );
+    let log = f.db.take_executed();
+    assert!(
+        executions_of(&log, "declared_member_signature") >= 1,
+        "a genuinely changed declaring site must reach the signature: {log:?}",
+    );
+}
+
+/// Issue #37, stage 1: `declaring_site` is now a tracked query of its
+/// own. A prose-only edit to another class's docblock still reaches it
+/// (its `member_tree` input changed), but as a tracked query it
+/// appears in the execution log under its own name and its unchanged
+/// answer backdates, which the closing pin of this family turns into a
+/// spared `declared_member_signature`.
+#[test]
+fn a_class_docblock_prose_edit_reruns_declaring_site_as_a_tracked_query() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/**
+ * The repository.
+ * @template T
+ */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("The repository.", "The repository, but described better.");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    let log = f.db.take_executed();
+    assert!(
+        executions_of(&log, "declaring_site") >= 1,
+        "declaring_site must be a tracked query in its own right, visible \
+         in the execution log when its member_tree input changes: {log:?}",
+    );
+}
+
+/// Issue #37, stage 2: `owner_class_docblock` is now tracked per
+/// class-like, so a prose edit to Repository's docblock re-parses
+/// Repository's class annotations only. UserRepository's
+/// `class_annotations` sees its own docblock query backdate (its
+/// `@extends` text is untouched) and stays memoized, where before the
+/// boundary both classes re-parsed on any same-file docblock edit.
+#[test]
+fn a_class_docblock_prose_edit_spares_the_sibling_classes_annotations() {
+    let before = r#"<?php
+namespace App;
+class Entity {}
+/**
+ * The repository.
+ * @template T
+ */
+class Repository {
+    /** @return T */
+    public function find(int $identifier) {}
+}
+/** @extends Repository<User> */
+class UserRepository extends Repository {}
+class User extends Entity {}
+"#;
+    let after = before.replace("The repository.", "The repository, but described better.");
+    let mut f = fixture_with_inheritance_syntax(&[before]);
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    f.db.take_executed();
+    let handle = f.handles.first().copied().unwrap();
+    handle.set_bytes(&mut f.db).to(after.into_bytes());
+    let query = MemberQuery::new(
+        &f.db,
+        "app\\userrepository".to_owned(),
+        MemberKind::Method,
+        "find".to_owned(),
+    );
+    let signature =
+        declared_member_signature(&f.db, f.files, f.stubs, f.configuration, query).unwrap();
+    assert_eq!(
+        signature.value_type,
+        TypeId::class(&f.db, "app\\user", vec![])
+    );
+    let log = f.db.take_executed();
+    assert_eq!(
+        executions_of(&log, "class_annotations"),
+        1,
+        "only the EDITED class's annotations re-parse: Repository's own \
+         docblock changed, UserRepository's did not, and the tracked \
+         owner_class_docblock boundary keeps them apart: {log:?}",
     );
 }
 

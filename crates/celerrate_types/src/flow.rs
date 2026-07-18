@@ -1056,10 +1056,13 @@ impl<'db> Walker<'db, '_, '_> {
             namespace: &self.context.namespace,
             tables,
         };
-        let owner_docblock =
-            self.context.owner_class_key.as_deref().and_then(|owner| {
-                crate::declared::owner_class_docblock(db, self.context.files, owner)
-            });
+        let owner_docblock = self.context.owner_class_key.as_deref().and_then(|owner| {
+            crate::declared::owner_class_docblock(
+                db,
+                self.context.files,
+                crate::declared::class_like_query(db, owner),
+            )
+        });
         let context = crate::type_syntax::AnnotationContext {
             declaring_scope: &self.context.scope_key,
             enclosing_class_scope: self.context.owner_class_key.as_deref(),
