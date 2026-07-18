@@ -10,11 +10,20 @@ use std::process::Command;
 
 use crate::Result;
 
-/// The file the one-edit scenario touches, relative to the corpus
-/// root, and the scripted edit itself: appended, so every span above
-/// it stays put — one file changes, everything else is unchanged.
+/// The file the one-edit and body-edit scenarios touch, relative to
+/// the corpus root. One-edit appends a comment (spans above stay put,
+/// trivia the body IR ignores); body-edit replaces a statement's
+/// expression through a variant file (the body IR changes).
 const EDIT_TARGET: &str = "src/Controller/BlogController.php";
 const EDIT_TEXT: &str = "\\n// celerrate benchmark edit\\n";
+
+/// The body-edit scenario's scripted edit, inside
+/// `BlogController::search`: one statement's expression changes, the
+/// signature does not — the body IR changes, the member tree
+/// backdates. This is the edit class the comment-append scenario
+/// neutralizes, and the protocol's flagship.
+const BODY_EDIT_NEEDLE: &str = "['query' => (string) $request->query->get('q', '')]";
+const BODY_EDIT_REPLACEMENT: &str = "['query' => trim((string) $request->query->get('q', ''))]";
 
 /// The CI guard rail's generous ceilings, in seconds. Shared runners
 /// are too noisy to measure on, so these catch structural regressions
@@ -24,6 +33,7 @@ const EDIT_TEXT: &str = "\\n// celerrate benchmark edit\\n";
 const COLD_CEILING_SECONDS: f64 = 30.0;
 const WARM_NO_CHANGE_CEILING_SECONDS: f64 = 3.0;
 const WARM_ONE_EDIT_CEILING_SECONDS: f64 = 3.0;
+const WARM_BODY_EDIT_CEILING_SECONDS: f64 = 3.0;
 
 /// One protocol scenario: its name, how many timed runs, what runs
 /// before each timed run, and the guard-rail ceiling.
@@ -55,6 +65,16 @@ pub fn run(check_ceilings: bool) -> Result<()> {
     let original = bench_directory.join("edit-target-original.bak");
     std::fs::copy(&edit_target, &original)?;
 
+    // The in-place scripted edits, applied by `cp` from variant files
+    // computed here in Rust: no shell-quoting of PHP source, and a
+    // moved corpus pin fails loudly instead of measuring nothing.
+    let pristine = std::fs::read_to_string(&edit_target)?;
+    let body_variant = bench_directory.join("edit-target-body-variant.php");
+    std::fs::write(
+        &body_variant,
+        edited_variant(&pristine, BODY_EDIT_NEEDLE, BODY_EDIT_REPLACEMENT)?,
+    )?;
+
     let quoted_binary = quoted(&binary);
     let scenarios = [
         Scenario {
@@ -81,11 +101,26 @@ pub fn run(check_ceilings: bool) -> Result<()> {
             )),
             ceiling_seconds: WARM_ONE_EDIT_CEILING_SECONDS,
         },
+        Scenario {
+            name: "warm body-edit",
+            runs: 10,
+            prepare: Some(restore_prime_apply(
+                &original,
+                &edit_target,
+                &quoted_binary,
+                &body_variant,
+            )),
+            ceiling_seconds: WARM_BODY_EDIT_CEILING_SECONDS,
+        },
     ];
 
     // Cold full's last timed run already leaves a cache behind, but
     // this explicit prime guarantees the warm scenarios a cache to
-    // start from regardless of scenario order.
+    // start from regardless of scenario order. Each in-place scenario
+    // restores only its own target: whatever state an earlier scenario
+    // left elsewhere is constant within a scenario and absorbed by the
+    // prime inside every prepare, so each timed run measures exactly
+    // its scenario's one edit.
     prime(&binary, &working)?;
 
     let mut failures = Vec::new();
@@ -201,6 +236,39 @@ fn quoted(path: &Path) -> String {
     format!("'{}'", path.display())
 }
 
+/// Applies one scripted edit to the pristine content of its target. A
+/// missing needle means the corpus pin moved without the benchmark
+/// following: a loud error, never a silent no-op measurement.
+pub fn edited_variant(pristine: &str, needle: &str, replacement: &str) -> Result<String> {
+    if !pristine.contains(needle) {
+        return Err(format!(
+            "the scripted-edit needle {needle:?} is not in the pristine target; \
+             the corpus pin moved without the benchmark following"
+        )
+        .into());
+    }
+    Ok(pristine.replace(needle, replacement))
+}
+
+/// The prepare command of the in-place edit scenarios: restore the
+/// pristine target, prime the cache on it, then apply the edited
+/// variant — all through `cp`, so no PHP source is ever shell-quoted
+/// inside the command string.
+fn restore_prime_apply(
+    original: &Path,
+    target: &Path,
+    quoted_binary: &str,
+    variant: &Path,
+) -> String {
+    format!(
+        "cp {} {} && ({quoted_binary} check . > /dev/null || true) && cp {} {}",
+        quoted(original),
+        quoted(target),
+        quoted(variant),
+        quoted(target),
+    )
+}
+
 /// A named check with an installation pointer beats a bare "No such
 /// file or directory" from the spawn.
 fn ensure_hyperfine() -> Result<()> {
@@ -262,5 +330,48 @@ mod tests {
         assert!(copy.join("composer.json").is_file());
         assert!(!copy.join(".git").exists());
         assert!(!copy.join(".celerrate").exists());
+    }
+
+    #[test]
+    fn the_scripted_edit_replaces_the_pinned_needle() {
+        let variant = super::edited_variant("a needle b", "needle", "thread").unwrap();
+        assert_eq!(variant, "a thread b");
+    }
+
+    #[test]
+    fn a_missing_needle_is_an_error_naming_it() {
+        let error = super::edited_variant("nothing here", "needle", "thread").unwrap_err();
+        assert!(error.to_string().contains("needle"));
+        assert!(error.to_string().contains("corpus pin"));
+    }
+
+    #[test]
+    fn the_body_edit_wraps_the_pinned_query_expression() {
+        // A copy of the pinned line of src/Controller/BlogController.php
+        // (symfony/demo at 03fe2567): if the pin moves, `edited_variant`
+        // fails loudly at run time; this pins the needle against the
+        // content the pin currently names.
+        let pristine = "        return $this->render('blog/search.html.twig', ['query' => (string) $request->query->get('q', '')]);\n";
+        let variant = super::edited_variant(
+            pristine,
+            super::BODY_EDIT_NEEDLE,
+            super::BODY_EDIT_REPLACEMENT,
+        )
+        .unwrap();
+        assert!(variant.contains("trim((string) $request->query->get('q', ''))"));
+    }
+
+    #[test]
+    fn the_in_place_prepare_restores_primes_and_applies() {
+        let command = super::restore_prime_apply(
+            std::path::Path::new("/b/orig.bak"),
+            std::path::Path::new("/w/File.php"),
+            "'/bin/celerrate'",
+            std::path::Path::new("/b/variant.php"),
+        );
+        assert_eq!(
+            command,
+            "cp '/b/orig.bak' '/w/File.php' && ('/bin/celerrate' check . > /dev/null || true) && cp '/b/variant.php' '/w/File.php'"
+        );
     }
 }
