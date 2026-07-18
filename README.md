@@ -7,14 +7,15 @@
 
 **An extremely fast, all-in-one toolchain for PHP, written in Rust.**
 
-Celerrate analyzes 1.3 million lines of PHP in 1.11 seconds cold, and
-in 0.29 seconds after you edit one file. Measured end to end, protocol
-committed to the repository.
+Celerrate type-checks 1.3 million lines of PHP in 1.533 seconds
+cold, and in 0.521 seconds after you edit a function body.
+Measured end to end, protocol committed to the repository.
 
-> **Early preview (v0.0.2).** The engine is real; the rule surface is
-> deliberately small, and growing. Today `celerrate check` resolves
-> every symbol and gates PHP versions, with zero configuration and
-> without ever crashing on any input. Type inference is next.
+> **Early preview (v0.0.3).** The engine is now type-aware:
+> interprocedural inference, your existing PHPDoc/PHPStan/Psalm
+> annotations honored out of the box, and five diagnostic families,
+> with zero configuration and without ever crashing on any input.
+> The rule surface is still deliberately small, and growing.
 
 ## Quick start
 
@@ -32,33 +33,37 @@ dependencies, and your PHP version range on its own:
 ```text
 src/Service/Search.php:27:16 CEL0021 `array_find` requires PHP 8.4, but the project's minimum PHP version is 8.1
 src/Controller/PostController.php:42:19 CEL0018 unknown class `App\Service\Mailer`
+src/Notification/Mailer.php:31:9 CEL0034 accessing `format` on a possibly null `DateTimeImmutable|null`
 
-0 notices, 2 diagnostics
+0 notices, 3 diagnostics
 ```
 
 ## Performance
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of median wall clock on symfony/demo: cold full analysis 1.11 seconds, warm with one file edited 0.29 seconds">
+  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of median wall clock on symfony/demo: cold full analysis 1.533 seconds, warm with one function body edited 0.521 seconds">
 </picture>
 
 Measured by the committed [benchmark protocol](benchmarks/PROTOCOL.md)
 on symfony/demo (9447 PHP files, 1.3 million lines, vendor tree
-included), on the hardware the protocol names:
+included), with type inference active, on the hardware the protocol
+names:
 
 | Scenario | Median wall clock |
 | --- | --- |
-| Cold full analysis | 1.11 s |
-| Warm, one file edited | **0.29 s** |
+| Cold full analysis | 1.533 s |
+| Warm, one function body edited | **0.521 s** |
+| Warm, one signature edited | 0.471 s |
 
-Both numbers are full CLI runs: process startup, cache loading,
+All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. No comparison against other tools is
 published at this scope; the protocol states why.
 
 ## What works today
 
-`celerrate check .` reports two diagnostic families:
+`celerrate check .` reports five diagnostic families
+([the identifier reference](docs/diagnostics.md)):
 
 - **Unknown symbols**: references to classes, functions, or constants
   that resolve nowhere, with your project, your Composer dependencies,
@@ -66,22 +71,43 @@ published at this scope; the protocol states why.
 - **PHP version gating**: symbols or syntax used outside the PHP
   version range your `composer.json` declares, including removals and
   deprecations.
+- **Unknown members**: methods, properties, class constants, and enum
+  cases that do not exist on the receiver's inferred type, silent on
+  anything dynamic, aware of `__call`/`__get` and
+  `@property`/`@method` docblocks.
+- **Nullability**: dereferencing a value that may be `null`, with
+  flow narrowing (`instanceof`, `isset()`, `??`, `?->` chains,
+  `match`, early returns, assertion annotations) deciding what is
+  still nullable at each use site.
+- **Argument types**: per-argument assignability and arity, named
+  arguments included, honoring each file's `declare(strict_types)`
+  mode.
 
 Around them:
 
+- **Your annotations, honored**: standard PHPDoc, the PHPStan
+  dialect, and Psalm synonyms, through the bundled
+  [PHPDoc bridge](docs/phpdoc-bridge.md), including inline
+  suppressions (`@phpstan-ignore-line`, `@psalm-suppress`, and
+  friends).
+- **Interprocedural inference**: declared types are trusted,
+  unannotated returns are inferred across the call graph, generics
+  are resolved for precision (and never reported on).
 - **Zero configuration**: Composer discovery derives what to analyze
   and which PHP versions to check against. Installed dependencies are
   indexed but never reported on.
 - **`--watch`**: re-analysis on every change.
 - **A persistent cache** (`.celerrate/cache/`, self-ignoring): warm
-  runs reuse everything that did not change, across processes.
+  runs reuse everything that did not change, across processes,
+  inferred types included.
 
 ### What it does not do yet
 
-No type inference, no lint rules, no formatter, no language server, no
-configuration file, no baseline, and no output formats beyond the
-terminal report. Those are the next sub-projects, in the
-[roadmap](#roadmap)'s order.
+No lint rules, no formatter, no language server, no configuration
+file, no baseline, and no output formats beyond the terminal report.
+Generic mismatches are not reported (generics serve precision only),
+and unannotated parameters are treated as `mixed`. Those are the next
+sub-projects, in the [roadmap](#roadmap)'s order.
 
 ## One engine, a whole toolchain
 
@@ -122,16 +148,16 @@ The engineering rules behind the numbers, enforced mechanically in CI:
 ## Compatibility
 
 Celerrate targets PHP 8.1+ projects. It defines its own type annotation
-norm and ships a first-party PHPDoc syntax bridge, enabled by default,
-so existing annotated codebases work on day 1.
+norm and ships a first-party [PHPDoc bridge](docs/phpdoc-bridge.md),
+enabled by default, so existing annotated codebases work on day 1.
 
 ## Roadmap
 
 One pillar at a time, in this order:
 
 1. **`celerrate check`**: the static analysis engine is the first
-   public deliverable (previewed since v0.0.1); type inference and the
-   lint, taint, and architecture rule groups build on it.
+   public deliverable (previewed since v0.0.1, type-aware since
+   v0.0.3); the lint, taint, and architecture rule groups build on it.
 2. **`celerrate format`**: the formatter, once the lossless syntax tree
    is proven by the analyzer.
 3. **`celerrate lsp`**: the language server, reusing the same
