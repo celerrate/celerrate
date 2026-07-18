@@ -26,7 +26,7 @@ use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
-use crate::plugins::{RegisteredPlugins, register_plugins};
+use crate::plugins::{RegisteredPlugins, plugin_set_digest, register_plugins};
 use crate::watch::{InputMutation, reconcile};
 
 /// Something that must never happen happened. The run continues, the
@@ -96,6 +96,11 @@ pub struct Session {
     /// registries, and the ones it excluded. Set once, right after the
     /// database's other singleton inputs, before any query runs.
     pub plugins: RegisteredPlugins,
+    /// The registered plugin-set digest (`plugins::plugin_set_digest`),
+    /// computed once at startup and shared by every `PackHeader::current`
+    /// call this session makes: load and persist must key packs on the
+    /// same value, never recompute it independently.
+    pub plugin_set_digest: [u8; 32],
 }
 
 impl Session {
@@ -125,9 +130,12 @@ impl Session {
         let statistics = Arc::new(CacheStatistics::default());
         let cache_directory = root.join(".celerrate").join("cache");
         let cache_loaded_range = discovery.php_version_range;
+        // Computed once and threaded through: load and persist must key
+        // packs on the same digest, never recompute it independently.
+        let plugin_set_digest = plugin_set_digest();
         let cache = Arc::new(CacheSnapshot::load(
             &cache_directory,
-            &PackHeader::current(cache_loaded_range),
+            &PackHeader::current(cache_loaded_range, plugin_set_digest),
         ));
         let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache {
             snapshot: cache.clone(),
@@ -155,6 +163,7 @@ impl Session {
             cache_loaded_range,
             statistics,
             plugins,
+            plugin_set_digest,
         };
         let walk = enumerate_php_files(&session.discovery.walk_roots());
         session.load(&walk);

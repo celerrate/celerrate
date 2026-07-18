@@ -68,7 +68,7 @@ pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
     let current_range = session.configuration.php_version_range(database);
-    let header = PackHeader::current(current_range);
+    let header = PackHeader::current(current_range, session.plugin_set_digest);
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
     let Ok((trees, member_trees, verdicts)) =
@@ -431,7 +431,8 @@ mod tests {
         };
         super::persist(&mut session, &outcome);
         let original_range = session.cache_loaded_range;
-        let original_header = super::pack::PackHeader::current(original_range);
+        let original_header =
+            super::pack::PackHeader::current(original_range, session.plugin_set_digest);
 
         let item_trees_path = session
             .cache_directory
@@ -460,7 +461,7 @@ mod tests {
             session.cache_loaded_range, moved_range,
             "persist adopts the new range once the rewrite is confirmed",
         );
-        let moved_header = super::pack::PackHeader::current(moved_range);
+        let moved_header = super::pack::PackHeader::current(moved_range, session.plugin_set_digest);
         let rewritten = std::fs::read(&item_trees_path).unwrap();
         assert!(
             super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(

@@ -11,8 +11,8 @@ use celerrate_cli::analysis::analyze;
 use celerrate_cli::cache::pack::{Pack, PackHeader, encode, write_atomically};
 use celerrate_cli::cache::snapshot::{DIAGNOSTICS_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK};
 use celerrate_cli::cache::stored::{
-    StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
-    StoredSeverity, StoredSpace, StoredVerdict,
+    StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredSeverity,
+    StoredSpace, StoredVerdict,
 };
 use celerrate_cli::session::Session;
 use celerrate_project::{PhpVersion, PhpVersionRange};
@@ -75,7 +75,10 @@ fn a_matching_pack_seeds_the_item_tree_query() {
     // over the file's raw bytes.
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let probe = StoredItemTree::of(&ItemTree::default());
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_item_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
     let session = Session::start(root.path());
@@ -99,7 +102,10 @@ fn a_matching_pack_seeds_the_member_tree_query() {
 
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let probe = StoredMemberTree::of(&MemberTree::default());
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_member_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
     let session = Session::start(root.path());
@@ -128,7 +134,10 @@ fn a_matching_pack_seeds_the_symbol_table_with_its_defines() {
     let mut probe_tree = ItemTree::default();
     probe_tree.defines.push("PROBE_ROOT".to_owned());
     let probe = StoredItemTree::of(&probe_tree);
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_item_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
     let session = Session::start(root.path());
@@ -147,10 +156,10 @@ fn a_range_mismatch_ignores_the_pack() {
 
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let probe = StoredItemTree::of(&ItemTree::default());
-    let other_header = PackHeader::current(PhpVersionRange::new(
-        PhpVersion::new(8, 1),
-        PhpVersion::new(8, 2),
-    ));
+    let other_header = PackHeader::current(
+        PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 2)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_item_trees_pack(root.path(), &other_header, vec![(hash, probe)]);
 
     let session = Session::start(root.path());
@@ -173,7 +182,10 @@ fn a_stub_blob_mismatch_ignores_the_pack() {
 
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let probe = StoredItemTree::of(&ItemTree::default());
-    let mut foreign_stub = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let mut foreign_stub = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     foreign_stub.stub_blob[0] ^= 0xFF;
     write_item_trees_pack(root.path(), &foreign_stub, vec![(hash, probe)]);
 
@@ -244,7 +256,10 @@ fn a_verdict_whose_records_still_hold_is_served() {
     let source = "<?php new Missing();";
     let root = project(&[("a.php", source)]);
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, probe_verdict())]);
 
     let session = Session::start(root.path());
@@ -270,7 +285,10 @@ fn a_verdict_whose_answer_flipped_is_discarded() {
     let source = "<?php new Missing();";
     let root = project(&[("a.php", source), ("b.php", "<?php class Missing {}")]);
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, probe_verdict())]);
 
     let session = Session::start(root.path());
@@ -298,7 +316,10 @@ fn a_verdict_with_an_unknown_identifier_is_discarded() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let mut verdict = probe_verdict();
     verdict.diagnostics[0].id = "CEL9999".to_owned();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
     let session = Session::start(root.path());
@@ -322,7 +343,10 @@ fn a_verdict_with_a_reversed_range_is_discarded() {
     let mut verdict = probe_verdict();
     verdict.diagnostics[0].start = 17;
     verdict.diagnostics[0].end = 10;
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
     let session = Session::start(root.path());
@@ -382,7 +406,10 @@ fn the_written_packs_validate_and_carry_the_analyzed_files() {
     let root = project(&[("a.php", source_a), ("b.php", source_b)]);
     let (_, _) = run_check(root.path());
 
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
     let pack: Pack<Vec<([u8; 32], StoredItemTree)>> =
         celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
@@ -406,8 +433,12 @@ fn a_second_run_leaves_equivalent_packs_behind() {
     let (_, first_output) = run_check(root.path());
     let first_trees =
         std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
-    let first_member_trees =
-        std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK)).unwrap();
+    let first_member_trees = std::fs::read(
+        root.path()
+            .join(".celerrate/cache/")
+            .join(MEMBER_TREES_PACK),
+    )
+    .unwrap();
     let first_verdicts =
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
 
@@ -419,7 +450,12 @@ fn a_second_run_leaves_equivalent_packs_behind() {
     );
     assert_eq!(
         first_member_trees,
-        std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK)).unwrap(),
+        std::fs::read(
+            root.path()
+                .join(".celerrate/cache/")
+                .join(MEMBER_TREES_PACK)
+        )
+        .unwrap(),
     );
     assert_eq!(
         first_verdicts,
@@ -441,7 +477,10 @@ fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let mut verdict = probe_verdict();
     verdict.diagnostics[0].id = "CEL9999".to_owned();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
     let (_, _) = run_check(root.path());
@@ -491,7 +530,10 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
     // range, not hard-coded: `^8.2` maps to whatever maximum the binary
     // supports, and this test must not re-derive that rule.
     let session = Session::start(root.path());
-    let header = PackHeader::current(session.configuration.php_version_range(&session.database));
+    let header = PackHeader::current(
+        session.configuration.php_version_range(&session.database),
+        session.plugin_set_digest,
+    );
 
     let vendor_hash = *blake3::hash(vendor_source.as_bytes()).as_bytes();
     let project_hash = *blake3::hash(project_source.as_bytes()).as_bytes();
@@ -506,8 +548,12 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
     );
     assert!(tree_keys.contains(&project_hash));
 
-    let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(MEMBER_TREES_PACK))
-        .unwrap();
+    let bytes = std::fs::read(
+        root.path()
+            .join(".celerrate/cache/")
+            .join(MEMBER_TREES_PACK),
+    )
+    .unwrap();
     let member_trees: Pack<Vec<([u8; 32], StoredMemberTree)>> =
         celerrate_cli::cache::pack::decode(&bytes, &header).unwrap();
     let member_tree_keys: Vec<[u8; 32]> =
@@ -552,7 +598,10 @@ fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
     let mut verdict = probe_verdict();
     verdict.diagnostics[0].start = 100;
     verdict.diagnostics[0].end = 200;
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
     let session = Session::start(root.path());
@@ -597,7 +646,10 @@ fn an_item_tree_with_an_absurd_ast_index_never_panics() {
         implements: Vec::new(),
         trait_uses: Vec::new(),
     });
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_item_trees_pack(
         root.path(),
         &header,
@@ -641,7 +693,10 @@ fn a_member_tree_with_an_absurd_ast_index_never_panics() {
         }],
         functions: Vec::new(),
     };
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_member_trees_pack(
         root.path(),
         &header,
@@ -664,7 +719,10 @@ fn duplicate_keys_in_a_pack_never_panic() {
     let source = "<?php class Marker {}";
     let root = project(&[("a.php", source)]);
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_item_trees_pack(
         root.path(),
         &header,
@@ -696,7 +754,10 @@ fn an_empty_record_list_is_served_without_panicking() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let mut verdict = probe_verdict();
     verdict.records = Vec::new();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
     let (outcome, _) = run_check(root.path());
@@ -713,7 +774,10 @@ fn persist_records_every_referencing_files_lookups() {
     let (_, _) = run_check(root.path());
 
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
-    let header = PackHeader::current(PhpVersionRange::point(PhpVersion::new(8, 5)));
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        celerrate_cli::plugins::plugin_set_digest(),
+    );
     let bytes =
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
     let pack: Pack<Vec<([u8; 32], StoredVerdict)>> =

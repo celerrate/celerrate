@@ -33,12 +33,15 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// the directive filter existed carries findings the filter would have
 /// extinguished, and must not speak. In practice the binary self-hash
 /// already discards it; this is the named, reviewable record.
-pub const CACHE_SCHEMA_VERSION: u32 = 4;
+///
+/// 5 = typed artifacts: member-tree pack, inferred-signature pack,
+/// typed verdict fields, plugin-set header digest (plan 9a).
+pub const CACHE_SCHEMA_VERSION: u32 = 5;
 
 /// What must match for a pack to be readable at all: the schema, the
-/// binary, the stub content, and the PHP version range. Any mismatch
-/// discards the whole pack, so entry keys only need to encode what
-/// varies within one configuration — file content.
+/// binary, the stub content, the plugin set, and the PHP version range.
+/// Any mismatch discards the whole pack, so entry keys only need to
+/// encode what varies within one configuration — file content.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, serde::Deserialize)]
 pub struct PackHeader {
     pub schema: u32,
@@ -47,17 +50,23 @@ pub struct PackHeader {
     /// *content*, not just its format — a new snapshot changes
     /// availability answers.
     pub stub_blob: [u8; 32],
+    /// blake3 over the sorted registered plugin identities
+    /// (name, version, configuration): the plugin-set cache key the
+    /// `PluginIdentity` rustdoc promised (plan 4a decision 1).
+    pub plugins: [u8; 32],
     pub php_minimum: (u8, u8),
     pub php_maximum: (u8, u8),
 }
 
 impl PackHeader {
-    /// The header of this binary analyzing under `range`.
-    pub fn current(range: PhpVersionRange) -> Self {
+    /// The header of this binary analyzing under `range`, with `plugins`
+    /// the registered plugin-set digest (`plugins::plugin_set_digest`).
+    pub fn current(range: PhpVersionRange, plugins: [u8; 32]) -> Self {
         Self {
             schema: CACHE_SCHEMA_VERSION,
             binary: super::identity::binary_identity().to_owned(),
             stub_blob: *blake3::hash(celerrate_stubs::EMBEDDED_STUB_BLOB).as_bytes(),
+            plugins,
             php_minimum: (range.minimum.major, range.minimum.minor),
             php_maximum: (range.maximum.major, range.maximum.minor),
         }
@@ -133,10 +142,10 @@ mod tests {
     use super::{CACHE_MAGIC, Pack, PackHeader, decode, encode, write_atomically};
 
     fn header() -> PackHeader {
-        PackHeader::current(PhpVersionRange::new(
-            PhpVersion::new(8, 1),
-            PhpVersion::new(8, 5),
-        ))
+        PackHeader::current(
+            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
+            crate::plugins::plugin_set_digest(),
+        )
     }
 
     fn sample() -> Pack<Vec<(u32, String)>> {
@@ -192,10 +201,10 @@ mod tests {
     #[test]
     fn a_header_mismatch_discards_the_whole_pack() {
         let bytes = encode(&sample()).unwrap();
-        let other_range = PackHeader::current(PhpVersionRange::new(
-            PhpVersion::new(8, 2),
-            PhpVersion::new(8, 5),
-        ));
+        let other_range = PackHeader::current(
+            PhpVersionRange::new(PhpVersion::new(8, 2), PhpVersion::new(8, 5)),
+            crate::plugins::plugin_set_digest(),
+        );
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_range).is_none());
 
         let mut other_schema = header();
@@ -211,6 +220,13 @@ mod tests {
         assert!(
             decode::<Vec<(u32, String)>>(&bytes, &other_stub).is_none(),
             "the stub-blob field is load-bearing: a new snapshot changes availability answers",
+        );
+
+        let mut other_plugins = header();
+        other_plugins.plugins[0] ^= 0xFF;
+        assert!(
+            decode::<Vec<(u32, String)>>(&bytes, &other_plugins).is_none(),
+            "the plugin-set field is load-bearing",
         );
     }
 

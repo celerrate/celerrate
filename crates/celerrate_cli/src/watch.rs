@@ -1454,8 +1454,10 @@ mod tests {
             "the cycle's persist rewrote the pack"
         );
 
-        let header =
-            PackHeader::current(session.configuration.php_version_range(&session.database));
+        let header = PackHeader::current(
+            session.configuration.php_version_range(&session.database),
+            session.plugin_set_digest,
+        );
         let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
         assert!(
             pack.entries

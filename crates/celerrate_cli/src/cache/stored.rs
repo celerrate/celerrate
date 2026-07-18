@@ -748,7 +748,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
     use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
-    use celerrate_semantics::{ItemTree, MemberKind, MemberTree, ResolutionAnswer, TraitAdaptation};
+    use celerrate_semantics::{
+        ItemTree, MemberKind, MemberTree, ResolutionAnswer, TraitAdaptation,
+    };
     use celerrate_source::{FileId, TextRange, TextSize};
     use celerrate_stubs::{StubAvailability, StubDeprecation};
 
