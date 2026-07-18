@@ -133,7 +133,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "celerrate_db",
@@ -160,7 +160,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_db"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "celerrate_diagnostics",
@@ -171,14 +171,14 @@ dependencies = [
 
 [[package]]
 name = "celerrate_diagnostics"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_source",
 ]
 
 [[package]]
 name = "celerrate_phpdoc_bridge"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_db",
  "celerrate_plugin",
@@ -192,7 +192,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_plugin"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_diagnostics",
  "celerrate_semantics",
@@ -203,7 +203,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_project"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_db",
  "celerrate_diagnostics",
@@ -215,7 +215,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_semantics"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_db",
  "celerrate_diagnostics",
@@ -228,14 +228,14 @@ dependencies = [
 
 [[package]]
 name = "celerrate_source"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "text-size",
 ]
 
 [[package]]
 name = "celerrate_stdlib_provider"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_db",
  "celerrate_plugin",
@@ -249,7 +249,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_stubs"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_db",
  "celerrate_project",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_syntax"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_diagnostics",
  "celerrate_source",
@@ -272,7 +272,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_types"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "blake3",
  "celerrate_db",
@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "celerrate_vfs"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "celerrate_source",
  "tempfile",
@@ -1245,7 +1245,7 @@ checksum = "d6bbff5f0aada427a1e5a6da5f1f98158182f26556f345ac9e04d36d0ebed650"
 
 [[package]]
 name = "xtask"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "serde_json",
  "tempfile",
