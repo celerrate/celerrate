@@ -27,6 +27,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary vocabulary nominally — no more `salsa` or whole-crate
   re-exports — and the boundary structs are `#[non_exhaustive]`.
   Breaking for the v0 plugin API; `PLUGIN_API_VERSION` stays 0.
+- The comment-directive vocabulary is sealed (issue #66), the same
+  treatment PR #65 gave the plugin boundary: `CommentDirective`,
+  `CommentKind`, and `DirectiveScope` are now `#[non_exhaustive]`, and
+  the `CommentDirective::Suppress` variant closes cross-crate literal
+  construction of its fields. Cross-crate callers build a `Suppress`
+  through the new `CommentDirective::suppress(scope, identifiers)`
+  constructor; the bundled `phpdoc-bridge` plugin has migrated to it.
+  Breaking for the v0 plugin API; `PLUGIN_API_VERSION` stays 0.
 - Internal hardening (issue #63): the inference warming precondition
   is now compile-checked instead of documented. The unguarded tracked
   query behind body-type inference moved into a private `sealed`
@@ -40,6 +48,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `StubRefinements::new` now dedups its sorted `functions`, `classes`,
+  and each class's `methods` by key, first entry wins (#47) — matching
+  `StubIndex::new`'s precedent, so a duplicate key can no longer reach
+  the compiled blob as two identically-keyed rows with an arbitrary
+  binary-search winner. Unreachable on any shipped path: the sole
+  production producer, `parse_refinement_source`, already rejects
+  duplicate keys outright. Defense in depth for a programmatic caller.
 - `foreach` list-destructuring binds are now value-change sites
   (#75): the value pattern routes through the assignment machinery,
   so every destructured target kills its stale call-result

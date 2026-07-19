@@ -48,7 +48,9 @@ pub struct RefinedClass {
 /// The whole overlay, keyed by folded symbol keys: `functions` and
 /// `classes` are sorted by key, and each class's `methods` is sorted
 /// by name too, so lookups binary-search and the blob encoding is
-/// deterministic.
+/// deterministic. Duplicate keys collapse to the first entry after the
+/// sort, matching `StubIndex::new`; the sole production producer already
+/// rejects duplicates, so this is defense in depth for programmatic callers.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct StubRefinements {
     pub functions: Vec<(String, RefinedSignature)>,
@@ -61,9 +63,12 @@ impl StubRefinements {
         mut classes: Vec<(String, RefinedClass)>,
     ) -> Self {
         functions.sort_by(|left, right| left.0.cmp(&right.0));
+        functions.dedup_by(|second, first| first.0 == second.0);
         classes.sort_by(|left, right| left.0.cmp(&right.0));
+        classes.dedup_by(|second, first| first.0 == second.0);
         for (_, class) in &mut classes {
             class.methods.sort_by(|left, right| left.0.cmp(&right.0));
+            class.methods.dedup_by(|second, first| first.0 == second.0);
         }
         Self { functions, classes }
     }
@@ -321,6 +326,71 @@ mod tests {
             .map(|(name, _)| name.as_str())
             .collect();
         assert_eq!(method_names, ["current", "key", "valid"]);
+    }
+
+    #[test]
+    fn duplicate_function_keys_collapse_to_the_first_entry() {
+        let first = RefinedSignature {
+            return_type: Some("int".to_owned()),
+            ..RefinedSignature::default()
+        };
+        let second = RefinedSignature {
+            return_type: Some("string".to_owned()),
+            ..RefinedSignature::default()
+        };
+        let refinements = StubRefinements::new(
+            vec![
+                ("strlen".to_owned(), first.clone()),
+                ("strlen".to_owned(), second),
+            ],
+            Vec::new(),
+        );
+        assert_eq!(refinements.functions, vec![("strlen".to_owned(), first)]);
+    }
+
+    #[test]
+    fn duplicate_class_keys_collapse_to_the_first_entry() {
+        let first = RefinedClass {
+            templates: vec![RefinedTemplate {
+                name: "T".to_owned(),
+                bound: None,
+            }],
+            ..RefinedClass::default()
+        };
+        let refinements = StubRefinements::new(
+            Vec::new(),
+            vec![
+                ("iterator".to_owned(), first.clone()),
+                ("iterator".to_owned(), RefinedClass::default()),
+            ],
+        );
+        assert_eq!(refinements.classes, vec![("iterator".to_owned(), first)]);
+    }
+
+    #[test]
+    fn duplicate_method_names_collapse_to_the_first_entry_within_a_class() {
+        let first = RefinedSignature {
+            return_type: Some("static".to_owned()),
+            ..RefinedSignature::default()
+        };
+        let class = RefinedClass {
+            methods: vec![
+                ("current".to_owned(), first.clone()),
+                ("current".to_owned(), RefinedSignature::default()),
+            ],
+            ..RefinedClass::default()
+        };
+        let refinements = StubRefinements::new(Vec::new(), vec![("iterator".to_owned(), class)]);
+        assert_eq!(
+            refinements.classes,
+            vec![(
+                "iterator".to_owned(),
+                RefinedClass {
+                    methods: vec![("current".to_owned(), first)],
+                    ..RefinedClass::default()
+                }
+            )],
+        );
     }
 
     #[test]

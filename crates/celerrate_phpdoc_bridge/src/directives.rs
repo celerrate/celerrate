@@ -79,12 +79,16 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
     let scope = match kind {
         CommentKind::Docblock => DirectiveScope::AnnotatedDeclaration,
         CommentKind::Line | CommentKind::Block => DirectiveScope::CurrentAndNextLine,
+        // A comment kind this bridge does not know yet: the both-lines
+        // superset, the same over-suppression-never-under-suppression
+        // resolution the bare form uses (design section 5).
+        _ => DirectiveScope::CurrentAndNextLine,
     };
     Some(suppress(scope, identifiers_of(after_tag)))
 }
 
 fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
-    CommentDirective::Suppress { scope, identifiers }
+    CommentDirective::suppress(scope, identifiers)
 }
 
 /// A tag ends at a word boundary: the end of the comment, whitespace,
@@ -122,10 +126,7 @@ mod tests {
     use super::*;
 
     fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
-        CommentDirective::Suppress {
-            scope,
-            identifiers: identifiers.iter().map(|s| (*s).to_owned()).collect(),
-        }
+        CommentDirective::suppress(scope, identifiers.iter().map(|s| (*s).to_owned()).collect())
     }
 
     #[test]

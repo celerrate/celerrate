@@ -749,11 +749,13 @@ mod tests {
 
     #[test]
     fn a_duplicate_function_key_is_a_parse_error() {
-        // `StubRefinements::new` sorts by key but never dedups, so a
-        // duplicate entry would otherwise reach the blob as two
-        // identically-keyed rows — undefined which one a binary
-        // search finds. The parser rejects it outright, and folding
+        // The parser rejects a duplicate entry outright, and folding
         // means `Array_Keys` collides with `array_keys` too.
+        // `StubRefinements::new` now also dedups first-wins (#47), so
+        // even if a duplicate slipped past the parser it would collapse
+        // to a single row instead of reaching the blob as two
+        // identically-keyed rows — this test pins the parser's own
+        // rejection as defense in depth ahead of that collapse.
         let error = parse_refinement_source(
             "function array_keys(): list<int>\nfunction Array_Keys(): list<int>\n",
         )
