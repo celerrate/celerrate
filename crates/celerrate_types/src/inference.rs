@@ -1343,6 +1343,45 @@ $listener = new class {
     }
 
     #[test]
+    fn a_truthiness_guard_narrows_a_call_result_from_its_recorded_type() {
+        // Issue #72 item 1 (PR #71's mixed-rate regression): the
+        // truthiness guard on a call-result fingerprint narrows the
+        // call's recorded `Command|null`, not `subject_type`'s
+        // `mixed` fallback, so the guarded re-call reads `Command`.
+        let fixture = fixture(&["<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function f(Event $e) {
+    if ($e->getCommand()) {
+        return $e->getCommand();
+    }
+    return null;
+}"]);
+        // Declaration numbering counts class members too (0 = Command,
+        // 1 = Command::getName, 2 = Event, 3 = Event::getCommand), so
+        // `f` itself is index 4.
+        assert_eq!(return_display(&fixture, 4), "command|null");
+    }
+
+    #[test]
+    fn an_empty_guard_narrows_a_call_result_from_its_recorded_type() {
+        // The `empty()` twin of the truthiness arm: not-empty means
+        // truthy, so the guarded re-call reads `Command`.
+        let fixture = fixture(&["<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function f(Event $e) {
+    if (!empty($e->getCommand())) {
+        return $e->getCommand();
+    }
+    return null;
+}"]);
+        // Same numbering as the truthiness-guard test above: `f` is
+        // index 4.
+        assert_eq!(return_display(&fixture, 4), "command|null");
+    }
+
+    #[test]
     fn an_assign_and_test_condition_narrows_the_assigned_subject() {
         let fixture = fixture(&["<?php class Foo {}
             function f(?Foo $source) {

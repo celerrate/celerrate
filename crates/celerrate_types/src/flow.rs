@@ -3106,7 +3106,13 @@ impl<'db> Walker<'db, '_, '_> {
                 let subject = subject_of(ir, target);
                 let current = subject
                     .as_ref()
-                    .map(|subject| self.subject_type(environment, subject))
+                    .map(|subject| match subject {
+                        // The truthiness arm's twin (issue #72): the
+                        // just-typed target's record beats the
+                        // `mixed` fallback for a call result.
+                        NarrowingSubject::CallResult { .. } => self.recorded(target),
+                        _ => self.subject_type(environment, subject),
+                    })
                     .unwrap_or_else(|| TypeId::mixed(db));
                 self.split_on_subject(
                     environment,
@@ -3175,7 +3181,18 @@ impl<'db> Walker<'db, '_, '_> {
                 let subject = subject_of(ir, condition);
                 let current = subject
                     .as_ref()
-                    .map(|subject| self.subject_type(environment, subject))
+                    .map(|subject| match subject {
+                        // An unbound call-result fingerprint has no wide
+                        // type of its own (`subject_type` answers
+                        // `mixed`), but the condition was just typed:
+                        // its recorded type is the call's computed
+                        // return — and for a bound fingerprint the
+                        // record IS the binding ("environment wins"
+                        // consult records it), so the substitution is
+                        // uniform (issue #72).
+                        NarrowingSubject::CallResult { .. } => self.recorded(condition),
+                        _ => self.subject_type(environment, subject),
+                    })
                     .unwrap_or_else(|| TypeId::mixed(db));
                 self.split_on_subject(
                     environment,
