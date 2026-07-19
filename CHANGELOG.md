@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Possibly-null dereference (`CEL0034`) now reports on unguarded
+  call-result receivers (`$repo->find($id)->title` with no guard),
+  instead of silencing every call-result receiver. The narrowing
+  floor tracks call-result fingerprints — `$base->method(stable
+  arguments)` on a `$this` or local base — so the guards PHP
+  routinely writes (`if ($e->getCommand() &&
+  $e->getCommand()->getName())`, every condition form) narrow them,
+  and the silence shrinks to the genuinely untrackable shapes
+  (property-rooted receivers, unstable arguments). Two occurrences of
+  one fingerprint are assumed to denote the same value — documented
+  engine semantics whose unsoundness can only silence, never
+  fabricate a report. Verified on the Symfony corpus (no new
+  diagnostics). (#54)
 - Too-few-arguments (`CEL0036`) now reports on builtin callees, not only
   on source functions. The stub compiler honours phpstorm-stubs'
   `@param ... $name [optional]` docblock marker, which flags a parameter

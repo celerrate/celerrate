@@ -103,6 +103,14 @@ impl<'db> Environment<'db> {
         self.bindings.remove(subject);
     }
 
+    /// The call-result kill rule: local `name`'s value changed, so
+    /// every fingerprint mentioning it (as base or argument) is
+    /// stale. Deterministic: `retain` walks the `BTreeMap` in order.
+    pub(crate) fn kill_call_results_involving(&mut self, name: &str) {
+        self.bindings
+            .retain(|subject, _| !subject.call_result_involves_local(name));
+    }
+
     /// A keys snapshot for a sweep (the kill rule, `extract`, `eval`):
     /// deterministic because `bindings` is a `BTreeMap`.
     pub(crate) fn subjects(&self) -> Vec<NarrowingSubject> {
@@ -419,6 +427,7 @@ impl<'db> Walker<'db, '_, '_> {
                     })
                     .unwrap_or_else(|| TypeId::mixed(db))
             }
+            NarrowingSubject::CallResult { .. } => TypeId::mixed(db),
         }
     }
 
@@ -804,10 +813,18 @@ impl<'db> Walker<'db, '_, '_> {
     /// Over-killing is the conservative direction — a dropped binding
     /// reads as the declared type (`subject_type`'s fallback). Locals
     /// survive: they are not addressable through arbitrary aliasing
-    /// the way `$this`/`self::` state is.
+    /// the way `$this`/`self::` state is. Call-result fingerprints
+    /// survive too: their v1 bases are `$this` and locals (both
+    /// call-stable), and their validity is the purity assumption
+    /// itself — an intervening call does not undermine "this method
+    /// keeps answering the same value" (design
+    /// 2026-07-19-call-result-narrowing).
     fn kill_property_bindings(&mut self, environment: &mut Environment<'db>) {
         for subject in environment.subjects() {
-            if !matches!(subject, NarrowingSubject::Local { .. }) {
+            if !matches!(
+                subject,
+                NarrowingSubject::Local { .. } | NarrowingSubject::CallResult { .. }
+            ) {
                 environment.remove(&subject);
             }
         }
@@ -843,6 +860,9 @@ impl<'db> Walker<'db, '_, '_> {
                 continue;
             }
             if let Some(subject) = subject_of(self.context.ir, argument.value) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(
                     subject,
                     parameter
@@ -1812,6 +1832,9 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
+                        if let NarrowingSubject::Local { name } = &subject {
+                            environment.kill_call_results_involving(name);
+                        }
                         environment.bind(subject, TypeId::mixed(db));
                     }
                 }
@@ -1822,6 +1845,7 @@ impl<'db> Walker<'db, '_, '_> {
                         self.expression(initializer, environment);
                     }
                     // A static local persists across calls: mixed.
+                    environment.kill_call_results_involving(&variable.name);
                     environment.bind(
                         NarrowingSubject::Local {
                             name: variable.name.clone(),
@@ -1834,6 +1858,9 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
+                        if let NarrowingSubject::Local { name } = &subject {
+                            environment.kill_call_results_involving(name);
+                        }
                         environment.remove(&subject);
                     }
                 }
@@ -2244,12 +2271,13 @@ impl<'db> Walker<'db, '_, '_> {
                 self.expression(argument, environment);
                 // eval can rewrite every local and every property
                 // binding: forget them all (decision 10).
-                for subject in environment.subjects() {
-                    if matches!(subject, NarrowingSubject::Local { .. }) {
-                        environment.remove(&subject);
+                *environment = {
+                    let mut cleared = Environment::new();
+                    if !environment.is_reachable() {
+                        cleared.mark_unreachable();
                     }
-                }
-                self.kill_property_bindings(environment);
+                    cleared
+                };
                 TypeId::mixed(db)
             }
             BodyExpression::Exit { argument } => {
@@ -2593,7 +2621,7 @@ impl<'db> Walker<'db, '_, '_> {
                         // tier is exempt without special-casing — its
                         // answer is already concrete, so
                         // `contains_symbolic` is already false for it).
-                        match &signature {
+                        let computed = match &signature {
                             Some(signature) => self.solved_call_result(
                                 of,
                                 &signature.parameters,
@@ -2601,6 +2629,19 @@ impl<'db> Walker<'db, '_, '_> {
                                 &argument_types,
                             ),
                             None => of,
+                        };
+                        // A narrowed call-result fingerprint: the
+                        // environment wins over the fresh return type
+                        // (issue #54; the property-fetch arm's idiom).
+                        // The binding survived this call's own
+                        // `kill_property_bindings` above by the
+                        // survival rule.
+                        if let Some(subject) = subject_of(self.context.ir, id)
+                            && let Some(bound) = environment.binding(&subject)
+                        {
+                            bound
+                        } else {
+                            computed
                         }
                     }
                     Some(BodyExpression::ScopedAccess {
@@ -3065,7 +3106,13 @@ impl<'db> Walker<'db, '_, '_> {
                 let subject = subject_of(ir, target);
                 let current = subject
                     .as_ref()
-                    .map(|subject| self.subject_type(environment, subject))
+                    .map(|subject| match subject {
+                        // The truthiness arm's twin (issue #72): the
+                        // just-typed target's record beats the
+                        // `mixed` fallback for a call result.
+                        NarrowingSubject::CallResult { .. } => self.recorded(target),
+                        _ => self.subject_type(environment, subject),
+                    })
                     .unwrap_or_else(|| TypeId::mixed(db));
                 self.split_on_subject(
                     environment,
@@ -3134,7 +3181,18 @@ impl<'db> Walker<'db, '_, '_> {
                 let subject = subject_of(ir, condition);
                 let current = subject
                     .as_ref()
-                    .map(|subject| self.subject_type(environment, subject))
+                    .map(|subject| match subject {
+                        // An unbound call-result fingerprint has no wide
+                        // type of its own (`subject_type` answers
+                        // `mixed`), but the condition was just typed:
+                        // its recorded type is the call's computed
+                        // return — and for a bound fingerprint the
+                        // record IS the binding ("environment wins"
+                        // consult records it), so the substitution is
+                        // uniform (issue #72).
+                        NarrowingSubject::CallResult { .. } => self.recorded(condition),
+                        _ => self.subject_type(environment, subject),
+                    })
                     .unwrap_or_else(|| TypeId::mixed(db));
                 self.split_on_subject(
                     environment,
@@ -3642,9 +3700,15 @@ impl<'db> Walker<'db, '_, '_> {
             // `$b = &$a`: aliased locals are unknowable without alias
             // analysis — both sides degrade to mixed (decision 10).
             if let Some(subject) = subject_of(self.context.ir, target) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(subject, TypeId::mixed(db));
             }
             if let Some(subject) = subject_of(self.context.ir, _value) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(subject, TypeId::mixed(db));
             }
             return TypeId::mixed(db);
@@ -3694,11 +3758,17 @@ impl<'db> Walker<'db, '_, '_> {
                     let current = environment.binding(&base);
                     let key_type = index.map(|index| self.recorded(index));
                     let updated = updated_array(db, current, key_type, value_type);
+                    if let NarrowingSubject::Local { name } = &base {
+                        environment.kill_call_results_involving(name);
+                    }
                     environment.bind(base, updated);
                 }
             }
             _ => {
                 if let Some(subject) = subject_of(self.context.ir, target) {
+                    if let NarrowingSubject::Local { name } = &subject {
+                        environment.kill_call_results_involving(name);
+                    }
                     environment.bind(subject, value_type);
                 }
             }

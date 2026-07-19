@@ -26,6 +26,76 @@ pub(crate) enum NarrowingSubject {
     StaticProperty {
         name: String,
     },
+    /// The result of `$base->method(stable arguments)` — the
+    /// call-result fingerprint (issue #54, design
+    /// 2026-07-19-call-result-narrowing). Two occurrences of one
+    /// fingerprint denote the same value: the purity assumption,
+    /// documented engine semantics whose unsoundness can only silence
+    /// the nullability family, never make it report.
+    CallResult {
+        base: CallBase,
+        method: String,
+        arguments: Vec<ArgumentFingerprint>,
+    },
+}
+
+/// The stable base a call-result fingerprint hangs off: `$this`
+/// (never reassignable in PHP) or a local. Property-rooted receivers
+/// are deliberately excluded in v1 — their kill discipline would have
+/// to reconcile with decision 10, and the silence they keep is
+/// today's behavior.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum CallBase {
+    This,
+    Local { name: String },
+}
+
+/// One argument in a call fingerprint: its named-argument label (part
+/// of the identity — `f(a: 1)` and `f(1)` are distinct) and its
+/// stable value form.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) struct ArgumentFingerprint {
+    pub label: Option<String>,
+    pub value: ArgumentValue,
+}
+
+/// A stable argument value. Anything outside this grammar (a property
+/// fetch, a nested call, a spread) refuses the whole fingerprint.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum ArgumentValue {
+    /// A literal by its canonical source text. `1` and `0x1` are
+    /// distinct fingerprints — a false-negative direction only.
+    Literal {
+        text: String,
+    },
+    Local {
+        name: String,
+    },
+    This,
+}
+
+impl NarrowingSubject {
+    /// Whether this subject is a call-result fingerprint whose value
+    /// could change when local `name` is reassigned — its base or any
+    /// argument names it. The kill rule's predicate (design
+    /// 2026-07-19-call-result-narrowing): killing only on genuine
+    /// value changes, because an over-applied kill re-reports guarded
+    /// code (a false positive), while a missed kill only silences.
+    pub(crate) fn call_result_involves_local(&self, name: &str) -> bool {
+        let NarrowingSubject::CallResult {
+            base, arguments, ..
+        } = self
+        else {
+            return false;
+        };
+        matches!(base, CallBase::Local { name: base_name } if base_name == name)
+            || arguments.iter().any(|argument| {
+                matches!(
+                    &argument.value,
+                    ArgumentValue::Local { name: argument_name } if argument_name == name
+                )
+            })
+    }
 }
 
 /// The narrowing subject of one expression, seeing through
@@ -60,6 +130,49 @@ pub(crate) fn subject_of(ir: &BodyIr, expression: ExpressionId) -> Option<Narrow
             }
             _ => None,
         },
+        BodyExpression::Call { callee, arguments } => {
+            let BodyExpression::MemberAccess {
+                receiver,
+                member: MemberReference::Named { name },
+                null_safe: false,
+            } = ir.expression(*callee)?
+            else {
+                return None;
+            };
+            let base = match ir.expression(*receiver)? {
+                BodyExpression::Variable { name } if name == "this" => CallBase::This,
+                BodyExpression::Variable { name } => CallBase::Local { name: name.clone() },
+                _ => return None,
+            };
+            let fingerprints = arguments
+                .iter()
+                .map(|argument| {
+                    if argument.spread {
+                        return None;
+                    }
+                    Some(ArgumentFingerprint {
+                        label: argument.label.clone(),
+                        value: argument_value(ir, argument.value)?,
+                    })
+                })
+                .collect::<Option<Vec<_>>>()?;
+            Some(NarrowingSubject::CallResult {
+                base,
+                method: name.to_ascii_lowercase(),
+                arguments: fingerprints,
+            })
+        }
+        _ => None,
+    }
+}
+
+/// The stable fingerprint of one argument value, or `None` when the
+/// expression is outside the stable grammar.
+fn argument_value(ir: &BodyIr, id: ExpressionId) -> Option<ArgumentValue> {
+    match ir.expression(id)? {
+        BodyExpression::Literal { text } => Some(ArgumentValue::Literal { text: text.clone() }),
+        BodyExpression::Variable { name } if name == "this" => Some(ArgumentValue::This),
+        BodyExpression::Variable { name } => Some(ArgumentValue::Local { name: name.clone() }),
         _ => None,
     }
 }
@@ -369,6 +482,96 @@ mod tests {
         let (ir, expression) = first_expression("<?php function f() { $this; }");
         assert_eq!(subject_of(&ir, expression), None);
         let (ir, expression) = first_expression("<?php function f() { $a?->prop; }");
+        assert_eq!(subject_of(&ir, expression), None);
+    }
+
+    #[test]
+    fn call_results_on_stable_bases_fingerprint() {
+        use super::{ArgumentFingerprint, ArgumentValue, CallBase};
+
+        let (ir, expression) = first_expression("<?php function f() { $e->getCommand(); }");
+        assert_eq!(
+            subject_of(&ir, expression),
+            Some(NarrowingSubject::CallResult {
+                base: CallBase::Local {
+                    name: "e".to_owned()
+                },
+                method: "getcommand".to_owned(),
+                arguments: vec![],
+            }),
+        );
+
+        // `$this` is the most stable base of all (never reassignable).
+        let (ir, expression) = first_expression("<?php function f() { $this->user(); }");
+        assert_eq!(
+            subject_of(&ir, expression),
+            Some(NarrowingSubject::CallResult {
+                base: CallBase::This,
+                method: "user".to_owned(),
+                arguments: vec![],
+            }),
+        );
+
+        // Method names fold case (PHP method names are case-insensitive).
+        let (ir, expression) = first_expression("<?php function f() { $e->GetCommand(); }");
+        assert_eq!(
+            subject_of(&ir, expression),
+            Some(NarrowingSubject::CallResult {
+                base: CallBase::Local {
+                    name: "e".to_owned()
+                },
+                method: "getcommand".to_owned(),
+                arguments: vec![],
+            }),
+        );
+
+        // Stable arguments: literals by canonical text, locals, `$this`;
+        // named-argument labels are part of the identity.
+        let (ir, expression) = first_expression("<?php function f() { $r->find(1, name: $n); }");
+        assert_eq!(
+            subject_of(&ir, expression),
+            Some(NarrowingSubject::CallResult {
+                base: CallBase::Local {
+                    name: "r".to_owned()
+                },
+                method: "find".to_owned(),
+                arguments: vec![
+                    ArgumentFingerprint {
+                        label: None,
+                        value: ArgumentValue::Literal {
+                            text: "1".to_owned()
+                        },
+                    },
+                    ArgumentFingerprint {
+                        label: Some("name".to_owned()),
+                        value: ArgumentValue::Local {
+                            name: "n".to_owned()
+                        },
+                    },
+                ],
+            }),
+        );
+    }
+
+    #[test]
+    fn unstable_call_shapes_refuse_a_fingerprint() {
+        // A property-fetch argument is not stable.
+        let (ir, expression) = first_expression("<?php function f() { $r->find($this->id); }");
+        assert_eq!(subject_of(&ir, expression), None);
+        // A nested call argument is not stable.
+        let (ir, expression) = first_expression("<?php function f() { $r->find(g()); }");
+        assert_eq!(subject_of(&ir, expression), None);
+        // A spread refuses the whole fingerprint.
+        let (ir, expression) = first_expression("<?php function f() { $r->find(...$a); }");
+        assert_eq!(subject_of(&ir, expression), None);
+        // A null-safe call is never a subject (the chain rule owns it).
+        let (ir, expression) = first_expression("<?php function f() { $e?->getCommand(); }");
+        assert_eq!(subject_of(&ir, expression), None);
+        // A property-rooted receiver is not a stable base (v1 scope).
+        let (ir, expression) = first_expression("<?php function f() { $this->repo->find(1); }");
+        assert_eq!(subject_of(&ir, expression), None);
+        // A free-function call is out of scope for v1.
+        let (ir, expression) = first_expression("<?php function f() { config('x'); }");
         assert_eq!(subject_of(&ir, expression), None);
     }
 
