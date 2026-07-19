@@ -31,17 +31,14 @@ pub use celerrate_semantics::{
 };
 
 // The type-syntax and dynamic-type-provider extension points, and the
-// type vocabulary plugins construct and interrogate through.
+// type vocabulary plugins construct and interrogate through. Nominal
+// re-exports only: never the database crate, never a whole crate — the boundary
+// surface is enumerable by reading this list.
 pub use celerrate_types::{
-    AnnotationSite, AssertionPolarity, CallableParameter, DynamicTypeProvider, Invocation,
-    InvocationSite, ParsedAncestor, ParsedAnnotations, ParsedAssertion, ParsedTemplate, ShapeField,
-    ShapeKey, SymbolClaim, Trust, TypeContext, TypeId, TypeSyntax,
+    AnnotationSite, AssertionPolarity, CallableParameter, DynamicTypeProvider, InvocationSite,
+    ParsedAncestor, ParsedAnnotations, ParsedAssertion, ParsedTemplate, ShapeField, ShapeKey,
+    SymbolClaim, Trust, TypeContext, TypeId, TypeSyntax,
 };
-
-// The span and diagnostic vocabulary, and salsa for trait signatures.
-pub use celerrate_diagnostics as diagnostics;
-pub use celerrate_source as source;
-pub use salsa;
 
 #[cfg(test)]
 mod tests {

@@ -96,8 +96,11 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
         crate::type_context::TypeContext::new(self.db)
     }
 
-    /// The database, for `TypeId` builders. Never retain it.
-    pub fn database(&self) -> &'db dyn salsa::Database {
+    /// Engine-internal escape hatch for in-crate test fakes. Sealed:
+    /// plugins go through `types()` — they can neither name nor obtain
+    /// `salsa::Database` (the structural enforcement issue #61 demanded).
+    #[allow(dead_code)]
+    pub(crate) fn database(&self) -> &'db dyn salsa::Database {
         self.db
     }
 
