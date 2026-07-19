@@ -20,7 +20,12 @@ use celerrate_syntax::{SyntaxKind, SyntaxToken};
 use crate::plugin::PluginIdentity;
 
 /// The comment shapes a provider may be handed.
+///
+/// This type is `#[non_exhaustive]` — new shapes may be added in future
+/// versions. Use the constructor provided by this crate for portable
+/// construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CommentKind {
     /// `//` and `#` comments.
     Line,
@@ -31,7 +36,12 @@ pub enum CommentKind {
 }
 
 /// Where a directive applies, relative to the comment that carries it.
+///
+/// This type is `#[non_exhaustive]` — new scopes may be added in future
+/// versions. Use the constructor provided by this crate for portable
+/// construction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum DirectiveScope {
     /// The whole line(s) the comment covers — a trailing comment
     /// covers the code before it on the same line.
@@ -50,16 +60,26 @@ pub enum DirectiveScope {
 
 /// One structured directive a comment carries.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum CommentDirective {
     /// Extinguish every diagnostic family on the scope. The
     /// identifiers are the foreign diagnostic names the written form
     /// carried (`@phpstan-ignore method.notFound`), carried for the
     /// rule framework's identifier-level correspondence, never matched
     /// here (design section 5).
+    #[non_exhaustive]
     Suppress {
         scope: DirectiveScope,
         identifiers: Vec<String>,
     },
+}
+
+impl CommentDirective {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> Self {
+        Self::Suppress { scope, identifiers }
+    }
 }
 
 /// A provider translates one comment into the directives it carries.
@@ -431,6 +451,21 @@ mod tests {
             TextSize::of(source),
             TextSize::of(source),
         ));
+    }
+
+    #[test]
+    fn the_suppress_constructor_is_field_faithful() {
+        let directive = CommentDirective::suppress(
+            DirectiveScope::NextLine,
+            vec!["method.notFound".to_owned()],
+        );
+        assert_eq!(
+            directive,
+            CommentDirective::Suppress {
+                scope: DirectiveScope::NextLine,
+                identifiers: vec!["method.notFound".to_owned()],
+            },
+        );
     }
 
     #[test]
