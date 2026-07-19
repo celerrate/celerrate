@@ -53,6 +53,15 @@ Read the spec before architectural work. It is the source of truth.
 - `cargo fmt --all`
 - `cargo deny check`
 
+Corpus gates over the pinned Symfony corpus. A plan's verification task
+must run both, and each needs `cargo xtask fetch-corpus` first:
+
+- `cargo xtask corpus`: the diagnostic snapshot (must match the committed
+  snapshot; a delta is hand-inspected under verify-then-accept).
+- `cargo xtask mixed-rate`: the type-precision baseline (must match the
+  committed baseline; re-bless a verified precision gain with
+  `cargo xtask mixed-rate --bless`).
+
 ## Conventions
 
 - Everything is written in English. Full words, no abbreviated names
