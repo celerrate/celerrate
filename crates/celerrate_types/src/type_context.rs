@@ -185,6 +185,9 @@ impl<'db> TypeContext<'db> {
     pub fn callable_return(self, subject: TypeId<'db>) -> Option<TypeId<'db>> {
         subject.callable_return(self.db)
     }
+    pub fn display(self, subject: TypeId<'db>) -> String {
+        subject.display(self.db)
+    }
 }
 
 /// Test-only construction seam for out-of-crate test suites (the
@@ -242,6 +245,10 @@ mod tests {
         );
         let union = context.union([context.int(), context.null()]);
         assert_eq!(context.constituents(union).len(), 2);
+        assert_eq!(
+            context.display(context.int()),
+            TypeId::int(&db).display(&db)
+        );
     }
 
     #[test]
