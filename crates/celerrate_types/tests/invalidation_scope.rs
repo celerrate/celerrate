@@ -34,9 +34,9 @@ use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
     AnnotationSite, DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery,
-    InferenceContext, MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate, Proof,
-    StoredInferredEdge, StoredInferredSignature, StoredSignatureKey, StoredType, TypeId,
-    TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry, TypedArtifactCache, TypedCacheHandle,
+    MethodQuery, ParsedAncestor, ParsedAnnotations, ParsedTemplate, Proof, StoredInferredEdge,
+    StoredInferredSignature, StoredSignatureKey, StoredType, TypeId, TypeSyntax,
+    TypeSyntaxRegistration, TypeSyntaxRegistry, TypedArtifactCache, TypedCacheHandle,
     TypedCacheInput, declared_member_signature, inferred_body_types, inferred_function_return,
     inferred_method_return, subtype_of, typed_diagnostics, typed_file_verdicts,
 };
@@ -2074,7 +2074,6 @@ function bystander(string $text) { return strlen($text); }
             f.configuration,
             file,
             body_query(&f, index),
-            InferenceContext::new(&f.db, None),
         );
     }
     f.db.take_executed();
@@ -2088,7 +2087,6 @@ function bystander(string $text) { return strlen($text); }
             f.configuration,
             file,
             body_query(&f, index),
-            InferenceContext::new(&f.db, None),
         );
     }
     let log = f.db.take_executed();

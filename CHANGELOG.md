@@ -35,6 +35,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   through the new `CommentDirective::suppress(scope, identifiers)`
   constructor; the bundled `phpdoc-bridge` plugin has migrated to it.
   Breaking for the v0 plugin API; `PLUGIN_API_VERSION` stays 0.
+- Internal hardening (issue #63): the inference warming precondition
+  is now compile-checked instead of documented. The unguarded tracked
+  query behind body-type inference moved into a private `sealed`
+  module and now demands a `Warmed` proof token, minted only by
+  `warm_the_cycle_safe_entry_point` or, inside the two cycle-safe
+  return queries, `Warmed::from_inside_the_fixpoint`. No caller
+  outside `celerrate_types` can reach the query at all, and inside it
+  demanding without warming is now a deliberate, greppable act rather
+  than a silent omission. Pure refactor, no behavioral change; zero
+  delta on the Symfony corpus and mixed-typedness baseline.
 
 ### Fixed
 

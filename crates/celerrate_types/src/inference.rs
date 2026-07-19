@@ -193,128 +193,171 @@ pub struct InferenceContext<'db> {
     pub using_class_key: Option<String>,
 }
 
-/// The unguarded tracked query behind [`inferred_body_types`]: entering
-/// it while its own claim is active panics (salsa's `Panic` strategy —
-/// this query carries no `cycle_fn`). Module-private on purpose
-/// (issue #51): the only legal callers are the two cycle-safe return
-/// queries, which ARE the recovery-carrying heads, and the public
-/// wrapper, which warms one of them first. Do not re-export.
-///
-/// The inference of one body: `None` when the identity carries no
-/// body in `file` (mirroring `body_ir`). Task 3 replaces the
-/// all-`mixed` table with the flow walk.
-#[salsa::tracked(returns(ref))]
-#[allow(clippy::too_many_arguments)]
-fn inferred_body_types_unguarded<'db>(
-    db: &'db dyn salsa::Database,
-    files: AnalyzedFileSet,
-    stubs: StubIndexInput,
-    configuration: ProjectConfiguration,
-    file: SourceFile,
-    body: BodyQuery<'db>,
-    context: InferenceContext<'db>,
-) -> Option<InferredBody<'db>> {
-    let ir = body_ir(db, file, body).as_ref()?;
-    let owner = body_owner(db, file, body);
-    let (namespace, owner_class_key, method_is_static, parameters, scope_key) = match owner {
-        Some(BodyOwner::Function(function)) => {
-            let key = folded_symbol_key(
-                SymbolSpace::Function,
-                &fully_qualified_name(&function.namespace, &function.name),
-            );
-            let declared = declared_function_signature(
-                db,
-                files,
-                stubs,
-                configuration,
-                crate::declared::FunctionQuery::new(db, key.clone()),
-            );
-            (
-                function.namespace.clone(),
-                None,
-                false,
-                seeded_parameters(db, declared.as_ref(), &function.signature),
-                key,
-            )
-        }
-        Some(BodyOwner::Method {
-            class_key,
-            namespace,
-            member,
-        }) => {
-            let declared = class_key.as_ref().and_then(|key| {
-                declared_member_signature(
+/// The warm-before-demand proof (issue #63). Minted by
+/// [`warm_the_cycle_safe_entry_point`] — the ordinary route — or by
+/// [`Warmed::from_inside_the_fixpoint`], legal in exactly two places:
+/// the two recovery-carrying return queries, which are themselves the
+/// cycle-safe heads the warming completes. The private field keeps the
+/// value unconstructible by pattern or literal.
+struct Warmed(());
+
+impl Warmed {
+    /// See the type-level contract: only `inferred_function_return`
+    /// and `inferred_method_return` may call this. Anywhere else, call
+    /// `warm_the_cycle_safe_entry_point` and use its returned proof.
+    fn from_inside_the_fixpoint() -> Self {
+        Self(())
+    }
+}
+
+/// The seal (issue #63): the tracked query lives here so that no code
+/// outside this module can name it; the only export demands the
+/// [`Warmed`] proof. "Call without warming" is thereby a compile
+/// error, not a rustdoc plea. The proof rides on this plain wrapper
+/// rather than the tracked signature because tracked-query arguments
+/// must be salsa structs.
+mod sealed {
+    use super::*;
+
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn demand<'db>(
+        _proof: Warmed,
+        db: &'db dyn salsa::Database,
+        files: AnalyzedFileSet,
+        stubs: StubIndexInput,
+        configuration: ProjectConfiguration,
+        file: SourceFile,
+        body: BodyQuery<'db>,
+        context: InferenceContext<'db>,
+    ) -> &'db Option<InferredBody<'db>> {
+        inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
+    }
+
+    /// The unguarded tracked query behind [`inferred_body_types`]:
+    /// entering it while its own claim is active panics (salsa's
+    /// `Panic` strategy — this query carries no `cycle_fn`). Sealed on
+    /// purpose (issue #63): the only legal callers are the two
+    /// cycle-safe return queries, which ARE the recovery-carrying
+    /// heads, and the public wrapper, which warms one of them first —
+    /// both routed exclusively through [`demand`] above, which the
+    /// [`Warmed`] proof gates.
+    ///
+    /// The inference of one body: `None` when the identity carries no
+    /// body in `file` (mirroring `body_ir`). Task 3 replaces the
+    /// all-`mixed` table with the flow walk.
+    #[salsa::tracked(returns(ref))]
+    #[allow(clippy::too_many_arguments)]
+    fn inferred_body_types_unguarded<'db>(
+        db: &'db dyn salsa::Database,
+        files: AnalyzedFileSet,
+        stubs: StubIndexInput,
+        configuration: ProjectConfiguration,
+        file: SourceFile,
+        body: BodyQuery<'db>,
+        context: InferenceContext<'db>,
+    ) -> Option<InferredBody<'db>> {
+        let ir = body_ir(db, file, body).as_ref()?;
+        let owner = body_owner(db, file, body);
+        let (namespace, owner_class_key, method_is_static, parameters, scope_key) = match owner {
+            Some(BodyOwner::Function(function)) => {
+                let key = folded_symbol_key(
+                    SymbolSpace::Function,
+                    &fully_qualified_name(&function.namespace, &function.name),
+                );
+                let declared = declared_function_signature(
                     db,
                     files,
                     stubs,
                     configuration,
-                    celerrate_semantics::MemberQuery::new(
-                        db,
-                        key.clone(),
-                        MemberKind::Method,
-                        folded_member_key(MemberKind::Method, &member.name),
-                    ),
+                    crate::declared::FunctionQuery::new(db, key.clone()),
+                );
+                (
+                    function.namespace.clone(),
+                    None,
+                    false,
+                    seeded_parameters(db, declared.as_ref(), &function.signature),
+                    key,
                 )
-            });
-            // The body's *own* scope key — `class_key` here, before the
-            // using-class override just below — matching
-            // `declared.rs`'s `<class key>::<member key>` convention.
-            // A trait method analyzed for a using class (decision 5)
-            // still binds its own class-level templates under the
-            // trait's key: which class or trait wrote the `@template`
-            // is unaffected by who later `use`s the method, unlike the
-            // receiver facts (`self`, `static`, `$this`) the override
-            // just below governs.
-            let member_key = folded_member_key(MemberKind::Method, &member.name);
-            let scope_key = class_key
-                .as_ref()
-                .map(|key| format!("{key}::{member_key}"))
-                .unwrap_or(member_key);
-            (
-                namespace.clone(),
-                class_key.clone(),
-                member.flags.is_static,
-                seeded_parameters(db, declared.as_ref(), &member.signature),
-                scope_key,
-            )
-        }
-        None => (String::new(), None, false, Vec::new(), String::new()),
-    };
-    let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
-    // Decision 5: with a using-class context the walker's owner class
-    // key *is* the using class — `self`/`static` inside a trait body
-    // resolve against the class that uses it, not the trait. Without
-    // one, the body's own declaration answers, exactly as before.
-    let owner_class_key = context.using_class_key(db).clone().or(owner_class_key);
-    // `method_is_static` and `parameters` still come from `body_owner`
-    // above, the trait's own syntactic member, even for a trait body —
-    // only `owner_class_key` is overridden to the using class here.
-    // That split is deliberate, not an oversight: the *signature* (is
-    // this a static method, what are its parameters) is a fact about
-    // the trait method's own declaration, unaffected by which class
-    // uses it; only the *receiver* facts (`self`, `static`, `$this`,
-    // `parent`) are the using class's business (decision 5).
-    let flow = FlowContext {
-        db,
-        files,
-        stubs,
-        configuration,
-        ir,
-        namespace,
-        tables,
-        owner_class_key,
-        method_is_static,
-        parameters,
-        scope_key,
-    };
-    let result = walk_body(&flow);
-    Some(InferredBody {
-        expression_types: result.expression_types,
-        return_type: result.return_type,
-        edge_counts: result.edge_counts,
-        stub_calls: result.stub_calls,
-        dependencies: result.dependencies,
-    })
+            }
+            Some(BodyOwner::Method {
+                class_key,
+                namespace,
+                member,
+            }) => {
+                let declared = class_key.as_ref().and_then(|key| {
+                    declared_member_signature(
+                        db,
+                        files,
+                        stubs,
+                        configuration,
+                        celerrate_semantics::MemberQuery::new(
+                            db,
+                            key.clone(),
+                            MemberKind::Method,
+                            folded_member_key(MemberKind::Method, &member.name),
+                        ),
+                    )
+                });
+                // The body's *own* scope key — `class_key` here, before the
+                // using-class override just below — matching
+                // `declared.rs`'s `<class key>::<member key>` convention.
+                // A trait method analyzed for a using class (decision 5)
+                // still binds its own class-level templates under the
+                // trait's key: which class or trait wrote the `@template`
+                // is unaffected by who later `use`s the method, unlike the
+                // receiver facts (`self`, `static`, `$this`) the override
+                // just below governs.
+                let member_key = folded_member_key(MemberKind::Method, &member.name);
+                let scope_key = class_key
+                    .as_ref()
+                    .map(|key| format!("{key}::{member_key}"))
+                    .unwrap_or(member_key);
+                (
+                    namespace.clone(),
+                    class_key.clone(),
+                    member.flags.is_static,
+                    seeded_parameters(db, declared.as_ref(), &member.signature),
+                    scope_key,
+                )
+            }
+            None => (String::new(), None, false, Vec::new(), String::new()),
+        };
+        let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
+        // Decision 5: with a using-class context the walker's owner class
+        // key *is* the using class — `self`/`static` inside a trait body
+        // resolve against the class that uses it, not the trait. Without
+        // one, the body's own declaration answers, exactly as before.
+        let owner_class_key = context.using_class_key(db).clone().or(owner_class_key);
+        // `method_is_static` and `parameters` still come from `body_owner`
+        // above, the trait's own syntactic member, even for a trait body —
+        // only `owner_class_key` is overridden to the using class here.
+        // That split is deliberate, not an oversight: the *signature* (is
+        // this a static method, what are its parameters) is a fact about
+        // the trait method's own declaration, unaffected by which class
+        // uses it; only the *receiver* facts (`self`, `static`, `$this`,
+        // `parent`) are the using class's business (decision 5).
+        let flow = FlowContext {
+            db,
+            files,
+            stubs,
+            configuration,
+            ir,
+            namespace,
+            tables,
+            owner_class_key,
+            method_is_static,
+            parameters,
+            scope_key,
+        };
+        let result = walk_body(&flow);
+        Some(InferredBody {
+            expression_types: result.expression_types,
+            return_type: result.return_type,
+            edge_counts: result.edge_counts,
+            stub_calls: result.stub_calls,
+            dependencies: result.dependencies,
+        })
+    }
 }
 
 /// Completes any inference fixpoint `body` participates in by demanding
@@ -322,7 +365,8 @@ fn inferred_body_types_unguarded<'db>(
 /// `cycle_fn`/`cycle_initial`. Ownerless bodies (and the impossible
 /// keyless-method case) need no warming: a body the member tree does
 /// not own cannot be re-entered through the symbol index under its own
-/// name, so no same-claim cycle exists (issue #51).
+/// name, so no same-claim cycle exists (issue #51) — the proof this arm
+/// returns is honest even though nothing was warmed.
 fn warm_the_cycle_safe_entry_point<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -330,7 +374,7 @@ fn warm_the_cycle_safe_entry_point<'db>(
     configuration: ProjectConfiguration,
     file: SourceFile,
     body: BodyQuery<'db>,
-) {
+) -> Warmed {
     match body_owner(db, file, body) {
         Some(BodyOwner::Function(function)) => {
             let key = folded_symbol_key(
@@ -344,6 +388,7 @@ fn warm_the_cycle_safe_entry_point<'db>(
                 configuration,
                 crate::declared::FunctionQuery::new(db, key),
             );
+            Warmed(())
         }
         Some(BodyOwner::Method {
             class_key: Some(class_key),
@@ -361,25 +406,31 @@ fn warm_the_cycle_safe_entry_point<'db>(
                     folded_member_key(MemberKind::Method, &member.name),
                 ),
             );
+            Warmed(())
         }
         Some(BodyOwner::Method {
             class_key: None, ..
         })
-        | None => {}
+        | None => Warmed(()),
     }
 }
 
 /// The inference of one body: `None` when the identity carries no body
-/// in `file`. This public name is a cycle-safe wrapper over the
-/// module-private tracked query (issue #51): it first warms the owner's
-/// recovery-carrying return query, completing any fixpoint the body
-/// participates in, then demands the raw query — which either hits its
-/// memo or recomputes with every recursive edge answered from the
-/// completed return memo. Either way, salsa's `Panic` strategy is
-/// never reachable from here. The warming covers the
-/// `InferenceContext::new(db, None)` entry every present caller uses;
-/// a future external caller passing a `Some` (trait-body) context
-/// extends the warming symmetrically before it ships.
+/// in `file`. This public name is a cycle-safe wrapper over the sealed
+/// tracked query (issue #63): it first warms the owner's recovery-
+/// carrying return query, completing any fixpoint the body participates
+/// in, collects the returned [`Warmed`] proof, then demands the raw
+/// query through [`sealed::demand`] — which either hits its memo or
+/// recomputes with every recursive edge answered from the completed
+/// return memo. Either way, salsa's `Panic` strategy is never reachable
+/// from here, and the compiler — not just this rustdoc — enforces it:
+/// there is no other way to name the sealed query.
+///
+/// The wrapper owns its `InferenceContext` (always the `None` shape):
+/// a trait-body (`Some`) context is an engine-internal currency of the
+/// return queries, and exposing it here would reopen the unwarmed
+/// entry issue #63 closed. A future external trait-body consumer adds
+/// a deliberate new entry point — and its symmetric warming with it.
 pub fn inferred_body_types<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -387,10 +438,18 @@ pub fn inferred_body_types<'db>(
     configuration: ProjectConfiguration,
     file: SourceFile,
     body: BodyQuery<'db>,
-    context: InferenceContext<'db>,
 ) -> &'db Option<InferredBody<'db>> {
-    warm_the_cycle_safe_entry_point(db, files, stubs, configuration, file, body);
-    inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
+    let proof = warm_the_cycle_safe_entry_point(db, files, stubs, configuration, file, body);
+    sealed::demand(
+        proof,
+        db,
+        files,
+        stubs,
+        configuration,
+        file,
+        body,
+        InferenceContext::new(db, None),
+    )
 }
 
 /// Parameter names paired with their seeded types: the declared
@@ -678,7 +737,8 @@ pub fn inferred_function_return<'db>(
     let Some(&(_, file)) = index.get(position) else {
         return TypeId::mixed(db);
     };
-    inferred_body_types_unguarded(
+    sealed::demand(
+        Warmed::from_inside_the_fixpoint(),
         db,
         files,
         stubs,
@@ -834,10 +894,19 @@ pub fn inferred_method_return<'db>(
         return TypeId::mixed(db);
     };
     let body = BodyQuery::new(db, member.ast_id);
-    inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
-        .as_ref()
-        .map(|inferred| inferred.return_type)
-        .unwrap_or_else(|| TypeId::mixed(db))
+    sealed::demand(
+        Warmed::from_inside_the_fixpoint(),
+        db,
+        files,
+        stubs,
+        configuration,
+        file,
+        body,
+        context,
+    )
+    .as_ref()
+    .map(|inferred| inferred.return_type)
+    .unwrap_or_else(|| TypeId::mixed(db))
 }
 
 #[cfg(test)]
@@ -863,8 +932,8 @@ mod tests {
     use celerrate_stubs::{StubIndex, StubIndexInput};
 
     use super::{
-        BodyOwner, InferenceContext, MethodQuery, body_owner, inferred_body_types_unguarded,
-        inferred_function_return, inferred_method_return,
+        BodyOwner, MethodQuery, body_owner, inferred_body_types, inferred_function_return,
+        inferred_method_return,
     };
     use crate::declared::FunctionQuery;
 
@@ -967,14 +1036,13 @@ mod tests {
         let fixture = fixture(&["<?php function f() { return 1 + 2; }"]);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 0);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -998,14 +1066,13 @@ mod tests {
     fn return_display(fixture: &Fixture, index: u32) -> String {
         let file = fixture.handles[0];
         let body = body_query(fixture, index);
-        inferred_body_types_unguarded(
+        inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap()
@@ -1055,14 +1122,13 @@ mod tests {
                     continue;
                 };
                 let body = BodyQuery::new(&fixture.db, member.ast_id);
-                return inferred_body_types_unguarded(
+                return inferred_body_types(
                     &fixture.db,
                     fixture.files,
                     fixture.stubs,
                     fixture.configuration,
                     file,
                     body,
-                    InferenceContext::new(&fixture.db, None),
                 )
                 .as_ref()
                 .unwrap()
@@ -1168,14 +1234,13 @@ mod tests {
         // Numbering: class = 0 (no body), method = 1 (the 1a contract).
         let class = body_query(&fixture, 0);
         assert!(
-            inferred_body_types_unguarded(
+            inferred_body_types(
                 &fixture.db,
                 fixture.files,
                 fixture.stubs,
                 fixture.configuration,
                 file,
                 class,
-                InferenceContext::new(&fixture.db, None),
             )
             .is_none()
         );
@@ -1489,14 +1554,13 @@ function f(Event $e) {
         assert_eq!(return_display(&fixture, 2), "string");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -1531,14 +1595,13 @@ function f(Event $e) {
         let fixture = fixture(&["<?php enum E { case A; } function f() { return E::A; }"]);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2473,14 +2536,13 @@ function caller() { return make(); }
         assert_eq!(return_display(&fixture, 2), "string");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2535,14 +2597,13 @@ function caller() { return make(); }
         assert_eq!(return_display(&fixture, 1), "int");
         let file = fixture.handles[0];
         let body = body_query(&fixture, 1);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2569,14 +2630,13 @@ function caller() { return make(); }
         register_fake_provider(&fixture);
         let file = fixture.handles[0];
         let body = body_query(&fixture, 3);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2604,14 +2664,13 @@ function caller() { return make(); }
         // inferred_edge = 3, f = 4 (`methods_seed_their_declared_
         // parameters_too`'s own "class = 0, method = 1" convention).
         let body = body_query(&fixture, 4);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2680,24 +2739,22 @@ function caller() { return make(); }
         let file = fixture.handles[0];
         // Numbering: class C = 0, method m = 1, g_one = 2, g_two = 3,
         // f1 = 4, f2 = 5.
-        let first = inferred_body_types_unguarded(
+        let first = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body_query(&fixture, 4),
-            InferenceContext::new(&fixture.db, None),
         )
         .clone();
-        let second = inferred_body_types_unguarded(
+        let second = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body_query(&fixture, 5),
-            InferenceContext::new(&fixture.db, None),
         )
         .clone();
         assert!(first.is_some(), "f1's body resolved");
@@ -2731,14 +2788,13 @@ function caller() { return make(); }
         let file = fixture.handles[0];
         // Numbering: declared_edge = 0, inferred_edge = 1, f = 2.
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -2778,14 +2834,13 @@ function caller() { return make(); }
         // site, while the RECORDED edge must still carry the
         // unsubstituted placeholder.
         let body = body_query(&fixture, 2);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &fixture.db,
             fixture.files,
             fixture.stubs,
             fixture.configuration,
             file,
             body,
-            InferenceContext::new(&fixture.db, None),
         )
         .as_ref()
         .unwrap();
@@ -4423,14 +4478,13 @@ function consume(): void {
     $value = unserialize('x');
 }
 "#]);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &f.db,
             f.files,
             f.stubs,
             f.configuration,
             f.handles[0],
             body_query(&f, 0),
-            InferenceContext::new(&f.db, None),
         )
         .as_ref()
         .unwrap();
@@ -4453,14 +4507,13 @@ function consume(): void {
 function helper(): int { return 1; }
 function consume(): void { $x = helper(); }
 "#]);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &f.db,
             f.files,
             f.stubs,
             f.configuration,
             f.handles[0],
             body_query(&f, 1),
-            InferenceContext::new(&f.db, None),
         )
         .as_ref()
         .unwrap();
@@ -4482,14 +4535,13 @@ function consume(): void { $x = helper(); }
         let f = fixture(&[r#"<?php
 function consume(): void { $x = totally_undefined_function(); }
 "#]);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &f.db,
             f.files,
             f.stubs,
             f.configuration,
             f.handles[0],
             body_query(&f, 0),
-            InferenceContext::new(&f.db, None),
         )
         .as_ref()
         .unwrap();
@@ -4509,14 +4561,13 @@ function consume(array $arguments): void {
     preg_match(...$arguments);
 }
 "#]);
-        let inferred = inferred_body_types_unguarded(
+        let inferred = inferred_body_types(
             &f.db,
             f.files,
             f.stubs,
             f.configuration,
             f.handles[0],
             body_query(&f, 0),
-            InferenceContext::new(&f.db, None),
         )
         .as_ref()
         .unwrap();

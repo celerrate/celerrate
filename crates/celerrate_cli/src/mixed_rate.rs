@@ -26,7 +26,7 @@
 use std::io::{self, Write};
 
 use celerrate_semantics::{AstId, BodyQuery, MemberKind, member_tree};
-use celerrate_types::{InferenceContext, StubCallRecord, inferred_body_types};
+use celerrate_types::{StubCallRecord, inferred_body_types};
 
 use crate::analysis::AnalysisInputs;
 use crate::database::AnalysisDatabase;
@@ -119,7 +119,6 @@ fn accumulate(
         inputs.configuration,
         file,
         BodyQuery::new(database, ast_id),
-        InferenceContext::new(database, None),
     ) else {
         return;
     };

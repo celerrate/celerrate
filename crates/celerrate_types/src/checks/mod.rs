@@ -17,9 +17,7 @@ use celerrate_semantics::{
 use celerrate_stubs::StubIndexInput;
 
 use crate::InterproceduralEdgeCounts;
-use crate::inference::{
-    BodyOwner, InferenceContext, InferredBody, body_owner, inferred_body_types,
-};
+use crate::inference::{BodyOwner, InferredBody, body_owner, inferred_body_types};
 use crate::records::FileDependencies;
 
 pub(crate) mod arguments;
@@ -274,20 +272,8 @@ pub(crate) fn body_typed_verdicts<'db>(
     let Some(ir) = body_ir(db, file, body).as_ref() else {
         return BodyTypedResult::default();
     };
-    // `InferenceContext::new(db, None)`: the checks walk a body's own
-    // analysis, never a trait body analyzed for a using class (task 3
-    // and decision 5 own that; receivers.rs is where it lands).
-    let inference_context = InferenceContext::new(db, None);
-    let Some(inferred) = inferred_body_types(
-        db,
-        files,
-        stubs,
-        configuration,
-        file,
-        body,
-        inference_context,
-    )
-    .as_ref() else {
+    let Some(inferred) = inferred_body_types(db, files, stubs, configuration, file, body).as_ref()
+    else {
         return BodyTypedResult::default();
     };
     let owner = body_owner(db, file, body).as_ref();
@@ -361,16 +347,8 @@ pub fn typed_file_verdicts(
             .dependencies
             .classes
             .extend(body_result.classes.iter().cloned());
-        if let Some(inferred) = inferred_body_types(
-            db,
-            files,
-            stubs,
-            configuration,
-            file,
-            body,
-            InferenceContext::new(db, None),
-        )
-        .as_ref()
+        if let Some(inferred) =
+            inferred_body_types(db, files, stubs, configuration, file, body).as_ref()
         {
             result.bodies += 1;
             result.edge_counts.accumulate(&inferred.edge_counts);

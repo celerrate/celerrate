@@ -21,9 +21,8 @@ use celerrate_source::FileId;
 use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, InferenceContext,
-    MethodQuery, inferred_body_types, inferred_function_return, inferred_method_return,
-    typed_diagnostics,
+    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, MethodQuery,
+    inferred_body_types, inferred_function_return, inferred_method_return, typed_diagnostics,
 };
 
 struct Fixture {
@@ -663,7 +662,6 @@ fn provider_answers_are_identical_across_fresh_databases() {
             f.configuration,
             file,
             body_query(&f, 0),
-            InferenceContext::new(&f.db, None),
         )
         .as_ref()
         .unwrap();
@@ -700,7 +698,6 @@ function consume(mixed $anything): void {
         f.configuration,
         file,
         body_query(&f, 0),
-        InferenceContext::new(&f.db, None),
     )
     .as_ref()
     .unwrap();

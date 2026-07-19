@@ -17,8 +17,7 @@ use celerrate_source::FileId;
 use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
-    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, InferenceContext,
-    inferred_body_types,
+    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, inferred_body_types,
 };
 
 struct Fixture {
@@ -83,7 +82,6 @@ fn current_over_a_call_site_array_literal_resolves_through_the_provider_edge() {
         fixture.configuration,
         *file,
         body,
-        InferenceContext::new(&fixture.db, None),
     )
     .as_ref()
     .unwrap();
