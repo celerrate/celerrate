@@ -25,6 +25,7 @@ pub enum AssertionPolarity {
 /// narrowing consumer. The subject travels verbatim; the negation
 /// applies to the asserted type.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedAssertion<'db> {
     /// The asserted subject, verbatim (`$value`, `$this->prop`):
     /// interpretation is plan 5's.
@@ -34,20 +35,59 @@ pub struct ParsedAssertion<'db> {
     pub negated: bool,
 }
 
+impl<'db> ParsedAssertion<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(
+        subject: String,
+        asserted: TypeId<'db>,
+        polarity: AssertionPolarity,
+        negated: bool,
+    ) -> Self {
+        Self {
+            subject,
+            asserted,
+            polarity,
+            negated,
+        }
+    }
+}
+
 /// One `@template` declaration of the parsed docblock, in declaration
 /// order (task 3's ancestor-argument zip relies on this order).
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedTemplate<'db> {
     pub name: String,
     pub bound: Option<TypeId<'db>>,
 }
 
+impl<'db> ParsedTemplate<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(name: String, bound: Option<TypeId<'db>>) -> Self {
+        Self { name, bound }
+    }
+}
+
 /// One inheritance-position declaration: the ancestor's fully
 /// qualified, pre-folded class name and its fixed generic arguments.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedAncestor<'db> {
     pub class_name: String,
     pub arguments: Vec<TypeId<'db>>,
+}
+
+impl<'db> ParsedAncestor<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(class_name: String, arguments: Vec<TypeId<'db>>) -> Self {
+        Self {
+            class_name,
+            arguments,
+        }
+    }
 }
 
 /// The declaring-scope context one annotation parse needs beyond name
@@ -141,6 +181,7 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
 /// declares. `return_type` and `value_type` are both carried; the
 /// consumer picks by subject kind (decision 5 of the plan header).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedAnnotations<'db> {
     /// `@return`.
     pub return_type: Option<TypeId<'db>>,

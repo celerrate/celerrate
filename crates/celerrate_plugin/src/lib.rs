@@ -19,9 +19,21 @@ pub const PLUGIN_API_VERSION: u32 = 0;
 
 /// What a plugin exposes for registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PluginDescriptor {
     pub identity: PluginIdentity,
     pub api_version: u32,
+}
+
+impl PluginDescriptor {
+    /// Constructor for plugin crates and test suites: cross-crate
+    /// literal construction is closed by `#[non_exhaustive]`.
+    pub fn new(identity: PluginIdentity, api_version: u32) -> Self {
+        Self {
+            identity,
+            api_version,
+        }
+    }
 }
 
 // Identity and the comment-directive and virtual-symbol extension points.

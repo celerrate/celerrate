@@ -37,14 +37,14 @@ impl StdlibProvider {
 }
 
 pub fn descriptor() -> celerrate_plugin::PluginDescriptor {
-    celerrate_plugin::PluginDescriptor {
-        identity: celerrate_plugin::PluginIdentity {
+    celerrate_plugin::PluginDescriptor::new(
+        celerrate_plugin::PluginIdentity {
             name: "stdlib-provider".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             configuration: String::new(),
         },
-        api_version: celerrate_plugin::PLUGIN_API_VERSION,
-    }
+        celerrate_plugin::PLUGIN_API_VERSION,
+    )
 }
 
 impl DynamicTypeProvider for StdlibProvider {
@@ -109,13 +109,13 @@ mod tests {
         key: &str,
         arguments: Vec<TypeId<'db>>,
     ) -> Invocation<'db> {
-        Invocation {
-            claim: SymbolClaim::Function {
+        Invocation::new(
+            SymbolClaim::Function {
                 key: key.to_owned(),
             },
-            receiver_type: None,
-            argument_types: arguments,
-        }
+            None,
+            arguments,
+        )
     }
 
     #[test]

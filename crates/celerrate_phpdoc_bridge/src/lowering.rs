@@ -439,8 +439,5 @@ pub(crate) fn lower_ancestor<'db>(
     let lowered = lower(site, scope, &declaration.expression);
     let class_name = context.class_name(lowered)?;
     let arguments = context.class_arguments(lowered);
-    Some(ParsedAncestor {
-        class_name,
-        arguments,
-    })
+    Some(ParsedAncestor::new(class_name, arguments))
 }

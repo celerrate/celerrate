@@ -275,13 +275,8 @@ impl VirtualSymbolProvider for DocblockMemberProvider {
         let methods = class_docblock.split("@method").skip(1).filter_map(|rest| {
             let name_token = rest.split_whitespace().find(|token| token.contains('('))?;
             let name = name_token.split('(').next()?;
-            (!name.is_empty()).then(|| VirtualMember {
-                kind: VirtualMemberKind::Method,
-                name: name.to_owned(),
-                is_static: false,
-                type_text: None,
-                parameters: Vec::new(),
-            })
+            (!name.is_empty())
+                .then(|| VirtualMember::new(VirtualMemberKind::Method, name.to_owned()))
         });
         let properties = class_docblock
             .split("@property")
@@ -291,13 +286,8 @@ impl VirtualSymbolProvider for DocblockMemberProvider {
                     .split_whitespace()
                     .find(|token| token.starts_with('$'))?;
                 let name = name_token.trim_start_matches('$');
-                (!name.is_empty()).then(|| VirtualMember {
-                    kind: VirtualMemberKind::Property,
-                    name: name.to_owned(),
-                    is_static: false,
-                    type_text: None,
-                    parameters: Vec::new(),
-                })
+                (!name.is_empty())
+                    .then(|| VirtualMember::new(VirtualMemberKind::Property, name.to_owned()))
             });
         methods.chain(properties).collect()
     }

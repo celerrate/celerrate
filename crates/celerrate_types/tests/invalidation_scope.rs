@@ -589,10 +589,9 @@ impl TypeSyntax for WordOnlyReturnSyntax {
                         .class(&site.qualify_class_name(word), Vec::new())
                 })
             });
-        ParsedAnnotations {
-            return_type,
-            ..ParsedAnnotations::default()
-        }
+        let mut annotations = ParsedAnnotations::default();
+        annotations.return_type = return_type;
+        annotations
     }
 
     fn parse_type_expression<'db>(
@@ -1467,10 +1466,7 @@ impl TypeSyntax for InheritanceFakeSyntax {
         let mut return_type = None;
         for line in Self::docblock_lines(docblock) {
             if let Some(rest) = line.strip_prefix("@template ") {
-                templates.push(ParsedTemplate {
-                    name: rest.trim().to_owned(),
-                    bound: None,
-                });
+                templates.push(ParsedTemplate::new(rest.trim().to_owned(), None));
             } else if let Some(rest) = line.strip_prefix("@extends ") {
                 if let Some((head, tail)) = rest.split_once('<')
                     && let Some(arguments_text) = tail.strip_suffix('>')
@@ -1480,21 +1476,17 @@ impl TypeSyntax for InheritanceFakeSyntax {
                         .split(',')
                         .map(|argument| Self::lower_name(site, &own_templates, argument.trim()))
                         .collect();
-                    ancestors.push(ParsedAncestor {
-                        class_name,
-                        arguments,
-                    });
+                    ancestors.push(ParsedAncestor::new(class_name, arguments));
                 }
             } else if let Some(rest) = line.strip_prefix("@return ") {
                 return_type = Some(Self::lower_name(site, &own_templates, rest.trim()));
             }
         }
-        ParsedAnnotations {
-            templates,
-            ancestors,
-            return_type,
-            ..ParsedAnnotations::default()
-        }
+        let mut annotations = ParsedAnnotations::default();
+        annotations.templates = templates;
+        annotations.ancestors = ancestors;
+        annotations.return_type = return_type;
+        annotations
     }
 
     fn parse_type_expression<'db>(

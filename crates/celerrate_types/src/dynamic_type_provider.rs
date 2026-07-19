@@ -21,6 +21,7 @@ use crate::representation::TypeId;
 /// provider. Folded keys, normalized for comparison — the same form as
 /// the symbol table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum SymbolClaim {
     /// Global function.
     Function { key: String },
@@ -35,10 +36,27 @@ pub enum SymbolClaim {
 /// return type at a call site. Owned struct: implementations extend it
 /// additively (argument *values* travel as literal types interrogable
 /// on `TypeId`).
+#[non_exhaustive]
 pub struct Invocation<'db> {
     pub claim: SymbolClaim,
     pub receiver_type: Option<TypeId<'db>>,
     pub argument_types: Vec<TypeId<'db>>,
+}
+
+impl<'db> Invocation<'db> {
+    /// Constructor for the engine and for test suites: cross-crate
+    /// literal construction is closed by `#[non_exhaustive]`.
+    pub fn new(
+        claim: SymbolClaim,
+        receiver_type: Option<TypeId<'db>>,
+        argument_types: Vec<TypeId<'db>>,
+    ) -> Self {
+        Self {
+            claim,
+            receiver_type,
+            argument_types,
+        }
+    }
 }
 
 /// The call-scoped context a dynamic-type provider answers from: the

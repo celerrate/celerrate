@@ -60,22 +60,26 @@ impl TypeSyntax for PhpdocBridge {
         let assertions = extracted
             .assertions
             .iter()
-            .map(|assertion| ParsedAssertion {
-                subject: assertion.subject.clone(),
-                asserted: lower(site, &mut scope, &assertion.asserted),
-                polarity: assertion.polarity,
-                negated: assertion.negated,
+            .map(|assertion| {
+                ParsedAssertion::new(
+                    assertion.subject.clone(),
+                    lower(site, &mut scope, &assertion.asserted),
+                    assertion.polarity,
+                    assertion.negated,
+                )
             })
             .collect();
         let templates = extracted
             .templates
             .iter()
-            .map(|declaration| ParsedTemplate {
-                name: declaration.name.clone(),
-                bound: declaration
-                    .bound
-                    .as_ref()
-                    .map(|expression| lower(site, &mut scope, expression)),
+            .map(|declaration| {
+                ParsedTemplate::new(
+                    declaration.name.clone(),
+                    declaration
+                        .bound
+                        .as_ref()
+                        .map(|expression| lower(site, &mut scope, expression)),
+                )
             })
             .collect();
         let ancestors = extracted
@@ -88,16 +92,16 @@ impl TypeSyntax for PhpdocBridge {
             .iter()
             .map(|(name, expression)| (name.clone(), lower(site, &mut scope, expression)))
             .collect();
-        ParsedAnnotations {
-            return_type,
-            value_type,
-            parameters,
-            throws,
-            assertions,
-            templates,
-            ancestors,
-            variables,
-        }
+        let mut annotations = ParsedAnnotations::default();
+        annotations.return_type = return_type;
+        annotations.value_type = value_type;
+        annotations.parameters = parameters;
+        annotations.throws = throws;
+        annotations.assertions = assertions;
+        annotations.templates = templates;
+        annotations.ancestors = ancestors;
+        annotations.variables = variables;
+        annotations
     }
 
     fn parse_type_expression<'db>(

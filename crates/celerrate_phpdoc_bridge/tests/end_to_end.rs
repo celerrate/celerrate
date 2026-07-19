@@ -770,12 +770,12 @@ fn assertions_are_carried_through_the_annotation_seam() {
     );
     assert_eq!(
         annotations.assertions,
-        vec![celerrate_types::ParsedAssertion {
-            subject: "$value".to_owned(),
-            asserted: celerrate_types::TypeId::string(db),
-            polarity: celerrate_types::AssertionPolarity::Always,
-            negated: false,
-        }],
+        vec![celerrate_types::ParsedAssertion::new(
+            "$value".to_owned(),
+            celerrate_types::TypeId::string(db),
+            celerrate_types::AssertionPolarity::Always,
+            false,
+        )],
     );
 }
 

@@ -22,6 +22,7 @@ pub enum VirtualMemberKind {
 
 /// One parameter of a virtual method (`@method`).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VirtualParameter {
     pub name: String,
     /// The written type expression, unresolved.
@@ -31,8 +32,23 @@ pub struct VirtualParameter {
     pub variadic: bool,
 }
 
+impl VirtualParameter {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`. Remaining fields default to
+    /// their unset value; set them by mutation.
+    pub fn new(name: String) -> Self {
+        Self {
+            name,
+            type_text: None,
+            optional: false,
+            variadic: false,
+        }
+    }
+}
+
 /// One member declared by a class-like's docblock.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub struct VirtualMember {
     pub kind: VirtualMemberKind,
     /// Original spelling (property names without the `$`).
@@ -42,6 +58,21 @@ pub struct VirtualMember {
     pub type_text: Option<String>,
     /// Parameters, for virtual methods; empty for properties.
     pub parameters: Vec<VirtualParameter>,
+}
+
+impl VirtualMember {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`. Remaining fields default to
+    /// their unset value; set them by mutation.
+    pub fn new(kind: VirtualMemberKind, name: String) -> Self {
+        Self {
+            kind,
+            name,
+            is_static: false,
+            type_text: None,
+            parameters: Vec::new(),
+        }
+    }
 }
 
 /// A provider contributes the members a class-like docblock declares.
