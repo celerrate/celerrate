@@ -1,8 +1,8 @@
 //! The dependency-shape check: plugin crates depend on
-//! `celerrate_plugin` and nothing else in the workspace; certain external
-//! crates are forbidden to close external routes to the engine. An extension
-//! point that proves insufficient is extended, never bypassed — this
-//! check is what makes "never bypassed" mechanical.
+//! `celerrate_plugin` and nothing else in the workspace, and certain
+//! external crates are forbidden as well, closing the external route to
+//! the engine. An extension point that proves insufficient is extended,
+//! never bypassed — this check is what makes "never bypassed" mechanical.
 
 /// The plugin crates under the rule.
 const PLUGIN_CRATES: &[&str] = &["celerrate_phpdoc_bridge", "celerrate_stdlib_provider"];

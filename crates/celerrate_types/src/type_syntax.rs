@@ -112,8 +112,11 @@ pub struct AnnotationContext<'a> {
 /// A name-resolution and construction context for one annotation
 /// parse, scoped to the declaring site. Handles are call-scoped:
 /// implementations never retain the site, the database, or any
-/// `TypeId` beyond the call (the WASM projection will enforce this
-/// structurally; the native tier enforces it by review).
+/// `TypeId` beyond the call (the WASM projection enforces this with
+/// call-scoped handle tables; the native tier enforces it structurally
+/// too: the site owns the database, a plugin crate can neither name nor
+/// obtain `salsa::Database`, and the `'static` implementation bound
+/// makes retention a compile error).
 pub struct AnnotationSite<'db, 'site> {
     db: &'db dyn salsa::Database,
     site: &'site NameSite<'site>,

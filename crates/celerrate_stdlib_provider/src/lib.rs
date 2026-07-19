@@ -2,7 +2,7 @@
 //! plugin computing the computation-dependent stdlib signatures no
 //! declarative stub can express — the declarative long tail lives
 //! in the refinements overlay instead. Stateless and pure: every
-//! answer is a function of the `Invocation` alone (argument values
+//! answer is a function of the `InvocationSite` alone (argument values
 //! travel as literal types); `None` falls through to the declared
 //! tier. Claims are exact folded function keys. Depends only on
 //! `celerrate_plugin` (enforced by `cargo xtask dependency-shape`).

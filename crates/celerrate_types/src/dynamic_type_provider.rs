@@ -33,9 +33,9 @@ pub enum SymbolClaim {
 }
 
 /// The invocation context for a dynamic-type provider querying the
-/// return type at a call site. Owned struct: implementations extend it
-/// additively (argument *values* travel as literal types interrogable
-/// on `TypeId`).
+/// return type at a call site. Engine- and test-internal: plugins observe
+/// an invocation only through `InvocationSite` (argument *values* travel as
+/// literal types interrogable on `TypeId`).
 #[non_exhaustive]
 pub struct Invocation<'db> {
     pub claim: SymbolClaim,
