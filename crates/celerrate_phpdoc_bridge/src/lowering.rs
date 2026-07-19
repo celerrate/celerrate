@@ -39,7 +39,7 @@
 //! | any other name | a class type, qualified at the declaring site |
 
 use celerrate_plugin::{
-    AnnotationSite, CallableParameter, ParsedAncestor, ShapeField, ShapeKey, TypeId, salsa,
+    AnnotationSite, CallableParameter, ParsedAncestor, ShapeField, ShapeKey, TypeContext, TypeId,
 };
 
 use crate::expression::{ConditionalSubject, ShapeKeyExpression, TypeExpression, UnsealedTail};
@@ -63,12 +63,12 @@ impl<'db> LoweringScope<'db> {
     /// (member templates over class templates).
     pub(crate) fn declare_template(
         &mut self,
-        db: &'db dyn salsa::Database,
+        context: TypeContext<'db>,
         scope_key: &str,
         name: String,
         bound: TypeId<'db>,
     ) {
-        let resolved = TypeId::template(db, scope_key, &name, bound);
+        let resolved = context.template(scope_key, &name, bound);
         self.templates.push((name, resolved));
     }
 
@@ -88,35 +88,35 @@ pub(crate) fn lower<'db>(
     scope: &mut LoweringScope<'db>,
     expression: &TypeExpression,
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     match expression {
         TypeExpression::Name(name) => lower_name(site, scope, name),
         TypeExpression::Nullable(inner) => {
-            TypeId::union(db, [lower(site, scope, inner), TypeId::null(db)])
+            context.union([lower(site, scope, inner), context.null()])
         }
         TypeExpression::Union(parts) => {
             let mut lowered = Vec::with_capacity(parts.len());
             for part in parts {
                 lowered.push(lower(site, scope, part));
             }
-            TypeId::union(db, lowered)
+            context.union(lowered)
         }
         TypeExpression::Intersection(parts) => {
             let mut lowered = Vec::with_capacity(parts.len());
             for part in parts {
                 lowered.push(lower(site, scope, part));
             }
-            TypeId::intersection(db, lowered)
+            context.intersection(lowered)
         }
         TypeExpression::ArrayOf(element) => {
-            TypeId::array(db, array_key(db), lower(site, scope, element))
+            context.array(array_key(context), lower(site, scope, element))
         }
-        TypeExpression::IntLiteral(value) => TypeId::int_literal(db, *value),
+        TypeExpression::IntLiteral(value) => context.int_literal(*value),
         TypeExpression::FloatLiteral(text) => text
             .parse::<f64>()
-            .map(|value| TypeId::float_literal(db, value))
-            .unwrap_or_else(|_| TypeId::float(db)),
-        TypeExpression::StringLiteral(value) => TypeId::string_literal(db, value),
+            .map(|value| context.float_literal(value))
+            .unwrap_or_else(|_| context.float()),
+        TypeExpression::StringLiteral(value) => context.string_literal(value),
         TypeExpression::Generic { base, arguments } => lower_generic(site, scope, base, arguments),
         TypeExpression::Shape {
             base,
@@ -129,9 +129,9 @@ pub(crate) fn lower<'db>(
             return_type,
             ..
         } => lower_callable(site, scope, templates, parameters, return_type),
-        TypeExpression::ConstFetch { .. } => TypeId::mixed(db),
-        TypeExpression::This => TypeId::static_placeholder(db),
-        TypeExpression::Offset { .. } => TypeId::mixed(db),
+        TypeExpression::ConstFetch { .. } => context.mixed(),
+        TypeExpression::This => context.static_placeholder(),
+        TypeExpression::Offset { .. } => context.mixed(),
         TypeExpression::Conditional {
             subject,
             negated,
@@ -150,8 +150,8 @@ pub(crate) fn lower<'db>(
     }
 }
 
-fn array_key<'db>(db: &'db dyn salsa::Database) -> TypeId<'db> {
-    TypeId::union(db, [TypeId::int(db), TypeId::string(db)])
+fn array_key<'db>(context: TypeContext<'db>) -> TypeId<'db> {
+    context.union([context.int(), context.string()])
 }
 
 fn lower_name<'db>(
@@ -159,13 +159,13 @@ fn lower_name<'db>(
     scope: &mut LoweringScope<'db>,
     name: &str,
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     if scope
         .callable_templates
         .iter()
         .any(|template| template == name)
     {
-        return TypeId::mixed(db);
+        return context.mixed();
     }
     // The docblock template set resolves here, before keywords: a
     // template name shadows a same-named keyword.
@@ -175,62 +175,52 @@ fn lower_name<'db>(
     if let Some(keyword) = site.keyword_type(name) {
         return keyword;
     }
-    if let Some(dialect) = lower_dialect_name(db, name) {
+    if let Some(dialect) = lower_dialect_name(context, name) {
         return dialect;
     }
-    TypeId::class(db, &site.qualify_class_name(name), Vec::new())
+    context.class(&site.qualify_class_name(name), Vec::new())
 }
 
 /// The dialect atom table, folded ASCII-case-insensitively like the
 /// native keyword table. `None` means "an ordinary class name".
-fn lower_dialect_name<'db>(db: &'db dyn salsa::Database, name: &str) -> Option<TypeId<'db>> {
+fn lower_dialect_name<'db>(context: TypeContext<'db>, name: &str) -> Option<TypeId<'db>> {
     let folded = name.to_ascii_lowercase();
     Some(match folded.as_str() {
-        "list" => TypeId::list(db, TypeId::mixed(db)),
-        "non-empty-list" => TypeId::non_empty_list(db, TypeId::mixed(db)),
-        "non-empty-array" => TypeId::non_empty_array(db, array_key(db), TypeId::mixed(db)),
-        "associative-array" => TypeId::array(db, array_key(db), TypeId::mixed(db)),
-        "non-empty-string" => TypeId::non_empty_string(db),
-        "numeric-string" => TypeId::numeric_string(db),
-        "literal-string" => TypeId::literal_string_type(db),
+        "list" => context.list(context.mixed()),
+        "non-empty-list" => context.non_empty_list(context.mixed()),
+        "non-empty-array" => context.non_empty_array(array_key(context), context.mixed()),
+        "associative-array" => context.array(array_key(context), context.mixed()),
+        "non-empty-string" => context.non_empty_string(),
+        "numeric-string" => context.numeric_string(),
+        "literal-string" => context.literal_string_type(),
         "class-string" | "interface-string" | "enum-string" | "trait-string" => {
-            TypeId::class_string(db, None)
+            context.class_string(None)
         }
-        "callable-string" => TypeId::non_empty_string(db),
-        "lowercase-string" | "uppercase-string" => TypeId::string(db),
-        "non-falsy-string" | "truthy-string" => TypeId::non_empty_string(db),
-        "literal-int" => TypeId::int(db),
-        "positive-int" => TypeId::int_range(db, Some(1), None),
-        "negative-int" => TypeId::int_range(db, None, Some(-1)),
-        "non-negative-int" => TypeId::int_range(db, Some(0), None),
-        "non-positive-int" => TypeId::int_range(db, None, Some(0)),
-        "array-key" => array_key(db),
-        "scalar" => TypeId::union(
-            db,
-            [
-                TypeId::bool(db),
-                TypeId::int(db),
-                TypeId::float(db),
-                TypeId::string(db),
-            ],
-        ),
-        "numeric" => TypeId::union(
-            db,
-            [
-                TypeId::int(db),
-                TypeId::float(db),
-                TypeId::numeric_string(db),
-            ],
-        ),
-        "double" => TypeId::float(db),
-        "integer" => TypeId::int(db),
-        "boolean" => TypeId::bool(db),
-        "noreturn" | "no-return" | "never-return" | "never-returns" => TypeId::never(db),
-        "non-empty-mixed" => TypeId::mixed(db),
-        "open-resource" | "closed-resource" => TypeId::resource(db),
-        "pure-callable" => TypeId::mixed(db),
-        "pure-closure" => TypeId::class(db, "Closure", Vec::new()),
-        "callable-object" => TypeId::object(db),
+        "callable-string" => context.non_empty_string(),
+        "lowercase-string" | "uppercase-string" => context.string(),
+        "non-falsy-string" | "truthy-string" => context.non_empty_string(),
+        "literal-int" => context.int(),
+        "positive-int" => context.int_range(Some(1), None),
+        "negative-int" => context.int_range(None, Some(-1)),
+        "non-negative-int" => context.int_range(Some(0), None),
+        "non-positive-int" => context.int_range(None, Some(0)),
+        "array-key" => array_key(context),
+        "scalar" => context.union([
+            context.bool(),
+            context.int(),
+            context.float(),
+            context.string(),
+        ]),
+        "numeric" => context.union([context.int(), context.float(), context.numeric_string()]),
+        "double" => context.float(),
+        "integer" => context.int(),
+        "boolean" => context.bool(),
+        "noreturn" | "no-return" | "never-return" | "never-returns" => context.never(),
+        "non-empty-mixed" => context.mixed(),
+        "open-resource" | "closed-resource" => context.resource(),
+        "pure-callable" => context.mixed(),
+        "pure-closure" => context.class("Closure", Vec::new()),
+        "callable-object" => context.object(),
         _ => return None,
     })
 }
@@ -241,7 +231,7 @@ fn lower_generic<'db>(
     base: &str,
     arguments: &[TypeExpression],
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     let folded = base.to_ascii_lowercase();
     // `int<a, b>` reads its bounds at the expression level: a lowered
     // bound would already have lost `min`/`max`.
@@ -251,52 +241,52 @@ fn lower_generic<'db>(
             range_bound(arguments.get(1)),
         ) && arguments.len() == 2
         {
-            return TypeId::int_range(db, minimum, maximum);
+            return context.int_range(minimum, maximum);
         }
-        return TypeId::int(db);
+        return context.int();
     }
     if folded == "int-mask" || folded == "int-mask-of" {
-        return TypeId::int(db);
+        return context.int();
     }
     let mut lowered = Vec::with_capacity(arguments.len());
     for argument in arguments {
         lowered.push(lower(site, scope, argument));
     }
     match (folded.as_str(), lowered.as_slice()) {
-        ("array", [value]) => TypeId::array(db, array_key(db), *value),
-        ("array", [key, value]) => TypeId::array(db, *key, *value),
-        ("array", _) => TypeId::array(db, array_key(db), TypeId::mixed(db)),
-        ("non-empty-array", [value]) => TypeId::non_empty_array(db, array_key(db), *value),
-        ("non-empty-array", [key, value]) => TypeId::non_empty_array(db, *key, *value),
-        ("non-empty-array", _) => TypeId::non_empty_array(db, array_key(db), TypeId::mixed(db)),
-        ("list", [value]) => TypeId::list(db, *value),
-        ("list", _) => TypeId::list(db, TypeId::mixed(db)),
-        ("non-empty-list", [value]) => TypeId::non_empty_list(db, *value),
-        ("non-empty-list", _) => TypeId::non_empty_list(db, TypeId::mixed(db)),
-        ("iterable", [value]) => TypeId::iterable(db, TypeId::mixed(db), *value),
-        ("iterable", [key, value]) => TypeId::iterable(db, *key, *value),
-        ("iterable", _) => TypeId::iterable(db, TypeId::mixed(db), TypeId::mixed(db)),
+        ("array", [value]) => context.array(array_key(context), *value),
+        ("array", [key, value]) => context.array(*key, *value),
+        ("array", _) => context.array(array_key(context), context.mixed()),
+        ("non-empty-array", [value]) => context.non_empty_array(array_key(context), *value),
+        ("non-empty-array", [key, value]) => context.non_empty_array(*key, *value),
+        ("non-empty-array", _) => context.non_empty_array(array_key(context), context.mixed()),
+        ("list", [value]) => context.list(*value),
+        ("list", _) => context.list(context.mixed()),
+        ("non-empty-list", [value]) => context.non_empty_list(*value),
+        ("non-empty-list", _) => context.non_empty_list(context.mixed()),
+        ("iterable", [value]) => context.iterable(context.mixed(), *value),
+        ("iterable", [key, value]) => context.iterable(*key, *value),
+        ("iterable", _) => context.iterable(context.mixed(), context.mixed()),
         ("class-string" | "interface-string" | "enum-string" | "trait-string", [argument]) => {
-            TypeId::class_string(db, Some(*argument))
+            context.class_string(Some(*argument))
         }
         ("class-string" | "interface-string" | "enum-string" | "trait-string", _) => {
-            TypeId::class_string(db, None)
+            context.class_string(None)
         }
-        ("key-of", [subject]) => TypeId::key_of(db, *subject),
-        ("value-of", [subject]) => TypeId::value_of(db, *subject),
-        ("key-of" | "value-of", _) => TypeId::mixed(db),
+        ("key-of", [subject]) => context.key_of(*subject),
+        ("value-of", [subject]) => context.value_of(*subject),
+        ("key-of" | "value-of", _) => context.mixed(),
         _ => {
             // A template base drops its (spurious) argument list too:
             // a template variable is never itself generic.
             if let Some(resolved) = scope.resolve_template(base) {
                 return resolved;
             }
-            if site.keyword_type(base).is_some() || lower_dialect_name(db, base).is_some() {
+            if site.keyword_type(base).is_some() || lower_dialect_name(context, base).is_some() {
                 // A keyword or dialect atom with a spurious argument
                 // list: the atom stands, the arguments drop.
                 lower_name(site, scope, base)
             } else {
-                TypeId::class(db, &site.qualify_class_name(base), lowered)
+                context.class(&site.qualify_class_name(base), lowered)
             }
         }
     }
@@ -324,9 +314,9 @@ fn lower_shape<'db>(
     fields: &[crate::expression::ShapeFieldExpression],
     unsealed: Option<&UnsealedTail>,
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     if base.eq_ignore_ascii_case("object") {
-        return TypeId::object(db);
+        return context.object();
     }
     if let Some(tail) = unsealed {
         let mut values = Vec::with_capacity(fields.len() + 1);
@@ -336,15 +326,15 @@ fn lower_shape<'db>(
         let value = match tail.value.as_deref() {
             Some(tail_value) => {
                 values.push(lower(site, scope, tail_value));
-                TypeId::union(db, values)
+                context.union(values)
             }
-            None => TypeId::mixed(db),
+            None => context.mixed(),
         };
-        let key = array_key(db);
+        let key = array_key(context);
         return if fields.iter().any(|field| !field.optional) {
-            TypeId::non_empty_array(db, key, value)
+            context.non_empty_array(key, value)
         } else {
-            TypeId::array(db, key, value)
+            context.array(key, value)
         };
     }
     let mut next_index: i64 = 0;
@@ -371,7 +361,7 @@ fn lower_shape<'db>(
             value: lower(site, scope, &field.value),
         });
     }
-    TypeId::shape(db, lowered_fields)
+    context.shape(lowered_fields)
 }
 
 fn lower_callable<'db>(
@@ -381,7 +371,7 @@ fn lower_callable<'db>(
     parameters: &[crate::expression::CallableParameterExpression],
     return_type: &TypeExpression,
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     let before = scope.callable_templates.len();
     scope.callable_templates.extend(templates.iter().cloned());
     let mut lowered_parameters = Vec::with_capacity(parameters.len());
@@ -395,7 +385,7 @@ fn lower_callable<'db>(
     }
     let lowered_return = lower(site, scope, return_type);
     scope.callable_templates.truncate(before);
-    TypeId::callable(db, lowered_parameters, lowered_return)
+    context.callable(lowered_parameters, lowered_return)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -408,7 +398,7 @@ fn lower_conditional<'db>(
     then_branch: &TypeExpression,
     otherwise_branch: &TypeExpression,
 ) -> TypeId<'db> {
-    let db = site.database();
+    let context = site.types();
     let then_lowered = lower(site, scope, then_branch);
     let otherwise_lowered = lower(site, scope, otherwise_branch);
     // An in-scope template subject resolves to `TypeId::conditional`.
@@ -423,8 +413,7 @@ fn lower_conditional<'db>(
         && let Some(template) = scope.resolve_template(name)
     {
         let target_lowered = lower(site, scope, target);
-        return TypeId::conditional(
-            db,
+        return context.conditional(
             template,
             target_lowered,
             then_lowered,
@@ -432,7 +421,7 @@ fn lower_conditional<'db>(
             negated,
         );
     }
-    TypeId::union(db, [then_lowered, otherwise_lowered])
+    context.union([then_lowered, otherwise_lowered])
 }
 
 /// Lowers one inheritance-position declaration through the scope, then
@@ -446,10 +435,10 @@ pub(crate) fn lower_ancestor<'db>(
     scope: &mut LoweringScope<'db>,
     declaration: &AncestorDeclaration,
 ) -> Option<ParsedAncestor<'db>> {
-    let db = site.database();
+    let context = site.types();
     let lowered = lower(site, scope, &declaration.expression);
-    let class_name = lowered.class_name(db)?;
-    let arguments = lowered.class_arguments(db);
+    let class_name = context.class_name(lowered)?;
+    let arguments = context.class_arguments(lowered);
     Some(ParsedAncestor {
         class_name,
         arguments,

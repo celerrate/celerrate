@@ -148,11 +148,11 @@ fn declare_into<'db>(
     declaration: &TemplateDeclaration,
     scope_key: &str,
 ) {
-    let db = site.database();
+    let context = site.types();
     let bound = declaration
         .bound
         .as_ref()
         .map(|expression| lower(site, scope, expression))
-        .unwrap_or_else(|| TypeId::mixed(db));
-    scope.declare_template(db, scope_key, declaration.name.clone(), bound);
+        .unwrap_or_else(|| context.mixed());
+    scope.declare_template(context, scope_key, declaration.name.clone(), bound);
 }

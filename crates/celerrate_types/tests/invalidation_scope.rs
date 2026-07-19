@@ -585,7 +585,8 @@ impl TypeSyntax for WordOnlyReturnSyntax {
             .and_then(|(_, rest)| rest.split_whitespace().next())
             .map(|word| {
                 site.keyword_type(word).unwrap_or_else(|| {
-                    TypeId::class(site.database(), &site.qualify_class_name(word), Vec::new())
+                    site.types()
+                        .class(&site.qualify_class_name(word), Vec::new())
                 })
             });
         ParsedAnnotations {
@@ -1429,22 +1430,22 @@ impl InheritanceFakeSyntax {
         own_templates: &[String],
         written: &str,
     ) -> TypeId<'db> {
-        let db = site.database();
+        let context = site.types();
         let enclosing: Vec<String> = site
             .enclosing_class_docblock()
             .map(Self::template_names)
             .unwrap_or_default();
         if enclosing.iter().any(|name| name == written) {
             let scope = site.enclosing_class_scope().unwrap_or("");
-            return TypeId::template(db, scope, written, TypeId::mixed(db));
+            return context.template(scope, written, context.mixed());
         }
         if own_templates.iter().any(|name| name == written) {
-            return TypeId::template(db, site.declaring_scope(), written, TypeId::mixed(db));
+            return context.template(site.declaring_scope(), written, context.mixed());
         }
         if let Some(keyword) = site.keyword_type(written) {
             return keyword;
         }
-        TypeId::class(db, &site.qualify_class_name(written).to_lowercase(), vec![])
+        context.class(&site.qualify_class_name(written).to_lowercase(), vec![])
     }
 }
 
