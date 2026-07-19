@@ -453,19 +453,22 @@ fn stub_signature(
     by_reference: bool,
     declaration_node: &SyntaxNode,
 ) -> StubSignature {
+    let doc_optional = doc_optional_parameters(declaration_node);
     StubSignature {
         parameters: parameters
             .into_iter()
             .flat_map(|list| list.parameters())
             .filter_map(|parameter| {
                 let name = parameter.name_token()?;
+                let bare = name.text().trim_start_matches('$');
                 Some(StubParameter {
-                    name: name.text().trim_start_matches('$').to_owned(),
+                    name: bare.to_owned(),
                     type_text: versioned_type_text(
                         parameter.syntax(),
                         parameter.ty().map(|ty| ast::type_text(&ty)),
                     ),
-                    optional: parameter.default_value().is_some(),
+                    optional: parameter.default_value().is_some()
+                        || doc_optional.contains(bare),
                     by_reference: parameter.by_reference_token().is_some(),
                     variadic: parameter.variadic_token().is_some(),
                     // Attributes only: a parameter's leading doc
@@ -585,6 +588,57 @@ fn doc_availability(node: &SyntaxNode) -> StubAvailability {
         }
     }
     availability
+}
+
+/// The parameter names (without `$`) the declaration's docblock marks
+/// `[optional]` — phpstorm-stubs' convention for a builtin parameter
+/// that is optional without a PHP-expressible default (`mt_rand`'s
+/// `$min`/`$max` declare no default yet are optional in practice).
+/// Without this, stub arity over-counts required parameters and the
+/// too-few-arguments check false-positives on builtin calls.
+///
+/// The marker sits on the same `@param` line as the `$name` it
+/// documents, right after it, so the set is read line by line: a
+/// `@param` line carrying `[optional]` contributes its documented
+/// variable. Absent a docblock, the set is empty.
+fn doc_optional_parameters(node: &SyntaxNode) -> std::collections::BTreeSet<String> {
+    let mut optional = std::collections::BTreeSet::new();
+    let Some(comment) = leading_doc_comment(node) else {
+        return optional;
+    };
+    for line in comment.text().lines() {
+        let line = line.trim_start_matches(['/', '*', ' ', '\t']).trim_end();
+        let Some(rest) = line.strip_prefix("@param") else {
+            continue;
+        };
+        // `@param` must end at a word boundary: `@parameter` is prose.
+        if !rest.is_empty() && !rest.starts_with(|character: char| character.is_whitespace()) {
+            continue;
+        }
+        if !rest.contains("[optional]") {
+            continue;
+        }
+        // The documented variable: the first `$`-prefixed token, a
+        // leading variadic `...` stripped. Guard the tail to identifier
+        // characters so a trailing `,`/`.` never leaks into the name.
+        let name = rest.split_whitespace().find_map(|token| {
+            token
+                .trim_start_matches('.')
+                .strip_prefix('$')
+                .map(|bare| {
+                    bare.chars()
+                        .take_while(|character| {
+                            character.is_ascii_alphanumeric() || *character == '_'
+                        })
+                        .collect::<String>()
+                })
+                .filter(|bare| !bare.is_empty())
+        });
+        if let Some(name) = name {
+            optional.insert(name);
+        }
+    }
+    optional
 }
 
 /// The closest `/** ... */` before the node, separated from it only by
@@ -1058,6 +1112,93 @@ mod tests {
         );
         assert!(!signature.parameters[0].optional);
         assert_eq!(signature.return_type.at(PhpVersion::new(8, 1)), Some("int"));
+    }
+
+    #[test]
+    fn a_docblock_optional_marker_makes_a_defaultless_parameter_optional() {
+        // phpstorm-stubs marks a builtin parameter optional-without-a-
+        // PHP-default with `@param ... $name [optional]` (mt_rand's
+        // `$min`/`$max`). The signature carries no default value, so
+        // only the docblock reveals the parameter is not required.
+        let extraction = extract(
+            "<?php\n\
+             /**\n\
+              * @param int $min [optional] <p>the low bound</p>\n\
+              * @param int $max [optional]\n\
+              */\n\
+             function mt_rand(int $min, int $max): int {}\n",
+        );
+        let (name, signature) = &extraction.functions[0];
+        assert_eq!(name, "mt_rand");
+        assert_eq!(signature.parameters.len(), 2);
+        assert!(
+            signature.parameters[0].optional,
+            "$min is [optional] in the docblock",
+        );
+        assert!(
+            signature.parameters[1].optional,
+            "$max is [optional] in the docblock",
+        );
+    }
+
+    #[test]
+    fn an_unmarked_defaultless_parameter_stays_required() {
+        // str_repeat's `$times` carries neither a default nor an
+        // `[optional]` marker: it is genuinely required, and the
+        // too-few-arguments check must keep firing on `str_repeat("x")`.
+        let extraction = extract(
+            "<?php\n\
+             /**\n\
+              * @param string $string the input\n\
+              * @param int $times the repeat count\n\
+              */\n\
+             function str_repeat(string $string, int $times): string {}\n",
+        );
+        let (_, signature) = &extraction.functions[0];
+        assert!(!signature.parameters[0].optional);
+        assert!(!signature.parameters[1].optional);
+    }
+
+    #[test]
+    fn a_docblock_optional_marker_reaches_method_parameters() {
+        let extraction = extract(
+            "<?php\n\
+             class Randomizer {\n\
+                 /**\n\
+                  * @param int $min [optional]\n\
+                  */\n\
+                 public function between(int $min, int $max): int {}\n\
+             }\n",
+        );
+        let (_, surface) = &extraction.classes[0];
+        let signature = &surface.members[0].signature;
+        assert_eq!(
+            signature.as_ref().map(|s| s.parameters[0].optional),
+            Some(true),
+            "$min is [optional]",
+        );
+        assert_eq!(
+            signature.as_ref().map(|s| s.parameters[1].optional),
+            Some(false),
+            "$max is unmarked",
+        );
+    }
+
+    #[test]
+    fn param_marker_only_applies_to_the_parameter_it_documents() {
+        // The marker binds to the `$name` on its own line, not to every
+        // parameter in the docblock.
+        let extraction = extract(
+            "<?php\n\
+             /**\n\
+              * @param int $first the required one\n\
+              * @param int $second [optional]\n\
+              */\n\
+             function pair(int $first, int $second): int {}\n",
+        );
+        let (_, signature) = &extraction.functions[0];
+        assert!(!signature.parameters[0].optional);
+        assert!(signature.parameters[1].optional);
     }
 
     #[test]

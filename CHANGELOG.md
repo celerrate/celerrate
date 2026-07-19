@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Too-few-arguments (`CEL0036`) now reports on builtin callees, not only
+  on source functions. The stub compiler honours phpstorm-stubs'
+  `@param ... $name [optional]` docblock marker, which flags a parameter
+  that is optional without a PHP-expressible default (`mt_rand(int $min,
+  int $max)` is callable as `mt_rand()`). Stub arity is therefore
+  trustworthy, so `str_repeat("x")` — whose `$times` is genuinely
+  required — reports again, while a call that omits only `[optional]`
+  parameters stays silent. Verified on the Symfony corpus (no new
+  diagnostics) and end to end against the recompiled stubs. (#53)
 - The written-type parser (`celerrate_types`) no longer overflows the
   stack on deeply nested input. Its recursion is now bounded by a depth
   cap mirroring the norm parser's, so hostile type text (`((((…` or a
