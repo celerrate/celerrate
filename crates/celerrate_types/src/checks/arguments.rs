@@ -143,18 +143,15 @@ fn check_arity(
         });
     }
     // Missing: a required parameter bound neither by position nor name.
-    // Reported for source callees only. A stub signature's optionality
-    // is not trustworthy for this check: phpstorm-stubs routinely marks
-    // a parameter optional in its `@param ... [optional]` docblock while
-    // leaving the signature without a default (`mt_rand(int $min, int
-    // $max)` is callable as `mt_rand()`), and the compiled stub reads
-    // optionality from the signature default alone. A source callee's
-    // signature is authored by the analyzed code itself and is reliable;
-    // for a stub callee this stays silent — the guillotine's mandated
-    // over-suppression when a signature is not decidably complete
-    // (design section 8). Excess (CEL0037) and unknown-name (CEL0038)
-    // are unaffected: the `[optional]` gap can only over-declare a
-    // parameter as required, never drop one.
+    // Reported for source and stub callees alike (issue #53). Stub
+    // optionality was once untrustworthy — phpstorm-stubs routinely
+    // marks a parameter optional in its `@param ... [optional]` docblock
+    // while leaving the signature without a default (`mt_rand(int $min,
+    // int $max)` is callable as `mt_rand()`) — so the check was narrowed
+    // to source callees. The stub compiler now honours that `[optional]`
+    // marker (`celerrate_stubs`'s `extract.rs`), so a stub parameter's
+    // `optional` flag is reliable and the arity check reaches builtins:
+    // `str_repeat("x")` (its `$times` genuinely required) reports again.
     let required = parameters
         .iter()
         .filter(|parameter| !parameter.optional && !parameter.variadic)
@@ -169,7 +166,7 @@ fn check_arity(
                 && !named.iter().any(|name| **name == parameter.name)
         })
         .count();
-    if unbound > 0 && resolved.source_body.is_some() {
+    if unbound > 0 {
         verdicts.push(TypedVerdict {
             body: context.body,
             expression: call,
@@ -849,6 +846,123 @@ function f(): void {
         assert_eq!(verdicts, vec![]);
     }
 
+    /// A required stub parameter followed by an optional one — the
+    /// `str_repeat(string $string, int $times)` shape once `[optional]`
+    /// extraction (issue #53) makes stub optionality trustworthy. The
+    /// arity check must fire on a stub callee, not only a source one.
+    fn required_then_optional_stub_signature() -> StubSignature {
+        StubSignature {
+            parameters: vec![
+                StubParameter {
+                    name: "string".to_owned(),
+                    type_text: VersionedTypeText::from_text(Some("string".to_owned())),
+                    optional: false,
+                    by_reference: false,
+                    variadic: false,
+                    availability: StubAvailability::ALWAYS,
+                },
+                StubParameter {
+                    name: "times".to_owned(),
+                    type_text: VersionedTypeText::from_text(Some("int".to_owned())),
+                    optional: true,
+                    by_reference: false,
+                    variadic: false,
+                    availability: StubAvailability::ALWAYS,
+                },
+            ],
+            return_type: VersionedTypeText::from_text(Some("string".to_owned())),
+            by_reference: false,
+        }
+    }
+
+    /// Two optional parameters, no default in either — the
+    /// `mt_rand(int $min, int $max)` shape after `[optional]`
+    /// extraction. A bare `mt_rand()` call is legal and must stay
+    /// silent even though the arity check now reaches stub callees.
+    fn all_optional_stub_signature() -> StubSignature {
+        StubSignature {
+            parameters: vec![
+                StubParameter {
+                    name: "min".to_owned(),
+                    type_text: VersionedTypeText::from_text(Some("int".to_owned())),
+                    optional: true,
+                    by_reference: false,
+                    variadic: false,
+                    availability: StubAvailability::ALWAYS,
+                },
+                StubParameter {
+                    name: "max".to_owned(),
+                    type_text: VersionedTypeText::from_text(Some("int".to_owned())),
+                    optional: true,
+                    by_reference: false,
+                    variadic: false,
+                    availability: StubAvailability::ALWAYS,
+                },
+            ],
+            return_type: VersionedTypeText::from_text(Some("int".to_owned())),
+            by_reference: false,
+        }
+    }
+
+    #[test]
+    fn too_few_arguments_reports_on_a_stub_callee() {
+        // Issue #53: CEL0036 was narrowed to source callees while stub
+        // optionality was untrustworthy. With `[optional]` honoured, a
+        // builtin callee's arity is reliable, so a genuinely-missing
+        // required argument on a stub function must report — while a
+        // call that omits only optional parameters stays silent.
+        let index = StubIndex::new(
+            vec![
+                StubSymbol {
+                    name: "repeat_builtin".to_owned(),
+                    kind: StubSymbolKind::Function,
+                    availability: StubAvailability::ALWAYS,
+                },
+                StubSymbol {
+                    name: "rand_builtin".to_owned(),
+                    kind: StubSymbolKind::Function,
+                    availability: StubAvailability::ALWAYS,
+                },
+            ],
+            vec![
+                (
+                    "repeat_builtin".to_owned(),
+                    required_then_optional_stub_signature(),
+                ),
+                ("rand_builtin".to_owned(), all_optional_stub_signature()),
+            ],
+            vec![],
+        );
+        let fixture = fixture_with_stubs(
+            &[r#"<?php
+function f(): void {
+    repeat_builtin();      // reports CEL0036: $string is required
+    rand_builtin();        // both optional: silent
+}
+"#],
+            index,
+        );
+        let verdicts: Vec<TypedVerdictKind> = typed_file_verdicts(
+            &fixture.db,
+            fixture.files,
+            fixture.stubs,
+            fixture.configuration,
+            handle_of(&fixture, 0),
+        )
+        .verdicts
+        .iter()
+        .map(|verdict| verdict.kind.clone())
+        .collect();
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::TooFewArguments {
+                callee: "repeat_builtin".to_owned(),
+                given: 0,
+                required: 1,
+            }],
+        );
+    }
+
     #[test]
     fn methods_static_calls_constructors_and_variadics_are_checked() {
         let verdicts = family_verdicts(&format!(
@@ -1021,15 +1135,14 @@ function f(): void {
     }
 
     #[test]
-    fn too_few_arguments_is_reported_for_source_callees_only() {
-        // A stub signature's optionality is not trustworthy for CEL0036:
-        // phpstorm-stubs marks parameters `[optional]` in the docblock
-        // while the signature carries no default (`mt_rand(int $min, int
-        // $max)` is callable as `mt_rand()`), and the compiled stub reads
-        // optionality from the default alone. So a stub callee with too
-        // few arguments stays silent; a source callee, whose signature is
-        // authored by the analyzed code, still reports — proving the
-        // silence is about the source/stub distinction, not the fixture.
+    fn too_few_arguments_reports_on_stub_and_source_callees_alike() {
+        // Issue #53: with the `[optional]` marker honoured in stub
+        // extraction, a stub parameter's `optional` flag is trustworthy,
+        // so CEL0036 reaches builtin callees just as it does source ones.
+        // Here both `needs_two` (a stub whose two parameters are
+        // genuinely required) and `pair` (a source function) report when
+        // called with one argument — proving the check no longer draws a
+        // source/stub distinction.
         let index = StubIndex::new(
             vec![StubSymbol {
                 name: "needs_two".to_owned(),
@@ -1043,7 +1156,7 @@ function f(): void {
             &[r#"<?php
 function pair(int $a, int $b): void {}
 function f(): void {
-    needs_two(1);      // stub callee: optionality untrustworthy, silent
+    needs_two(1);      // stub callee: two required parameters, reports
     pair(1);           // source callee: reliable signature, reports
 }
 "#],
@@ -1062,11 +1175,18 @@ function f(): void {
         .collect();
         assert_eq!(
             verdicts,
-            vec![TypedVerdictKind::TooFewArguments {
-                callee: "pair".to_owned(),
-                given: 1,
-                required: 2,
-            }],
+            vec![
+                TypedVerdictKind::TooFewArguments {
+                    callee: "needs_two".to_owned(),
+                    given: 1,
+                    required: 2,
+                },
+                TypedVerdictKind::TooFewArguments {
+                    callee: "pair".to_owned(),
+                    given: 1,
+                    required: 2,
+                },
+            ],
         );
     }
 
