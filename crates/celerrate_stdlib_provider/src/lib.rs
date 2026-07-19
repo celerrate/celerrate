@@ -12,7 +12,7 @@ mod json_functions;
 mod pattern_functions;
 mod string_functions;
 
-use celerrate_plugin::{DynamicTypeProvider, Invocation, SymbolClaim, TypeId, salsa};
+use celerrate_plugin::{DynamicTypeProvider, InvocationSite, SymbolClaim, TypeContext, TypeId};
 
 /// Sorted; `claims()` maps it verbatim. Grown by tasks 7–9 and
 /// curation, never speculatively.
@@ -57,46 +57,40 @@ impl DynamicTypeProvider for StdlibProvider {
             .collect()
     }
 
-    fn return_type<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        invocation: &Invocation<'db>,
-    ) -> Option<TypeId<'db>> {
-        let SymbolClaim::Function { key } = &invocation.claim else {
+    fn return_type<'db>(&self, site: &InvocationSite<'db, '_>) -> Option<TypeId<'db>> {
+        let SymbolClaim::Function { key } = site.claim() else {
             return None;
         };
-        function_return(db, key, &invocation.argument_types)
+        function_return(site.types(), key, site.argument_types())
     }
 
-    fn by_reference_types<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        invocation: &Invocation<'db>,
-    ) -> Vec<(usize, TypeId<'db>)> {
-        let SymbolClaim::Function { key } = &invocation.claim else {
+    fn by_reference_types<'db>(&self, site: &InvocationSite<'db, '_>) -> Vec<(usize, TypeId<'db>)> {
+        let SymbolClaim::Function { key } = site.claim() else {
             return Vec::new();
         };
         match key.as_str() {
-            "preg_match" => pattern_functions::preg_match_matches(db, &invocation.argument_types)
-                .map(|matches| vec![(2, matches)])
-                .unwrap_or_default(),
+            "preg_match" => {
+                pattern_functions::preg_match_matches(site.types(), site.argument_types())
+                    .map(|matches| vec![(2, matches)])
+                    .unwrap_or_default()
+            }
             _ => Vec::new(),
         }
     }
 }
 
 fn function_return<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     key: &str,
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     match key {
-        "array_filter" => array_functions::array_filter(db, arguments),
-        "array_map" => array_functions::array_map(db, arguments),
-        "current" | "end" | "reset" => array_functions::pointer_value(db, arguments),
-        "explode" => string_functions::explode(db, arguments),
-        "json_decode" => json_functions::json_decode(db, arguments),
-        "preg_match" => Some(pattern_functions::preg_match_return(db)),
+        "array_filter" => array_functions::array_filter(context, arguments),
+        "array_map" => array_functions::array_map(context, arguments),
+        "current" | "end" | "reset" => array_functions::pointer_value(context, arguments),
+        "explode" => string_functions::explode(context, arguments),
+        "json_decode" => json_functions::json_decode(context, arguments),
+        "preg_match" => Some(pattern_functions::preg_match_return(context)),
         _ => None,
     }
 }
@@ -106,7 +100,8 @@ mod tests {
     #![allow(clippy::unwrap_used)]
 
     use celerrate_db::testing::TestDatabase;
-    use celerrate_plugin::{DynamicTypeProvider, Invocation, SymbolClaim, TypeId};
+    use celerrate_plugin::{DynamicTypeProvider, SymbolClaim, TypeId};
+    use celerrate_types::{Invocation, testing_invocation_site};
 
     use super::StdlibProvider;
 
@@ -143,8 +138,9 @@ mod tests {
         let db = TestDatabase::default();
         let provider = StdlibProvider::new();
         let subject = TypeId::array(&db, TypeId::int(&db), TypeId::string(&db));
+        let invocation = function_invocation("current", vec![subject]);
         let answer = provider
-            .return_type(&db, &function_invocation("current", vec![subject]))
+            .return_type(&testing_invocation_site(&db, &invocation))
             .unwrap();
         assert_eq!(
             answer,
@@ -171,8 +167,9 @@ mod tests {
                 },
             ],
         );
+        let invocation = function_invocation("current", vec![subject]);
         let answer = provider
-            .return_type(&db, &function_invocation("current", vec![subject]))
+            .return_type(&testing_invocation_site(&db, &invocation))
             .unwrap();
         assert_eq!(
             answer,
@@ -191,17 +188,16 @@ mod tests {
     fn an_unknown_subject_answers_none_and_falls_through() {
         let db = TestDatabase::default();
         let provider = StdlibProvider::new();
+        let unknown_subject = function_invocation("current", vec![TypeId::mixed(&db)]);
         assert!(
             provider
-                .return_type(
-                    &db,
-                    &function_invocation("current", vec![TypeId::mixed(&db)]),
-                )
+                .return_type(&testing_invocation_site(&db, &unknown_subject))
                 .is_none(),
         );
+        let no_arguments = function_invocation("current", vec![]);
         assert!(
             provider
-                .return_type(&db, &function_invocation("current", vec![]))
+                .return_type(&testing_invocation_site(&db, &no_arguments))
                 .is_none(),
         );
     }
@@ -217,8 +213,9 @@ mod tests {
         let db = TestDatabase::default();
         let provider = StdlibProvider::new();
         let subject = TypeId::shape(&db, vec![]);
+        let invocation = function_invocation("current", vec![subject]);
         let answer = provider
-            .return_type(&db, &function_invocation("current", vec![subject]))
+            .return_type(&testing_invocation_site(&db, &invocation))
             .unwrap();
         assert_eq!(answer, TypeId::bool_literal(&db, false));
     }
@@ -255,7 +252,8 @@ mod tests {
                  test keeps verifying the new dispatch arm",
             );
             let arguments = subject.unwrap_or_default();
-            let answer = provider.return_type(&db, &function_invocation(key, arguments));
+            let invocation = function_invocation(key, arguments);
+            let answer = provider.return_type(&testing_invocation_site(&db, &invocation));
             assert!(
                 answer.is_some(),
                 "claimed function {key:?} answered None: it is claimed but \

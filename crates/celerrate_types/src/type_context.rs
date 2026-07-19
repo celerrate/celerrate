@@ -187,6 +187,14 @@ impl<'db> TypeContext<'db> {
     }
 }
 
+/// Test-only construction seam for out-of-crate test suites (the
+/// plugin crates' dev-dependencies). Not part of the plugin API:
+/// plugin production code cannot reach it because plugin crates
+/// cannot depend on `celerrate_types` (the dependency-shape check).
+pub fn testing_type_context<'db>(db: &'db dyn salsa::Database) -> TypeContext<'db> {
+    TypeContext::new(db)
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]

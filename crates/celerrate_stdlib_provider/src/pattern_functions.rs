@@ -21,7 +21,7 @@
 //! named groups through the offset-tuple shape — sound, imprecise,
 //! unmeasured against the corpus.
 
-use celerrate_plugin::{ShapeField, ShapeKey, TypeId, salsa};
+use celerrate_plugin::{ShapeField, ShapeKey, TypeContext, TypeId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum PatternGroup {
@@ -29,45 +29,42 @@ pub(crate) enum PatternGroup {
     Named(String),
 }
 
-pub(crate) fn preg_match_return<'db>(db: &'db dyn salsa::Database) -> TypeId<'db> {
-    TypeId::union(
-        db,
-        [
-            TypeId::int_literal(db, 0),
-            TypeId::int_literal(db, 1),
-            TypeId::bool_literal(db, false),
-        ],
-    )
+pub(crate) fn preg_match_return<'db>(context: TypeContext<'db>) -> TypeId<'db> {
+    context.union([
+        context.int_literal(0),
+        context.int_literal(1),
+        context.bool_literal(false),
+    ])
 }
 
 pub(crate) fn preg_match_matches<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     if arguments.len() < 2 {
         return None;
     }
-    let int_or_string = TypeId::union(db, [TypeId::int(db), TypeId::string(db)]);
+    let int_or_string = context.union([context.int(), context.string()]);
     let flags = arguments.get(3);
     let flags_decided_zero = match flags {
         None => true,
-        Some(flags) => flags.int_literal_value(db) == Some(0),
+        Some(flags) => context.int_literal_value(*flags) == Some(0),
     };
     if !flags_decided_zero {
         // PREG_OFFSET_CAPTURE and friends change the value shape.
-        return Some(TypeId::array(db, int_or_string, TypeId::mixed(db)));
+        return Some(context.array(int_or_string, context.mixed()));
     }
     let groups = arguments
         .first()
-        .and_then(|pattern| pattern.string_literal_value(db))
+        .and_then(|pattern| context.string_literal_value(*pattern))
         .and_then(|pattern| pattern_groups(&pattern));
     let Some(groups) = groups else {
-        return Some(TypeId::array(db, int_or_string, TypeId::string(db)));
+        return Some(context.array(int_or_string, context.string()));
     };
     let mut fields = vec![ShapeField {
         key: ShapeKey::Integer(0),
         optional: true,
-        value: TypeId::string(db),
+        value: context.string(),
     }];
     for (position, group) in groups.iter().enumerate() {
         let number = position as i64 + 1;
@@ -75,16 +72,16 @@ pub(crate) fn preg_match_matches<'db>(
             fields.push(ShapeField {
                 key: ShapeKey::String(name.clone()),
                 optional: true,
-                value: TypeId::string(db),
+                value: context.string(),
             });
         }
         fields.push(ShapeField {
             key: ShapeKey::Integer(number),
             optional: true,
-            value: TypeId::string(db),
+            value: context.string(),
         });
     }
-    Some(TypeId::shape(db, fields))
+    Some(context.shape(fields))
 }
 
 /// The capturing groups of a PCRE pattern, in order. `None` when
@@ -182,6 +179,7 @@ mod tests {
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_plugin::{ShapeKey, TypeId};
+    use celerrate_types::testing_type_context;
 
     use super::PatternGroup;
 
@@ -294,8 +292,9 @@ mod tests {
     #[test]
     fn matches_shape_is_all_optional_with_both_key_spellings() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let pattern = TypeId::string_literal(&db, "/(?<year>\\d+)-(\\d+)/");
-        let answer = super::preg_match_matches(&db, &[pattern, TypeId::string(&db)]).unwrap();
+        let answer = super::preg_match_matches(context, &[pattern, TypeId::string(&db)]).unwrap();
         let fields = answer.shape_fields(&db).unwrap();
         // {0?: string, year?: string, 1?: string, 2?: string}: group 0,
         // the named group under both its name and its number, the
@@ -318,17 +317,19 @@ mod tests {
     #[test]
     fn a_flags_argument_or_unknown_pattern_falls_back_conservatively() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let int_or_string = TypeId::union(&db, [TypeId::int(&db), TypeId::string(&db)]);
         // Unknown pattern: values are still strings.
         assert_eq!(
-            super::preg_match_matches(&db, &[TypeId::string(&db), TypeId::string(&db)]).unwrap(),
+            super::preg_match_matches(context, &[TypeId::string(&db), TypeId::string(&db)])
+                .unwrap(),
             TypeId::array(&db, int_or_string, TypeId::string(&db)),
         );
         // A non-zero-literal flags argument: values are opaque.
         let pattern = TypeId::string_literal(&db, "/(a)/");
         assert_eq!(
             super::preg_match_matches(
-                &db,
+                context,
                 &[
                     pattern,
                     TypeId::string(&db),
@@ -344,8 +345,9 @@ mod tests {
     #[test]
     fn the_return_is_zero_one_or_false() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         assert_eq!(
-            super::preg_match_return(&db),
+            super::preg_match_return(context),
             TypeId::union(
                 &db,
                 [

@@ -2217,7 +2217,7 @@ function caller_name() { return unwrap_name(['id' => 42, 'name' => 'Ada']); }
     fn a_symbolic_provider_answer_still_finalizes_to_its_bound_then_mixed() {
         use crate::dynamic_type_provider::{
             DynamicTypeProvider, DynamicTypeProviderRegistration, DynamicTypeProviderRegistry,
-            Invocation, SymbolClaim,
+            InvocationSite, SymbolClaim,
         };
         use celerrate_semantics::PluginIdentity;
 
@@ -2232,18 +2232,13 @@ function caller_name() { return unwrap_name(['id' => 42, 'name' => 'Ada']); }
             }
             fn return_type<'db>(
                 &self,
-                db: &'db dyn salsa::Database,
-                _invocation: &Invocation<'db>,
+                site: &InvocationSite<'db, '_>,
             ) -> Option<crate::TypeId<'db>> {
                 // A boundless template under a scope no declared
                 // signature could ever share — exactly the leak the
                 // doc says never happens today.
-                Some(crate::TypeId::template(
-                    db,
-                    "provider-scope",
-                    "T",
-                    crate::TypeId::mixed(db),
-                ))
+                let context = site.types();
+                Some(context.template("provider-scope", "T", context.mixed()))
             }
         }
 
@@ -2463,7 +2458,8 @@ function caller() { return make(); }
 
     fn register_fake_provider(fixture: &Fixture) {
         use crate::{
-            DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, Invocation, SymbolClaim,
+            DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, InvocationSite,
+            SymbolClaim,
         };
 
         #[derive(Debug)]
@@ -2478,10 +2474,9 @@ function caller() { return make(); }
 
             fn return_type<'db>(
                 &self,
-                db: &'db dyn salsa::Database,
-                _invocation: &Invocation<'db>,
+                site: &InvocationSite<'db, '_>,
             ) -> Option<crate::TypeId<'db>> {
-                Some(crate::TypeId::int(db))
+                Some(site.types().int())
             }
         }
 

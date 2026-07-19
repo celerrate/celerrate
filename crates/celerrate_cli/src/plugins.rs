@@ -269,8 +269,7 @@ mod tests {
 
         fn return_type<'db>(
             &self,
-            _db: &'db dyn salsa::Database,
-            _invocation: &celerrate_types::Invocation<'db>,
+            _site: &celerrate_types::InvocationSite<'db, '_>,
         ) -> Option<celerrate_types::TypeId<'db>> {
             None
         }

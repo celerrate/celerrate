@@ -127,7 +127,8 @@ pub use declared::{
 };
 pub use dynamic_type_provider::{
     ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration,
-    DynamicTypeProviderRegistry, Invocation, SymbolClaim, validate_claims,
+    DynamicTypeProviderRegistry, Invocation, InvocationSite, SymbolClaim, testing_invocation_site,
+    validate_claims,
 };
 pub use inference::{
     FIXPOINT_ITERATION_BUDGET, InferenceContext, InferredBody, InterproceduralEdgeCounts,
@@ -146,7 +147,7 @@ pub use stored::{
     StoredClassDependency, StoredFunctionDependency, StoredInferredEdge, StoredInferredSignature,
     StoredParameter, StoredSignature, StoredSignatureKey, StoredTrust, StoredType,
 };
-pub use type_context::TypeContext;
+pub use type_context::{TypeContext, testing_type_context};
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
     ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
