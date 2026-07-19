@@ -30,6 +30,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Call-result narrowing hardening (#72): stale call-result
+  fingerprints now die at every value-change site — `foreach`
+  key/value rebinds, `catch` binds, by-reference closure captures
+  (`use (&$x)`), `extract()` (which now sweeps every fingerprint
+  naming a local, sparing pure `$this`-based ones), and `++`/`--`.
+  Each missed kill could only silence a genuine possibly-null
+  dereference; none could fabricate one. The purity assumption's
+  documented guarantee is also corrected: "can only silence, never
+  fabricate" holds for positive guards — under a negative guard the
+  surviving `null` binding makes the lazy-initialization idiom
+  report (PHPStan parity, now pinned by a test).
 - Possibly-null dereference (`CEL0034`) now reports on unguarded
   call-result receivers (`$repo->find($id)->title` with no guard),
   instead of silencing every call-result receiver. The narrowing

@@ -528,8 +528,9 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::Eval { argument } => {
                 self.expression(argument, environment);
-                // eval can rewrite every local and every property
-                // binding: forget them all (decision 10).
+                // eval can rewrite every local, every property
+                // binding, and every call-result fingerprint:
+                // forget them all (decision 10).
                 *environment = {
                     let mut cleared = Environment::new();
                     if !environment.is_reachable() {

@@ -30,8 +30,11 @@ pub(crate) enum NarrowingSubject {
     /// call-result fingerprint (issue #54, design
     /// 2026-07-19-call-result-narrowing). Two occurrences of one
     /// fingerprint denote the same value: the purity assumption,
-    /// documented engine semantics whose unsoundness can only silence
-    /// the nullability family, never make it report.
+    /// documented engine semantics. Under a **positive** guard its
+    /// unsoundness can only silence the nullability family; under a
+    /// negative guard the surviving `null` binding makes the
+    /// lazy-initialization idiom report (PHPStan parity, pinned by
+    /// `the_lazy_initialization_idiom_reports_by_the_survival_rule`).
     CallResult {
         base: CallBase,
         method: String,
