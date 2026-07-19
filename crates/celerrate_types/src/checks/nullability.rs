@@ -540,4 +540,34 @@ function g(Repo $repo, int $id): void {
             ],
         );
     }
+
+    #[test]
+    fn a_catch_bind_kills_the_call_result_narrowing() {
+        // The catch arm binds the caught variable directly (issue
+        // #72 item 4): the bind is a value change, and the caught
+        // class's own `getCommand` answers `?Command`, so the
+        // guarded fingerprint from outside the try is stale.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Oops { public function getCommand(): ?Command { return null; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function f(Event $e): void {
+    if ($e->getCommand()) {
+        try {
+        } catch (Oops $e) {
+            $e->getCommand()->getName();
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "getName".to_owned(),
+                receiver: "Command|null".to_owned(),
+            }],
+        );
+    }
 }

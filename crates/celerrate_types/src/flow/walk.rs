@@ -275,6 +275,10 @@ impl<'db> Walker<'db, '_, '_> {
                             .map(|written| self.class_type_of_written(written)),
                     );
                     if let Some(variable) = &catch.variable {
+                        // The catch bind is a value change (issue
+                        // #72): fingerprints naming the variable are
+                        // stale in the arm.
+                        arm.kill_call_results_involving(variable);
                         arm.bind(
                             NarrowingSubject::Local {
                                 name: variable.clone(),
