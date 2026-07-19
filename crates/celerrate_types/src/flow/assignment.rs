@@ -142,15 +142,11 @@ impl<'db> Walker<'db, '_, '_> {
             // `$b = &$a`: aliased locals are unknowable without alias
             // analysis — both sides degrade to mixed (decision 10).
             if let Some(subject) = subject_of(self.context.ir, target) {
-                if let NarrowingSubject::Local { name } = &subject {
-                    environment.kill_call_results_involving(name);
-                }
+                environment.kill_call_results_for_subject(&subject);
                 environment.bind(subject, TypeId::mixed(db));
             }
             if let Some(subject) = subject_of(self.context.ir, _value) {
-                if let NarrowingSubject::Local { name } = &subject {
-                    environment.kill_call_results_involving(name);
-                }
+                environment.kill_call_results_for_subject(&subject);
                 environment.bind(subject, TypeId::mixed(db));
             }
             return TypeId::mixed(db);
@@ -200,17 +196,13 @@ impl<'db> Walker<'db, '_, '_> {
                     let current = environment.binding(&base);
                     let key_type = index.map(|index| self.recorded(index));
                     let updated = updated_array(db, current, key_type, value_type);
-                    if let NarrowingSubject::Local { name } = &base {
-                        environment.kill_call_results_involving(name);
-                    }
+                    environment.kill_call_results_for_subject(&base);
                     environment.bind(base, updated);
                 }
             }
             _ => {
                 if let Some(subject) = subject_of(self.context.ir, target) {
-                    if let NarrowingSubject::Local { name } = &subject {
-                        environment.kill_call_results_involving(name);
-                    }
+                    environment.kill_call_results_for_subject(&subject);
                     environment.bind(subject, value_type);
                 }
             }

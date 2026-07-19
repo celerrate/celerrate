@@ -69,9 +69,7 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
-                        if let NarrowingSubject::Local { name } = &subject {
-                            environment.kill_call_results_involving(name);
-                        }
+                        environment.kill_call_results_for_subject(&subject);
                         environment.bind(subject, TypeId::mixed(db));
                     }
                 }
@@ -95,9 +93,7 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
-                        if let NarrowingSubject::Local { name } = &subject {
-                            environment.kill_call_results_involving(name);
-                        }
+                        environment.kill_call_results_for_subject(&subject);
                         environment.remove(&subject);
                     }
                 }

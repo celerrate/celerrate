@@ -139,9 +139,7 @@ impl<'db> Walker<'db, '_, '_> {
                 continue;
             }
             if let Some(subject) = subject_of(self.context.ir, argument.value) {
-                if let NarrowingSubject::Local { name } = &subject {
-                    environment.kill_call_results_involving(name);
-                }
+                environment.kill_call_results_for_subject(&subject);
                 environment.bind(
                     subject,
                     parameter
