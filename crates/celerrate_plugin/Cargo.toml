@@ -11,5 +11,8 @@ repository.workspace = true
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_types = { path = "../celerrate_types" }
 
+[dev-dependencies]
+trybuild = { workspace = true }
+
 [lints]
 workspace = true

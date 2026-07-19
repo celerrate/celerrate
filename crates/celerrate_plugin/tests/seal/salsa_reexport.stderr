@@ -1,0 +1,5 @@
+error[E0432]: unresolved import `celerrate_plugin::salsa`
+ --> tests/seal/salsa_reexport.rs:2:5
+  |
+2 | use celerrate_plugin::salsa;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^ no `salsa` in the root
