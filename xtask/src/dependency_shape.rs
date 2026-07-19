@@ -1,11 +1,16 @@
 //! The dependency-shape check: plugin crates depend on
-//! `celerrate_plugin` and nothing else in the workspace. An extension
+//! `celerrate_plugin` and nothing else in the workspace; certain external
+//! crates are forbidden to close external routes to the engine. An extension
 //! point that proves insufficient is extended, never bypassed — this
 //! check is what makes "never bypassed" mechanical.
 
 /// The plugin crates under the rule.
 const PLUGIN_CRATES: &[&str] = &["celerrate_phpdoc_bridge", "celerrate_stdlib_provider"];
 const ALLOWED_DEPENDENCY: &str = "celerrate_plugin";
+/// External crates a plugin crate must not depend on directly: the
+/// boundary sealing (issue #61) is only mechanical if the external
+/// route to the database handle is closed too.
+const FORBIDDEN_EXTERNAL_DEPENDENCIES: &[&str] = &["salsa"];
 
 pub fn run() -> crate::Result<()> {
     let output = std::process::Command::new("cargo")
@@ -48,6 +53,13 @@ pub(crate) fn check(metadata: &serde_json::Value) -> crate::Result<()> {
             // the design decisions); normal and build kinds are not.
             if dependency.get("kind").and_then(|value| value.as_str()) == Some("dev") {
                 continue;
+            }
+            if FORBIDDEN_EXTERNAL_DEPENDENCIES.contains(&dependency_name) {
+                return Err(format!(
+                    "dependency shape violated: {name} depends on {dependency_name} directly; \
+                     plugin crates reach the engine only through {ALLOWED_DEPENDENCY}",
+                )
+                .into());
             }
             if dependency_name.starts_with("celerrate_") && dependency_name != ALLOWED_DEPENDENCY {
                 return Err(format!(
@@ -144,5 +156,47 @@ mod tests {
             serde_json::json!([])
         ),]));
         assert!(check(&value).is_err());
+    }
+
+    #[test]
+    #[allow(clippy::unwrap_used)]
+    fn a_direct_salsa_dependency_fails_even_though_it_is_not_a_workspace_crate() {
+        // The sealing is only mechanical if the check also closes the
+        // external route: a plugin adding salsa directly would recover
+        // the database handle the facade hides.
+        let value = metadata(serde_json::json!([
+            package(
+                "celerrate_phpdoc_bridge",
+                serde_json::json!([
+                    { "name": "celerrate_plugin", "kind": null },
+                    { "name": "salsa", "kind": null },
+                ])
+            ),
+            package(
+                "celerrate_stdlib_provider",
+                serde_json::json!([{ "name": "celerrate_plugin", "kind": null }])
+            ),
+        ]));
+        let error = check(&value).unwrap_err().to_string();
+        assert!(error.contains("celerrate_phpdoc_bridge"));
+        assert!(error.contains("salsa"));
+    }
+
+    #[test]
+    fn a_dev_scoped_salsa_dependency_stays_exempt() {
+        let value = metadata(serde_json::json!([
+            package(
+                "celerrate_phpdoc_bridge",
+                serde_json::json!([
+                    { "name": "celerrate_plugin", "kind": null },
+                    { "name": "salsa", "kind": "dev" },
+                ])
+            ),
+            package(
+                "celerrate_stdlib_provider",
+                serde_json::json!([{ "name": "celerrate_plugin", "kind": null }])
+            ),
+        ]));
+        assert!(check(&value).is_ok());
     }
 }
