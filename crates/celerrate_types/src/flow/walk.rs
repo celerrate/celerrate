@@ -174,10 +174,17 @@ impl<'db> Walker<'db, '_, '_> {
                         env.bind(subject, key_type);
                     }
                     walker.expression(value, env);
-                    if let Some(subject) = subject_of(walker.context.ir, value) {
-                        env.kill_call_results_for_subject(&subject);
-                        env.bind(subject, value_type);
-                    }
+                    // The value bind is an assignment (issue #75): a
+                    // destructuring pattern rebinds every leaf
+                    // target, so `assign_target` recurses into it,
+                    // kills each target's stale call-result
+                    // fingerprints, and binds it to its element
+                    // type. A plain variable takes the same path it
+                    // always did (kill, then bind). The
+                    // `expression` call above recorded the pattern
+                    // subtree — including pattern keys, which
+                    // `assign_target` reads back through `recorded`.
+                    walker.assign_target(value, value_type, env);
                     walker.statements(&body, env);
                     env.clone()
                 });

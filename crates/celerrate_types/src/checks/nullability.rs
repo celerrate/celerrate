@@ -542,6 +542,125 @@ function g(Repo $repo, int $id): void {
     }
 
     #[test]
+    fn a_foreach_destructuring_rebind_kills_the_call_result_narrowing() {
+        // List-destructuring binds are value changes like plain loop
+        // variables (issue #75): the pattern's leaf targets are
+        // rebound on every pass, so fingerprints naming them are
+        // stale inside the body. `f` rebinds a local the fingerprint
+        // names as an argument through the short syntax; `g` does
+        // the same through the keyed form. Both dereferences are
+        // silenced today because the pattern is neither bound nor
+        // killed.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([[1, 2]] as [$id, $x]) {
+            $repo->find($id)->title;
+        }
+    }
+}
+function g(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([1 => [1, 2]] as $k => [$id, $x]) {
+            $repo->find($id)->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn destructuring_kill_coverage_spans_keyed_nested_and_list_patterns() {
+        // The `assign_target` recursion covers every pattern form
+        // uniformly (issue #75): explicit string keys (`h`),
+        // nesting (`i`), and the classic `list()` syntax (`j`),
+        // which lowers to the same `Array` node as the short form.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function h(Repo $repo, int $v): void {
+    if ($repo->find($v)) {
+        foreach ([['k' => 1]] as ['k' => $v]) {
+            $repo->find($v)->title;
+        }
+    }
+}
+function i(Repo $repo, int $a): void {
+    if ($repo->find($a)) {
+        foreach ([[[1], 2]] as [[$a], $b]) {
+            $repo->find($a)->title;
+        }
+    }
+}
+function j(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([[1, 2]] as list($id, $x)) {
+            $repo->find($id)->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn a_destructuring_kill_is_scoped_to_the_pattern_targets() {
+        // The kill sweeps the pattern's own targets, not every
+        // local: `$id` does not appear in the pattern, so its
+        // guarded fingerprint survives the loop and keeps
+        // silencing the dereference.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function k(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([[1]] as [$x]) {
+            $repo->find($id)->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(verdicts, vec![]);
+    }
+
+    #[test]
     fn a_catch_bind_kills_the_call_result_narrowing() {
         // The catch arm binds the caught variable directly (issue
         // #72 item 4): the bind is a value change, and the caught

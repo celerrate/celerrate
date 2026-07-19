@@ -30,6 +30,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- `foreach` list-destructuring binds are now value-change sites
+  (#75): the value pattern routes through the assignment machinery,
+  so every destructured target kills its stale call-result
+  fingerprints and is bound to its element type — short and
+  `list()` syntaxes, keyed and nested patterns, and index targets
+  alike. Each missed kill could only silence a genuine
+  possibly-null dereference (CEL0034), never fabricate one;
+  destructured loop variables previously kept their stale pre-loop
+  types.
 - Call-result narrowing hardening (#72): stale call-result
   fingerprints now die at every value-change site — `foreach`
   key/value rebinds, `catch` binds, by-reference closure captures
