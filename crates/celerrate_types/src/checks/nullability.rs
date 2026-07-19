@@ -410,4 +410,89 @@ function f(Repo $repo, int $id): void {
             }],
         );
     }
+
+    #[test]
+    fn every_guard_form_narrows_a_call_result() {
+        // The whole point of extending `subject_of` rather than
+        // teaching the check about guards: negation with early
+        // return, `!== null`, `instanceof`, and case-folded repeats
+        // all flow through the existing condition machinery.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function a(Event $e): void {
+    if (!$e->getCommand()) {
+        return;
+    }
+    $e->getCommand()->getName();
+}
+function b(Event $e): void {
+    if ($e->getCommand() !== null) {
+        $e->getCommand()->getName();
+    }
+}
+function c(Event $e): void {
+    if ($e->getCommand() instanceof Command) {
+        $e->getCommand()->getName();
+    }
+}
+function d(Event $e): void {
+    if ($e->getCommand()) {
+        $e->GETCOMMAND()->getName();
+    }
+}
+"#,
+        );
+        assert_eq!(verdicts, vec![]);
+    }
+
+    #[test]
+    fn distinct_fingerprints_do_not_share_a_guard() {
+        // Different arguments are different identities; a label makes
+        // an identity of its own; a guard on a plain variable does not
+        // transfer to a fresh call of the expression that produced it
+        // (assumed PHPStan parity, recorded in the design).
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function a(Repo $repo): void {
+    if ($repo->find(1)) {
+        $repo->find(2)->title;
+    }
+}
+function b(Repo $repo): void {
+    if ($repo->find(id: 1)) {
+        $repo->find(1)->title;
+    }
+}
+function c(Event $e): void {
+    $command = $e->getCommand();
+    if ($command) {
+        $e->getCommand()->getName();
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "getName".to_owned(),
+                    receiver: "Command|null".to_owned(),
+                },
+            ],
+        );
+    }
 }
