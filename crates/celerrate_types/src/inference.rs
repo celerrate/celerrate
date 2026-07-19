@@ -3604,6 +3604,31 @@ function keys() {
     }
 
     #[test]
+    fn foreach_destructuring_types_the_pattern_targets() {
+        // Destructured loop variables carry the element types
+        // `assign_target` derives from the iteration value through
+        // `index_type` (issue #75): positional patterns read the
+        // shape's positional fields, keyed patterns read the named
+        // field. Before the fix the targets kept their stale
+        // pre-loop bindings. Displays follow `structural_order`'s
+        // sorted literal unions, exactly like the array-literal
+        // foreach test above.
+        let f = fixture(&[r#"<?php
+namespace App;
+function positional() {
+    foreach ([[1, 2]] as [$a, $b]) { return $b; }
+    return 0;
+}
+function keyed() {
+    foreach ([['k' => 5]] as ['k' => $v]) { return $v; }
+    return 0;
+}
+"#]);
+        assert_eq!(caller_return_display(&f, "app\\positional"), "0|2");
+        assert_eq!(caller_return_display(&f, "app\\keyed"), "0|5");
+    }
+
+    #[test]
     fn a_declared_generator_return_drives_foreach() {
         let f = fixture_with_generics(&[r#"<?php
 namespace App;
