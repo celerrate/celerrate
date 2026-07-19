@@ -21,7 +21,7 @@ use celerrate_stubs::{
 };
 
 use super::{CheckContext, TypedVerdictKind, typed_file_verdicts};
-use crate::inference::{BodyOwner, InferenceContext, body_owner, inferred_body_types};
+use crate::inference::{BodyOwner, body_owner, inferred_body_types};
 
 pub(crate) struct Fixture {
     pub(crate) db: TestDatabase,
@@ -230,7 +230,6 @@ pub(crate) fn context_for(fixture: &Fixture, body_index: u32) -> CheckContext<'_
         fixture.configuration,
         file,
         body,
-        InferenceContext::new(db, None),
     )
     .as_ref()
     .expect("the fixture body types");

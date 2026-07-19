@@ -376,10 +376,13 @@ fn warm_the_cycle_safe_entry_point<'db>(
 /// participates in, then demands the raw query — which either hits its
 /// memo or recomputes with every recursive edge answered from the
 /// completed return memo. Either way, salsa's `Panic` strategy is
-/// never reachable from here. The warming covers the
-/// `InferenceContext::new(db, None)` entry every present caller uses;
-/// a future external caller passing a `Some` (trait-body) context
-/// extends the warming symmetrically before it ships.
+/// never reachable from here.
+///
+/// The wrapper owns its `InferenceContext` (always the `None` shape):
+/// a trait-body (`Some`) context is an engine-internal currency of the
+/// return queries, and exposing it here would reopen the unwarmed
+/// entry issue #63 closed. A future external trait-body consumer adds
+/// a deliberate new entry point — and its symmetric warming with it.
 pub fn inferred_body_types<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -387,10 +390,17 @@ pub fn inferred_body_types<'db>(
     configuration: ProjectConfiguration,
     file: SourceFile,
     body: BodyQuery<'db>,
-    context: InferenceContext<'db>,
 ) -> &'db Option<InferredBody<'db>> {
     warm_the_cycle_safe_entry_point(db, files, stubs, configuration, file, body);
-    inferred_body_types_unguarded(db, files, stubs, configuration, file, body, context)
+    inferred_body_types_unguarded(
+        db,
+        files,
+        stubs,
+        configuration,
+        file,
+        body,
+        InferenceContext::new(db, None),
+    )
 }
 
 /// Parameter names paired with their seeded types: the declared
