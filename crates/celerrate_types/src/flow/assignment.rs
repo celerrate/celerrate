@@ -162,7 +162,7 @@ impl<'db> Walker<'db, '_, '_> {
         assigned
     }
 
-    fn assign_target(
+    pub(super) fn assign_target(
         &mut self,
         target: ExpressionId,
         value_type: TypeId<'db>,

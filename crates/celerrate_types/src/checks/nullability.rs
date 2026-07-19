@@ -542,6 +542,51 @@ function g(Repo $repo, int $id): void {
     }
 
     #[test]
+    fn a_foreach_destructuring_rebind_kills_the_call_result_narrowing() {
+        // List-destructuring binds are value changes like plain loop
+        // variables (issue #75): the pattern's leaf targets are
+        // rebound on every pass, so fingerprints naming them are
+        // stale inside the body. `f` rebinds a local the fingerprint
+        // names as an argument through the short syntax; `g` does
+        // the same through the keyed form. Both dereferences are
+        // silenced today because the pattern is neither bound nor
+        // killed.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([[1, 2]] as [$id, $x]) {
+            $repo->find($id)->title;
+        }
+    }
+}
+function g(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([1 => [1, 2]] as $k => [$id, $x]) {
+            $repo->find($id)->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+            ],
+        );
+    }
+
+    #[test]
     fn a_catch_bind_kills_the_call_result_narrowing() {
         // The catch arm binds the caught variable directly (issue
         // #72 item 4): the bind is a value change, and the caught
