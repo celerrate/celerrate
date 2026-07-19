@@ -20,6 +20,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The written-type parser (`celerrate_types`) no longer overflows the
+  stack on deeply nested input. Its recursion is now bounded by a depth
+  cap mirroring the norm parser's, so hostile type text (`((((…` or a
+  long `?` chain), which derives from user-supplied source, answers with
+  no type instead of crashing the tool. (#46)
 - `declared_member_signature` no longer re-executes on docblock edits
   elsewhere in the owner's file: the declaring-site helpers
   (`declaring_site`, `owner_class_docblock`, `declares_member`) are now
