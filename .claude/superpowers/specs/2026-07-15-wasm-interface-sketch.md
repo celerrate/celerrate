@@ -83,8 +83,8 @@ reshaping.
   path as fuel exhaustion: contribution dropped, run degraded, no
   panic, no undefined behavior.
 - The native tier already honors the shape this forces:
-  `AnnotationSite` and `Invocation` are borrowed per call and never
-  stored, and `TypeId` values never escape the process (persistence is
+  `AnnotationSite` and `InvocationSite` are borrowed per call and never
+  stored, and both own the database privately behind the sealed `TypeContext` facade, and `TypeId` values never escape the process (persistence is
   structural, design section 3).
 
 ## 6. The v0 host interface families
@@ -111,7 +111,7 @@ Enumerated so sub-project 6 extends rather than reshapes:
 | Native trait (owner) | Guest exports | Host families needed |
 |---|---|---|
 | `TypeSyntax` (`celerrate_types`) | `can_parse(text) -> bool`, `parse_docblock(site, text) -> annotations`, `parse_type_expression(site, text) -> type?` | construction, symbol lookup |
-| `DynamicTypeProvider` (`celerrate_types`) | `claims() -> list`, `return_type(invocation) -> type?`, `by_reference_types(invocation) -> list<(index, handle)>` | all four |
+| `DynamicTypeProvider` (`celerrate_types`) | `claims() -> list`, `return_type(site) -> type?`, `by_reference_types(site) -> list<(index, handle)>` | all four |
 | `VirtualSymbolProvider` (`celerrate_semantics`) | `virtual_members(text) -> list` | none — plain data out |
 | `CommentDirectiveProvider` (`celerrate_semantics`) | `directives(kind, text) -> list` | none — plain data out |
 
@@ -133,3 +133,23 @@ sketch exists to demonstrate.
 - [x] The v0 families are enumerated: type construction, type
       interrogation, argument value access, symbol lookup.
 - [x] Every native trait projects onto the sketch without reshaping.
+
+## 9. Amendment 2026-07-19 — the native tier now enforces the shape
+
+Issue #61: the native traits leaked `&dyn salsa::Database`
+(`DynamicTypeProvider` took it as a parameter; `AnnotationSite`
+exposed it via `database()`), so "every native trait projects onto
+the sketch without reshaping" was false — the guest export
+`return_type(invocation)` had no database parameter to project.
+
+Resolved by the boundary sealing
+(`.claude/superpowers/specs/2026-07-19-plugin-boundary-sealing-design.md`):
+the sealed `TypeContext` facade carries the construction and
+interrogation families of section 6; `InvocationSite` replaces the
+raw `db + Invocation` pair; the facade re-exports are nominal and
+`salsa` is unnameable from a plugin crate (extended
+`dependency_shape` check). What section 5 called "the native tier
+enforces it by review" is now structural: retention is a compile
+error (`'static` implementation bound), and the database handle is
+unreachable. The acceptance property holds in shape, not just in
+intent.
