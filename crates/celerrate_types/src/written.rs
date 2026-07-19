@@ -93,19 +93,53 @@ fn lex_name(characters: &mut core::iter::Peekable<core::str::Chars<'_>>) -> Opti
     }
 }
 
+/// Cap on `parse_atom` recursion depth (`parse_union` -> `parse_intersection`
+/// -> `parse_atom`, plus `?T`'s direct self-recursion and `(...)`'s cycle
+/// back through `parse_union`). Mirrors `norm.rs`'s `MAX_ATOM_NESTING_DEPTH`:
+/// no legitimate written type nests anywhere close, so hostile input such as
+/// `"(".repeat(100_000)` answers `None` instead of overflowing the stack.
+const MAX_ATOM_NESTING_DEPTH: usize = 256;
+
+struct Cursor<'a> {
+    tokens: &'a [Token],
+    position: usize,
+    /// Current `parse_atom` call-stack depth. Incremented on entry and
+    /// decremented on exit (see `parse_atom`), so it tracks live nesting
+    /// rather than the total number of atoms parsed.
+    depth: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn peek(&self) -> Option<&'a Token> {
+        self.tokens.get(self.position)
+    }
+
+    fn advance(&mut self) {
+        self.position += 1;
+    }
+
+    fn at_end(&self) -> bool {
+        self.position == self.tokens.len()
+    }
+}
+
 pub(crate) fn parse_written(text: &str) -> Option<WrittenType> {
     let tokens = lex(text)?;
-    let mut cursor = 0usize;
-    let parsed = parse_union(&tokens, &mut cursor)?;
-    (cursor == tokens.len()).then_some(parsed)
+    let mut cursor = Cursor {
+        tokens: &tokens,
+        position: 0,
+        depth: 0,
+    };
+    let parsed = parse_union(&mut cursor)?;
+    cursor.at_end().then_some(parsed)
 }
 
 /// union := intersection (`|` intersection)*
-fn parse_union(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
-    let mut parts = vec![parse_intersection(tokens, cursor)?];
-    while tokens.get(*cursor) == Some(&Token::Pipe) {
-        *cursor += 1;
-        parts.push(parse_intersection(tokens, cursor)?);
+fn parse_union(cursor: &mut Cursor<'_>) -> Option<WrittenType> {
+    let mut parts = vec![parse_intersection(cursor)?];
+    while cursor.peek() == Some(&Token::Pipe) {
+        cursor.advance();
+        parts.push(parse_intersection(cursor)?);
     }
     Some(if parts.len() == 1 {
         parts.remove(0)
@@ -115,11 +149,11 @@ fn parse_union(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
 }
 
 /// intersection := atom (`&` atom)*
-fn parse_intersection(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
-    let mut parts = vec![parse_atom(tokens, cursor)?];
-    while tokens.get(*cursor) == Some(&Token::Ampersand) {
-        *cursor += 1;
-        parts.push(parse_atom(tokens, cursor)?);
+fn parse_intersection(cursor: &mut Cursor<'_>) -> Option<WrittenType> {
+    let mut parts = vec![parse_atom(cursor)?];
+    while cursor.peek() == Some(&Token::Ampersand) {
+        cursor.advance();
+        parts.push(parse_atom(cursor)?);
     }
     Some(if parts.len() == 1 {
         parts.remove(0)
@@ -128,25 +162,38 @@ fn parse_intersection(tokens: &[Token], cursor: &mut usize) -> Option<WrittenTyp
     })
 }
 
+/// Guards `parse_atom_body`'s recursion depth: hostile input answers
+/// `None`, never crashes. See `MAX_ATOM_NESTING_DEPTH`.
+fn parse_atom(cursor: &mut Cursor<'_>) -> Option<WrittenType> {
+    cursor.depth += 1;
+    let result = if cursor.depth > MAX_ATOM_NESTING_DEPTH {
+        None
+    } else {
+        parse_atom_body(cursor)
+    };
+    cursor.depth -= 1;
+    result
+}
+
 /// atom := `?` atom | `(` union `)` | name
-fn parse_atom(tokens: &[Token], cursor: &mut usize) -> Option<WrittenType> {
-    match tokens.get(*cursor)? {
+fn parse_atom_body(cursor: &mut Cursor<'_>) -> Option<WrittenType> {
+    match cursor.peek()? {
         Token::Question => {
-            *cursor += 1;
-            Some(WrittenType::Nullable(Box::new(parse_atom(tokens, cursor)?)))
+            cursor.advance();
+            Some(WrittenType::Nullable(Box::new(parse_atom(cursor)?)))
         }
         Token::OpenParenthesis => {
-            *cursor += 1;
-            let inner = parse_union(tokens, cursor)?;
-            if tokens.get(*cursor) != Some(&Token::CloseParenthesis) {
+            cursor.advance();
+            let inner = parse_union(cursor)?;
+            if cursor.peek() != Some(&Token::CloseParenthesis) {
                 return None;
             }
-            *cursor += 1;
+            cursor.advance();
             Some(inner)
         }
         Token::Name(name) => {
             let name = name.clone();
-            *cursor += 1;
+            cursor.advance();
             Some(WrittenType::Name(name))
         }
         Token::Pipe | Token::Ampersand | Token::CloseParenthesis => None,
@@ -217,6 +264,19 @@ mod tests {
         ] {
             assert_eq!(parse_written(garbage), None, "input {garbage:?}");
         }
+    }
+
+    #[test]
+    fn deeply_nested_input_answers_none_instead_of_overflowing_the_stack() {
+        // Comfortably past `MAX_ATOM_NESTING_DEPTH`. Each of these alone
+        // crashes the process (stack overflow) without the depth guard in
+        // `parse_atom` — the same shape `norm.rs` guards. The written form
+        // is derived from user-supplied source, so hostile nesting must
+        // answer `None`, not a SIGSEGV.
+        let deeply_nested_parentheses = "(".repeat(100_000);
+        let deeply_nested_nullable = "?".repeat(100_000);
+        assert_eq!(parse_written(&deeply_nested_parentheses), None);
+        assert_eq!(parse_written(&deeply_nested_nullable), None);
     }
 
     #[test]
