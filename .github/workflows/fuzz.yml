@@ -23,7 +23,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # See ci.yml's `changes` job. The nightly schedule and manual dispatch carry
+  # no diff to filter, so the fuzz job below runs unconditionally for those
+  # events; only push and pull-request events can skip it on documentation.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE*'
+              - '!.gitignore'
+              - '!.gitattributes'
+              - '!.editorconfig'
+
   fuzz:
+    needs: changes
+    if: >-
+      ${{ needs.changes.outputs.code == 'true'
+      || github.event_name == 'schedule'
+      || github.event_name == 'workflow_dispatch' }}
     runs-on: ubuntu-latest
     # Three targets at 30 minutes each on the nightly run, plus the build.
     # 120 minutes leaves comfortable headroom.

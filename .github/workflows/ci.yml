@@ -16,7 +16,33 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Decide whether the change touches anything the build, tests, lints or
+  # corpus depend on. Everything counts as code except a small allowlist of
+  # inert documentation files, so a misclassification can only run the full
+  # suite unnecessarily, never skip it on a real code change. Downstream jobs
+  # gate on `code`; a skipped required job still satisfies branch protection,
+  # so a documentation-only pull request stays mergeable without rebuilding.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE*'
+              - '!.gitignore'
+              - '!.gitattributes'
+              - '!.editorconfig'
+
   lint:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -30,6 +56,8 @@ jobs:
       - run: cargo xtask dependency-shape
 
   test:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
@@ -45,12 +73,16 @@ jobs:
       - run: cargo test --workspace
 
   deny:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
 
   stubs:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
