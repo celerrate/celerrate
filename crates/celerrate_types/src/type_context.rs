@@ -19,7 +19,6 @@ pub struct TypeContext<'db> {
 impl<'db> TypeContext<'db> {
     /// Constructed only by the engine's dispatch and consumption
     /// points. No accessor returns the database.
-    #[allow(dead_code)]
     pub(crate) fn new(db: &'db dyn salsa::Database) -> Self {
         Self { db }
     }

@@ -90,6 +90,12 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
         Self { db, site, context }
     }
 
+    /// The sealed type facade: construction and interrogation without
+    /// the database. Call-scoped like the site itself.
+    pub fn types(&self) -> crate::type_context::TypeContext<'db> {
+        crate::type_context::TypeContext::new(self.db)
+    }
+
     /// The database, for `TypeId` builders. Never retain it.
     pub fn database(&self) -> &'db dyn salsa::Database {
         self.db
@@ -483,5 +489,19 @@ mod tests {
         assert_eq!(site.declaring_scope(), "c::find");
         assert_eq!(site.enclosing_class_scope(), Some("c"));
         assert_eq!(site.enclosing_class_docblock(), Some("/** @template T */"));
+    }
+
+    #[test]
+    fn the_annotation_site_exposes_the_sealed_type_context() {
+        let fixture = fixture(&["<?php class C {}"]);
+        let db = &fixture.db;
+        let site = AnnotationSite::new(db, &NameSite::Global, AnnotationContext::default());
+        // The facade builds the same interned types as the raw builders:
+        // a plugin needs nothing beyond the site.
+        assert_eq!(site.types().int(), TypeId::int(db));
+        assert_eq!(
+            site.types().class("App\\User", Vec::new()),
+            TypeId::class(db, "App\\User", Vec::new())
+        );
     }
 }
