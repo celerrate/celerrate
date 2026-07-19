@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use celerrate_vfs::normalize_path;
@@ -53,36 +54,77 @@ impl ProjectDiscovery {
     }
 }
 
+/// The outcome of trying to read one discovery input file. `Absent` and
+/// `Unreadable` are deliberately distinct: a not-found file is an
+/// ordinary zero-configuration case, an unreadable one (permission
+/// denied, a directory in the file's place, any other IO error) is a
+/// signal the user must see, because analysis then runs over knowingly
+/// wrong inputs and the swallowed error would surface only as a
+/// downstream false-positive storm with nothing pointing at the cause.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum FileSource {
+    /// The file was read; its text.
+    Present(String),
+    /// The file does not exist (`ErrorKind::NotFound`).
+    Absent,
+    /// The file exists but could not be read; the IO error, named in the
+    /// resulting notice.
+    Unreadable(String),
+}
+
+impl From<&str> for FileSource {
+    fn from(text: &str) -> Self {
+        Self::Present(text.to_owned())
+    }
+}
+
+/// Reads one discovery input, distinguishing not-found (an ordinary
+/// absence) from any other IO error (a signal). Never fails: an IO
+/// error becomes [`FileSource::Unreadable`] carrying its message.
+fn read_source(path: &Path) -> FileSource {
+    match fs::read_to_string(path) {
+        Ok(text) => FileSource::Present(text),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => FileSource::Absent,
+        Err(error) => FileSource::Unreadable(error.to_string()),
+    }
+}
+
 /// Discovers the project at an absolute `root`, reading
 /// `composer.json` and `<vendor>/composer/installed.json` from disk.
 /// This is push-time work for the composition root, never called
 /// during a query.
 pub fn discover(root: &Path) -> ProjectDiscovery {
-    let manifest_text = fs::read_to_string(root.join("composer.json")).ok();
+    let manifest = read_source(&root.join("composer.json"));
     // The manifest decides where the vendor directory lives, so it is
     // parsed once here just to locate `installed.json`; the pure core
     // re-derives everything from the texts.
-    let manifest = manifest_text.as_deref().and_then(parse_manifest);
-    let vendor = vendor_root(root, manifest.as_ref());
-    let installed_text = fs::read_to_string(vendor.join("composer/installed.json")).ok();
-    discover_from_sources(root, manifest_text.as_deref(), installed_text.as_deref())
+    let parsed = match &manifest {
+        FileSource::Present(text) => parse_manifest(text),
+        FileSource::Absent | FileSource::Unreadable(_) => None,
+    };
+    let vendor = vendor_root(root, parsed.as_ref());
+    let installed = read_source(&vendor.join("composer/installed.json"));
+    discover_from_sources(root, manifest, installed)
 }
 
 /// The pure core of [`discover`]: derives the configuration from the
-/// two file texts (`None` = the file does not exist). `root` must be
-/// absolute.
+/// two file sources. `root` must be absolute.
 pub fn discover_from_sources(
     root: &Path,
-    manifest_text: Option<&str>,
-    installed_text: Option<&str>,
+    manifest_source: FileSource,
+    installed_source: FileSource,
 ) -> ProjectDiscovery {
     let mut notices = Vec::new();
-    let manifest = match manifest_text {
-        None => {
+    let manifest = match manifest_source {
+        FileSource::Absent => {
             notices.push(ProjectNotice::MissingComposerManifest);
             None
         }
-        Some(text) => match parse_manifest(text) {
+        FileSource::Unreadable(error) => {
+            notices.push(ProjectNotice::UnreadableComposerManifest { error });
+            None
+        }
+        FileSource::Present(text) => match parse_manifest(&text) {
             None => {
                 notices.push(ProjectNotice::InvalidComposerManifest);
                 None
@@ -105,21 +147,27 @@ pub fn discover_from_sources(
         .map(|manifest| manifest.autoload.walk_roots(root))
         .filter(|walk_roots| !walk_roots.is_empty())
         .unwrap_or_else(|| vec![normalize_path(root, root)]);
-    let vendor_walk_roots = match installed_text {
-        None => Vec::new(),
-        Some(text) => match parse_installed_packages(text, &vendor_root.join("composer")) {
-            None => {
-                notices.push(ProjectNotice::InvalidInstalledPackages);
-                Vec::new()
-            }
-            Some(packages) => {
-                let mut roots = BTreeSet::new();
-                for package in packages {
-                    roots.extend(package.autoload.walk_roots(&package.root));
+    let vendor_walk_roots = match installed_source {
+        FileSource::Absent => Vec::new(),
+        FileSource::Unreadable(error) => {
+            notices.push(ProjectNotice::UnreadableInstalledPackages { error });
+            Vec::new()
+        }
+        FileSource::Present(text) => {
+            match parse_installed_packages(&text, &vendor_root.join("composer")) {
+                None => {
+                    notices.push(ProjectNotice::InvalidInstalledPackages);
+                    Vec::new()
                 }
-                roots.into_iter().collect()
+                Some(packages) => {
+                    let mut roots = BTreeSet::new();
+                    for package in packages {
+                        roots.extend(package.autoload.walk_roots(&package.root));
+                    }
+                    roots.into_iter().collect()
+                }
             }
-        },
+        }
     };
     ProjectDiscovery {
         root: normalize_path(root, root),
@@ -178,7 +226,7 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
-    use super::{FileOrigin, discover_from_sources};
+    use super::{FileOrigin, FileSource, discover_from_sources};
     use crate::notice::ProjectNotice;
     use crate::version::{PhpVersion, PhpVersionRange};
 
@@ -186,7 +234,8 @@ mod tests {
 
     #[test]
     fn without_a_manifest_the_root_is_analyzed_with_defaults_and_one_notice() {
-        let discovery = discover_from_sources(Path::new(ROOT), None, None);
+        let discovery =
+            discover_from_sources(Path::new(ROOT), FileSource::Absent, FileSource::Absent);
         assert_eq!(
             discovery.notices,
             vec![ProjectNotice::MissingComposerManifest]
@@ -199,7 +248,11 @@ mod tests {
 
     #[test]
     fn an_invalid_manifest_behaves_like_a_missing_one_with_its_own_notice() {
-        let discovery = discover_from_sources(Path::new(ROOT), Some("not json"), None);
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from("not json"),
+            FileSource::Absent,
+        );
         assert_eq!(
             discovery.notices,
             vec![ProjectNotice::InvalidComposerManifest]
@@ -212,13 +265,13 @@ mod tests {
     fn the_platform_version_wins_over_the_require_constraint() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(
+            FileSource::from(
                 r#"{
                     "require": { "php": "^8.1" },
                     "config": { "platform": { "php": "8.2.7" } }
                 }"#,
             ),
-            None,
+            FileSource::Absent,
         );
         assert_eq!(
             discovery.php_version_range,
@@ -231,8 +284,8 @@ mod tests {
     fn an_unsupported_platform_version_is_clamped() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "config": { "platform": { "php": "7.4.33" } } }"#),
-            None,
+            FileSource::from(r#"{ "config": { "platform": { "php": "7.4.33" } } }"#),
+            FileSource::Absent,
         );
         assert_eq!(
             discovery.php_version_range,
@@ -244,13 +297,13 @@ mod tests {
     fn an_invalid_platform_falls_through_to_the_require_constraint() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(
+            FileSource::from(
                 r#"{
                     "require": { "php": ">=8.2 <8.5" },
                     "config": { "platform": { "php": "eight" } }
                 }"#,
             ),
-            None,
+            FileSource::Absent,
         );
         assert_eq!(
             discovery.php_version_range,
@@ -268,8 +321,8 @@ mod tests {
     fn no_version_signal_at_all_falls_back_with_one_notice() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#),
-            None,
+            FileSource::from(r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#),
+            FileSource::Absent,
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(discovery.notices, vec![ProjectNotice::PhpVersionFallback]);
@@ -279,8 +332,8 @@ mod tests {
     fn an_unsatisfiable_require_constraint_falls_back_with_one_notice() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "require": { "php": "7.4.*" } }"#),
-            None,
+            FileSource::from(r#"{ "require": { "php": "7.4.*" } }"#),
+            FileSource::Absent,
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -295,13 +348,13 @@ mod tests {
     fn each_invalid_version_field_reports_itself_once() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(
+            FileSource::from(
                 r#"{
                     "require": { "php": "7.4.*" },
                     "config": { "platform": { "php": "eight" } }
                 }"#,
             ),
-            None,
+            FileSource::Absent,
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -321,8 +374,8 @@ mod tests {
     fn an_invalid_platform_without_require_reports_once_and_falls_back() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "config": { "platform": { "php": "eight" } } }"#),
-            None,
+            FileSource::from(r#"{ "config": { "platform": { "php": "eight" } } }"#),
+            FileSource::Absent,
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -337,14 +390,14 @@ mod tests {
     fn declared_autoload_replaces_the_root_walk_and_vendor_joins_in() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(
+            FileSource::from(
                 r#"{
                     "require": { "php": "^8.1" },
                     "autoload": { "psr-4": { "App\\": "src/" } },
                     "autoload-dev": { "psr-4": { "Tests\\": "tests/" } }
                 }"#,
             ),
-            Some(
+            FileSource::from(
                 r#"{
                     "packages": [
                         {
@@ -381,8 +434,8 @@ mod tests {
     fn a_manifest_without_autoload_still_walks_the_root() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "require": { "php": "^8.1" } }"#),
-            None,
+            FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
+            FileSource::Absent,
         );
         assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
     }
@@ -391,8 +444,10 @@ mod tests {
     fn autoload_that_yields_no_walk_roots_falls_back_to_the_root() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "require": { "php": "^8.1" }, "autoload": { "psr-4": { "App\\": 42 } } }"#),
-            None,
+            FileSource::from(
+                r#"{ "require": { "php": "^8.1" }, "autoload": { "psr-4": { "App\\": 42 } } }"#,
+            ),
+            FileSource::Absent,
         );
         assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
     }
@@ -401,8 +456,10 @@ mod tests {
     fn the_vendor_directory_override_moves_the_boundary() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "require": { "php": "^8.1" }, "config": { "vendor-dir": "third-party" } }"#),
-            None,
+            FileSource::from(
+                r#"{ "require": { "php": "^8.1" }, "config": { "vendor-dir": "third-party" } }"#,
+            ),
+            FileSource::Absent,
         );
         assert_eq!(discovery.vendor_root, PathBuf::from("/project/third-party"));
         assert_eq!(
@@ -419,13 +476,53 @@ mod tests {
     fn invalid_installed_packages_skip_vendor_with_a_notice() {
         let discovery = discover_from_sources(
             Path::new(ROOT),
-            Some(r#"{ "require": { "php": "^8.1" } }"#),
-            Some("not json"),
+            FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
+            FileSource::from("not json"),
         );
         assert_eq!(discovery.vendor_walk_roots, Vec::<PathBuf>::new());
         assert_eq!(
             discovery.notices,
             vec![ProjectNotice::InvalidInstalledPackages],
+        );
+    }
+
+    #[test]
+    fn an_unreadable_manifest_reports_itself_not_a_missing_one() {
+        // A present-but-unreadable composer.json falls back like a missing
+        // one (whole root, fallback version) but must name the IO error
+        // instead of claiming the file does not exist.
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::Unreadable("permission denied (os error 13)".to_owned()),
+            FileSource::Absent,
+        );
+        assert_eq!(
+            discovery.notices,
+            vec![ProjectNotice::UnreadableComposerManifest {
+                error: "permission denied (os error 13)".to_owned(),
+            }],
+        );
+        assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
+        assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
+    }
+
+    #[test]
+    fn an_unreadable_installed_json_is_signalled_not_dropped_silently() {
+        // A present-but-unreadable installed.json drops every vendor
+        // autoload root; today that happened with no signal at all, which
+        // reads downstream as a CEL0018 false-positive storm with nothing
+        // pointing at the cause.
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
+            FileSource::Unreadable("permission denied (os error 13)".to_owned()),
+        );
+        assert_eq!(discovery.vendor_walk_roots, Vec::<PathBuf>::new());
+        assert_eq!(
+            discovery.notices,
+            vec![ProjectNotice::UnreadableInstalledPackages {
+                error: "permission denied (os error 13)".to_owned(),
+            }],
         );
     }
 }

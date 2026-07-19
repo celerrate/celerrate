@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Project discovery distinguishes a missing Composer manifest from an
+  unreadable one. A `composer.json` or `vendor/composer/installed.json`
+  that exists but cannot be read (permission denied, a directory in its
+  place, any IO error other than not-found) now reports a dedicated
+  notice naming the error — `CEL0039` for the manifest, `CEL0040` for
+  the installed packages — instead of being silently treated as absent.
+  (#59)
+
 ### Changed
 
 - The plugin API boundary is sealed (issue #61): `DynamicTypeProvider`

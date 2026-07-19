@@ -15,8 +15,8 @@ src/Controller/PostController.php:42:19 CEL0018 unknown class `App\Service\Maile
 Severity is reporting weight, not exit behavior: `celerrate check`
 exits 1 as soon as it reports any diagnostic, **error** and
 **warning** alike. The project discovery notices
-(`CEL0025` to `CEL0029`) are counted separately in the summary line
-and do not affect the exit code.
+(`CEL0025` to `CEL0029`, `CEL0039`, `CEL0040`) are counted separately
+in the summary line and do not affect the exit code.
 
 To silence a single occurrence, use an inline suppression
 (`@phpstan-ignore-line`, `@phpstan-ignore-next-line`,
@@ -74,17 +74,19 @@ Symbols or syntax used outside the PHP version range the project's
 | CEL0023 | warning | the symbol is deprecated within the project's version range |
 | CEL0024 | error | the syntax construct is not available in the project's minimum PHP version |
 
-## Project discovery notices (CEL0025 to CEL0029)
+## Project discovery notices (CEL0025 to CEL0029, CEL0039, CEL0040)
 
 About the project's own configuration, reported once per run.
 
 | Identifier | Severity | Meaning |
 | --- | --- | --- |
 | CEL0025 | warning | no `composer.json` found; the whole project root is analyzed |
-| CEL0026 | warning | `composer.json` exists but could not be read as a Composer manifest |
+| CEL0026 | warning | `composer.json` exists but is not a JSON object; defaults are used |
 | CEL0027 | warning | no PHP version configured; the latest supported stable version (currently PHP 8.5) is assumed |
 | CEL0028 | warning | the PHP version constraint is unusable (unparseable, or admitting no supported version); the latest supported stable version is assumed |
-| CEL0029 | warning | `vendor/composer/installed.json` could not be read; installed packages are not indexed |
+| CEL0029 | warning | `vendor/composer/installed.json` is not a JSON object; installed packages are not indexed |
+| CEL0039 | warning | `composer.json` exists but could not be read (an IO error other than not-found, named in the message); the whole project root is analyzed |
+| CEL0040 | warning | `vendor/composer/installed.json` exists but could not be read (an IO error other than not-found, named in the message); installed packages are not indexed |
 
 ## Unknown members (CEL0030 to CEL0033)
 

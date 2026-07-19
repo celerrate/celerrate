@@ -19,7 +19,7 @@ mod version;
 
 pub use autoload::{AutoloadRules, NamespaceMapping};
 pub use constraint::{php_version_from_text, version_range_for_constraint};
-pub use discovery::{FileOrigin, ProjectDiscovery, discover, discover_from_sources};
+pub use discovery::{FileOrigin, FileSource, ProjectDiscovery, discover, discover_from_sources};
 pub use input::ProjectConfiguration;
 pub use installed::{VendorPackage, parse_installed_packages};
 pub use manifest::{ComposerManifest, parse_manifest};

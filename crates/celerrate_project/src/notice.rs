@@ -10,8 +10,16 @@ pub const INVALID_COMPOSER_MANIFEST: DiagnosticId = DiagnosticId::new("CEL0026")
 pub const PHP_VERSION_FALLBACK: DiagnosticId = DiagnosticId::new("CEL0027");
 /// A version constraint is unparseable or admits no supported version.
 pub const INVALID_PHP_VERSION_CONSTRAINT: DiagnosticId = DiagnosticId::new("CEL0028");
-/// `installed.json` is unreadable: vendor autoload is skipped.
+/// `installed.json` is not a JSON object: vendor autoload is skipped.
 pub const INVALID_INSTALLED_PACKAGES: DiagnosticId = DiagnosticId::new("CEL0029");
+/// `composer.json` exists but could not be read (an IO error other than
+/// not-found): defaults are used, as with a missing one, but the cause
+/// is named rather than reported as absence.
+pub const UNREADABLE_COMPOSER_MANIFEST: DiagnosticId = DiagnosticId::new("CEL0039");
+/// `installed.json` exists but could not be read (an IO error other than
+/// not-found): vendor autoload is skipped, and the cause is named rather
+/// than dropped silently.
+pub const UNREADABLE_INSTALLED_PACKAGES: DiagnosticId = DiagnosticId::new("CEL0040");
 
 /// Every identifier this crate allocates, for the registry check at the
 /// composition root.
@@ -21,6 +29,8 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     PHP_VERSION_FALLBACK,
     INVALID_PHP_VERSION_CONSTRAINT,
     INVALID_INSTALLED_PACKAGES,
+    UNREADABLE_COMPOSER_MANIFEST,
+    UNREADABLE_INSTALLED_PACKAGES,
 ];
 
 /// One discovery finding, structured. The kind stays with this
@@ -34,8 +44,22 @@ pub enum ProjectNotice {
     MissingComposerManifest,
     InvalidComposerManifest,
     PhpVersionFallback,
-    InvalidPhpVersionConstraint { constraint: String },
+    InvalidPhpVersionConstraint {
+        constraint: String,
+    },
     InvalidInstalledPackages,
+    /// `composer.json` is present but could not be read: the IO error,
+    /// carried so the message can name it. Distinct from a missing
+    /// manifest, which is an ordinary zero-configuration case.
+    UnreadableComposerManifest {
+        error: String,
+    },
+    /// `installed.json` is present but could not be read: the IO error,
+    /// carried so the message can name it. Distinct from a missing one,
+    /// which drops vendor autoload silently and legitimately.
+    UnreadableInstalledPackages {
+        error: String,
+    },
 }
 
 impl ProjectNotice {
@@ -46,6 +70,8 @@ impl ProjectNotice {
             Self::PhpVersionFallback => PHP_VERSION_FALLBACK,
             Self::InvalidPhpVersionConstraint { .. } => INVALID_PHP_VERSION_CONSTRAINT,
             Self::InvalidInstalledPackages => INVALID_INSTALLED_PACKAGES,
+            Self::UnreadableComposerManifest { .. } => UNREADABLE_COMPOSER_MANIFEST,
+            Self::UnreadableInstalledPackages { .. } => UNREADABLE_INSTALLED_PACKAGES,
         }
     }
 
@@ -75,7 +101,15 @@ impl ProjectNotice {
                 "the PHP version constraint `{constraint}` is unusable; assuming {LATEST_STABLE_VERSION}",
             ),
             Self::InvalidInstalledPackages => {
-                "installed.json is unreadable; vendor autoload is skipped".to_owned()
+                "installed.json is not a JSON object; vendor autoload is skipped".to_owned()
+            }
+            Self::UnreadableComposerManifest { error } => {
+                format!(
+                    "composer.json could not be read ({error}); analyzing the whole project root"
+                )
+            }
+            Self::UnreadableInstalledPackages { error } => {
+                format!("installed.json could not be read ({error}); vendor autoload is skipped")
             }
         }
     }
@@ -102,12 +136,44 @@ mod tests {
                 "CEL0028",
             ),
             (ProjectNotice::InvalidInstalledPackages, "CEL0029"),
+            (
+                ProjectNotice::UnreadableComposerManifest {
+                    error: "permission denied".to_owned(),
+                },
+                "CEL0039",
+            ),
+            (
+                ProjectNotice::UnreadableInstalledPackages {
+                    error: "permission denied".to_owned(),
+                },
+                "CEL0040",
+            ),
         ];
         for (notice, identifier) in cases {
             assert_eq!(notice.identifier().as_str(), identifier);
             assert_eq!(notice.severity(), Severity::Warning);
             assert!(!notice.message().is_empty());
         }
+    }
+
+    #[test]
+    fn an_unreadable_notice_names_the_underlying_io_error() {
+        let manifest = ProjectNotice::UnreadableComposerManifest {
+            error: "permission denied (os error 13)".to_owned(),
+        };
+        assert!(
+            manifest
+                .message()
+                .contains("permission denied (os error 13)")
+        );
+        let installed = ProjectNotice::UnreadableInstalledPackages {
+            error: "permission denied (os error 13)".to_owned(),
+        };
+        assert!(
+            installed
+                .message()
+                .contains("permission denied (os error 13)")
+        );
     }
 
     #[test]
@@ -120,6 +186,12 @@ mod tests {
                 constraint: String::new(),
             },
             ProjectNotice::InvalidInstalledPackages,
+            ProjectNotice::UnreadableComposerManifest {
+                error: String::new(),
+            },
+            ProjectNotice::UnreadableInstalledPackages {
+                error: String::new(),
+            },
         ]
         .iter()
         .map(ProjectNotice::identifier)
