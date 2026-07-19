@@ -634,4 +634,42 @@ class Holder {
             }],
         );
     }
+
+    #[test]
+    fn increments_kill_the_call_result_narrowing() {
+        // `++`/`--` mutate their operand (issue #72 item 7): the
+        // fingerprint naming `$id` as an argument is stale after
+        // either form. Postfix in `f`, prefix in `g`.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        $id++;
+        $repo->find($id)->title;
+    }
+}
+function g(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        --$id;
+        $repo->find($id)->title;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+            ],
+        );
+    }
 }

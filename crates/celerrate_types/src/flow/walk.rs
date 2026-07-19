@@ -397,10 +397,23 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::Unary { operator, operand } => {
                 let operand_type = self.expression(operand, environment);
+                // Prefix `++`/`--` mutate their operand (issue #72):
+                // fingerprints naming it are stale. The other unary
+                // operators read only.
+                if matches!(operator, SyntaxKind::PlusPlus | SyntaxKind::MinusMinus)
+                    && let Some(subject) = subject_of(self.context.ir, operand)
+                {
+                    environment.kill_call_results_for_subject(&subject);
+                }
                 operators::unary_type(db, operator, operand_type)
             }
             BodyExpression::Postfix { operand, .. } => {
                 let operand_type = self.expression(operand, environment);
+                // Postfix is always `++`/`--`: a mutation (issue
+                // #72), so its operand's fingerprints are stale.
+                if let Some(subject) = subject_of(self.context.ir, operand) {
+                    environment.kill_call_results_for_subject(&subject);
+                }
                 operators::postfix_type(db, operand_type)
             }
             BodyExpression::Binary {
