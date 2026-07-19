@@ -1185,8 +1185,12 @@ impl<'db> Walker<'db, '_, '_> {
                         // `use (&$x)`: the local is aliased into the
                         // closure's scope for as long as the closure
                         // lives, unknowable without alias analysis —
-                        // degrade both sides now (decision 10).
+                        // degrade both sides now (decision 10), and
+                        // kill the fingerprints naming it (issue
+                        // #72): any later closure call may rewrite
+                        // the alias.
                         inner.bind(subject.clone(), TypeId::mixed(db));
+                        environment.kill_call_results_involving(&capture.name);
                         environment.bind(subject, TypeId::mixed(db));
                     } else {
                         let captured = self.subject_type(environment, &subject);

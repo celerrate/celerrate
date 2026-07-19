@@ -570,4 +570,31 @@ function f(Event $e): void {
             }],
         );
     }
+
+    #[test]
+    fn a_by_reference_closure_capture_kills_the_call_result_narrowing() {
+        // `use (&$id)` aliases the local into the closure for as
+        // long as the closure lives (issue #72 item 5): any later
+        // closure call may rewrite it, so the fingerprint naming it
+        // as an argument is stale from the capture on.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        $fn = function () use (&$id): void {};
+        $repo->find($id)->title;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "title".to_owned(),
+                receiver: "Post|null".to_owned(),
+            }],
+        );
+    }
 }
