@@ -122,6 +122,17 @@ impl<'db> Environment<'db> {
             .retain(|subject, _| !subject.call_result_involves_local(name));
     }
 
+    /// The subject-shaped face of the kill rule: a `Local` subject's
+    /// value changed, so every fingerprint mentioning it (as base or
+    /// argument) is stale. Non-`Local` subjects kill nothing — a
+    /// property or call-result subject is not a fingerprint base or
+    /// argument.
+    pub(crate) fn kill_call_results_for_subject(&mut self, subject: &NarrowingSubject) {
+        if let NarrowingSubject::Local { name } = subject {
+            self.kill_call_results_involving(name);
+        }
+    }
+
     /// A keys snapshot for a sweep (the kill rule, `extract`, `eval`):
     /// deterministic because `bindings` is a `BTreeMap`.
     pub(crate) fn subjects(&self) -> Vec<NarrowingSubject> {

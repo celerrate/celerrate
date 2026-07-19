@@ -30,8 +30,11 @@ pub(crate) enum NarrowingSubject {
     /// call-result fingerprint (issue #54, design
     /// 2026-07-19-call-result-narrowing). Two occurrences of one
     /// fingerprint denote the same value: the purity assumption,
-    /// documented engine semantics whose unsoundness can only silence
-    /// the nullability family, never make it report.
+    /// documented engine semantics. Under a **positive** guard its
+    /// unsoundness can only silence the nullability family; under a
+    /// negative guard the surviving `null` binding makes the
+    /// lazy-initialization idiom report (PHPStan parity, pinned by
+    /// `the_lazy_initialization_idiom_reports_by_the_survival_rule`).
     CallResult {
         base: CallBase,
         method: String,
@@ -95,6 +98,24 @@ impl NarrowingSubject {
                     ArgumentValue::Local { name: argument_name } if argument_name == name
                 )
             })
+    }
+
+    /// Whether this subject is a call-result fingerprint involving
+    /// *any* local — its base or any argument. `extract()`'s sweep
+    /// predicate (issue #72): it may rewrite every local, so every
+    /// local-involving fingerprint is stale, while a fingerprint of
+    /// literals and `$this` alone survives.
+    pub(crate) fn call_result_involves_any_local(&self) -> bool {
+        let NarrowingSubject::CallResult {
+            base, arguments, ..
+        } = self
+        else {
+            return false;
+        };
+        matches!(base, CallBase::Local { .. })
+            || arguments
+                .iter()
+                .any(|argument| matches!(argument.value, ArgumentValue::Local { .. }))
     }
 }
 

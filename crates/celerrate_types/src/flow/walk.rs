@@ -69,9 +69,7 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
-                        if let NarrowingSubject::Local { name } = &subject {
-                            environment.kill_call_results_involving(name);
-                        }
+                        environment.kill_call_results_for_subject(&subject);
                         environment.bind(subject, TypeId::mixed(db));
                     }
                 }
@@ -95,9 +93,7 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
-                        if let NarrowingSubject::Local { name } = &subject {
-                            environment.kill_call_results_involving(name);
-                        }
+                        environment.kill_call_results_for_subject(&subject);
                         environment.remove(&subject);
                     }
                 }
@@ -171,10 +167,15 @@ impl<'db> Walker<'db, '_, '_> {
                         && let Some(subject) = subject_of(walker.context.ir, key)
                     {
                         walker.expression(key, env);
+                        // A loop-variable rebind is a value change
+                        // (issue #72): fingerprints naming it are
+                        // stale from this pass on.
+                        env.kill_call_results_for_subject(&subject);
                         env.bind(subject, key_type);
                     }
                     walker.expression(value, env);
                     if let Some(subject) = subject_of(walker.context.ir, value) {
+                        env.kill_call_results_for_subject(&subject);
                         env.bind(subject, value_type);
                     }
                     walker.statements(&body, env);
@@ -274,6 +275,10 @@ impl<'db> Walker<'db, '_, '_> {
                             .map(|written| self.class_type_of_written(written)),
                     );
                     if let Some(variable) = &catch.variable {
+                        // The catch bind is a value change (issue
+                        // #72): fingerprints naming the variable are
+                        // stale in the arm.
+                        arm.kill_call_results_involving(variable);
                         arm.bind(
                             NarrowingSubject::Local {
                                 name: variable.clone(),
@@ -392,10 +397,23 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::Unary { operator, operand } => {
                 let operand_type = self.expression(operand, environment);
+                // Prefix `++`/`--` mutate their operand (issue #72):
+                // fingerprints naming it are stale. The other unary
+                // operators read only.
+                if matches!(operator, SyntaxKind::PlusPlus | SyntaxKind::MinusMinus)
+                    && let Some(subject) = subject_of(self.context.ir, operand)
+                {
+                    environment.kill_call_results_for_subject(&subject);
+                }
                 operators::unary_type(db, operator, operand_type)
             }
             BodyExpression::Postfix { operand, .. } => {
                 let operand_type = self.expression(operand, environment);
+                // Postfix is always `++`/`--`: a mutation (issue
+                // #72), so its operand's fingerprints are stale.
+                if let Some(subject) = subject_of(self.context.ir, operand) {
+                    environment.kill_call_results_for_subject(&subject);
+                }
                 operators::postfix_type(db, operand_type)
             }
             BodyExpression::Binary {
@@ -510,8 +528,9 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::Eval { argument } => {
                 self.expression(argument, environment);
-                // eval can rewrite every local and every property
-                // binding: forget them all (decision 10).
+                // eval can rewrite every local, every property
+                // binding, and every call-result fingerprint:
+                // forget them all (decision 10).
                 *environment = {
                     let mut cleared = Environment::new();
                     if !environment.is_reachable() {
@@ -959,12 +978,19 @@ impl<'db> Walker<'db, '_, '_> {
                         let argument_types = self.typed_arguments(&arguments, environment);
                         let (key, source_exists) = self.resolved_function_key(&text);
                         // `extract()` rewrites every local from its
-                        // array argument's keys: an aggressive sweep on
-                        // top of the general kill below.
+                        // array argument's keys: an aggressive sweep
+                        // on top of the general kill below — locals,
+                        // and every call-result fingerprint naming a
+                        // local as base or argument (issue #72). A
+                        // fingerprint of literals and `$this` alone
+                        // survives: `extract()` cannot reassign
+                        // `$this`.
                         let name = text.strip_prefix('\\').unwrap_or(text.as_str());
                         if name.eq_ignore_ascii_case("extract") {
                             for subject in environment.subjects() {
-                                if matches!(subject, NarrowingSubject::Local { .. }) {
+                                if matches!(subject, NarrowingSubject::Local { .. })
+                                    || subject.call_result_involves_any_local()
+                                {
                                     environment.remove(&subject);
                                 }
                             }
@@ -1180,8 +1206,12 @@ impl<'db> Walker<'db, '_, '_> {
                         // `use (&$x)`: the local is aliased into the
                         // closure's scope for as long as the closure
                         // lives, unknowable without alias analysis —
-                        // degrade both sides now (decision 10).
+                        // degrade both sides now (decision 10), and
+                        // kill the fingerprints naming it (issue
+                        // #72): any later closure call may rewrite
+                        // the alias.
                         inner.bind(subject.clone(), TypeId::mixed(db));
+                        environment.kill_call_results_involving(&capture.name);
                         environment.bind(subject, TypeId::mixed(db));
                     } else {
                         let captured = self.subject_type(environment, &subject);
