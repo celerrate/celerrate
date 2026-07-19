@@ -110,6 +110,7 @@ mod representation;
 mod solver;
 pub mod stored;
 mod substitution;
+mod type_context;
 mod type_syntax;
 mod widening;
 mod written;
@@ -145,6 +146,7 @@ pub use stored::{
     StoredClassDependency, StoredFunctionDependency, StoredInferredEdge, StoredInferredSignature,
     StoredParameter, StoredSignature, StoredSignatureKey, StoredTrust, StoredType,
 };
+pub use type_context::TypeContext;
 pub use type_syntax::{
     AnnotationSite, AssertionPolarity, ParsedAncestor, ParsedAnnotations, ParsedAssertion,
     ParsedTemplate, TypeSyntax, TypeSyntaxRegistration, TypeSyntaxRegistry,
