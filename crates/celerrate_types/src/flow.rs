@@ -805,10 +805,18 @@ impl<'db> Walker<'db, '_, '_> {
     /// Over-killing is the conservative direction — a dropped binding
     /// reads as the declared type (`subject_type`'s fallback). Locals
     /// survive: they are not addressable through arbitrary aliasing
-    /// the way `$this`/`self::` state is.
+    /// the way `$this`/`self::` state is. Call-result fingerprints
+    /// survive too: their v1 bases are `$this` and locals (both
+    /// call-stable), and their validity is the purity assumption
+    /// itself — an intervening call does not undermine "this method
+    /// keeps answering the same value" (design
+    /// 2026-07-19-call-result-narrowing).
     fn kill_property_bindings(&mut self, environment: &mut Environment<'db>) {
         for subject in environment.subjects() {
-            if !matches!(subject, NarrowingSubject::Local { .. }) {
+            if !matches!(
+                subject,
+                NarrowingSubject::Local { .. } | NarrowingSubject::CallResult { .. }
+            ) {
                 environment.remove(&subject);
             }
         }
@@ -2245,12 +2253,13 @@ impl<'db> Walker<'db, '_, '_> {
                 self.expression(argument, environment);
                 // eval can rewrite every local and every property
                 // binding: forget them all (decision 10).
-                for subject in environment.subjects() {
-                    if matches!(subject, NarrowingSubject::Local { .. }) {
-                        environment.remove(&subject);
+                *environment = {
+                    let mut cleared = Environment::new();
+                    if !environment.is_reachable() {
+                        cleared.mark_unreachable();
                     }
-                }
-                self.kill_property_bindings(environment);
+                    cleared
+                };
                 TypeId::mixed(db)
             }
             BodyExpression::Exit { argument } => {
@@ -2594,7 +2603,7 @@ impl<'db> Walker<'db, '_, '_> {
                         // tier is exempt without special-casing — its
                         // answer is already concrete, so
                         // `contains_symbolic` is already false for it).
-                        match &signature {
+                        let computed = match &signature {
                             Some(signature) => self.solved_call_result(
                                 of,
                                 &signature.parameters,
@@ -2602,6 +2611,19 @@ impl<'db> Walker<'db, '_, '_> {
                                 &argument_types,
                             ),
                             None => of,
+                        };
+                        // A narrowed call-result fingerprint: the
+                        // environment wins over the fresh return type
+                        // (issue #54; the property-fetch arm's idiom).
+                        // The binding survived this call's own
+                        // `kill_property_bindings` above by the
+                        // survival rule.
+                        if let Some(subject) = subject_of(self.context.ir, id)
+                            && let Some(bound) = environment.binding(&subject)
+                        {
+                            bound
+                        } else {
+                            computed
                         }
                     }
                     Some(BodyExpression::ScopedAccess {
