@@ -32,17 +32,53 @@ jobs:
       code: ${{ steps.filter.outputs.code }}
     steps:
       - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v3
-        id: filter
         with:
-          filters: |
-            code:
-              - '**'
-              - '!**/*.md'
-              - '!LICENSE*'
-              - '!.gitignore'
-              - '!.gitattributes'
-              - '!.editorconfig'
+          fetch-depth: 0
+      - id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PR_HEAD: ${{ github.event.pull_request.head.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            base="$PR_BASE"
+            head="$PR_HEAD"
+          else
+            base="$PUSH_BEFORE"
+            head="$GITHUB_SHA"
+          fi
+          # Run the full suite whenever the base is missing or unknown (for
+          # example a new branch, whose before-sha is all zeros): never skip
+          # on uncertainty.
+          valid=true
+          if [ -z "$base" ] || [ "$base" = "0000000000000000000000000000000000000000" ]; then
+            valid=false
+          elif ! git cat-file -e "${base}^{commit}" 2>/dev/null; then
+            valid=false
+          fi
+          if [ "$valid" = false ]; then
+            echo "base unavailable; running the full suite"
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files="$(git diff --name-only "$base" "$head")"
+          echo "changed files:"
+          printf '%s\n' "$files"
+          # A change counts as code unless every changed file is inert
+          # documentation. Any other path forces the full suite, so a
+          # misclassification can only over-run, never skip a real change.
+          code=false
+          while IFS= read -r file; do
+            [ -z "$file" ] && continue
+            case "$file" in
+              *.md|LICENSE*|.gitignore|.gitattributes|.editorconfig) ;;
+              *) code=true ;;
+            esac
+          done <<< "$files"
+          echo "resolved code=$code"
+          echo "code=$code" >> "$GITHUB_OUTPUT"
 
   fuzz:
     needs: changes
