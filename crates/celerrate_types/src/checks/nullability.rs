@@ -345,4 +345,69 @@ function g(?Holder $h): void {
         );
         assert_eq!(verdicts, vec![]);
     }
+
+    #[test]
+    fn a_base_value_change_kills_the_call_result_narrowing() {
+        // Reassigning the base local makes the fingerprint stale: the
+        // second call is on a different object and re-acquires its
+        // fresh `?Command`. A by-reference capture is a value change
+        // the callee may perform, so it kills too.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+function mutate(Event &$e): void {}
+function f(Event $e, Event $other): void {
+    if ($e->getCommand()) {
+        $e = $other;
+        $e->getCommand()->getName();
+    }
+}
+function g(Event $e): void {
+    if ($e->getCommand()) {
+        mutate($e);
+        $e->getCommand()->getName();
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "getName".to_owned(),
+                    receiver: "Command|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "getName".to_owned(),
+                    receiver: "Command|null".to_owned(),
+                },
+            ],
+        );
+    }
+
+    #[test]
+    fn an_argument_value_change_kills_the_call_result_narrowing() {
+        // The killed local appears as an argument, not the base: the
+        // fingerprint names `$id`, so reassigning `$id` stales it.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        $id = 2;
+        $repo->find($id)->title;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "title".to_owned(),
+                receiver: "Post|null".to_owned(),
+            }],
+        );
+    }
 }

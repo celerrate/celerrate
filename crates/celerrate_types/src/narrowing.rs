@@ -74,6 +74,30 @@ pub(crate) enum ArgumentValue {
     This,
 }
 
+impl NarrowingSubject {
+    /// Whether this subject is a call-result fingerprint whose value
+    /// could change when local `name` is reassigned — its base or any
+    /// argument names it. The kill rule's predicate (design
+    /// 2026-07-19-call-result-narrowing): killing only on genuine
+    /// value changes, because an over-applied kill re-reports guarded
+    /// code (a false positive), while a missed kill only silences.
+    pub(crate) fn call_result_involves_local(&self, name: &str) -> bool {
+        let NarrowingSubject::CallResult {
+            base, arguments, ..
+        } = self
+        else {
+            return false;
+        };
+        matches!(base, CallBase::Local { name: base_name } if base_name == name)
+            || arguments.iter().any(|argument| {
+                matches!(
+                    &argument.value,
+                    ArgumentValue::Local { name: argument_name } if argument_name == name
+                )
+            })
+    }
+}
+
 /// The narrowing subject of one expression, seeing through
 /// `Assignment` to its target so an assign-and-test condition
 /// (`if (($x = f()) instanceof Foo)`) narrows the assigned subject.

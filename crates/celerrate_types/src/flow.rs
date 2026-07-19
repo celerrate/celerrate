@@ -103,6 +103,14 @@ impl<'db> Environment<'db> {
         self.bindings.remove(subject);
     }
 
+    /// The call-result kill rule: local `name`'s value changed, so
+    /// every fingerprint mentioning it (as base or argument) is
+    /// stale. Deterministic: `retain` walks the `BTreeMap` in order.
+    pub(crate) fn kill_call_results_involving(&mut self, name: &str) {
+        self.bindings
+            .retain(|subject, _| !subject.call_result_involves_local(name));
+    }
+
     /// A keys snapshot for a sweep (the kill rule, `extract`, `eval`):
     /// deterministic because `bindings` is a `BTreeMap`.
     pub(crate) fn subjects(&self) -> Vec<NarrowingSubject> {
@@ -852,6 +860,9 @@ impl<'db> Walker<'db, '_, '_> {
                 continue;
             }
             if let Some(subject) = subject_of(self.context.ir, argument.value) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(
                     subject,
                     parameter
@@ -1821,6 +1832,9 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
+                        if let NarrowingSubject::Local { name } = &subject {
+                            environment.kill_call_results_involving(name);
+                        }
                         environment.bind(subject, TypeId::mixed(db));
                     }
                 }
@@ -1831,6 +1845,7 @@ impl<'db> Walker<'db, '_, '_> {
                         self.expression(initializer, environment);
                     }
                     // A static local persists across calls: mixed.
+                    environment.kill_call_results_involving(&variable.name);
                     environment.bind(
                         NarrowingSubject::Local {
                             name: variable.name.clone(),
@@ -1843,6 +1858,9 @@ impl<'db> Walker<'db, '_, '_> {
                 for target in targets {
                     self.expression(target, environment);
                     if let Some(subject) = subject_of(self.context.ir, target) {
+                        if let NarrowingSubject::Local { name } = &subject {
+                            environment.kill_call_results_involving(name);
+                        }
                         environment.remove(&subject);
                     }
                 }
@@ -3665,9 +3683,15 @@ impl<'db> Walker<'db, '_, '_> {
             // `$b = &$a`: aliased locals are unknowable without alias
             // analysis — both sides degrade to mixed (decision 10).
             if let Some(subject) = subject_of(self.context.ir, target) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(subject, TypeId::mixed(db));
             }
             if let Some(subject) = subject_of(self.context.ir, _value) {
+                if let NarrowingSubject::Local { name } = &subject {
+                    environment.kill_call_results_involving(name);
+                }
                 environment.bind(subject, TypeId::mixed(db));
             }
             return TypeId::mixed(db);
@@ -3717,11 +3741,17 @@ impl<'db> Walker<'db, '_, '_> {
                     let current = environment.binding(&base);
                     let key_type = index.map(|index| self.recorded(index));
                     let updated = updated_array(db, current, key_type, value_type);
+                    if let NarrowingSubject::Local { name } = &base {
+                        environment.kill_call_results_involving(name);
+                    }
                     environment.bind(base, updated);
                 }
             }
             _ => {
                 if let Some(subject) = subject_of(self.context.ir, target) {
+                    if let NarrowingSubject::Local { name } = &subject {
+                        environment.kill_call_results_involving(name);
+                    }
                     environment.bind(subject, value_type);
                 }
             }
