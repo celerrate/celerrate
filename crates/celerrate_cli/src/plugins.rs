@@ -19,6 +19,11 @@ pub struct ExcludedPlugin {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RegisteredPlugins {
+    /// The identities whose registrations actually entered a salsa
+    /// registry, in registration order — dynamic providers counted
+    /// after claim admission. This is the effective set the plugin-set
+    /// digest keys the cache on (issue #60).
+    pub admitted: Vec<PluginIdentity>,
     pub excluded: Vec<ExcludedPlugin>,
 }
 
@@ -36,6 +41,7 @@ fn admission(descriptor: &PluginDescriptor) -> Result<(), String> {
 }
 
 pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
+    let mut admitted = Vec::new();
     let mut excluded = Vec::new();
     let mut type_syntax = Vec::new();
     let mut virtual_symbols = Vec::new();
@@ -56,9 +62,10 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
                 provider: bridge.clone(),
             });
             virtual_symbols.push(celerrate_semantics::VirtualSymbolRegistration {
-                identity: descriptor.identity,
+                identity: descriptor.identity.clone(),
                 provider: bridge,
             });
+            admitted.push(descriptor.identity);
         }
         Err(reason) => excluded.push(ExcludedPlugin {
             name: descriptor.identity.name,
@@ -68,15 +75,16 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
 
     // Stdlib provider: the computation-dependent stdlib signatures
     // no declarative stub can express.
-    match admission(&celerrate_stdlib_provider::descriptor()) {
+    let descriptor = celerrate_stdlib_provider::descriptor();
+    match admission(&descriptor) {
         Ok(()) => {
             dynamic_providers.push(celerrate_types::DynamicTypeProviderRegistration {
-                identity: celerrate_stdlib_provider::descriptor().identity,
+                identity: descriptor.identity,
                 provider: Arc::new(celerrate_stdlib_provider::StdlibProvider::new()),
             });
         }
         Err(reason) => excluded.push(ExcludedPlugin {
-            name: celerrate_stdlib_provider::descriptor().identity.name,
+            name: descriptor.identity.name,
             reason,
         }),
     }
@@ -84,9 +92,16 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     // Overlapping dynamic-provider claims exclude the later
     // registrant: registration order above IS the precedence (first
     // claim wins), and the set is rebuilt and re-validated until it
-    // is conflict-free (`admit_dynamic_providers` below).
+    // is conflict-free (`admit_dynamic_providers` below). Only the
+    // survivors of that rebuild are counted as admitted: a
+    // claim-excluded provider never lands in `admitted`.
     let (dynamic_providers, rebuild_exclusions) = admit_dynamic_providers(dynamic_providers);
     excluded.extend(rebuild_exclusions);
+    admitted.extend(
+        dynamic_providers
+            .iter()
+            .map(|registration| registration.identity.clone()),
+    );
 
     let _ = celerrate_types::TypeSyntaxRegistry::builder(type_syntax)
         .durability(salsa::Durability::HIGH)
@@ -101,7 +116,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
         .durability(salsa::Durability::HIGH)
         .new(database);
 
-    RegisteredPlugins { excluded }
+    RegisteredPlugins { admitted, excluded }
 }
 
 /// Overlapping claims exclude the later registrant and the set is
@@ -255,6 +270,35 @@ mod tests {
         assert_eq!(excluded.first().unwrap().name, "second");
         assert_eq!(excluded.get(1).unwrap().name, "third");
         assert!(celerrate_types::validate_claims(&admitted).is_ok());
+        let admitted_names: Vec<&str> = admitted
+            .iter()
+            .map(|registration| registration.identity.name.as_str())
+            .collect();
+        assert!(
+            !admitted_names.contains(&"second"),
+            "a claim-excluded provider must never land in the admitted set",
+        );
+        assert!(
+            !admitted_names.contains(&"third"),
+            "a claim-excluded provider must never land in the admitted set",
+        );
+    }
+
+    #[test]
+    fn registration_records_the_admitted_identities_in_order() {
+        let database = AnalysisDatabase::default();
+        let plugins = register_plugins(&database);
+        let bridge_name = celerrate_phpdoc_bridge::descriptor().identity.name;
+        let stdlib_name = celerrate_stdlib_provider::descriptor().identity.name;
+        assert_eq!(
+            plugins
+                .admitted
+                .iter()
+                .map(|identity| identity.name.as_str())
+                .collect::<Vec<_>>(),
+            vec![bridge_name.as_str(), stdlib_name.as_str()],
+        );
+        assert!(plugins.excluded.is_empty());
     }
 
     #[derive(Debug)]
