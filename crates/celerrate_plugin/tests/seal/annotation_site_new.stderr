@@ -1,0 +1,14 @@
+error[E0624]: associated function `new` is private
+ --> tests/seal/annotation_site_new.rs:3:47
+  |
+3 |       let _ = celerrate_plugin::AnnotationSite::new;
+  |                                                 ^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/celerrate_types/src/type_syntax.rs
+  |
+  | /     pub(crate) fn new(
+  | |         db: &'db dyn salsa::Database,
+  | |         site: &'site NameSite<'site>,
+  | |         context: AnnotationContext<'site>,
+  | |     ) -> Self {
+  | |_____________- private associated function defined here
