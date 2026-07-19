@@ -419,6 +419,7 @@ impl<'db> Walker<'db, '_, '_> {
                     })
                     .unwrap_or_else(|| TypeId::mixed(db))
             }
+            NarrowingSubject::CallResult { .. } => TypeId::mixed(db),
         }
     }
 
