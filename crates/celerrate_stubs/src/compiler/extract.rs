@@ -467,8 +467,7 @@ fn stub_signature(
                         parameter.syntax(),
                         parameter.ty().map(|ty| ast::type_text(&ty)),
                     ),
-                    optional: parameter.default_value().is_some()
-                        || doc_optional.contains(bare),
+                    optional: parameter.default_value().is_some() || doc_optional.contains(bare),
                     by_reference: parameter.by_reference_token().is_some(),
                     variadic: parameter.variadic_token().is_some(),
                     // Attributes only: a parameter's leading doc
