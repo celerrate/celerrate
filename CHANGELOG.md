@@ -30,6 +30,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Possibly-null dereference (`CEL0034`) now reports on unguarded
+  call-result receivers (`$repo->find($id)->title` with no guard),
+  instead of silencing every call-result receiver. The narrowing
+  floor tracks call-result fingerprints — `$base->method(stable
+  arguments)` on a `$this` or local base — so the guards PHP
+  routinely writes (`if ($e->getCommand() &&
+  $e->getCommand()->getName())`, every condition form) narrow them,
+  and the silence shrinks to the genuinely untrackable shapes
+  (property-rooted receivers, unstable arguments). Two occurrences of
+  one fingerprint are assumed to denote the same value — documented
+  engine semantics whose unsoundness can only silence, never
+  fabricate a report. Verified on the Symfony corpus (no new
+  diagnostics). (#54)
 - The written-type parser (`celerrate_types`) no longer overflows the
   stack on deeply nested input. Its recursion is now bounded by a depth
   cap mirroring the norm parser's, so hostile type text (`((((…` or a
