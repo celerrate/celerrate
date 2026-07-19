@@ -597,4 +597,41 @@ function f(Repo $repo, int $id): void {
             }],
         );
     }
+
+    #[test]
+    fn extract_kills_local_involving_call_results_but_spares_this_based_ones() {
+        // `extract()` may rewrite every local (issue #72 item 6):
+        // fingerprints whose base or any argument is a local are
+        // stale. A fingerprint involving no local — `$this` base,
+        // no arguments — survives: `extract()` cannot reassign
+        // `$this`.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Holder {
+    public function find(int $id): ?Post { return null; }
+    public function helper(): ?Post { return null; }
+    public function f(int $id, array $data): void {
+        if ($this->find($id)) {
+            extract($data);
+            $this->find($id)->title;
+        }
+    }
+    public function g(array $data): void {
+        if ($this->helper()) {
+            extract($data);
+            $this->helper()->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "title".to_owned(),
+                receiver: "Post|null".to_owned(),
+            }],
+        );
+    }
 }

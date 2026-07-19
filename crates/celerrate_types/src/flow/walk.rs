@@ -964,12 +964,19 @@ impl<'db> Walker<'db, '_, '_> {
                         let argument_types = self.typed_arguments(&arguments, environment);
                         let (key, source_exists) = self.resolved_function_key(&text);
                         // `extract()` rewrites every local from its
-                        // array argument's keys: an aggressive sweep on
-                        // top of the general kill below.
+                        // array argument's keys: an aggressive sweep
+                        // on top of the general kill below — locals,
+                        // and every call-result fingerprint naming a
+                        // local as base or argument (issue #72). A
+                        // fingerprint of literals and `$this` alone
+                        // survives: `extract()` cannot reassign
+                        // `$this`.
                         let name = text.strip_prefix('\\').unwrap_or(text.as_str());
                         if name.eq_ignore_ascii_case("extract") {
                             for subject in environment.subjects() {
-                                if matches!(subject, NarrowingSubject::Local { .. }) {
+                                if matches!(subject, NarrowingSubject::Local { .. })
+                                    || subject.call_result_involves_any_local()
+                                {
                                     environment.remove(&subject);
                                 }
                             }

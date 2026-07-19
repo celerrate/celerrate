@@ -96,6 +96,24 @@ impl NarrowingSubject {
                 )
             })
     }
+
+    /// Whether this subject is a call-result fingerprint involving
+    /// *any* local — its base or any argument. `extract()`'s sweep
+    /// predicate (issue #72): it may rewrite every local, so every
+    /// local-involving fingerprint is stale, while a fingerprint of
+    /// literals and `$this` alone survives.
+    pub(crate) fn call_result_involves_any_local(&self) -> bool {
+        let NarrowingSubject::CallResult {
+            base, arguments, ..
+        } = self
+        else {
+            return false;
+        };
+        matches!(base, CallBase::Local { .. })
+            || arguments
+                .iter()
+                .any(|argument| matches!(argument.value, ArgumentValue::Local { .. }))
+    }
 }
 
 /// The narrowing subject of one expression, seeing through
