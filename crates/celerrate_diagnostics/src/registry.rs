@@ -83,6 +83,16 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
     registered("CEL0036", "too few arguments", "celerrate_types"),
     registered("CEL0037", "too many arguments", "celerrate_types"),
     registered("CEL0038", "unknown named argument", "celerrate_types"),
+    registered(
+        "CEL0039",
+        "unreadable Composer manifest",
+        "celerrate_project",
+    ),
+    registered(
+        "CEL0040",
+        "unreadable installed packages",
+        "celerrate_project",
+    ),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its
@@ -119,7 +129,7 @@ mod tests {
             );
             previous = number;
         }
-        assert_eq!(previous, 38, "thirty-eight identifiers allocated so far");
+        assert_eq!(previous, 40, "forty identifiers allocated so far");
     }
 
     #[test]

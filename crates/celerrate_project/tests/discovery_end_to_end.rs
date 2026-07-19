@@ -9,7 +9,7 @@ use std::path::Path;
 
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{SourceFile, file_diagnostics};
-use celerrate_project::{FileOrigin, PhpVersion, PhpVersionRange, discover};
+use celerrate_project::{FileOrigin, PhpVersion, PhpVersionRange, ProjectNotice, discover};
 use celerrate_vfs::{Vfs, enumerate_php_files};
 
 fn write(path: &Path, contents: &str) {
@@ -111,5 +111,34 @@ fn discovery_walk_and_analysis_are_deterministic_end_to_end() {
         ],
         "walked set, origins, or diagnostics changed: \
          the undeclared stray.php must stay out",
+    );
+}
+
+#[test]
+fn a_manifest_that_cannot_be_read_is_reported_unreadable_not_missing() {
+    // A directory sitting where composer.json should be makes the read
+    // fail with an IO error that is not not-found. Discovery must name
+    // the failure rather than claim the manifest is absent and analyze
+    // the wrong file set while telling the user the file is not there.
+    let temporary = tempfile::tempdir().unwrap();
+    let root = temporary.path();
+    fs::create_dir_all(root.join("composer.json")).unwrap();
+
+    let discovery = discover(root);
+
+    assert!(
+        discovery
+            .notices
+            .iter()
+            .any(|notice| matches!(notice, ProjectNotice::UnreadableComposerManifest { .. })),
+        "expected an unreadable-manifest notice, got {:?}",
+        discovery.notices,
+    );
+    assert!(
+        !discovery
+            .notices
+            .iter()
+            .any(|notice| matches!(notice, ProjectNotice::MissingComposerManifest)),
+        "an unreadable manifest must never be reported as missing",
     );
 }
