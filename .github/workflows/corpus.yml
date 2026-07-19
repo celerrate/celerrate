@@ -16,7 +16,30 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # See ci.yml's `changes` job: gate the corpus gates on a real code change so
+  # a documentation-only pull request skips them (and stays mergeable, since a
+  # skipped required job satisfies branch protection).
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            code:
+              - '**'
+              - '!**/*.md'
+              - '!LICENSE*'
+              - '!.gitignore'
+              - '!.gitattributes'
+              - '!.editorconfig'
+
   snapshot:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -31,6 +54,8 @@ jobs:
       - run: cargo xtask corpus
 
   ground-truth:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -45,6 +70,8 @@ jobs:
       - run: cargo xtask ground-truth
 
   mixed-rate:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -59,6 +86,8 @@ jobs:
       - run: cargo xtask mixed-rate
 
   bench:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -74,6 +103,8 @@ jobs:
       - run: cargo xtask bench --ceilings
 
   memory:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
@@ -89,6 +120,8 @@ jobs:
       - run: cargo xtask memory --ceiling
 
   phpdoc-cases:
+    needs: changes
+    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
