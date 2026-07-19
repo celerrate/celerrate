@@ -495,4 +495,49 @@ function c(Event $e): void {
             ],
         );
     }
+
+    #[test]
+    fn a_foreach_rebind_kills_the_call_result_narrowing() {
+        // The loop arm binds the key and value subjects directly,
+        // not through `assign_target` (issue #72 item 3): each
+        // rebind is a value change, so fingerprints naming the loop
+        // variable are stale inside the body. `f` rebinds the
+        // fingerprint's base to a typed value; `g` rebinds a local
+        // the fingerprint names as an argument (the key bind path).
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Event { public function getCommand(): ?Command { return null; } }
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Event $e, Event $other): void {
+    if ($e->getCommand()) {
+        foreach ([$other] as $e) {
+            $e->getCommand()->getName();
+        }
+    }
+}
+function g(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        foreach ([1 => 2] as $id => $value) {
+            $repo->find($id)->title;
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![
+                TypedVerdictKind::NullDereference {
+                    member: "getName".to_owned(),
+                    receiver: "Command|null".to_owned(),
+                },
+                TypedVerdictKind::NullDereference {
+                    member: "title".to_owned(),
+                    receiver: "Post|null".to_owned(),
+                },
+            ],
+        );
+    }
 }

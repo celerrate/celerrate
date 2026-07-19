@@ -167,10 +167,15 @@ impl<'db> Walker<'db, '_, '_> {
                         && let Some(subject) = subject_of(walker.context.ir, key)
                     {
                         walker.expression(key, env);
+                        // A loop-variable rebind is a value change
+                        // (issue #72): fingerprints naming it are
+                        // stale from this pass on.
+                        env.kill_call_results_for_subject(&subject);
                         env.bind(subject, key_type);
                     }
                     walker.expression(value, env);
                     if let Some(subject) = subject_of(walker.context.ir, value) {
+                        env.kill_call_results_for_subject(&subject);
                         env.bind(subject, value_type);
                     }
                     walker.statements(&body, env);
