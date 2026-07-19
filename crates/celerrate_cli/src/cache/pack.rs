@@ -50,9 +50,12 @@ pub struct PackHeader {
     /// *content*, not just its format — a new snapshot changes
     /// availability answers.
     pub stub_blob: [u8; 32],
-    /// blake3 over the sorted registered plugin identities
-    /// (name, version, configuration): the plugin-set cache key the
-    /// `PluginIdentity` rustdoc promised (plan 4a decision 1).
+    /// blake3 over the post-admission effective plugin set (issue #60):
+    /// the sorted admitted identities' `(name, version, configuration)`
+    /// triples plus the sorted excluded plugin names, each field
+    /// length-prefixed and each section count-prefixed. The plugin-set
+    /// cache key the `PluginIdentity` rustdoc promised (plan 4a
+    /// decision 1), keyed on the set actually active.
     pub plugins: [u8; 32],
     pub php_minimum: (u8, u8),
     pub php_maximum: (u8, u8),
@@ -142,9 +145,12 @@ mod tests {
     use super::{CACHE_MAGIC, Pack, PackHeader, decode, encode, write_atomically};
 
     fn header() -> PackHeader {
+        // The pack format itself does not care which plugins are
+        // registered, only that a digest is present: an empty
+        // `RegisteredPlugins` is a valid, deterministic stand-in here.
         PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-            crate::plugins::plugin_set_digest(),
+            crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
         )
     }
 
@@ -203,7 +209,7 @@ mod tests {
         let bytes = encode(&sample()).unwrap();
         let other_range = PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 2), PhpVersion::new(8, 5)),
-            crate::plugins::plugin_set_digest(),
+            crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
         );
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_range).is_none());
 

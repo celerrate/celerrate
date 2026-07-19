@@ -61,6 +61,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- The plugin-set cache key now describes the post-admission plugin set,
+  instead of the raw registration descriptor list (#60): `plugin_set_digest`
+  takes the `RegisteredPlugins` record that `register_plugins` itself
+  produced, so there is no second descriptor list that could fall out of
+  sync, and no risk of keying the cache on a plugin that a claim conflict
+  later excluded. The admitted identities' `(name, version, configuration)`
+  triples and the excluded plugins' names are sorted, then length-prefixed
+  straight into the blake3 hasher, with no postcard encoding step, so the
+  previous fallible encode arm (which collapsed on failure to a constant
+  `[0u8; 32]`, silently discarding nothing wrongly but never varying
+  either) is gone entirely. The digest value changes as a result,
+  discarding existing local caches once; the Symfony corpus snapshot and
+  mixed-rate baseline do not embed the digest and show no delta.
 - `StubRefinements::new` now dedups its sorted `functions`, `classes`,
   and each class's `methods` by key, first entry wins (#47) — matching
   `StubIndex::new`'s precedent, so a duplicate key can no longer reach
