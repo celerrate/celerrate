@@ -12,6 +12,7 @@
 
 use std::collections::BTreeSet;
 use std::io::Write;
+use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
 use std::time::{Duration, Instant};
@@ -155,22 +156,20 @@ fn completed_cycle(
 /// next burst.
 ///
 /// This trades away part of I6's crash-window property: any termination
-/// mid-burst now loses every cycle since the last quiet persist, not
-/// just one. `watch`'s own loop persists once more on its way out, but
-/// only along the branch reached when the burst channel disconnects
-/// (below) — and that branch is not reached by an interactive Ctrl+C,
-/// which gets the operating system's default handling (immediate
-/// termination, no destructors run, this function never returns) with
-/// no signal handler anywhere in this crate to route it through a
-/// graceful exit instead. So in practice this final persist covers only
-/// the narrow case of the channel's sender actually dropping while the
-/// watch is alive — the module's own comment on that branch already
-/// says this "cannot happen while the watch is alive" — and essentially
-/// every real way a `--watch` session ends (Ctrl+C included) loses every
-/// cycle back to the last quiet persist, the same as an unclean kill.
-/// Recorded as a known gap for a follow-up outside plan 9a's scope:
-/// SIGINT/SIGTERM handling that routes an interactive Ctrl+C through
-/// this same graceful-exit path.
+/// mid-burst loses every cycle since the last quiet persist, not just
+/// one. `iteration`'s graceful exit arm (issue #52) persists once more
+/// on its way out, along both the branch reached when the burst channel
+/// disconnects and the one reached by a `WatchEvent::Shutdown` —
+/// including a shutdown that arrives while a burst is already being
+/// collected, now that `drain_burst`'s own shutdown flag reaches this
+/// same exit instead of being silently dropped. What remains outside
+/// this module's control is who actually sends that event: the signal
+/// handler that routes an interactive Ctrl+C onto the channel is a
+/// follow-up task, and once it is wired an ordinary SIGINT or SIGTERM
+/// closes the crash window exactly like any other graceful exit. Only a
+/// hard kill — `SIGKILL`, a crash, a power loss — still takes the
+/// process down mid-cycle with no destructor run and no chance to
+/// persist, losing every cycle back to the last quiet write.
 ///
 /// Split out from `completed_cycle` so this decision — and the path it
 /// hands back — is pinned directly against a channel a test controls,
@@ -209,71 +208,80 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
 
     let mut reanalyzed = session.sources.len();
     loop {
-        let (outcome, pending, shutdown) =
-            match completed_cycle(session, &mut watcher, output, reanalyzed) {
-                Ok(result) => result,
-                Err(ended) => return ended,
-            };
-
-        if shutdown {
-            // Issue #52: no new work starts after a shutdown is observed.
-            // `completed_cycle`'s own persist already ran unless a
-            // `Changed` was found queued right behind the shutdown (see
-            // `persist_unless_a_burst_is_already_waiting`); this final
-            // persist covers that one remaining case, and is a no-op
-            // write otherwise, since `write_when_changed` compares before
-            // writing.
-            crate::cache::persist(session, &outcome);
-            return Outcome::of(outcome.diagnostics.len(), session.internal_errors.len());
+        match iteration(session, &mut watcher, output, reanalyzed) {
+            ControlFlow::Continue(next) => reanalyzed = next,
+            ControlFlow::Break(outcome) => return outcome,
         }
+    }
+}
 
-        // A change already queued (task 11's fallback above) starts the
-        // next burst instead of blocking for one that has, in effect,
-        // already arrived. A shutdown queued the same way ends the run
-        // instead: no new work starts after it either.
-        let burst = match pending {
+/// One pass of the watch loop: a completed cycle, then either the start
+/// of the next burst or the graceful exit. Extracted from `watch` (issue
+/// #52) so a test can drive exactly one pass by injecting events on a
+/// held sender, rather than only observing the loop from the outside
+/// through its infinite iteration.
+///
+/// `Break` carries the final `Outcome`, reached only after the graceful
+/// exit's own persist has run; `Continue` carries the `reanalyzed` count
+/// the next iteration reports against.
+fn iteration(
+    session: &mut Session,
+    watcher: &mut Watch,
+    output: &mut dyn Write,
+    reanalyzed: usize,
+) -> ControlFlow<Outcome, usize> {
+    let (outcome, pending, shutdown) = match completed_cycle(session, watcher, output, reanalyzed) {
+        Ok(result) => result,
+        Err(ended) => return ControlFlow::Break(ended),
+    };
+
+    // Issue #52: no new work starts after a shutdown is observed. A
+    // shutdown seen mid-cycle (the flag `cycle` threads back through
+    // `completed_cycle`) skips the burst wait entirely — there is
+    // nothing left to collect, and falling through to the graceful exit
+    // arm below is the whole of what is left to do.
+    //
+    // A change already queued (task 11's fallback in
+    // `persist_unless_a_burst_is_already_waiting`) starts the next burst
+    // instead of blocking for one that has, in effect, already arrived.
+    // A shutdown queued the same way reaches the same graceful exit
+    // instead: no new work starts after it either.
+    let burst = if shutdown {
+        BurstOutcome::Shutdown
+    } else {
+        match pending {
             Some(WatchEvent::Changed(path)) => burst_starting_with(watcher.events(), path),
             Some(WatchEvent::Shutdown) => BurstOutcome::Shutdown,
             None => wait_for_a_burst(watcher.events()),
-        };
-        let changed = match burst {
-            BurstOutcome::Changes(changed) => changed,
-            BurstOutcome::Shutdown | BurstOutcome::Disconnected => {
-                // `Disconnected`: the channel holds its sender inside the
-                // watcher's event handler, and the watcher outlives this
-                // loop, so a disconnection cannot happen while the watch
-                // is alive — this arm exists only so the loop is total.
-                // `Shutdown`: issue #52's graceful exit — the burst
-                // collected before the shutdown arrived is deliberately
-                // discarded, and the run stops on the last state it
-                // actually rendered. Returning `Outcome::Clean`
-                // unconditionally would report success over a screen
-                // full of diagnostics, which is the one thing the fixed
-                // exit codes forbid.
-                //
-                // A final persist closes task 11's fallback back to I6's
-                // guarantee along both branches: whatever the last busy
-                // cycle skipped is flushed before the process actually
-                // returns. It is a no-op WRITE when that cycle's own
-                // persist already ran, since `write_when_changed` compares
-                // before writing, though the collection cost is still paid
-                // once either way.
-                crate::cache::persist(session, &outcome);
-                return Outcome::of(outcome.diagnostics.len(), session.internal_errors.len());
-            }
-        };
-        session.absorb(&changed);
-        // The burst may have carried a manifest change, and a manifest
-        // change re-runs discovery, and discovery may declare different
-        // walk roots. The watch follows them here, before the next cycle
-        // reads the channel again: the next read must come from the roots
-        // the project declares now, not the ones it declared when the
-        // session started.
-        if let Err(error) = watcher.resynchronize(session) {
-            return unwatchable(output, &error);
         }
-        reanalyzed = changed.len();
+    };
+    let changed = match burst {
+        BurstOutcome::Changes(changed) => changed,
+        BurstOutcome::Shutdown | BurstOutcome::Disconnected => {
+            // The graceful exit (issue #52): a shutdown request, or the
+            // disconnect that "cannot happen while the watch is alive"
+            // (kept because the loop must be total). Whatever the last
+            // busy cycle skipped is flushed before the process returns —
+            // a no-op write when that cycle's own persist already ran,
+            // since `write_when_changed` compares before writing.
+            crate::cache::persist(session, &outcome);
+            return ControlFlow::Break(Outcome::of(
+                outcome.diagnostics.len(),
+                session.internal_errors.len(),
+            ));
+        }
+    };
+    session.absorb(&changed);
+    // The burst may have carried a manifest change, and a manifest
+    // change re-runs discovery, and discovery may declare different
+    // walk roots. The watch follows them here, before the next cycle
+    // reads the channel again: the next read must come from the roots
+    // the project declares now, not the ones it declared when the
+    // session started.
+    if let Err(error) = watcher.resynchronize(session) {
+        return ControlFlow::Break(unwatchable(output, &error));
     }
+    ControlFlow::Continue(changed.len())
 }
 
 /// The watch cannot be established, or cannot be re-established over the
@@ -703,18 +711,32 @@ fn changes_content(kind: &notify::EventKind) -> bool {
 /// survives.
 ///
 /// The returned `bool` is issue #52's addition: whether a shutdown request
-/// was observed while this cycle ran. It is set only when the shutdown
-/// arrives while nothing has changed yet, in which case the worker is
-/// joined exactly as on the channel-disconnected path — the in-flight
-/// analysis completes (warm cycles are ~13ms) rather than being cancelled,
-/// because nothing was absorbed to cancel it with.
+/// was observed while this cycle ran, on either of two routes. The first
+/// is a shutdown that arrives while nothing has changed yet, in which
+/// case the worker is joined exactly as on the channel-disconnected path
+/// — the in-flight analysis completes (warm cycles are ~13ms) rather
+/// than being cancelled, because nothing was absorbed to cancel it with.
+/// The second is a shutdown that arrives while a burst is already being
+/// collected (`drain_burst`'s own return value): that live change still
+/// cancels this attempt and restarts analysis over the absorbed edit, so
+/// the flag cannot simply be returned in the same breath it is set — it
+/// is carried above the restart loop instead, and read only once this
+/// cycle finally settles on a completed outcome.
 fn cycle(session: &mut Session, watcher: &mut Watch) -> notify::Result<(AnalysisOutcome, bool)> {
+    // Hoisted above the outer loop, not redeclared per restart: a live
+    // change that arrives alongside a shutdown (line below) cancels this
+    // attempt and `continue`s to a fresh one, and a `shutdown` scoped to
+    // one iteration would be reset to `false` right there, losing
+    // exactly the request this bool exists to carry. It accumulates
+    // across every restart within this one `cycle` call and is read only
+    // once, at whichever `return` below finally settles on a completed
+    // outcome.
+    let mut shutdown = false;
     loop {
         let inputs = session.inputs();
         let worker = std::thread::spawn(move || analyze(&inputs));
 
         let mut changed: Vec<PathBuf> = Vec::new();
-        let mut shutdown = false;
         loop {
             match watcher.events().recv_timeout(POLL_INTERVAL) {
                 Ok(WatchEvent::Changed(path)) => changed.push(path),
@@ -726,7 +748,13 @@ fn cycle(session: &mut Session, watcher: &mut Watch) -> notify::Result<(Analysis
                 Err(RecvTimeoutError::Disconnected) => break,
             }
             if !changed.is_empty() {
-                drain_burst(watcher.events(), &mut changed);
+                // Issue #52's must-fix: a shutdown arriving while a burst
+                // is already being collected here must not be lost —
+                // `drain_burst`'s own return value is exactly that
+                // signal, and it folds into this cycle's shutdown flag
+                // the same way the direct `Ok(WatchEvent::Shutdown)` arm
+                // above does.
+                shutdown |= drain_burst(watcher.events(), &mut changed);
                 break;
             }
             if worker.is_finished() {
@@ -814,8 +842,9 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use std::collections::BTreeSet;
+    use std::ops::ControlFlow;
     use std::path::{Path, PathBuf};
-    use std::sync::mpsc::Receiver;
+    use std::sync::mpsc::{Receiver, Sender};
     use std::time::{Duration, Instant};
 
     use celerrate_project::PhpVersion;
@@ -827,14 +856,16 @@ mod tests {
         WatchedRoot, as_the_project_names_it, changes_content, reconcile, wait_for_a_burst,
         watched_roots,
     };
+    use crate::Outcome;
     use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
     use crate::render;
     use crate::session::{InternalError, Session};
 
-    /// A `Watch` whose channel never receives anything: nothing is
-    /// registered with the operating system, and the sender is dropped
-    /// immediately, so `try_recv` always answers `Disconnected` and
-    /// `recv_timeout` never actually waits out its timeout.
+    /// A `Watch` over a channel the test itself controls, with the
+    /// sender kept alive so it can inject `WatchEvent`s (issue #52's
+    /// `iteration` tests) or be dropped on purpose to drive the
+    /// `Disconnected` branch. Nothing is registered with the operating
+    /// system.
     ///
     /// For a test that mutates the session directly (`session.absorb`)
     /// rather than through a real filesystem edit, this is what keeps
@@ -843,15 +874,24 @@ mod tests {
     /// `std::fs::write` calls, and the OS event's arrival time relative
     /// to `completed_cycle`'s own `try_recv` peek is a race this helper
     /// removes rather than accepts.
-    fn silent_watch(session: &Session) -> Watch {
-        let (_sender, receiver) = std::sync::mpsc::channel();
-        Watch {
+    fn watch_with_held_sender(session: &Session) -> (Watch, Sender<WatchEvent>) {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let watcher = Watch {
             _watcher: notify::recommended_watcher(|_event: notify::Result<notify::Event>| {})
                 .unwrap(),
             events: receiver,
             declared: session.discovery.project_walk_roots.clone(),
             unwatchable: Vec::new(),
-        }
+        };
+        (watcher, sender)
+    }
+
+    /// A `Watch` whose channel never receives anything: the sender from
+    /// `watch_with_held_sender` is dropped immediately, so `try_recv`
+    /// always answers `Disconnected` and `recv_timeout` never actually
+    /// waits out its timeout.
+    fn silent_watch(session: &Session) -> Watch {
+        watch_with_held_sender(session).0
     }
 
     /// The invariant the whole loop is built on, and the one the umbrella
@@ -2092,6 +2132,115 @@ mod tests {
         assert_eq!(
             changed,
             vec![PathBuf::from("src/a.php"), PathBuf::from("src/b.php")],
+        );
+    }
+
+    /// Issue #52's `iteration`: a shutdown queued ahead of the call is
+    /// observed by `completed_cycle`'s own `persist_unless_a_burst_is_
+    /// already_waiting` peek, so it never reaches the burst wait at all —
+    /// `iteration` must still take the graceful exit, and the exit's own
+    /// persist must be the one that lands on disk (not the busy cycle's,
+    /// which this fixture never runs in the first place).
+    #[test]
+    fn a_shutdown_event_exits_through_the_graceful_persist() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let (mut watcher, sender) = watch_with_held_sender(&session);
+        let mut output = Vec::new();
+
+        let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
+        assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
+
+        sender.send(WatchEvent::Shutdown).unwrap();
+        let outcome = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
+            ControlFlow::Break(outcome) => outcome,
+            ControlFlow::Continue(next) => {
+                panic!("a shutdown must break the loop, not continue with {next}")
+            }
+        };
+        assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
+        assert!(
+            diagnostics_pack.exists(),
+            "the graceful exit persists the cycle it completed before the shutdown",
+        );
+    }
+
+    /// Issue #52's `iteration`: a change delivered only once the loop is
+    /// genuinely idle (a background thread sends it after a short delay,
+    /// long after the fixture's trivial cycle has settled) is picked up
+    /// by the burst wait between cycles, absorbed, and the loop
+    /// continues rather than exiting.
+    #[test]
+    fn a_burst_event_continues_the_loop() {
+        let root = tempfile::tempdir().unwrap();
+        let edited = root.path().join("a.php");
+        std::fs::write(&edited, "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let (mut watcher, sender) = watch_with_held_sender(&session);
+        let mut output = Vec::new();
+
+        // The edit lands on disk before the event is sent: `Session::
+        // absorb` reads the file's current contents when the path
+        // arrives, so what proves the session absorbed the change is the
+        // very next cycle seeing it, not the burst itself.
+        let edited_source = "<?php class A {} new Missing();";
+        std::fs::write(&edited, edited_source).unwrap();
+
+        let sent = edited.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            sender.send(WatchEvent::Changed(sent)).unwrap();
+        });
+
+        let next = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
+            ControlFlow::Continue(next) => next,
+            ControlFlow::Break(outcome) => {
+                panic!("a plain change must not break the loop: {outcome:?}")
+            }
+        };
+        assert_eq!(
+            next, 1,
+            "one path changed, so the next cycle reports one reanalyzed file",
+        );
+
+        let (outcome, _, shutdown) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, next).unwrap();
+        assert!(!shutdown, "no shutdown was ever sent");
+        assert_eq!(
+            outcome.diagnostics.len(),
+            1,
+            "the session absorbed the edit the burst carried, and the next cycle sees it",
+        );
+    }
+
+    /// Issue #52's `iteration`: the `Disconnected` branch the module's
+    /// own comment calls unreachable "while the watch is alive" — kept
+    /// only so the loop is total — is, with a held sender, finally
+    /// something a test can drive on purpose. Dropping it must still
+    /// reach the graceful exit and its persist.
+    #[test]
+    fn a_disconnected_channel_exits_through_the_graceful_persist() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
+        let mut session = Session::start(root.path());
+        let (mut watcher, sender) = watch_with_held_sender(&session);
+        drop(sender);
+        let mut output = Vec::new();
+
+        let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
+        assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
+
+        let outcome = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
+            ControlFlow::Break(outcome) => outcome,
+            ControlFlow::Continue(next) => {
+                panic!("a disconnected channel must break the loop, not continue with {next}")
+            }
+        };
+        assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
+        assert!(
+            diagnostics_pack.exists(),
+            "the graceful exit persists the cycle it completed before the disconnect",
         );
     }
 }
