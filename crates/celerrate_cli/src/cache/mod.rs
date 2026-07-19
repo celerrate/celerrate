@@ -31,7 +31,7 @@ use celerrate_semantics::{
 };
 use celerrate_source::FileId;
 use celerrate_types::{
-    FunctionQuery, InferenceContext, InferredBody, StoredClassDependency, StoredFunctionDependency,
+    FunctionQuery, InferredBody, StoredClassDependency, StoredFunctionDependency,
     StoredInferredEdge, StoredInferredSignature, StoredSignatureKey, StoredType,
     class_surface_digest, function_signature_digest, inferred_body_types,
 };
@@ -367,7 +367,6 @@ fn collect_signature_entries(
                 inputs.configuration,
                 file,
                 BodyQuery::new(database, function.ast_id),
-                InferenceContext::new(database, None),
             ) else {
                 continue;
             };
@@ -408,7 +407,6 @@ fn collect_signature_entries(
                     inputs.configuration,
                     file,
                     BodyQuery::new(database, member.ast_id),
-                    InferenceContext::new(database, None),
                 ) else {
                     continue;
                 };

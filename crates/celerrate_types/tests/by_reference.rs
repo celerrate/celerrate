@@ -23,7 +23,7 @@ use celerrate_source::FileId;
 use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::StubIndexInput;
 use celerrate_types::{
-    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, InferenceContext,
+    DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery,
     inferred_body_types, inferred_function_return,
 };
 
@@ -120,17 +120,9 @@ function consume(array $arguments): void {
             index: 0,
         },
     );
-    let inferred = inferred_body_types(
-        &f.db,
-        f.files,
-        f.stubs,
-        f.configuration,
-        file,
-        body,
-        InferenceContext::new(&f.db, None),
-    )
-    .as_ref()
-    .unwrap();
+    let inferred = inferred_body_types(&f.db, f.files, f.stubs, f.configuration, file, body)
+        .as_ref()
+        .unwrap();
     assert!(!inferred.expression_types.is_empty());
 }
 
