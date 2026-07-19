@@ -36,15 +36,18 @@ be structurally derived, not maintained by convention.
 
 ## Design
 
-### 1. One descriptor list
+### 1. One source of truth
 
-A single private function, `plugin_descriptors() -> Vec<PluginDescriptor>`
-(or equivalent), becomes the only place the first-party descriptor set
-is written down. `register_plugins` iterates it; nothing else calls the
-per-crate `descriptor()` functions directly (today `register_plugins`
-calls `celerrate_stdlib_provider::descriptor()` three separate times —
-that collapses too). Adding a plugin is one edit, and the digest follows
-by construction because of the next point.
+`register_plugins` becomes the only place the first-party descriptor
+set is written down, each plugin's `descriptor()` called exactly once
+into a local (today `register_plugins` calls
+`celerrate_stdlib_provider::descriptor()` three separate times — that
+collapses too), and the digest stops naming descriptors at all: it
+derives from `register_plugins`' output (next point). Adding a plugin
+is one edit, and the digest follows by construction. A separate shared
+descriptor list is deliberately not introduced: with the digest derived
+from the registration record, a second enumeration would itself be a
+second source of truth.
 
 ### 2. Digest the post-admission effective set
 
@@ -71,13 +74,15 @@ digest consumes registration's output). The ~25 `plugin_set_digest()`
 call sites in `cache_seeding.rs` update mechanically to build their
 digest from a `RegisteredPlugins` value.
 
-### 3. Encode failure is an internal error
+### 3. The encode-failure arm is eliminated, not handled
 
-`digest_identities` returns `Result<[u8; 32], ...>`; the postcard-error
-arm propagates through `Session` construction as an internal error (the
-CLI's existing internal-error surface, exit 2) instead of a constant
-key. A cache key that cannot be computed is a bug to surface, never a
-value to guess. Zero-panic rule respected: `Result`, not `panic`.
+The digest stops serializing through postcard: the sorted identity
+triples (and excluded names) feed a `blake3::Hasher` directly, each
+field length-prefixed and each section count-prefixed, so no fallible
+encoding step exists and the `[0u8; 32]` arm disappears with it. A
+cache key computation with no failure path beats one whose failure path
+is handled — the invalid state becomes unrepresentable rather than
+reported.
 
 ## Testing
 
@@ -88,9 +93,9 @@ value to guess. Zero-panic rule respected: `Result`, not `panic`.
   separately a claim conflict) changes the digest relative to the
   all-admitted run.
 - Order-independence and identity-sensitivity tests carry over.
-- The encode-failure arm is exercised or, if unreachable by
-  construction with the concrete types, documented as such where the
-  `Result` is introduced.
+- The direct-hashing digest is pinned against collisions between
+  adjacent fields (length prefixes: `("ab", "c")` and `("a", "bc")`
+  digest differently).
 - Cache-seeding integration suite passes with the new signature.
 - Corpus gates: zero delta (`cargo xtask corpus`,
   `cargo xtask mixed-rate`). The digest value itself may change
