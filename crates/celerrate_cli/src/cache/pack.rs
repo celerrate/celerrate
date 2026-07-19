@@ -50,9 +50,12 @@ pub struct PackHeader {
     /// *content*, not just its format — a new snapshot changes
     /// availability answers.
     pub stub_blob: [u8; 32],
-    /// blake3 over the sorted registered plugin identities
-    /// (name, version, configuration): the plugin-set cache key the
-    /// `PluginIdentity` rustdoc promised (plan 4a decision 1).
+    /// blake3 over the post-admission effective plugin set (issue #60):
+    /// the sorted admitted identities' `(name, version, configuration)`
+    /// triples plus the sorted excluded plugin names, each field
+    /// length-prefixed and each section count-prefixed. The plugin-set
+    /// cache key the `PluginIdentity` rustdoc promised (plan 4a
+    /// decision 1), keyed on the set actually active.
     pub plugins: [u8; 32],
     pub php_minimum: (u8, u8),
     pub php_maximum: (u8, u8),
