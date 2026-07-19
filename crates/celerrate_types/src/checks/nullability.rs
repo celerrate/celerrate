@@ -672,4 +672,95 @@ function g(Repo $repo, int $id): void {
             ],
         );
     }
+
+    #[test]
+    fn the_lazy_initialization_idiom_reports_by_the_survival_rule() {
+        // The purity assumption's one report-producing consequence
+        // (issue #72 item 2): under a negative guard, the null
+        // binding survives the intervening call — the fingerprint's
+        // whole point — so the re-call inside the branch reads the
+        // narrowed `null` and reports. PHPStan-parity, corpus-clean,
+        // and now a conscious stance: the "can only silence"
+        // guarantee is scoped to positive guards.
+        let verdicts = family_verdicts(
+            r#"<?php
+class User { public function getName(): string { return ''; } }
+class Holder {
+    public function getUser(): ?User { return null; }
+    public function authenticate(): void {}
+    public function f(): void {
+        if ($this->getUser() === null) {
+            $this->authenticate();
+            $this->getUser()->getName();
+        }
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "getName".to_owned(),
+                receiver: "null".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn a_this_based_fingerprint_narrows_end_to_end() {
+        // `$this` is never reassignable, so a `CallBase::This`
+        // fingerprint needs no kill discipline on its base — covered
+        // until now only at the `subject_of` unit level (issue #72
+        // item 10). Guarded `f` is silent; unguarded `g` reports.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Command { public function getName(): string { return ''; } }
+class Holder {
+    public function command(): ?Command { return null; }
+    public function f(): void {
+        if ($this->command()) {
+            $this->command()->getName();
+        }
+    }
+    public function g(): void {
+        $this->command()->getName();
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "getName".to_owned(),
+                receiver: "Command|null".to_owned(),
+            }],
+        );
+    }
+
+    #[test]
+    fn unset_kills_the_call_result_narrowing() {
+        // The `Unset` arm's kill, pinned at the verdict level (issue
+        // #72 item 11): `unset($id)` is a value change, so the
+        // fingerprint naming `$id` is stale and the re-call reads
+        // its fresh `?Post`.
+        let verdicts = family_verdicts(
+            r#"<?php
+class Post { public string $title = ''; }
+class Repo { public function find(int $id): ?Post { return null; } }
+function f(Repo $repo, int $id): void {
+    if ($repo->find($id)) {
+        unset($id);
+        $repo->find($id)->title;
+    }
+}
+"#,
+        );
+        assert_eq!(
+            verdicts,
+            vec![TypedVerdictKind::NullDereference {
+                member: "title".to_owned(),
+                receiver: "Post|null".to_owned(),
+            }],
+        );
+    }
 }
