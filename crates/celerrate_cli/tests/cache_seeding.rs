@@ -25,6 +25,19 @@ use celerrate_semantics::{
 };
 use celerrate_types::{StoredInferredSignature, StoredSignatureKey};
 
+/// The digest a real `Session::start` computes: registration is
+/// deterministic (the compiled-in plugins, never project content), so a
+/// fresh, throwaway database's own registration record is the same
+/// record any session in this file's fixtures would produce. Every
+/// header built here must key on this, exactly like `Session::start`
+/// does (issue #60) — never on `RegisteredPlugins::default()`, which
+/// would digest an empty set no real session in this file ever has.
+fn registered_plugin_set_digest() -> [u8; 32] {
+    let database = celerrate_cli::database::AnalysisDatabase::default();
+    let plugins = celerrate_cli::plugins::register_plugins(&database);
+    celerrate_cli::plugins::plugin_set_digest(&plugins)
+}
+
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
     for (path, contents) in files {
@@ -99,7 +112,7 @@ fn a_matching_pack_seeds_the_item_tree_query() {
     let probe = StoredItemTree::of(&ItemTree::default());
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_item_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
@@ -126,7 +139,7 @@ fn a_matching_pack_seeds_the_member_tree_query() {
     let probe = StoredMemberTree::of(&MemberTree::default());
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_member_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
@@ -158,7 +171,7 @@ fn a_matching_pack_seeds_the_symbol_table_with_its_defines() {
     let probe = StoredItemTree::of(&probe_tree);
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_item_trees_pack(root.path(), &header, vec![(hash, probe)]);
 
@@ -180,7 +193,7 @@ fn a_range_mismatch_ignores_the_pack() {
     let probe = StoredItemTree::of(&ItemTree::default());
     let other_header = PackHeader::current(
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 2)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_item_trees_pack(root.path(), &other_header, vec![(hash, probe)]);
 
@@ -206,7 +219,7 @@ fn a_stub_blob_mismatch_ignores_the_pack() {
     let probe = StoredItemTree::of(&ItemTree::default());
     let mut foreign_stub = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     foreign_stub.stub_blob[0] ^= 0xFF;
     write_item_trees_pack(root.path(), &foreign_stub, vec![(hash, probe)]);
@@ -281,7 +294,7 @@ fn a_verdict_whose_records_still_hold_is_served() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, probe_verdict())]);
 
@@ -310,7 +323,7 @@ fn a_verdict_whose_answer_flipped_is_discarded() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, probe_verdict())]);
 
@@ -341,7 +354,7 @@ fn a_verdict_with_an_unknown_identifier_is_discarded() {
     verdict.diagnostics[0].id = "CEL9999".to_owned();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
@@ -368,7 +381,7 @@ fn a_verdict_with_a_reversed_range_is_discarded() {
     verdict.diagnostics[0].end = 10;
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
@@ -431,7 +444,7 @@ fn the_written_packs_validate_and_carry_the_analyzed_files() {
 
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let bytes = std::fs::read(root.path().join(".celerrate/cache/").join(ITEM_TREES_PACK)).unwrap();
     let pack: Pack<Vec<([u8; 32], StoredItemTree)>> =
@@ -502,7 +515,7 @@ fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {
     verdict.diagnostics[0].id = "CEL9999".to_owned();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
@@ -623,7 +636,7 @@ fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
     verdict.diagnostics[0].end = 200;
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
@@ -671,7 +684,7 @@ fn an_item_tree_with_an_absurd_ast_index_never_panics() {
     });
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_item_trees_pack(
         root.path(),
@@ -718,7 +731,7 @@ fn a_member_tree_with_an_absurd_ast_index_never_panics() {
     };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_member_trees_pack(
         root.path(),
@@ -744,7 +757,7 @@ fn duplicate_keys_in_a_pack_never_panic() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_item_trees_pack(
         root.path(),
@@ -779,7 +792,7 @@ fn an_empty_record_list_is_served_without_panicking() {
     verdict.records = Vec::new();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_diagnostics_pack(root.path(), &header, vec![(hash, verdict)]);
 
@@ -799,7 +812,7 @@ fn persist_records_every_referencing_files_lookups() {
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let bytes =
         std::fs::read(root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK)).unwrap();
@@ -885,7 +898,7 @@ fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
 
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let bytes = std::fs::read(
         root.path()
@@ -1009,7 +1022,7 @@ fn the_signature_pack_is_sorted_and_deterministic() {
 
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let pack: Pack<Vec<(StoredSignatureKey, StoredInferredSignature)>> =
         celerrate_cli::cache::pack::decode(&first, &header).unwrap();
@@ -1696,7 +1709,7 @@ fn an_absurd_stored_type_never_panics() {
     };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_signatures_pack(
         root.path(),
@@ -1762,7 +1775,7 @@ fn a_stale_class_digest_discards_the_typed_portion_only() {
 
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let path = root.path().join(".celerrate/cache/").join(DIAGNOSTICS_PACK);
     let bytes = std::fs::read(&path).unwrap();
@@ -1862,7 +1875,7 @@ fn a_signature_entry_with_a_wrong_content_hash_is_ignored() {
     };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_signatures_pack(
         root.path(),
@@ -1925,7 +1938,7 @@ fn duplicate_signature_keys_never_panic() {
     };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     write_signatures_pack(
         root.path(),
@@ -1981,7 +1994,7 @@ fn a_plugin_digest_mismatch_ignores_every_pack() {
 
     let mut foreign_plugins = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     foreign_plugins.plugins[0] ^= 0xFF;
     let cache = root.path().join(".celerrate/cache");
@@ -2002,7 +2015,7 @@ fn a_plugin_digest_mismatch_ignores_every_pack() {
         // the real header ever changes shape.
         let real_header = PackHeader::current(
             PhpVersionRange::point(PhpVersion::new(8, 5)),
-            celerrate_cli::plugins::plugin_set_digest(),
+            registered_plugin_set_digest(),
         );
         match pack {
             ITEM_TREES_PACK => {
@@ -2103,7 +2116,7 @@ fn the_packs_carry_no_expression_type_tables() {
 
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
-        celerrate_cli::plugins::plugin_set_digest(),
+        registered_plugin_set_digest(),
     );
     let bytes = std::fs::read(
         root.path()
