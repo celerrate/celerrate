@@ -131,9 +131,18 @@ impl Session {
         let statistics = Arc::new(CacheStatistics::default());
         let cache_directory = root.join(".celerrate").join("cache");
         let cache_loaded_range = discovery.php_version_range;
+
+        // Registration happens here, right after the database's other
+        // singleton inputs and before any query runs: the registries
+        // are themselves salsa singletons, set once per database. Also
+        // ahead of the cache load below, so the plugin-set digest
+        // (issue #60) can be derived from the effective, post-admission
+        // set `register_plugins` actually produced, not a second,
+        // independently-collected descriptor list.
+        let plugins = register_plugins(&database);
         // Computed once and threaded through: load and persist must key
         // packs on the same digest, never recompute it independently.
-        let plugin_set_digest = plugin_set_digest();
+        let plugin_set_digest = plugin_set_digest(&plugins);
         let cache = Arc::new(CacheSnapshot::load(
             &cache_directory,
             &PackHeader::current(cache_loaded_range, plugin_set_digest),
@@ -154,11 +163,6 @@ impl Session {
         })))
         .durability(salsa::Durability::HIGH)
         .new(&database);
-
-        // Registration happens here, right after the database's other
-        // singleton inputs and before any query runs: the registries
-        // are themselves salsa singletons, set once per database.
-        let plugins = register_plugins(&database);
 
         let mut session = Self {
             database,

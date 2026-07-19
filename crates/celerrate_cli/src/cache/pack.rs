@@ -142,9 +142,12 @@ mod tests {
     use super::{CACHE_MAGIC, Pack, PackHeader, decode, encode, write_atomically};
 
     fn header() -> PackHeader {
+        // The pack format itself does not care which plugins are
+        // registered, only that a digest is present: an empty
+        // `RegisteredPlugins` is a valid, deterministic stand-in here.
         PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-            crate::plugins::plugin_set_digest(),
+            crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
         )
     }
 
@@ -203,7 +206,7 @@ mod tests {
         let bytes = encode(&sample()).unwrap();
         let other_range = PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 2), PhpVersion::new(8, 5)),
-            crate::plugins::plugin_set_digest(),
+            crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
         );
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_range).is_none());
 
