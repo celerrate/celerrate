@@ -38,9 +38,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Internal hardening (issue #67): the plugin API boundary seal (issue
   #61) now carries a compile-fail proof — five pinned `trybuild` cases
   showing that `AnnotationSite::new`, `InvocationSite::new`, and
-  `TypeContext::new` cannot be constructed cross-crate, that
-  `AnnotationSite::database()` does not exist, and that `celerrate_plugin`
-  re-exports no `salsa` item. The `xtask dependency-shape` check now
+  `TypeContext::new` cannot be called cross-crate, that
+  `AnnotationSite::database()` is not reachable from the facade, and that
+  `celerrate_plugin` re-exports no `salsa` item. The `xtask dependency-shape` check now
   derives its governed plugin-crate set from `cargo metadata` instead of
   a hardcoded list: any workspace package with a non-dev dependency on
   the `celerrate_plugin` facade is governed automatically, so a new
