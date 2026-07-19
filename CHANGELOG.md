@@ -27,6 +27,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   boundary vocabulary nominally — no more `salsa` or whole-crate
   re-exports — and the boundary structs are `#[non_exhaustive]`.
   Breaking for the v0 plugin API; `PLUGIN_API_VERSION` stays 0.
+- Internal hardening (issue #63): the inference warming precondition
+  is now compile-checked instead of documented. The unguarded tracked
+  query behind body-type inference moved into a private `sealed`
+  module and now demands a `Warmed` proof token that only the two
+  cycle-safe return queries or `warm_the_cycle_safe_entry_point` can
+  mint, so `inferred_body_types_unguarded` can no longer be demanded
+  without warming its owner's fixpoint first. Pure refactor, no
+  behavioral change; zero delta on the Symfony corpus and
+  mixed-typedness baseline.
 
 ### Fixed
 
