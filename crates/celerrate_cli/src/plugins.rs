@@ -212,10 +212,10 @@ mod tests {
         // takes the descriptor as data (the public path cannot mismatch
         // for compiled-in plugins — the design says so; this pins the
         // scaffolding anyway).
-        let mismatched = celerrate_plugin::PluginDescriptor {
-            identity: celerrate_phpdoc_bridge::descriptor().identity,
-            api_version: celerrate_plugin::PLUGIN_API_VERSION + 1,
-        };
+        let mismatched = celerrate_plugin::PluginDescriptor::new(
+            celerrate_phpdoc_bridge::descriptor().identity,
+            celerrate_plugin::PLUGIN_API_VERSION + 1,
+        );
         let verdict = admission(&mismatched);
         assert!(matches!(verdict, Err(reason) if reason.contains("API version")));
     }
@@ -269,8 +269,7 @@ mod tests {
 
         fn return_type<'db>(
             &self,
-            _db: &'db dyn salsa::Database,
-            _invocation: &celerrate_types::Invocation<'db>,
+            _site: &celerrate_types::InvocationSite<'db, '_>,
         ) -> Option<celerrate_types::TypeId<'db>> {
             None
         }

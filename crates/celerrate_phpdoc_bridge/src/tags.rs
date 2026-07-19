@@ -398,13 +398,10 @@ fn parse_property_tag(content: &str) -> Option<VirtualMember> {
         if name.is_empty() {
             return None;
         }
-        return Some(VirtualMember {
-            kind: VirtualMemberKind::Property,
-            name: name.to_owned(),
-            is_static: false,
-            type_text: None,
-            parameters: Vec::new(),
-        });
+        return Some(VirtualMember::new(
+            VirtualMemberKind::Property,
+            name.to_owned(),
+        ));
     }
     let (_, consumed) = parse_type_expression_prefix(content)?;
     let type_text = content.get(..consumed)?.trim().to_owned();
@@ -413,13 +410,9 @@ fn parse_property_tag(content: &str) -> Option<VirtualMember> {
     if name.is_empty() {
         return None;
     }
-    Some(VirtualMember {
-        kind: VirtualMemberKind::Property,
-        name: name.to_owned(),
-        is_static: false,
-        type_text: Some(type_text),
-        parameters: Vec::new(),
-    })
+    let mut member = VirtualMember::new(VirtualMemberKind::Property, name.to_owned());
+    member.type_text = Some(type_text);
+    Some(member)
 }
 
 /// `@method [static] [type] name(parameters)`. The return type is a
@@ -452,13 +445,11 @@ fn parse_method_tag(content: &str) -> Option<VirtualMember> {
     }
     let after_open = rest.get(open + 1..)?;
     let (parameter_segment, _) = split_at_matching_parenthesis(after_open)?;
-    Some(VirtualMember {
-        kind: VirtualMemberKind::Method,
-        name: name.to_owned(),
-        is_static,
-        type_text,
-        parameters: parse_method_parameters(parameter_segment),
-    })
+    let mut member = VirtualMember::new(VirtualMemberKind::Method, name.to_owned());
+    member.is_static = is_static;
+    member.type_text = type_text;
+    member.parameters = parse_method_parameters(parameter_segment);
+    Some(member)
 }
 
 /// Splits `text` at the parenthesis matching an already-consumed `(`:
@@ -559,12 +550,11 @@ fn parse_method_parameter(chunk: &str) -> Option<VirtualParameter> {
     if name.is_empty() {
         return None;
     }
-    Some(VirtualParameter {
-        name: name.to_owned(),
-        type_text,
-        optional,
-        variadic,
-    })
+    let mut parameter = VirtualParameter::new(name.to_owned());
+    parameter.type_text = type_text;
+    parameter.optional = optional;
+    parameter.variadic = variadic;
+    Some(parameter)
 }
 
 #[cfg(test)]

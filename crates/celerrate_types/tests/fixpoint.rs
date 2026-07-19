@@ -402,8 +402,7 @@ impl celerrate_types::DynamicTypeProvider for BlockingProvider {
 
     fn return_type<'db>(
         &self,
-        _db: &'db dyn salsa::Database,
-        _invocation: &celerrate_types::Invocation<'db>,
+        _site: &celerrate_types::InvocationSite<'db, '_>,
     ) -> Option<celerrate_types::TypeId<'db>> {
         if self.armed.swap(false, Ordering::SeqCst) {
             self.entered.wait();

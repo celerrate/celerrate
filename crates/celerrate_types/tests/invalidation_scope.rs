@@ -585,13 +585,13 @@ impl TypeSyntax for WordOnlyReturnSyntax {
             .and_then(|(_, rest)| rest.split_whitespace().next())
             .map(|word| {
                 site.keyword_type(word).unwrap_or_else(|| {
-                    TypeId::class(site.database(), &site.qualify_class_name(word), Vec::new())
+                    site.types()
+                        .class(&site.qualify_class_name(word), Vec::new())
                 })
             });
-        ParsedAnnotations {
-            return_type,
-            ..ParsedAnnotations::default()
-        }
+        let mut annotations = ParsedAnnotations::default();
+        annotations.return_type = return_type;
+        annotations
     }
 
     fn parse_type_expression<'db>(
@@ -1429,22 +1429,22 @@ impl InheritanceFakeSyntax {
         own_templates: &[String],
         written: &str,
     ) -> TypeId<'db> {
-        let db = site.database();
+        let context = site.types();
         let enclosing: Vec<String> = site
             .enclosing_class_docblock()
             .map(Self::template_names)
             .unwrap_or_default();
         if enclosing.iter().any(|name| name == written) {
             let scope = site.enclosing_class_scope().unwrap_or("");
-            return TypeId::template(db, scope, written, TypeId::mixed(db));
+            return context.template(scope, written, context.mixed());
         }
         if own_templates.iter().any(|name| name == written) {
-            return TypeId::template(db, site.declaring_scope(), written, TypeId::mixed(db));
+            return context.template(site.declaring_scope(), written, context.mixed());
         }
         if let Some(keyword) = site.keyword_type(written) {
             return keyword;
         }
-        TypeId::class(db, &site.qualify_class_name(written).to_lowercase(), vec![])
+        context.class(&site.qualify_class_name(written).to_lowercase(), vec![])
     }
 }
 
@@ -1466,10 +1466,7 @@ impl TypeSyntax for InheritanceFakeSyntax {
         let mut return_type = None;
         for line in Self::docblock_lines(docblock) {
             if let Some(rest) = line.strip_prefix("@template ") {
-                templates.push(ParsedTemplate {
-                    name: rest.trim().to_owned(),
-                    bound: None,
-                });
+                templates.push(ParsedTemplate::new(rest.trim().to_owned(), None));
             } else if let Some(rest) = line.strip_prefix("@extends ") {
                 if let Some((head, tail)) = rest.split_once('<')
                     && let Some(arguments_text) = tail.strip_suffix('>')
@@ -1479,21 +1476,17 @@ impl TypeSyntax for InheritanceFakeSyntax {
                         .split(',')
                         .map(|argument| Self::lower_name(site, &own_templates, argument.trim()))
                         .collect();
-                    ancestors.push(ParsedAncestor {
-                        class_name,
-                        arguments,
-                    });
+                    ancestors.push(ParsedAncestor::new(class_name, arguments));
                 }
             } else if let Some(rest) = line.strip_prefix("@return ") {
                 return_type = Some(Self::lower_name(site, &own_templates, rest.trim()));
             }
         }
-        ParsedAnnotations {
-            templates,
-            ancestors,
-            return_type,
-            ..ParsedAnnotations::default()
-        }
+        let mut annotations = ParsedAnnotations::default();
+        annotations.templates = templates;
+        annotations.ancestors = ancestors;
+        annotations.return_type = return_type;
+        annotations
     }
 
     fn parse_type_expression<'db>(

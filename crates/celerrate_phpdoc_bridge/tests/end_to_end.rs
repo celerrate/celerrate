@@ -120,7 +120,7 @@ impl celerrate_types::TypeSyntax for RecordingBridge {
         docblock: &str,
     ) -> celerrate_types::ParsedAnnotations<'db> {
         let parsed = self.inner.parse_docblock(site, docblock);
-        let db = site.database();
+        let context = site.types();
         let captured = Captured {
             ancestors: parsed
                 .ancestors
@@ -135,7 +135,7 @@ impl celerrate_types::TypeSyntax for RecordingBridge {
             template_bounds: parsed
                 .templates
                 .iter()
-                .map(|template| template.bound.map(|bound| bound.display(db)))
+                .map(|template| template.bound.map(|bound| context.display(bound)))
                 .collect(),
             variable_names: parsed
                 .variables
@@ -770,12 +770,12 @@ fn assertions_are_carried_through_the_annotation_seam() {
     );
     assert_eq!(
         annotations.assertions,
-        vec![celerrate_types::ParsedAssertion {
-            subject: "$value".to_owned(),
-            asserted: celerrate_types::TypeId::string(db),
-            polarity: celerrate_types::AssertionPolarity::Always,
-            negated: false,
-        }],
+        vec![celerrate_types::ParsedAssertion::new(
+            "$value".to_owned(),
+            celerrate_types::TypeId::string(db),
+            celerrate_types::AssertionPolarity::Always,
+            false,
+        )],
     );
 }
 

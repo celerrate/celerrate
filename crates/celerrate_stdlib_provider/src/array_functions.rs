@@ -2,18 +2,18 @@
 //! invocation's argument types; `None` falls through to the
 //! declared tier (conservative silence).
 
-use celerrate_plugin::{TypeId, salsa};
+use celerrate_plugin::{TypeContext, TypeId};
 
 /// `current`/`reset`/`end`: the value projection with the `false`
 /// miss. Arrays and lists answer their value type; shapes union
 /// their field values; anything else is `None`.
 pub(crate) fn pointer_value<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     let subject = arguments.first()?;
-    let value = array_value_of(db, *subject)?;
-    Some(TypeId::union(db, [value, TypeId::bool_literal(db, false)]))
+    let value = array_value_of(context, *subject)?;
+    Some(context.union([value, context.bool_literal(false)]))
 }
 
 /// The value type of an array-like subject, `None` when unknown.
@@ -33,10 +33,10 @@ pub(crate) fn pointer_value<'db>(
 /// natural `false` answer is the intended, correct one, not a
 /// symptom worth suppressing back into `None`.
 pub(crate) fn array_value_of<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     subject: TypeId<'db>,
 ) -> Option<TypeId<'db>> {
-    subject.array_value(db)
+    context.array_value(subject)
 }
 
 /// `array_map(callback, array, ...)`: a `null` callback with exactly
@@ -59,26 +59,26 @@ pub(crate) fn array_value_of<'db>(
 /// `mixed` callback does, and the call falls through to the declared
 /// tier's answer — sound (widening), unmeasured against the corpus.
 pub(crate) fn array_map<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     let callback = arguments.first()?;
     let subjects = arguments.get(1..)?;
     let first_subject = subjects.first()?;
-    if callback.is_null(db) {
+    if context.is_null(*callback) {
         return match subjects {
             [only] => Some(*only),
             _ => None,
         };
     }
-    let mapped = callback.callable_return(db)?;
+    let mapped = context.callable_return(*callback)?;
     if subjects.len() > 1 {
-        return Some(TypeId::list(db, mapped));
+        return Some(context.list(mapped));
     }
-    if first_subject.is_list(db) {
-        return Some(TypeId::list(db, mapped));
+    if context.is_list(*first_subject) {
+        return Some(context.list(mapped));
     }
-    Some(TypeId::array(db, array_key_of(db, *first_subject)?, mapped))
+    Some(context.array(array_key_of(context, *first_subject)?, mapped))
 }
 
 /// `array_filter(array, callback?, mode?)`: a list subject (`is_list`,
@@ -103,57 +103,60 @@ pub(crate) fn array_map<'db>(
 /// by the pinned corpus (verified at task 11: none of its three
 /// `array_filter` call sites use this form).
 pub(crate) fn array_filter<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     arguments: &[TypeId<'db>],
 ) -> Option<TypeId<'db>> {
     let subject = arguments.first()?;
-    let value = array_value_of(db, *subject)?;
+    let value = array_value_of(context, *subject)?;
     let value = if arguments.len() == 1 {
-        without_falsy(db, value)
+        without_falsy(context, value)
     } else {
         value
     };
-    let key = if subject.is_list(db) {
-        TypeId::int_range(db, Some(0), None)
+    let key = if context.is_list(*subject) {
+        context.int_range(Some(0), None)
     } else {
-        array_key_of(db, *subject)?
+        array_key_of(context, *subject)?
     };
-    Some(TypeId::array(db, key, value))
+    Some(context.array(key, value))
 }
 
 /// The key type of an array-like subject: arrays and shapes answer
 /// through the lattice's own `array_key` (the shape case already
 /// unions the shape's key literals), `None` when unknown.
 pub(crate) fn array_key_of<'db>(
-    db: &'db dyn salsa::Database,
+    context: TypeContext<'db>,
     subject: TypeId<'db>,
 ) -> Option<TypeId<'db>> {
-    subject.array_key(db)
+    context.array_key(subject)
 }
 
 /// Removes the falsy constituents a bare `array_filter` discards:
 /// `null`, `false`, `0`, `0.0`, `''`, `'0'`. A constituent set that
 /// empties entirely stays unchanged (the conservative floor — an
 /// always-falsy value is the caller's bug, not ours to `never`).
-fn without_falsy<'db>(db: &'db dyn salsa::Database, value: TypeId<'db>) -> TypeId<'db> {
-    let kept: Vec<TypeId<'db>> = value
-        .constituents(db)
+fn without_falsy<'db>(context: TypeContext<'db>, value: TypeId<'db>) -> TypeId<'db> {
+    let kept: Vec<TypeId<'db>> = context
+        .constituents(value)
         .into_iter()
-        .filter(|constituent| !is_falsy_literal(db, *constituent))
+        .filter(|constituent| !is_falsy_literal(context, *constituent))
         .collect();
     if kept.is_empty() {
         value
     } else {
-        TypeId::union(db, kept)
+        context.union(kept)
     }
 }
 
-fn is_falsy_literal<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool {
-    of.is_null(db)
-        || of.bool_literal_value(db) == Some(false)
-        || of.int_literal_value(db) == Some(0)
-        || of.float_literal_value(db) == Some(0.0)
-        || matches!(of.string_literal_value(db).as_deref(), Some("") | Some("0"))
+fn is_falsy_literal<'db>(context: TypeContext<'db>, of: TypeId<'db>) -> bool {
+    context.is_null(of)
+        || context.bool_literal_value(of) == Some(false)
+        || context.int_literal_value(of) == Some(0)
+        || context.float_literal_value(of) == Some(0.0)
+        || matches!(
+            context.string_literal_value(of).as_deref(),
+            Some("") | Some("0")
+        )
 }
 
 #[cfg(test)]
@@ -162,6 +165,7 @@ mod tests {
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_plugin::{ShapeField, ShapeKey, TypeId};
+    use celerrate_types::testing_type_context;
 
     /// A two-field shape whose keys are both strings, so
     /// `shape_as_array`'s `is_list` is `false` (`ShapeKey::String`
@@ -190,18 +194,20 @@ mod tests {
     #[test]
     fn array_map_with_a_null_callback_answers_the_array_unchanged() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let subject = TypeId::list(&db, TypeId::int(&db));
-        let answer = super::array_map(&db, &[TypeId::null(&db), subject]).unwrap();
+        let answer = super::array_map(context, &[TypeId::null(&db), subject]).unwrap();
         assert_eq!(answer, subject);
     }
 
     #[test]
     fn array_map_composes_the_callable_return_over_a_list() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let callback = TypeId::callable(&db, vec![], TypeId::string(&db));
         let subject = TypeId::list(&db, TypeId::int(&db));
         assert_eq!(
-            super::array_map(&db, &[callback, subject]).unwrap(),
+            super::array_map(context, &[callback, subject]).unwrap(),
             TypeId::list(&db, TypeId::string(&db)),
         );
     }
@@ -209,10 +215,11 @@ mod tests {
     #[test]
     fn array_map_keeps_the_key_type_over_an_array() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let callback = TypeId::callable(&db, vec![], TypeId::bool(&db));
         let subject = TypeId::array(&db, TypeId::string(&db), TypeId::int(&db));
         assert_eq!(
-            super::array_map(&db, &[callback, subject]).unwrap(),
+            super::array_map(context, &[callback, subject]).unwrap(),
             TypeId::array(&db, TypeId::string(&db), TypeId::bool(&db)),
         );
     }
@@ -220,11 +227,12 @@ mod tests {
     #[test]
     fn array_map_over_the_zip_form_answers_a_list() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let callback = TypeId::callable(&db, vec![], TypeId::int(&db));
         let first = TypeId::list(&db, TypeId::int(&db));
         let second = TypeId::list(&db, TypeId::string(&db));
         assert_eq!(
-            super::array_map(&db, &[callback, first, second]).unwrap(),
+            super::array_map(context, &[callback, first, second]).unwrap(),
             TypeId::list(&db, TypeId::int(&db)),
         );
     }
@@ -232,9 +240,10 @@ mod tests {
     #[test]
     fn array_map_without_a_callable_type_stays_silent() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let subject = TypeId::list(&db, TypeId::int(&db));
-        assert!(super::array_map(&db, &[TypeId::string(&db), subject]).is_none());
-        assert!(super::array_map(&db, &[TypeId::mixed(&db)]).is_none());
+        assert!(super::array_map(context, &[TypeId::string(&db), subject]).is_none());
+        assert!(super::array_map(context, &[TypeId::mixed(&db)]).is_none());
     }
 
     /// The non-list shape path (`array<K, R>`, `array_key_of`
@@ -244,6 +253,7 @@ mod tests {
     #[test]
     fn array_map_over_a_non_list_shape_keeps_the_key_union() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let callback = TypeId::callable(&db, vec![], TypeId::string(&db));
         let subject = shape_with_string_keys(&db);
         let key = TypeId::union(
@@ -254,7 +264,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            super::array_map(&db, &[callback, subject]).unwrap(),
+            super::array_map(context, &[callback, subject]).unwrap(),
             TypeId::array(&db, key, TypeId::string(&db)),
         );
     }
@@ -262,6 +272,7 @@ mod tests {
     #[test]
     fn array_filter_without_a_callback_drops_falsy_constituents() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let value = TypeId::union(
             &db,
             [
@@ -272,7 +283,7 @@ mod tests {
         );
         let subject = TypeId::array(&db, TypeId::string(&db), value);
         assert_eq!(
-            super::array_filter(&db, &[subject]).unwrap(),
+            super::array_filter(context, &[subject]).unwrap(),
             TypeId::array(&db, TypeId::string(&db), TypeId::string(&db)),
         );
     }
@@ -280,9 +291,10 @@ mod tests {
     #[test]
     fn array_filter_over_a_list_loses_contiguity_but_keeps_int_keys() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let subject = TypeId::list(&db, TypeId::int(&db));
         assert_eq!(
-            super::array_filter(&db, &[subject]).unwrap(),
+            super::array_filter(context, &[subject]).unwrap(),
             TypeId::array(&db, TypeId::int_range(&db, Some(0), None), TypeId::int(&db)),
         );
     }
@@ -290,11 +302,12 @@ mod tests {
     #[test]
     fn array_filter_with_a_callback_passes_the_value_through() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let value = TypeId::union(&db, [TypeId::string(&db), TypeId::null(&db)]);
         let subject = TypeId::array(&db, TypeId::string(&db), value);
         let callback = TypeId::callable(&db, vec![], TypeId::bool(&db));
         assert_eq!(
-            super::array_filter(&db, &[subject, callback]).unwrap(),
+            super::array_filter(context, &[subject, callback]).unwrap(),
             TypeId::array(&db, TypeId::string(&db), value),
         );
     }
@@ -306,6 +319,7 @@ mod tests {
     #[test]
     fn array_filter_over_a_non_list_shape_keeps_the_key_union() {
         let db = TestDatabase::default();
+        let context = testing_type_context(&db);
         let subject = shape_with_string_keys(&db);
         let key = TypeId::union(
             &db,
@@ -315,7 +329,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            super::array_filter(&db, &[subject]).unwrap(),
+            super::array_filter(context, &[subject]).unwrap(),
             TypeId::array(&db, key, TypeId::int(&db)),
         );
     }

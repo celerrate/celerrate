@@ -37,12 +37,12 @@ pub use tags::{
 
 /// What the composition root registers.
 pub fn descriptor() -> celerrate_plugin::PluginDescriptor {
-    celerrate_plugin::PluginDescriptor {
-        identity: celerrate_plugin::PluginIdentity {
+    celerrate_plugin::PluginDescriptor::new(
+        celerrate_plugin::PluginIdentity {
             name: "phpdoc-bridge".to_owned(),
             version: env!("CARGO_PKG_VERSION").to_owned(),
             configuration: String::new(),
         },
-        api_version: celerrate_plugin::PLUGIN_API_VERSION,
-    }
+        celerrate_plugin::PLUGIN_API_VERSION,
+    )
 }

@@ -19,9 +19,21 @@ pub const PLUGIN_API_VERSION: u32 = 0;
 
 /// What a plugin exposes for registration.
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct PluginDescriptor {
     pub identity: PluginIdentity,
     pub api_version: u32,
+}
+
+impl PluginDescriptor {
+    /// Constructor for plugin crates and test suites: cross-crate
+    /// literal construction is closed by `#[non_exhaustive]`.
+    pub fn new(identity: PluginIdentity, api_version: u32) -> Self {
+        Self {
+            identity,
+            api_version,
+        }
+    }
 }
 
 // Identity and the comment-directive and virtual-symbol extension points.
@@ -31,17 +43,14 @@ pub use celerrate_semantics::{
 };
 
 // The type-syntax and dynamic-type-provider extension points, and the
-// type vocabulary plugins construct and interrogate through.
+// type vocabulary plugins construct and interrogate through. Nominal
+// re-exports only: never the database crate, never a whole crate — the boundary
+// surface is enumerable by reading this list.
 pub use celerrate_types::{
-    AnnotationSite, AssertionPolarity, CallableParameter, DynamicTypeProvider, Invocation,
+    AnnotationSite, AssertionPolarity, CallableParameter, DynamicTypeProvider, InvocationSite,
     ParsedAncestor, ParsedAnnotations, ParsedAssertion, ParsedTemplate, ShapeField, ShapeKey,
-    SymbolClaim, Trust, TypeId, TypeSyntax,
+    SymbolClaim, Trust, TypeContext, TypeId, TypeSyntax,
 };
-
-// The span and diagnostic vocabulary, and salsa for trait signatures.
-pub use celerrate_diagnostics as diagnostics;
-pub use celerrate_source as source;
-pub use salsa;
 
 #[cfg(test)]
 mod tests {

@@ -628,13 +628,11 @@ mod tests {
         impl VirtualSymbolProvider for FakeProvider {
             fn virtual_members(&self, class_docblock: &str) -> Vec<VirtualMember> {
                 if class_docblock.contains("@fake") {
-                    vec![VirtualMember {
-                        kind: VirtualMemberKind::Method,
-                        name: "find".to_owned(),
-                        is_static: true,
-                        type_text: self.type_text.clone(),
-                        parameters: Vec::new(),
-                    }]
+                    let mut member =
+                        VirtualMember::new(VirtualMemberKind::Method, "find".to_owned());
+                    member.is_static = true;
+                    member.type_text = self.type_text.clone();
+                    vec![member]
                 } else {
                     Vec::new()
                 }

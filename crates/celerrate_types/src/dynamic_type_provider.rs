@@ -21,6 +21,7 @@ use crate::representation::TypeId;
 /// provider. Folded keys, normalized for comparison — the same form as
 /// the symbol table.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
 pub enum SymbolClaim {
     /// Global function.
     Function { key: String },
@@ -32,13 +33,72 @@ pub enum SymbolClaim {
 }
 
 /// The invocation context for a dynamic-type provider querying the
-/// return type at a call site. Owned struct: implementations extend it
-/// additively (argument *values* travel as literal types interrogable
-/// on `TypeId`).
+/// return type at a call site. Engine- and test-internal: plugins observe
+/// an invocation only through `InvocationSite` (argument *values* travel as
+/// literal types interrogable on `TypeId`).
+#[non_exhaustive]
 pub struct Invocation<'db> {
     pub claim: SymbolClaim,
     pub receiver_type: Option<TypeId<'db>>,
     pub argument_types: Vec<TypeId<'db>>,
+}
+
+impl<'db> Invocation<'db> {
+    /// Constructor for the engine and for test suites: cross-crate
+    /// literal construction is closed by `#[non_exhaustive]`.
+    pub fn new(
+        claim: SymbolClaim,
+        receiver_type: Option<TypeId<'db>>,
+        argument_types: Vec<TypeId<'db>>,
+    ) -> Self {
+        Self {
+            claim,
+            receiver_type,
+            argument_types,
+        }
+    }
+}
+
+/// The call-scoped context a dynamic-type provider answers from: the
+/// invocation plus the sealed type facade. Owns the database
+/// privately — a provider can neither name nor obtain
+/// `salsa::Database` (the WASM-projectable shape, sketch section 7).
+/// Constructed only by the engine's consumption points.
+pub struct InvocationSite<'db, 'call> {
+    db: &'db dyn salsa::Database,
+    invocation: &'call Invocation<'db>,
+}
+
+impl<'db, 'call> InvocationSite<'db, 'call> {
+    pub(crate) fn new(db: &'db dyn salsa::Database, invocation: &'call Invocation<'db>) -> Self {
+        Self { db, invocation }
+    }
+
+    pub fn claim(&self) -> &'call SymbolClaim {
+        &self.invocation.claim
+    }
+
+    pub fn receiver_type(&self) -> Option<TypeId<'db>> {
+        self.invocation.receiver_type
+    }
+
+    pub fn argument_types(&self) -> &'call [TypeId<'db>] {
+        &self.invocation.argument_types
+    }
+
+    /// The sealed type facade. Call-scoped like the site itself.
+    pub fn types(&self) -> crate::type_context::TypeContext<'db> {
+        crate::type_context::TypeContext::new(self.db)
+    }
+}
+
+/// Test-only construction seam, same contract as
+/// `testing_type_context`.
+pub fn testing_invocation_site<'db, 'call>(
+    db: &'db dyn salsa::Database,
+    invocation: &'call Invocation<'db>,
+) -> InvocationSite<'db, 'call> {
+    InvocationSite::new(db, invocation)
 }
 
 /// An implementation contributes return types at call sites for claimed
@@ -56,34 +116,27 @@ pub struct Invocation<'db> {
 /// termination.
 ///
 /// **The persisted-cache purity obligation (plan 9a, decision 5).** A
-/// provider's answer must be a pure function of its `Invocation` and
-/// its `PluginIdentity`: the persistent cache records no per-answer
-/// dependency (plan 9a decision 5), so a provider that reads cross-file
-/// state would silently break warm revalidation — extend the record
-/// vocabulary in `celerrate_types::records` before shipping one.
+/// provider's answer must be a pure function of its `InvocationSite`
+/// and its `PluginIdentity`: the persistent cache records no
+/// per-answer dependency (plan 9a decision 5), so a provider that
+/// reads cross-file state would silently break warm revalidation —
+/// extend the record vocabulary in `celerrate_types::records` before
+/// shipping one.
 pub trait DynamicTypeProvider: Send + Sync {
     /// All symbols this provider claims to handle. Used for
     /// overlap detection at registration time.
     fn claims(&self) -> Vec<SymbolClaim>;
     /// Return type for an invocation, if the provider wishes to
     /// contribute one.
-    fn return_type<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        invocation: &Invocation<'db>,
-    ) -> Option<TypeId<'db>>;
+    fn return_type<'db>(&self, site: &InvocationSite<'db, '_>) -> Option<TypeId<'db>>;
     /// By-reference parameter refinements for a claimed invocation:
     /// (positional parameter index, the type the argument holds after
     /// the call). The default contributes nothing. Same purity and
     /// monotonicity contract as `return_type`; contributions are
     /// widened at the consumption boundary. Positional only — the
     /// consumer skips labeled arguments and stops at a spread.
-    fn by_reference_types<'db>(
-        &self,
-        db: &'db dyn salsa::Database,
-        invocation: &Invocation<'db>,
-    ) -> Vec<(usize, TypeId<'db>)> {
-        let _ = (db, invocation);
+    fn by_reference_types<'db>(&self, site: &InvocationSite<'db, '_>) -> Vec<(usize, TypeId<'db>)> {
+        let _ = site;
         Vec::new()
     }
 }
@@ -153,7 +206,7 @@ mod tests {
 
     use super::{
         ClaimConflict, DynamicTypeProvider, DynamicTypeProviderRegistration, Invocation,
-        SymbolClaim, validate_claims,
+        InvocationSite, SymbolClaim, validate_claims,
     };
     use crate::representation::TypeId;
 
@@ -166,12 +219,8 @@ mod tests {
         fn claims(&self) -> Vec<SymbolClaim> {
             self.claimed.clone()
         }
-        fn return_type<'db>(
-            &self,
-            db: &'db dyn salsa::Database,
-            _invocation: &Invocation<'db>,
-        ) -> Option<TypeId<'db>> {
-            Some(TypeId::int(db))
+        fn return_type<'db>(&self, site: &InvocationSite<'db, '_>) -> Option<TypeId<'db>> {
+            Some(site.types().int())
         }
     }
 
@@ -249,6 +298,28 @@ mod tests {
             receiver_type: None,
             argument_types: vec![],
         };
-        assert!(provider.by_reference_types(&db, &invocation).is_empty());
+        assert!(
+            provider
+                .by_reference_types(&InvocationSite::new(&db, &invocation))
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn the_invocation_site_exposes_the_invocation_and_the_sealed_facade() {
+        let db = TestDatabase::default();
+        let claim = SymbolClaim::Function {
+            key: "array_map".to_owned(),
+        };
+        let invocation = Invocation {
+            claim: claim.clone(),
+            receiver_type: None,
+            argument_types: vec![TypeId::int(&db)],
+        };
+        let site = InvocationSite::new(&db, &invocation);
+        assert_eq!(site.claim(), &claim);
+        assert_eq!(site.receiver_type(), None);
+        assert_eq!(site.argument_types(), &[TypeId::int(&db)]);
+        assert_eq!(site.types().int(), TypeId::int(&db));
     }
 }

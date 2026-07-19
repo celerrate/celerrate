@@ -1212,7 +1212,9 @@ impl<'db> Walker<'db, '_, '_> {
                 receiver_type,
                 argument_types: argument_types.to_vec(),
             };
-            if let Some(answer) = registration.provider.return_type(db, &invocation) {
+            if let Some(answer) = registration.provider.return_type(
+                &crate::dynamic_type_provider::InvocationSite::new(db, &invocation),
+            ) {
                 self.edge_counts.provider_edges += 1;
                 return Some(crate::widening::capped_child(db, answer));
             }
@@ -1244,7 +1246,9 @@ impl<'db> Walker<'db, '_, '_> {
                 receiver_type,
                 argument_types: argument_types.to_vec(),
             };
-            let contributions = registration.provider.by_reference_types(db, &invocation);
+            let contributions = registration.provider.by_reference_types(
+                &crate::dynamic_type_provider::InvocationSite::new(db, &invocation),
+            );
             if !contributions.is_empty() {
                 return contributions
                     .into_iter()

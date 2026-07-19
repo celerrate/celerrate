@@ -25,6 +25,7 @@ pub enum AssertionPolarity {
 /// narrowing consumer. The subject travels verbatim; the negation
 /// applies to the asserted type.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedAssertion<'db> {
     /// The asserted subject, verbatim (`$value`, `$this->prop`):
     /// interpretation is plan 5's.
@@ -34,20 +35,59 @@ pub struct ParsedAssertion<'db> {
     pub negated: bool,
 }
 
+impl<'db> ParsedAssertion<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(
+        subject: String,
+        asserted: TypeId<'db>,
+        polarity: AssertionPolarity,
+        negated: bool,
+    ) -> Self {
+        Self {
+            subject,
+            asserted,
+            polarity,
+            negated,
+        }
+    }
+}
+
 /// One `@template` declaration of the parsed docblock, in declaration
 /// order (task 3's ancestor-argument zip relies on this order).
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedTemplate<'db> {
     pub name: String,
     pub bound: Option<TypeId<'db>>,
 }
 
+impl<'db> ParsedTemplate<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(name: String, bound: Option<TypeId<'db>>) -> Self {
+        Self { name, bound }
+    }
+}
+
 /// One inheritance-position declaration: the ancestor's fully
 /// qualified, pre-folded class name and its fixed generic arguments.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
+#[non_exhaustive]
 pub struct ParsedAncestor<'db> {
     pub class_name: String,
     pub arguments: Vec<TypeId<'db>>,
+}
+
+impl<'db> ParsedAncestor<'db> {
+    /// Constructor for cross-crate construction: literal construction
+    /// is closed by `#[non_exhaustive]`.
+    pub fn new(class_name: String, arguments: Vec<TypeId<'db>>) -> Self {
+        Self {
+            class_name,
+            arguments,
+        }
+    }
 }
 
 /// The declaring-scope context one annotation parse needs beyond name
@@ -72,8 +112,11 @@ pub struct AnnotationContext<'a> {
 /// A name-resolution and construction context for one annotation
 /// parse, scoped to the declaring site. Handles are call-scoped:
 /// implementations never retain the site, the database, or any
-/// `TypeId` beyond the call (the WASM projection will enforce this
-/// structurally; the native tier enforces it by review).
+/// `TypeId` beyond the call (the WASM projection enforces this with
+/// call-scoped handle tables; the native tier enforces it structurally
+/// too: the site owns the database, a plugin crate can neither name nor
+/// obtain `salsa::Database`, and the `'static` implementation bound
+/// makes retention a compile error).
 pub struct AnnotationSite<'db, 'site> {
     db: &'db dyn salsa::Database,
     site: &'site NameSite<'site>,
@@ -90,8 +133,17 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
         Self { db, site, context }
     }
 
-    /// The database, for `TypeId` builders. Never retain it.
-    pub fn database(&self) -> &'db dyn salsa::Database {
+    /// The sealed type facade: construction and interrogation without
+    /// the database. Call-scoped like the site itself.
+    pub fn types(&self) -> crate::type_context::TypeContext<'db> {
+        crate::type_context::TypeContext::new(self.db)
+    }
+
+    /// Engine-internal escape hatch for in-crate test fakes. Sealed:
+    /// plugins go through `types()` — they can neither name nor obtain
+    /// `salsa::Database` (the structural enforcement issue #61 demanded).
+    #[allow(dead_code)]
+    pub(crate) fn database(&self) -> &'db dyn salsa::Database {
         self.db
     }
 
@@ -132,6 +184,7 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
 /// declares. `return_type` and `value_type` are both carried; the
 /// consumer picks by subject kind (decision 5 of the plan header).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct ParsedAnnotations<'db> {
     /// `@return`.
     pub return_type: Option<TypeId<'db>>,
@@ -483,5 +536,19 @@ mod tests {
         assert_eq!(site.declaring_scope(), "c::find");
         assert_eq!(site.enclosing_class_scope(), Some("c"));
         assert_eq!(site.enclosing_class_docblock(), Some("/** @template T */"));
+    }
+
+    #[test]
+    fn the_annotation_site_exposes_the_sealed_type_context() {
+        let fixture = fixture(&["<?php class C {}"]);
+        let db = &fixture.db;
+        let site = AnnotationSite::new(db, &NameSite::Global, AnnotationContext::default());
+        // The facade builds the same interned types as the raw builders:
+        // a plugin needs nothing beyond the site.
+        assert_eq!(site.types().int(), TypeId::int(db));
+        assert_eq!(
+            site.types().class("App\\User", Vec::new()),
+            TypeId::class(db, "App\\User", Vec::new())
+        );
     }
 }

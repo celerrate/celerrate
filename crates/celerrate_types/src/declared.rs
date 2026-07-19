@@ -1686,13 +1686,9 @@ mod tests {
     /// A non-static virtual property with an annotated type text and
     /// no parameters.
     fn virtual_property_with_text(name: &str, type_text: &str) -> VirtualMember {
-        VirtualMember {
-            kind: VirtualMemberKind::Property,
-            name: name.to_owned(),
-            is_static: false,
-            type_text: Some(type_text.to_owned()),
-            parameters: Vec::new(),
-        }
+        let mut member = VirtualMember::new(VirtualMemberKind::Property, name.to_owned());
+        member.type_text = Some(type_text.to_owned());
+        member
     }
 
     #[derive(Debug)]
@@ -2778,21 +2774,13 @@ mod tests {
     #[test]
     fn a_virtual_method_carries_its_annotated_parameters() {
         let fixture = fixture(&["<?php /** @fake */ class Post {}"]);
-        register_fake_virtual_provider(
-            &fixture,
-            vec![VirtualMember {
-                kind: VirtualMemberKind::Method,
-                name: "find".to_owned(),
-                is_static: true,
-                type_text: Some("int".to_owned()),
-                parameters: vec![VirtualParameter {
-                    name: "id".to_owned(),
-                    type_text: Some("int".to_owned()),
-                    optional: false,
-                    variadic: false,
-                }],
-            }],
-        );
+        let mut member = VirtualMember::new(VirtualMemberKind::Method, "find".to_owned());
+        member.is_static = true;
+        member.type_text = Some("int".to_owned());
+        let mut parameter = VirtualParameter::new("id".to_owned());
+        parameter.type_text = Some("int".to_owned());
+        member.parameters = vec![parameter];
+        register_fake_virtual_provider(&fixture, vec![member]);
         register_fake_syntax(&fixture);
         let query = member_query(&fixture, "Post", MemberKind::Method, "find");
         let signature = declared_member_signature(

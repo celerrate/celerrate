@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The plugin API boundary is sealed (issue #61): `DynamicTypeProvider`
+  receives a call-scoped `InvocationSite` instead of a raw salsa
+  database handle, `AnnotationSite` no longer exposes `database()`,
+  and both sites hand out a sealed `TypeContext` facade for type
+  construction and interrogation. `celerrate_plugin` now re-exports
+  boundary vocabulary nominally — no more `salsa` or whole-crate
+  re-exports — and the boundary structs are `#[non_exhaustive]`.
+  Breaking for the v0 plugin API; `PLUGIN_API_VERSION` stays 0.
+
 ### Fixed
 
 - `declared_member_signature` no longer re-executes on docblock edits
