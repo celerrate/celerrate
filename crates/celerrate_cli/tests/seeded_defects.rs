@@ -48,6 +48,17 @@ fn seeded(identifier: &str, source: &str) {
 }
 
 #[test]
+fn cel0024_a_gated_construct_below_the_minimum_is_reported() {
+    seeded(
+        "CEL0024",
+        r#"<?php
+namespace App;
+readonly class Point {}
+"#,
+    );
+}
+
+#[test]
 fn cel0030_a_known_unknown_method_is_reported() {
     seeded(
         "CEL0030",
