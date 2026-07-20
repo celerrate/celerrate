@@ -28,6 +28,7 @@ celerrate_stubs = { path = "../celerrate_stubs" }
 celerrate_types = { path = "../celerrate_types" }
 celerrate_vfs = { path = "../celerrate_vfs" }
 clap = { workspace = true }
+ctrlc = { workspace = true }
 notify = { workspace = true }
 postcard = { workspace = true }
 rayon = { workspace = true }

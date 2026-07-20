@@ -13,6 +13,7 @@ repository = "https://github.com/celerrate/celerrate"
 [workspace.dependencies]
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
+ctrlc = { version = "3", features = ["termination"] }
 insta = { version = "1", features = ["glob"] }
 notify = "8"
 postcard = { version = "1", default-features = false, features = ["use-std"] }

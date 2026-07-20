@@ -14,7 +14,8 @@ use std::collections::BTreeSet;
 use std::io::Write;
 use std::ops::ControlFlow;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{Receiver, RecvTimeoutError, channel};
+use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, channel};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use celerrate_source::FileId;
@@ -40,11 +41,9 @@ const POLL_INTERVAL: Duration = Duration::from_millis(5);
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum WatchEvent {
     Changed(PathBuf),
-    // Constructed by the tests below and, in production, by the signal
-    // handler a follow-up task (issue #52's Ctrl+C handling) wires up;
-    // this task only establishes the vocabulary and the readers that
-    // answer it, so no production sender exists yet.
-    #[allow(dead_code)]
+    // Constructed by the tests below and, in production, by
+    // `install_shutdown_handler` (issue #52's Ctrl+C handling), sent
+    // through the cell `Watch::shutdown_sender` hands out.
     Shutdown,
 }
 
@@ -205,6 +204,12 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
         Ok(watcher) => watcher,
         Err(error) => return unwatchable(output, &error),
     };
+    // Issue #52: routes Ctrl+C (and `kill`) into the graceful exit. Taken
+    // once, over the first spawn's cell; every respawn inside
+    // `resynchronize` keeps writing into this same cell, so the handler
+    // stays live across the life of the process, not just until the first
+    // walk-root change.
+    install_shutdown_handler(watcher.shutdown_sender());
 
     let mut reanalyzed = session.sources.len();
     loop {
@@ -213,6 +218,41 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
             ControlFlow::Break(outcome) => return outcome,
         }
     }
+}
+
+/// Routes SIGINT/SIGTERM (Ctrl+C, kill) into the watch channel so the
+/// loop exits through the graceful persist (issue #52). The second
+/// signal exits the process immediately (130, the shell convention):
+/// the graceful path must never cost the user their escape hatch. An
+/// installation failure degrades to the pre-#52 behavior — the watch
+/// still runs, shutdown is just abrupt again.
+///
+/// Known, accepted residue: a shutdown sent in the exact instant a
+/// respawn swaps the channel can be lost — `resynchronize` holds the
+/// cell's lock only for the length of the swap, but a signal landing in
+/// that narrow window still finds the cell either mid-swap (behind the
+/// same lock, so this call simply waits) or, in the case where the
+/// signal is delivered and handled between the respawn's `spawn` and its
+/// write into the cell, sends into a sender whose receiver is about to
+/// be dropped. Either way, the second Ctrl+C covers it: this handler
+/// exits the process outright on the second signal regardless of
+/// whether the first one was delivered.
+///
+/// Tests never install this: `set_handler` is process-global (one
+/// handler for the whole binary, and `ctrlc` refuses a second
+/// installation), so tests inject `WatchEvent::Shutdown` directly
+/// through a cell they hold, exercising `iteration` and `resynchronize`
+/// without touching the process-wide signal state.
+fn install_shutdown_handler(cell: Arc<Mutex<Sender<WatchEvent>>>) {
+    let already_requested = std::sync::atomic::AtomicBool::new(false);
+    let _ = ctrlc::set_handler(move || {
+        if already_requested.swap(true, std::sync::atomic::Ordering::SeqCst) {
+            std::process::exit(130);
+        }
+        if let Ok(sender) = cell.lock() {
+            let _ = sender.send(WatchEvent::Shutdown);
+        }
+    });
 }
 
 /// One pass of the watch loop: a completed cycle, then either the start
@@ -326,6 +366,18 @@ pub struct Watch {
     /// other half of the decision to respawn, and they are what the picture
     /// says about a watch that is only partly alive.
     unwatchable: Vec<UnwatchablePath>,
+    /// The live sender for `events`, shared with the signal handler
+    /// installed by `install_shutdown_handler` (issue #52) through an
+    /// `Arc` clone taken once, before any respawn.
+    ///
+    /// A respawn inside `resynchronize` replaces `events` with a whole new
+    /// channel, and a plain cloned `Sender` held by the handler would go
+    /// stale the moment that happens: it would keep sending into a channel
+    /// nothing reads from again. The cell exists so the respawn can instead
+    /// write the new sender *into this same `Mutex`*, leaving every `Arc`
+    /// clone anyone already holds pointing at a cell that always contains
+    /// the current, live sender.
+    shutdown_sender: Arc<Mutex<Sender<WatchEvent>>>,
 }
 
 /// What a resynchronization did. The loop does not branch on it, but the
@@ -401,6 +453,17 @@ impl UnwatchablePath {
     }
 }
 
+/// The pieces `Watch::build` assembles, before its two callers decide what
+/// to do with the sender: `spawn` mints a brand new `shutdown_sender` cell
+/// around it, `resynchronize`'s respawn writes it into a cell that already
+/// exists.
+struct Built {
+    watcher: RecommendedWatcher,
+    events: Receiver<WatchEvent>,
+    unwatchable: Vec<UnwatchablePath>,
+    sender: Sender<WatchEvent>,
+}
+
 impl Watch {
     /// The watcher observes the project walk roots plus `composer.json`
     /// and `composer.lock`. The vendor walk roots are never watched on
@@ -425,8 +488,28 @@ impl Watch {
     /// The same goes for an exhausted watch budget, which refuses a
     /// directory that is there. Both are reported; the first is retried.
     pub fn spawn(session: &Session) -> notify::Result<Self> {
+        let built = Self::build(session)?;
+        Ok(Self {
+            _watcher: built.watcher,
+            events: built.events,
+            declared: session.discovery.project_walk_roots.clone(),
+            unwatchable: built.unwatchable,
+            shutdown_sender: Arc::new(Mutex::new(built.sender)),
+        })
+    }
+
+    /// The watcher, channel, and refusals a fresh registration over
+    /// `session`'s declared roots produces, plus the raw sender that feeds
+    /// the channel. Shared by `spawn` (which mints a brand new
+    /// `shutdown_sender` cell around the sender: there is no existing cell
+    /// yet) and `resynchronize`'s respawn (which instead writes the sender
+    /// into the cell it already has, so a handler installed over the
+    /// pre-respawn `Watch` keeps sending into the channel the respawned
+    /// one actually reads).
+    fn build(session: &Session) -> notify::Result<Built> {
         let (sender, receiver) = channel();
         let roots = watched_roots(session);
+        let watcher_sender = sender.clone();
         let mut watcher =
             notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
                 if let Ok(event) = event {
@@ -434,8 +517,8 @@ impl Watch {
                         return;
                     }
                     for path in event.paths {
-                        let _ =
-                            sender.send(WatchEvent::Changed(as_the_project_names_it(&roots, path)));
+                        let _ = watcher_sender
+                            .send(WatchEvent::Changed(as_the_project_names_it(&roots, path)));
                     }
                 }
             })?;
@@ -463,11 +546,11 @@ impl Watch {
                 Declared::ByNobody,
             ));
         }
-        Ok(Self {
-            _watcher: watcher,
+        Ok(Built {
+            watcher,
             events: receiver,
-            declared: session.discovery.project_walk_roots.clone(),
             unwatchable,
+            sender,
         })
     }
 
@@ -479,6 +562,19 @@ impl Watch {
     /// which is private for the same reason it returns `Resynchronized`).
     fn events(&self) -> &Receiver<WatchEvent> {
         &self.events
+    }
+
+    /// An `Arc` clone of the cell holding this watch's current sender.
+    /// `install_shutdown_handler` takes it once, and it stays valid across
+    /// every respawn `resynchronize` performs afterward: see the field
+    /// doc on `shutdown_sender` for why a plain cloned `Sender` would not.
+    ///
+    /// Not `pub`, for the same reason `events` is not: `WatchEvent` is
+    /// module-private, and nothing outside this module needs the cell
+    /// directly — `watch()` is the one production caller, in this same
+    /// module.
+    fn shutdown_sender(&self) -> Arc<Mutex<Sender<WatchEvent>>> {
+        Arc::clone(&self.shutdown_sender)
     }
 
     /// Tells the session which paths the watch is not observing, so that
@@ -564,7 +660,22 @@ impl Watch {
         // The new watch is built before the old one is dropped, so a
         // failure here leaves the old watch running and the loop able to
         // report it rather than blind.
-        *self = Self::spawn(session)?;
+        let built = Self::build(session)?;
+        // Issue #52: a signal handler installed over the pre-respawn
+        // `Watch` holds an `Arc` clone of `self.shutdown_sender`, taken
+        // long before this call. Writing the new sender into that SAME
+        // cell — instead of letting the respawn mint its own, the way
+        // `spawn` does for a first-time `Watch` — is what keeps that
+        // clone pointing at the channel the respawned watch actually
+        // reads. A poisoned lock degrades to no signal handling rather
+        // than a panic: the watch itself is unaffected either way.
+        if let Ok(mut guard) = self.shutdown_sender.lock() {
+            *guard = built.sender;
+        }
+        self._watcher = built.watcher;
+        self.events = built.events;
+        self.declared = session.discovery.project_walk_roots.clone();
+        self.unwatchable = built.unwatchable;
         Ok(Resynchronized::Respawned)
     }
 }
@@ -845,6 +956,7 @@ mod tests {
     use std::ops::ControlFlow;
     use std::path::{Path, PathBuf};
     use std::sync::mpsc::{Receiver, Sender};
+    use std::sync::{Arc, Mutex};
     use std::time::{Duration, Instant};
 
     use celerrate_project::PhpVersion;
@@ -882,6 +994,7 @@ mod tests {
             events: receiver,
             declared: session.discovery.project_walk_roots.clone(),
             unwatchable: Vec::new(),
+            shutdown_sender: Arc::new(Mutex::new(sender.clone())),
         };
         (watcher, sender)
     }
@@ -1147,6 +1260,47 @@ mod tests {
             "a file created in the brand new walk root is watched, and maps back into the \
              project's own spelling: {seen:?}",
         );
+    }
+
+    /// The signal handler (issue #52) takes `shutdown_sender()` once, well
+    /// before any respawn. `resynchronize` replaces the whole channel on a
+    /// respawn, so if it also minted a fresh cell, the handler's `Arc`
+    /// clone would keep locking a cell nothing reads from again, and every
+    /// Ctrl+C after the first respawn would silently do nothing. This
+    /// drives the exact respawn `a_walk_root_the_manifest_grows_is_watched_
+    /// and_mapped` does, then proves the handler's own path: send
+    /// `Shutdown` through the cell taken *before* the respawn, and observe
+    /// it on the watch's *current*, post-respawn receiver.
+    #[test]
+    fn a_respawn_updates_the_shared_sender_cell() {
+        let root = project_with_an_undeclared_directory();
+        let manifest = root.path().join("composer.json");
+
+        let mut session = Session::start(root.path());
+        let mut watcher = Watch::spawn(&session).unwrap();
+        let cell = watcher.shutdown_sender();
+
+        std::fs::write(
+            &manifest,
+            r#"{"autoload": {"psr-4": {"App\\": "src", "Lib\\": "lib"}}}"#,
+        )
+        .unwrap();
+        session.absorb(std::slice::from_ref(&manifest));
+        assert_eq!(
+            watcher.resynchronize(&session).unwrap(),
+            Resynchronized::Respawned,
+            "the respawn this test needs to prove the cell survives really happened",
+        );
+
+        // The cell still sends into the channel the respawned watch is reading.
+        cell.lock().unwrap().send(WatchEvent::Shutdown).unwrap();
+
+        match watcher.events().recv_timeout(Duration::from_secs(5)) {
+            Ok(WatchEvent::Shutdown) => {}
+            other => {
+                panic!("expected Shutdown through the watch's post-respawn receiver, got {other:?}")
+            }
+        }
     }
 
     /// The other half of the same bug. A walk root the manifest drops is
@@ -2226,6 +2380,16 @@ mod tests {
         let mut session = Session::start(root.path());
         let (mut watcher, sender) = watch_with_held_sender(&session);
         drop(sender);
+        // `watch_with_held_sender` also seeds the shutdown-sender cell
+        // with a clone: issue #52's Ctrl+C plumbing keeps one live
+        // sender for the watch's whole life, which is exactly why
+        // `Disconnected` cannot occur in production. Orphan that clone
+        // too, or the channel never disconnects and the loop's blocking
+        // read waits forever instead of taking the branch under test.
+        {
+            let (orphan, _) = std::sync::mpsc::channel();
+            *watcher.shutdown_sender.lock().unwrap() = orphan;
+        }
         let mut output = Vec::new();
 
         let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
