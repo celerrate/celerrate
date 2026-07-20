@@ -9,6 +9,7 @@
 //! notice. An identifier is permanent once published: a new diagnostic
 //! takes the next free number and never reuses a retired one.
 
+use crate::explain::ExplainPage;
 use crate::identifier::DiagnosticId;
 
 /// One allocated identifier: what it means, and who produces it.
@@ -17,6 +18,9 @@ pub struct RegisteredDiagnostic {
     pub id: DiagnosticId,
     pub family: &'static str,
     pub owner: &'static str,
+    /// The long-form explanation. `Option` only until part 8 writes
+    /// the pages and makes the field mandatory.
+    pub explain: Option<&'static ExplainPage>,
 }
 
 const fn registered(
@@ -28,6 +32,7 @@ const fn registered(
         id: DiagnosticId::new(id),
         family,
         owner,
+        explain: None,
     }
 }
 
@@ -104,6 +109,14 @@ pub fn find_identifier(text: &str) -> Option<DiagnosticId> {
         .iter()
         .find(|entry| entry.id.as_str() == text)
         .map(|entry| entry.id)
+}
+
+/// The explain page registered for `id`, if any is written yet.
+pub fn find_page(id: DiagnosticId) -> Option<&'static ExplainPage> {
+    REGISTRY
+        .iter()
+        .find(|entry| entry.id == id)
+        .and_then(|entry| entry.explain)
 }
 
 #[cfg(test)]
