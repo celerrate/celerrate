@@ -13,6 +13,8 @@ celerrate_source = { path = "../crates/celerrate_source" }
 celerrate_syntax = { path = "../crates/celerrate_syntax" }
 celerrate_phpdoc_bridge = { path = "../crates/celerrate_phpdoc_bridge" }
 celerrate_plugin = { path = "../crates/celerrate_plugin" }
+arbitrary = { version = "1", features = ["derive"] }
+celerrate_edit = { path = "../crates/celerrate_edit" }
 
 [[bin]]
 name = "lex"
@@ -31,6 +33,13 @@ bench = false
 [[bin]]
 name = "docblock"
 path = "fuzz_targets/docblock.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "edit_apply"
+path = "fuzz_targets/edit_apply.rs"
 test = false
 doc = false
 bench = false
