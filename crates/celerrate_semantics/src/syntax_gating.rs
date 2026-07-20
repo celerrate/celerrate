@@ -9,14 +9,10 @@
 //! (`celerrate_rules::rules::syntax_version_gating`).
 
 use celerrate_db::SourceFile;
-use celerrate_diagnostics::DiagnosticId;
 use celerrate_project::PhpVersion;
 use celerrate_source::TextRange;
 use celerrate_syntax::ast::{self, AstNode};
 use celerrate_syntax::{SyntaxKind, SyntaxNode};
-
-/// A syntax construct newer than the range minimum.
-pub const SYNTAX_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0024");
 
 /// One use of a version-gated construct, in tree order: the outcome
 /// the syntax-version-gating rule consumes. The walk stays below; the

@@ -81,7 +81,7 @@ pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution
 pub use rule_context::{SemanticContext, semantic_context};
 pub use strict_types::file_strict_types;
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
-pub use syntax_gating::{GatedSyntaxUse, SYNTAX_NOT_AVAILABLE, gated_syntax_uses};
+pub use syntax_gating::{GatedSyntaxUse, gated_syntax_uses};
 pub use virtual_symbols::{
     VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
     VirtualSymbolRegistration, VirtualSymbolRegistry,

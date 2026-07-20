@@ -2,7 +2,7 @@
 //! as `celerrate_semantics::gated_syntax_uses`; this rule consumes the
 //! outcomes and constructs the diagnostics.
 
-use celerrate_semantics::SYNTAX_NOT_AVAILABLE;
+use celerrate_diagnostics::DiagnosticId;
 
 use crate::context::SyntaxContext;
 use crate::finding::{FindingAnchor, FindingSink};
@@ -10,6 +10,14 @@ use crate::metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};
 use crate::traits::SyntaxRule;
 
 /// A syntax construct newer than the range minimum.
+pub const SYNTAX_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0024");
+
+/// Every identifier this crate allocates, for the registry check at
+/// the composition root.
+pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[SYNTAX_NOT_AVAILABLE];
+
+/// The rule that reports uses of syntax constructs newer than the
+/// project's minimum PHP version.
 pub struct SyntaxVersionGating;
 
 /// The family's declarative unit.
@@ -58,9 +66,10 @@ mod tests {
     use celerrate_db::testing::TestDatabase;
     use celerrate_diagnostics::{Diagnostic, Severity};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-    use celerrate_semantics::{PluginIdentity, SYNTAX_NOT_AVAILABLE};
+    use celerrate_semantics::PluginIdentity;
     use celerrate_source::FileId;
 
+    use super::SYNTAX_NOT_AVAILABLE;
     use crate::metadata::Tier;
     use crate::phases::syntax_phase_diagnostics;
     use crate::registry::{RuleRegistration, RuleRegistry};

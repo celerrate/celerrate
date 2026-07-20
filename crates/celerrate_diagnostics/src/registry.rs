@@ -68,7 +68,7 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
     registered(
         "CEL0024",
         "syntax construct not available",
-        "celerrate_semantics",
+        "celerrate_rules",
     ),
     registered("CEL0025", "missing Composer manifest", "celerrate_project"),
     registered("CEL0026", "invalid Composer manifest", "celerrate_project"),
