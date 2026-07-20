@@ -15,11 +15,23 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode};
 /// A syntax construct newer than the range minimum.
 pub const SYNTAX_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0024");
 
-/// One use of a version-gated construct.
-struct GatedUse {
-    label: &'static str,
-    required: PhpVersion,
-    range: TextRange,
+/// One use of a version-gated construct, in tree order: the outcome
+/// the syntax-version-gating rule consumes. The walk stays below; the
+/// rule turns outcomes into diagnostics (design section 2).
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GatedSyntaxUse {
+    pub label: &'static str,
+    pub required: PhpVersion,
+    pub range: TextRange,
+}
+
+/// Every gated-construct use in the file, in tree order.
+/// Version-range independent on purpose: a configuration change
+/// re-filters without re-walking.
+#[salsa::tracked(returns(ref))]
+pub fn gated_syntax_uses(db: &dyn salsa::Database, file: SourceFile) -> Vec<GatedSyntaxUse> {
+    let root = celerrate_db::parse(db, file).tree();
+    collect_gated_uses(&root)
 }
 
 /// The per-file syntax gating diagnostics.
@@ -31,9 +43,8 @@ pub fn syntax_version_diagnostics(
 ) -> Vec<Diagnostic> {
     let minimum = configuration.php_version_range(db).minimum;
     let file_id = file.file_id(db);
-    let root = celerrate_db::parse(db, file).tree();
-    let mut diagnostics: Vec<Diagnostic> = gated_uses(&root)
-        .into_iter()
+    let mut diagnostics: Vec<Diagnostic> = gated_syntax_uses(db, file)
+        .iter()
         .filter(|gated| gated.required > minimum)
         .map(|gated| {
             Diagnostic::spanned(
@@ -54,7 +65,7 @@ pub fn syntax_version_diagnostics(
 
 /// Every gated-construct use in the file, in tree order. One match arm
 /// per construct: growing the table is adding an arm.
-fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
+fn collect_gated_uses(root: &SyntaxNode) -> Vec<GatedSyntaxUse> {
     let mut uses = Vec::new();
     for node in root.descendants() {
         match node.kind() {
@@ -64,14 +75,14 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                         .modifiers()
                         .find(|token| token.kind() == SyntaxKind::Readonly)
                 {
-                    uses.push(GatedUse {
+                    uses.push(GatedSyntaxUse {
                         label: "readonly class",
                         required: PhpVersion::new(8, 2),
                         range: readonly.text_range(),
                     });
                 }
             }
-            SyntaxKind::ParenthesizedType => uses.push(GatedUse {
+            SyntaxKind::ParenthesizedType => uses.push(GatedSyntaxUse {
                 label: "parenthesized (DNF) type",
                 required: PhpVersion::new(8, 2),
                 range: node.text_range(),
@@ -80,7 +91,7 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                 if let Some(declaration) = ast::ConstantDeclaration::cast(node)
                     && let Some(constant_type) = declaration.ty()
                 {
-                    uses.push(GatedUse {
+                    uses.push(GatedSyntaxUse {
                         label: "typed constant",
                         required: PhpVersion::new(8, 3),
                         range: constant_type.syntax().text_range(),
@@ -102,7 +113,7 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                         .and_then(|element| element.into_token())
                         .is_some_and(|token| token.kind() == SyntaxKind::OpenBrace);
                     if opens_with_brace {
-                        uses.push(GatedUse {
+                        uses.push(GatedSyntaxUse {
                             label: "dynamic class constant fetch",
                             required: PhpVersion::new(8, 3),
                             range: member.syntax().text_range(),
@@ -110,14 +121,14 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                     }
                 }
             }
-            SyntaxKind::PropertyHookList => uses.push(GatedUse {
+            SyntaxKind::PropertyHookList => uses.push(GatedSyntaxUse {
                 label: "property hooks",
                 required: PhpVersion::new(8, 4),
                 range: node.text_range(),
             }),
             SyntaxKind::PropertyDeclaration | SyntaxKind::Parameter => {
                 if let Some(range) = asymmetric_visibility(&node) {
-                    uses.push(GatedUse {
+                    uses.push(GatedSyntaxUse {
                         label: "asymmetric visibility",
                         required: PhpVersion::new(8, 4),
                         range,
@@ -129,7 +140,7 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                     .and_then(|binary| binary.operator_token())
                     .filter(|token| token.kind() == SyntaxKind::PipeGreater);
                 if let Some(operator) = operator {
-                    uses.push(GatedUse {
+                    uses.push(GatedSyntaxUse {
                         label: "pipe operator",
                         required: PhpVersion::new(8, 5),
                         range: operator.text_range(),
@@ -145,7 +156,7 @@ fn gated_uses(root: &SyntaxNode) -> Vec<GatedUse> {
                             .arguments()
                             .any(|argument| argument.label_token().is_some());
                     if is_clone_with {
-                        uses.push(GatedUse {
+                        uses.push(GatedSyntaxUse {
                             label: "clone with arguments",
                             required: PhpVersion::new(8, 5),
                             range: arguments.syntax().text_range(),
@@ -310,6 +321,20 @@ mod tests {
             gated("<?php $x = Config::VERSION;", PhpVersion::new(8, 1)),
             vec![]
         );
+    }
+
+    #[test]
+    fn the_walk_reports_every_gated_use_regardless_of_the_version_range() {
+        let db = TestDatabase::default();
+        let file = SourceFile::new(
+            &db,
+            FileId::new(0),
+            b"<?php readonly class Point { public const int X = 1; }".to_vec(),
+        );
+        let uses = gated_syntax_uses(&db, file);
+        let labels: Vec<&str> = uses.iter().map(|gated| gated.label).collect();
+        assert_eq!(labels, vec!["readonly class", "typed constant"]);
+        assert_eq!(uses[0].required, PhpVersion::new(8, 2));
     }
 
     #[test]

@@ -79,7 +79,9 @@ pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution_records};
 pub use strict_types::file_strict_types;
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
-pub use syntax_gating::{SYNTAX_NOT_AVAILABLE, syntax_version_diagnostics};
+pub use syntax_gating::{
+    GatedSyntaxUse, SYNTAX_NOT_AVAILABLE, gated_syntax_uses, syntax_version_diagnostics,
+};
 pub use virtual_symbols::{
     VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
     VirtualSymbolRegistration, VirtualSymbolRegistry,

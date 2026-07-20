@@ -581,6 +581,11 @@ fn a_version_range_change_re_runs_the_gating_queries() {
         1,
         "the configuration is an input of the gating query: {log:?}",
     );
+    assert_eq!(
+        executions_of(&log, "gated_syntax_uses"),
+        0,
+        "the walk is version-independent; a range change only re-filters: {log:?}",
+    );
 }
 
 #[test]
