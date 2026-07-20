@@ -58,6 +58,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   demanding without warming is now a deliberate, greppable act rather
   than a silent omission. Pure refactor, no behavioral change; zero
   delta on the Symfony corpus and mixed-typedness baseline.
+- `--watch` now shuts down gracefully on Ctrl+C and `SIGTERM` (issue
+  #52): the interrupt flushes the analysis cache through the same
+  quiet-cycle persist a clean exit uses, so the next run starts warm
+  instead of paying for a cold rebuild. In-flight work finishes first;
+  a burst not yet analyzed is dropped. A second Ctrl+C exits
+  immediately (code 130), preserving the escape hatch during the final
+  persist or a long cold cycle. Delivered through `ctrlc`'s
+  `termination` feature, which encapsulates the platform signal
+  handling the workspace's `unsafe`-forbidding lints otherwise disallow.
 
 ### Fixed
 
