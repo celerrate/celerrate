@@ -1,5 +1,5 @@
-use celerrate_source::{FileId, TextEdit};
-use celerrate_syntax::{SyntaxKind, SyntaxToken, lex};
+use celerrate_source::{FileId, TextEdit, TextRange};
+use celerrate_syntax::{SyntaxKind, SyntaxNode, SyntaxToken, lex};
 
 use crate::conflict::{EditConflict, find_conflict};
 
@@ -61,6 +61,29 @@ impl EditBuilder {
         Ok(())
     }
 
+    /// Inserts `// text` on its own line directly above `node`,
+    /// reproducing the node's indentation. The edit is a pure insertion
+    /// at the node's first byte, so the trivia already in front of the
+    /// node are never touched.
+    pub fn insert_line_comment_before(
+        &mut self,
+        node: &SyntaxNode,
+        text: &str,
+    ) -> Result<(), EditError> {
+        if text.contains('\n') || text.contains('\r') || text.contains("?>") {
+            return Err(EditError::CommentTextBreaksOut {
+                text: text.to_owned(),
+            });
+        }
+        let indentation = indentation_before(node);
+        self.edits.push(TextEdit {
+            file: self.file,
+            range: TextRange::empty(node.text_range().start()),
+            replacement: format!("// {text}\n{indentation}"),
+        });
+        Ok(())
+    }
+
     /// Finalizes into the sorted edit set, or reports the first
     /// conflict. The set is the terminal, tree-free form suggestions
     /// transport and [`crate::apply`] consumes.
@@ -101,6 +124,26 @@ fn single_token_kind(replacement: &str) -> Result<SyntaxKind, EditError> {
         return Err(not_one_token());
     }
     Ok(first.kind)
+}
+
+/// The whitespace run between the last line break and `node`, used to
+/// reproduce the node's indentation on an inserted line. A node with
+/// no preceding whitespace token has no indentation to reproduce; a
+/// mid-line node (preceding whitespace without a line break) reuses
+/// that whitespace as-is.
+fn indentation_before(node: &SyntaxNode) -> String {
+    let Some(first_token) = node.first_token() else {
+        return String::new();
+    };
+    let Some(previous) = first_token.prev_token() else {
+        return String::new();
+    };
+    if previous.kind() != SyntaxKind::Whitespace {
+        return String::new();
+    }
+    let text = previous.text();
+    let after_break = text.rfind('\n').map_or(0, |index| index + 1);
+    text.get(after_break..).unwrap_or("").to_owned()
 }
 
 #[cfg(test)]
@@ -249,5 +292,124 @@ mod tests {
         builder.replace_token(&token, "strrev").unwrap();
         builder.replace_token(&token, "strtolower").unwrap();
         assert!(builder.finish().is_err());
+    }
+
+    fn first_node_of_kind(root: &SyntaxNode, kind: SyntaxKind) -> SyntaxNode {
+        root.descendants()
+            .find(|node| node.kind() == kind)
+            .expect("the target node exists in the tree")
+    }
+
+    #[test]
+    fn a_comment_is_inserted_above_an_indented_statement() {
+        let source = "<?php\nfunction demo() {\n    echo 1;\n}\n";
+        let root = parse_tree(source);
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        builder
+            .insert_line_comment_before(&statement, "@celerrate-ignore CEL0018")
+            .unwrap();
+        let edits = builder.finish().unwrap();
+        assert_eq!(
+            apply(source, &edits).unwrap(),
+            "<?php\nfunction demo() {\n    // @celerrate-ignore CEL0018\n    echo 1;\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_comment_above_a_top_level_statement_carries_no_indentation() {
+        let source = "<?php\necho 1;\n";
+        let root = parse_tree(source);
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        builder
+            .insert_line_comment_before(&statement, "note")
+            .unwrap();
+        let edits = builder.finish().unwrap();
+        assert_eq!(apply(source, &edits).unwrap(), "<?php\n// note\necho 1;\n");
+    }
+
+    #[test]
+    fn tab_indentation_is_reproduced() {
+        let source = "<?php\nfunction demo() {\n\techo 1;\n}\n";
+        let root = parse_tree(source);
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        builder
+            .insert_line_comment_before(&statement, "note")
+            .unwrap();
+        let edits = builder.finish().unwrap();
+        assert_eq!(
+            apply(source, &edits).unwrap(),
+            "<?php\nfunction demo() {\n\t// note\n\techo 1;\n}\n",
+        );
+    }
+
+    #[test]
+    fn a_mid_line_node_stays_intact_after_insertion() {
+        // The comment ends with a line break before the node, so the
+        // statement survives even when the node is not at a line start.
+        let source = "<?php\necho 1; echo 2;\n";
+        let root = parse_tree(source);
+        let second = root
+            .descendants()
+            .filter(|node| node.kind() == SyntaxKind::EchoStatement)
+            .nth(1)
+            .expect("the second echo statement");
+        let mut builder = EditBuilder::new(FileId::new(0));
+        builder.insert_line_comment_before(&second, "note").unwrap();
+        let edits = builder.finish().unwrap();
+        assert_eq!(
+            apply(source, &edits).unwrap(),
+            "<?php\necho 1; // note\n echo 2;\n",
+        );
+    }
+
+    #[test]
+    fn comment_text_with_a_line_break_is_rejected() {
+        let root = parse_tree("<?php\necho 1;\n");
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        assert_eq!(
+            builder.insert_line_comment_before(&statement, "a\nb"),
+            Err(EditError::CommentTextBreaksOut {
+                text: "a\nb".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn comment_text_with_a_close_tag_is_rejected() {
+        let root = parse_tree("<?php\necho 1;\n");
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        assert_eq!(
+            builder.insert_line_comment_before(&statement, "a ?> b"),
+            Err(EditError::CommentTextBreaksOut {
+                text: "a ?> b".to_owned(),
+            }),
+        );
+    }
+
+    #[test]
+    fn an_inserted_comment_reparses_as_a_comment() {
+        // The guarantee behind the validation: the patched file lexes
+        // with the inserted text inside a line comment, not as code.
+        let source = "<?php\nfunction demo() {\n    echo 1;\n}\n";
+        let root = parse_tree(source);
+        let statement = first_node_of_kind(&root, SyntaxKind::EchoStatement);
+        let mut builder = EditBuilder::new(FileId::new(0));
+        builder
+            .insert_line_comment_before(&statement, "note")
+            .unwrap();
+        let edits = builder.finish().unwrap();
+        let patched = apply(source, &edits).unwrap();
+        let reparsed = parse_tree(&patched);
+        let comment = reparsed
+            .descendants_with_tokens()
+            .filter_map(|element| element.into_token())
+            .find(|token| token.kind() == SyntaxKind::LineComment)
+            .expect("the inserted comment lexes as a line comment");
+        assert_eq!(comment.text(), "// note");
     }
 }
