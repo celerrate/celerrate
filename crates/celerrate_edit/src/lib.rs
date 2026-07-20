@@ -5,6 +5,8 @@
 //!
 //! [`TextEdit`]: celerrate_source::TextEdit
 
+mod apply;
 mod conflict;
 
+pub use apply::{ApplyError, apply};
 pub use conflict::EditConflict;
