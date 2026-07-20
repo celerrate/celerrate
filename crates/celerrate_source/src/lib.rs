@@ -14,7 +14,9 @@ pub use text_size::{TextRange, TextSize};
 mod file_id;
 mod line_index;
 mod source_text;
+mod text_edit;
 
 pub use file_id::FileId;
 pub use line_index::{LineColumn, LineIndex};
 pub use source_text::{SourceText, SourceTooLarge};
+pub use text_edit::TextEdit;
