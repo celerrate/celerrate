@@ -1,0 +1,15 @@
+[package]
+name = "celerrate_edit"
+description = "Structured-edit library on the Celerrate syntax tree"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_source = { path = "../celerrate_source" }
+celerrate_syntax = { path = "../celerrate_syntax" }
+
+[lints]
+workspace = true

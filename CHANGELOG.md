@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   notice naming the error — `CEL0039` for the manifest, `CEL0040` for
   the installed packages — instead of being silently treated as absent.
   (#59)
+- The structured-edit library `celerrate_edit`: structured operations on
+  the syntax tree — kind-checked token replacement and line-comment
+  insertion that reproduces the surrounding indentation — compile into
+  the deterministic, sorted, conflict-free `TextEdit` sets suggestions
+  transport, and an application primitive splices such a set into
+  source text. Overlapping edits are reported errors, never silent
+  resolutions, and an edit never touches trivia it was not aimed at. An
+  edit-application fuzz target joins the fuzz suite. Library groundwork
+  only: no rule emits edits yet and no output changes.
 
 ### Changed
 

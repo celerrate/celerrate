@@ -154,6 +154,8 @@ jobs:
         run: cargo +nightly fuzz run parse -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
       - if: ${{ env.RUN_FUZZ == 'true' }}
         run: cargo +nightly fuzz run docblock -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
+      - if: ${{ env.RUN_FUZZ == 'true' }}
+        run: cargo +nightly fuzz run edit_apply -- -max_total_time=${{ steps.duration.outputs.seconds }} -timeout=25 -rss_limit_mb=4096
       - name: Upload crash artifacts
         if: ${{ failure() && env.RUN_FUZZ == 'true' }}
         uses: actions/upload-artifact@v4
