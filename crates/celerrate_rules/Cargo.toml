@@ -1,0 +1,20 @@
+[package]
+name = "celerrate_rules"
+description = "The rule framework: phase traits, the rule registry, and the core rules"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+salsa = { workspace = true }
+celerrate_db = { path = "../celerrate_db" }
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_project = { path = "../celerrate_project" }
+celerrate_semantics = { path = "../celerrate_semantics" }
+celerrate_source = { path = "../celerrate_source" }
+celerrate_types = { path = "../celerrate_types" }
+
+[lints]
+workspace = true
