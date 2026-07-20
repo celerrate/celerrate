@@ -299,7 +299,9 @@ the parser now rejects outside the documented subset, tested.
 
 - [ ] **Step 4: Run the totality gate before anything else**
 
-Run: `cargo test -p celerrate_stubs every_embedded_refinement_text_lowers`
+Run: `cargo test -p celerrate_types every_embedded_refinement_text_lowers`
+(the totality test lives in `celerrate_types`, calling into
+`celerrate_stubs::embedded_stub_index()`)
 Expected: PASS — no embedded refinement uses a tightened form. If it
 FAILS: per the spec, either rewrite the stranded spelling in
 `crates/celerrate_stubs/refinements.celerrate` to its documented,

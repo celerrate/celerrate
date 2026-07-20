@@ -75,6 +75,19 @@ bypassed" rule, applied in its intended direction). Any further
 divergences the new corpus surfaces are repaired in the same change,
 each on whichever side is wrong against the documented semantics.
 
+**Implementation outcome (narrow branch taken).** The graceful repair
+above proved unsound and was not shipped: the bridge has no symbol
+table at lowering time, so lowering every `Foo::BAR` to an enum-case
+type makes a resolvable non-enum `Foo::BAR` (an ordinary class
+constant) fabricate unknown-member (`CEL0030`/`CEL0031`) and
+argument-type false positives that `mixed` correctly suppresses (the
+norm avoids this only because it lowers curated stub refinements, never
+arbitrary user docblocks). Per the plan's sanctioned fallback, the
+bridge keeps `mixed`, and the oracle pins the enum-case divergence with
+an explicit inequality assertion. Sound unification — deferred,
+symbol-aware const-fetch resolution, or enum-ness-checking downstream
+consumers — is tracked in #86.
+
 ### 3. Tighten the norm parser to its documented subset (#48)
 
 `lower_norm_text` accepts five form families wider than decision 13's
