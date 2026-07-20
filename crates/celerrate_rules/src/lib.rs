@@ -8,6 +8,7 @@ mod finding;
 mod metadata;
 mod phases;
 mod registry;
+pub mod rules;
 mod traits;
 
 pub use context::{ReportingContext, SyntaxContext, testing_syntax_context};
@@ -18,4 +19,5 @@ pub use registry::{
     CORE_IDENTITY_NAME, RuleConflict, RuleImplementation, RuleRegistration, RuleRegistry,
     validate_rules,
 };
+pub use rules::core_rules;
 pub use traits::{ReportingRule, SemanticRule, SyntaxRule, TypedBodyRule};
