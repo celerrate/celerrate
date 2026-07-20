@@ -1,0 +1,10 @@
+error[E0624]: method `database` is private
+ --> tests/seal/annotation_site_database.rs:4:18
+  |
+4 |     let _ = site.database();
+  |                  ^^^^^^^^ private method
+  |
+ ::: $WORKSPACE/crates/celerrate_types/src/type_syntax.rs
+  |
+  |     pub(crate) fn database(&self) -> &'db dyn salsa::Database {
+  |     --------------------------------------------------------- private method defined here

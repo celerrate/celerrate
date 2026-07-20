@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/seal/type_context_new.rs:4:44
+  |
+4 |     let _ = celerrate_plugin::TypeContext::new;
+  |                                            ^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/celerrate_types/src/type_context.rs
+  |
+  |     pub(crate) fn new(db: &'db dyn salsa::Database) -> Self {
+  |     ------------------------------------------------------- private associated function defined here

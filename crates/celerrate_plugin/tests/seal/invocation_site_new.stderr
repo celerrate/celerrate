@@ -1,0 +1,10 @@
+error[E0624]: associated function `new` is private
+ --> tests/seal/invocation_site_new.rs:3:47
+  |
+3 |     let _ = celerrate_plugin::InvocationSite::new;
+  |                                               ^^^ private associated function
+  |
+ ::: $WORKSPACE/crates/celerrate_types/src/dynamic_type_provider.rs
+  |
+  |     pub(crate) fn new(db: &'db dyn salsa::Database, invocation: &'call Invocation<'db>) -> Self {
+  |     ------------------------------------------------------------------------------------------- private associated function defined here
