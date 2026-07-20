@@ -19,9 +19,13 @@ jobs:
   # Decide whether the change touches anything the build, tests, lints or
   # corpus depend on. Everything counts as code except a small allowlist of
   # inert documentation files, so a misclassification can only run the full
-  # suite unnecessarily, never skip it on a real code change. Downstream jobs
-  # gate on `code`; a skipped required job still satisfies branch protection,
-  # so a documentation-only pull request stays mergeable without rebuilding.
+  # suite unnecessarily, never skip it on a real code change. Every job below
+  # carries a required branch-protection context, so none of them may skip at
+  # the job level: a skipped matrix job never expands, its per-OS contexts
+  # are never reported, and branch protection waits forever (issue #89).
+  # Instead the jobs always start and every step gates on `code`; on a
+  # documentation-only pull request each job no-ops in seconds and reports
+  # success, so auto-merge can fire without manual intervention.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -78,54 +82,67 @@ jobs:
 
   lint:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
           components: clippy, rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo fmt --all --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo xtask dependency-shape
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo fmt --all --check
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo clippy --workspace --all-targets -- -D warnings
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask dependency-shape
 
   test:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo test --workspace
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo test --workspace
 
   deny:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: EmbarkStudios/cargo-deny-action@v2
 
   stubs:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
           components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --package celerrate_stubs --features compiler --all-targets -- -D warnings
-      - run: cargo xtask compile-stubs --check
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo clippy --package celerrate_stubs --features compiler --all-targets -- -D warnings
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask compile-stubs --check
