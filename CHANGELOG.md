@@ -67,6 +67,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   persist or a long cold cycle. Delivered through `ctrlc`'s
   `termination` feature, which encapsulates the platform signal
   handling the workspace's `unsafe`-forbidding lints otherwise disallow.
+- The norm type-grammar parser now rejects forms outside its documented
+  v0 subset (issue #48): bare collection generics (`array`, `list`,
+  `iterable`, `non-empty-array`, `non-empty-list`), bare `callable`, the
+  empty shape `{}`, quoted shape keys, hyphenated class names, and
+  stacked nullability (`??int`) answer "no type" instead of silently
+  parsing to an undocumented over-approximation. The three documented
+  conveniences (`array-key`, the single-argument `array<V>` /
+  `iterable<V>` sugars, single `?T`) are unchanged and pinned. No shipped
+  stub refinement used a rejected form; zero corpus delta.
+- Internal hardening (issue #62): a cross-provenance oracle now pins that
+  the two type grammars behind the `TypeSyntax` seam — the norm (stub
+  refinements) and the phpdoc bridge (docblocks) — lower every shared
+  spelling to the identical interned type, and that each deliberate
+  dialect gap is rejected on the expected side. One divergence is
+  documented rather than silent: the norm lowers an enum-case reference
+  (`Status::Active`) to its enum-case type, while the bridge keeps `mixed`
+  because it has no symbol table to confirm enum-ness at lowering time
+  (lowering a non-enum `Foo::BAR` would fabricate unknown-member reports).
+  Tracked for unification in #86. Test-only; zero corpus delta.
 
 ### Fixed
 
