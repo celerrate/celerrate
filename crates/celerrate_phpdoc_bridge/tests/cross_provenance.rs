@@ -36,14 +36,26 @@
 //! `celerrate_types` and cannot be imported from this crate's
 //! integration tests.
 //!
-//! **Expected result (Task 1's TDD red step).** This suite is
-//! EXPECTED TO FAIL on exactly the `Status::Active` entry: the
-//! confirmed divergence issue #62 exists to catch. The norm lowers it
-//! to a real enum-case type; the bridge's `ConstFetch` lowering
-//! (`celerrate_phpdoc_bridge/src/lowering.rs`) folds every `Foo::Bar`
-//! constant fetch to `mixed`, undecided from a genuine class-constant
-//! fetch, so the two sides disagree. A later task repairs the bridge
-//! so this entry turns green; until then this file is committed red.
+//! **Documented divergence (issue #62, tracked onward as #86).** The
+//! `Status::Active` entry was this suite's TDD red step: the norm
+//! lowers it to a real enum-case type via curated stub refinements,
+//! while the bridge's `ConstFetch` lowering folds every `Foo::Bar`
+//! constant fetch to `mixed`. This is deliberate, not a gap to close
+//! here: the bridge has no symbol table at lowering time, so it cannot
+//! tell an enum case (`Status::Active`) from a class constant
+//! (`Foo::BAR` on `class Foo { const BAR = 42; }`). Lowering every
+//! named constant fetch to an enum-case type — the approach this
+//! branch tried and reverted — makes a resolvable non-enum class look
+//! like an enum-case receiver downstream, and `checks/receivers.rs`'s
+//! `atom_existence` then emits unknown-member false positives
+//! (CEL0030/CEL0031) that `mixed` correctly suppressed. So the bridge
+//! keeps folding `Foo::Bar` to `mixed`, and the oracle asserts the two
+//! provenances both lower but to *different* types
+//! (`the_enum_case_reference_is_a_documented_divergence`, below) rather
+//! than asserting equality. Closing this gap for real needs a
+//! symbol-table-aware bridge lowering; see issue #86. The wildcard
+//! `Foo::*` still lowers to `mixed` on both sides (no single case to
+//! name: recorded debt, unaffected by this divergence).
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
@@ -263,8 +275,11 @@ const TABLE: &[Entry] = &[
     entry("class-string<User>", Lowers, Lowers),
     entry("key-of<array<int, string>>", Lowers, Lowers),
     entry("value-of<array<int, string>>", Lowers, Lowers),
-    // Enum cases: the confirmed divergence this suite exists to catch.
-    entry("Status::Active", Lowers, Lowers),
+    // Enum cases (`Status::Active`) are NOT listed here: both sides
+    // lower, but to different types, a documented divergence asserted
+    // separately below (see
+    // `the_enum_case_reference_is_a_documented_divergence`), not the
+    // plain equality this loop enforces.
     // Documented dialect gaps (ranges spell differently by design).
     entry("int<1..5>", Lowers, Rejects),
     entry("int<1, 5>", Rejects, Lowers),
@@ -346,5 +361,34 @@ fn the_norm_bare_shape_and_the_dialect_array_prefixed_shape_lower_to_the_same_ty
     assert_eq!(
         norm_value, bridge_value,
         "the norm's bare `{{id: int}}` and the dialect's `array{{id: int}}` must be the same type",
+    );
+}
+
+#[test]
+fn the_enum_case_reference_is_a_documented_divergence() {
+    // `Status::Active` is a deliberate, tracked divergence, not a bug
+    // to fix here (issue #86). The norm lowers it to a real enum-case
+    // type from curated stub refinements. The bridge lowers `Foo::Bar`
+    // to `mixed` instead, because it has no symbol table at lowering
+    // time to tell an enum case apart from a class constant
+    // (`Foo::BAR` on a resolvable `class Foo { const BAR = 42; }` is
+    // NOT an enum case) — lowering every named constant fetch to an
+    // enum-case type regardless would make such a class look like an
+    // enum-case receiver downstream, and `checks/receivers.rs`'s
+    // `atom_existence` would then emit unknown-member false positives
+    // (CEL0030/CEL0031) that `mixed` correctly suppresses. So both
+    // provenances must lower (neither rejects the spelling), but they
+    // must intern to DIFFERENT `TypeId`s, not the same one: the plain
+    // equality the table loop enforces does not apply to this entry.
+    let fixture = fixture("Status::Active", "Status::Active");
+    let norm_value =
+        norm_type(&fixture).unwrap_or_else(|| panic!("the norm must lower `Status::Active`"));
+    let bridge_value =
+        bridge_type(&fixture).unwrap_or_else(|| panic!("the bridge must lower `Status::Active`"));
+    assert_ne!(
+        norm_value, bridge_value,
+        "documented divergence (#86): the norm's enum-case type and the bridge's `mixed` \
+         fallback must NOT be the same TypeId; if this now holds, the divergence has been \
+         closed and this entry should move back into the equality-asserting TABLE",
     );
 }
