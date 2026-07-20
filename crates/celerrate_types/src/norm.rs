@@ -3,7 +3,16 @@
 //! refinements overlay (design section 7). Internal by design: the
 //! norm is not a plugin notation, so this module is `pub(crate)`
 //! and never crosses the facade. Tolerant: anything outside the v0
-//! subset answers `None`, never a panic (decision 13).
+//! subset answers `None`, never a panic (decision 13). The subset
+//! boundary is exact and tested, not merely aspirational: forms that
+//! once parsed as sound-but-undocumented over-approximations (bare
+//! `array`/`list`/`iterable`/`non-empty-array`/`non-empty-list`, bare
+//! `callable`, the empty shape `{}`, quoted shape keys, hyphenated
+//! class names, and stacked `??T`) now answer `None`
+//! (`forms_outside_the_documented_subset_are_rejected`, issue #48); the
+//! three documented v0 conveniences (`array-key`, the single-argument
+//! `array<V>`/`iterable<V>` sugars, and single `?T`) still lower
+//! (`the_documented_conveniences_lower`).
 //!
 //! Task-12 debt (owner: the norm v0 subset, recorded in the norm
 //! draft's own mapping table). Conditional types (`(T is int ? A :
@@ -34,7 +43,10 @@ pub(crate) struct NormScope<'db, 'a> {
 }
 
 /// Lowers one norm type expression. `None` on anything outside the
-/// v0 subset (decision 13), tolerant of arbitrary bytes.
+/// v0 subset (decision 13), tolerant of arbitrary bytes. The subset
+/// boundary is tested, not just documented (issue #48): see
+/// `forms_outside_the_documented_subset_are_rejected` and
+/// `the_documented_conveniences_lower`.
 pub(crate) fn lower_norm_text<'db>(
     db: &'db dyn salsa::Database,
     scope: &NormScope<'db, '_>,
@@ -347,8 +359,14 @@ fn atom_type_body<'db>(
     cursor: &mut Cursor<'_>,
 ) -> Option<TypeId<'db>> {
     match cursor.advance()? {
-        // `?T` binds tighter than `|` and `&` (decision 13).
+        // `?T` binds tighter than `|` and `&` (decision 13). Stacked
+        // nullable (`??T`) is outside the v0 subset (issue #48, design
+        // rule 1: one spelling per constructor): peek for a second
+        // `?` and reject rather than silently double-wrapping.
         Token::Question => {
+            if cursor.peek() == Some(&Token::Question) {
+                return None;
+            }
             let inner = atom_type(db, scope, cursor)?;
             Some(TypeId::union(db, [inner, TypeId::null(db)]))
         }
@@ -404,6 +422,14 @@ fn named_type<'db>(
         "value-of" => return projection_type(db, scope, cursor, TypeId::value_of),
         "callable" => return callable_type(db, scope, cursor),
         _ => {}
+    }
+    // A hyphenated name reaching here is none of the known hyphenated
+    // keywords matched above: hyphens outside that closed keyword set
+    // are outside the v0 subset (issue #48). The lexer still lexes
+    // `Foo-Bar` as one name (`lex_name`'s job, unchanged); the
+    // constraint lands here, on lowering.
+    if name.contains('-') {
+        return None;
     }
     // `Enum::Case` before template and class references.
     if cursor.eat(&Token::DoubleColon) {
@@ -505,14 +531,15 @@ fn array_type<'db>(
     cursor: &mut Cursor<'_>,
     non_empty: bool,
 ) -> Option<TypeId<'db>> {
+    // A bare `array`/`non-empty-array` (no `<...>` at all) is outside
+    // the v0 subset: only the single-argument sugar is documented
+    // (issue #48). `generic_arguments` answers `None` for "absent",
+    // which the first `?` turns into this function's own `None`.
     let array_key = TypeId::union(db, [TypeId::int(db), TypeId::string(db)]);
-    let (key, value) = match generic_arguments(db, scope, cursor) {
-        None => (array_key, TypeId::mixed(db)),
-        Some(arguments) => match arguments?.as_slice() {
-            [value] => (array_key, *value),
-            [key, value] => (*key, *value),
-            _ => return None,
-        },
+    let (key, value) = match generic_arguments(db, scope, cursor)??.as_slice() {
+        [value] => (array_key, *value),
+        [key, value] => (*key, *value),
+        _ => return None,
     };
     Some(if non_empty {
         TypeId::non_empty_array(db, key, value)
@@ -527,12 +554,11 @@ fn list_type<'db>(
     cursor: &mut Cursor<'_>,
     non_empty: bool,
 ) -> Option<TypeId<'db>> {
-    let value = match generic_arguments(db, scope, cursor) {
-        None => TypeId::mixed(db),
-        Some(arguments) => match arguments?.as_slice() {
-            [value] => *value,
-            _ => return None,
-        },
+    // Same v0 boundary as `array_type`: a bare `list`/`non-empty-list`
+    // answers `None` (issue #48).
+    let value = match generic_arguments(db, scope, cursor)??.as_slice() {
+        [value] => *value,
+        _ => return None,
     };
     Some(if non_empty {
         TypeId::non_empty_list(db, value)
@@ -546,15 +572,14 @@ fn iterable_type<'db>(
     scope: &NormScope<'db, '_>,
     cursor: &mut Cursor<'_>,
 ) -> Option<TypeId<'db>> {
-    let (key, value) = match generic_arguments(db, scope, cursor) {
-        None => (TypeId::mixed(db), TypeId::mixed(db)),
-        Some(arguments) => match arguments?.as_slice() {
-            // Iterable keys are unconstrained: the array-key default
-            // is only correct for arrays (decision 13).
-            [value] => (TypeId::mixed(db), *value),
-            [key, value] => (*key, *value),
-            _ => return None,
-        },
+    // Same v0 boundary as `array_type`: a bare `iterable` answers
+    // `None` (issue #48). The single-argument sugar stays documented.
+    let (key, value) = match generic_arguments(db, scope, cursor)??.as_slice() {
+        // Iterable keys are unconstrained: the array-key default
+        // is only correct for arrays (decision 13).
+        [value] => (TypeId::mixed(db), *value),
+        [key, value] => (*key, *value),
+        _ => return None,
     };
     Some(TypeId::iterable(db, key, value))
 }
@@ -594,8 +619,10 @@ fn callable_type<'db>(
     cursor: &mut Cursor<'_>,
 ) -> Option<TypeId<'db>> {
     if !cursor.eat(&Token::OpenParenthesis) {
-        // A bare `callable` carries no signature.
-        return Some(TypeId::callable(db, vec![], TypeId::mixed(db)));
+        // A bare `callable` (no parenthesized signature) is outside
+        // the v0 subset (issue #48): the documented form always
+        // carries a signature, even an empty one (`callable()`).
+        return None;
     }
     let mut parameters = Vec::new();
     if !cursor.eat(&Token::CloseParenthesis) {
@@ -630,15 +657,19 @@ fn shape_type<'db>(
     scope: &NormScope<'db, '_>,
     cursor: &mut Cursor<'_>,
 ) -> Option<TypeId<'db>> {
+    // An empty shape (`{}`) is outside the v0 subset (issue #48): a
+    // shape's whole point is to name its fields, so the empty-shape
+    // spelling is left undocumented. Falling through to the loop below
+    // lets the `_ => return None` arm reject it uniformly: the first
+    // `advance` sees the closing brace, matches no key arm.
     let mut fields = Vec::new();
-    if cursor.eat(&Token::CloseBrace) {
-        return Some(TypeId::shape(db, fields));
-    }
     loop {
         let key = match cursor.advance()? {
             Token::Name(name) => ShapeKey::String(name.clone()),
             Token::Integer(value) => ShapeKey::Integer(*value),
-            Token::Text(value) => ShapeKey::String(value.clone()),
+            // Quoted keys (`{'a': int}`) are outside the v0 subset
+            // (issue #48): the documented grammar spells a shape key
+            // as a bare name or integer, never a quoted string.
             _ => return None,
         };
         let optional = cursor.eat(&Token::Question);
@@ -680,6 +711,24 @@ mod tests {
         lower_norm_text(db, &scope(), text)
             .map(|type_id| type_id.display(db))
             .unwrap_or_else(|| "<none>".to_owned())
+    }
+
+    /// Mirrors `everything_outside_the_subset_answers_none_never_a_panic`:
+    /// asserts `text` lowers to `None`.
+    fn assert_lowers_to_none(text: &str) {
+        let db = TestDatabase::default();
+        assert!(
+            lower_norm_text(&db, &scope(), text).is_none(),
+            "expected None for {text:?}",
+        );
+    }
+
+    /// The display-string assertion pattern used throughout this
+    /// module (see `lowered` above): asserts `text` lowers to a type
+    /// whose display rendering is `expected`.
+    fn assert_lowers(text: &str, expected: &str) {
+        let db = TestDatabase::default();
+        assert_eq!(lowered(&db, text), expected, "for {text}");
     }
 
     #[test]
@@ -1059,6 +1108,40 @@ mod tests {
                 "expected None for {text:?}",
             );
         }
+    }
+
+    #[test]
+    fn forms_outside_the_documented_subset_are_rejected() {
+        // Issue #48: each of these parsed to a sound over-approximation
+        // with no test pinning it; the documented subset (norm draft
+        // §3.1, design rule 1: one spelling per constructor) does not
+        // name them, and an undocumented accepted spelling is
+        // compatibility debt in a grammar that intends to freeze.
+        for rejected in [
+            "array",
+            "list",
+            "iterable",
+            "non-empty-array",
+            "non-empty-list",
+            "callable",
+            "{}",
+            "{'a': int}",
+            "Foo-Bar",
+            "??int",
+        ] {
+            assert_lowers_to_none(rejected);
+        }
+    }
+
+    #[test]
+    fn the_documented_conveniences_lower() {
+        // Norm draft §3.1: the three v0 conveniences, positively pinned.
+        assert_lowers("array-key", "int|string");
+        assert_lowers("array<string>", "array<int|string, string>");
+        assert_lowers(
+            "iterable<string>",
+            "array<mixed, string>|traversable<mixed, string>",
+        );
     }
 
     #[test]
