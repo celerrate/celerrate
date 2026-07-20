@@ -14,8 +14,8 @@ use celerrate_cli::cache::snapshot::{
     DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
 };
 use celerrate_cli::cache::stored::{
-    StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredSeverity,
-    StoredSpace, StoredVerdict,
+    StoredAnchor, StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
+    StoredSeverity, StoredSpace, StoredVerdict,
 };
 use celerrate_cli::session::Session;
 use celerrate_project::{PhpVersion, PhpVersionRange};
@@ -270,9 +270,11 @@ fn probe_verdict() -> StoredVerdict {
         diagnostics: vec![StoredDiagnostic {
             id: "CEL0018".to_owned(),
             severity: StoredSeverity::Error,
-            start: 10,
-            end: 17,
+            anchor: StoredAnchor::Span { start: 10, end: 17 },
             message: "planted by the cache probe".to_owned(),
+            labels: Vec::new(),
+            notes: Vec::new(),
+            suggestions: Vec::new(),
         }],
         records: vec![StoredRecord {
             written: "Missing".to_owned(),
@@ -377,8 +379,7 @@ fn a_verdict_with_a_reversed_range_is_discarded() {
     let root = project(&[("a.php", source)]);
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let mut verdict = probe_verdict();
-    verdict.diagnostics[0].start = 17;
-    verdict.diagnostics[0].end = 10;
+    verdict.diagnostics[0].anchor = StoredAnchor::Span { start: 17, end: 10 };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
         registered_plugin_set_digest(),
@@ -632,8 +633,10 @@ fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
     let root = project(&[("a.php", source)]);
     let hash = *blake3::hash(source.as_bytes()).as_bytes();
     let mut verdict = probe_verdict();
-    verdict.diagnostics[0].start = 100;
-    verdict.diagnostics[0].end = 200;
+    verdict.diagnostics[0].anchor = StoredAnchor::Span {
+        start: 100,
+        end: 200,
+    };
     let header = PackHeader::current(
         PhpVersionRange::point(PhpVersion::new(8, 5)),
         registered_plugin_set_digest(),

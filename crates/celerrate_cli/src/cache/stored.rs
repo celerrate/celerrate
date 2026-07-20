@@ -5,6 +5,17 @@
 //! re-interned through the registry. Every `to_*` conversion is total
 //! except identifier re-interning, whose failure discards the entry.
 //!
+//! **The stored diagnostic's anatomy (schema 6).** `StoredDiagnostic`
+//! mirrors the domain `Diagnostic` whole: its anchor (`Project` or a
+//! bounds-checked `Span`), its labels (a local range or a symbolic
+//! name), its notes, and its suggestions (a confidence plus same-file
+//! text edits — no file identity of their own, since a suggestion's
+//! edits always target the diagnostic's own file). `to_diagnostic`
+//! bounds-checks EVERY stored range against `content_length` — the
+//! anchor's span, each local label's range, each edit's range — because
+//! a blake3 checksum proves only that a pack's bytes were not corrupted
+//! in transit, never that whoever wrote them was honest.
+//!
 //! **The suppression note (plan 9a, task 9).** `StoredVerdict.diagnostics`
 //! and `StoredTypedVerdict.diagnostics` are both stored POST-suppression
 //! (schema 4's convention, unchanged): every persisted diagnostic has
@@ -17,14 +28,16 @@
 //! module doc). A stale suppression decision can therefore never survive
 //! into a served verdict, typed or not.
 
-use celerrate_diagnostics::{Diagnostic, Severity, find_identifier};
+use celerrate_diagnostics::{
+    Anchor, Confidence, Diagnostic, Label, LabelTarget, Severity, Suggestion, find_identifier,
+};
 use celerrate_project::PhpVersion;
 use celerrate_semantics::{
     AstId, ClassMembers, Declaration, DeclarationKind, FreeFunction, ImportKind, ItemTree, Member,
     MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature, ResolutionAnswer,
     ResolutionRecord, SymbolSpace, TraitAdaptation, TraitUse, UseImport, Visibility,
 };
-use celerrate_source::{FileId, TextRange, TextSize};
+use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
 use celerrate_types::{StoredClassDependency, StoredFunctionDependency, StoredInferredEdge};
 use serde::{Deserialize, Serialize};
 
@@ -608,55 +621,189 @@ pub enum StoredSeverity {
     Error,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredAnchor {
+    Project,
+    Span { start: u32, end: u32 },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredLabelTarget {
+    Local { start: u32, end: u32 },
+    Symbolic { symbol: String },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredLabel {
+    pub target: StoredLabelTarget,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredConfidence {
+    Safe,
+    NeedsReview,
+}
+
+/// A stored edit carries no file identity: a suggestion's edits target
+/// the diagnostic's own file (design section 3), and the stored form
+/// enforces that structurally by having nowhere to write another file.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredTextEdit {
+    pub start: u32,
+    pub end: u32,
+    pub replacement: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredSuggestion {
+    pub message: String,
+    pub confidence: StoredConfidence,
+    pub edits: Vec<StoredTextEdit>,
+}
+
 /// One diagnostic with its process-local file identity removed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredDiagnostic {
     pub id: String,
     pub severity: StoredSeverity,
-    pub start: u32,
-    pub end: u32,
+    pub anchor: StoredAnchor,
     pub message: String,
+    pub labels: Vec<StoredLabel>,
+    pub notes: Vec<String>,
+    pub suggestions: Vec<StoredSuggestion>,
 }
 
 impl StoredDiagnostic {
-    pub fn of(diagnostic: &Diagnostic) -> Option<Self> {
-        let (_, range) = diagnostic.span()?;
-        Some(Self {
+    pub fn of(diagnostic: &Diagnostic) -> Self {
+        Self {
             id: diagnostic.id.as_str().to_owned(),
             severity: match diagnostic.severity {
                 Severity::Warning => StoredSeverity::Warning,
                 Severity::Error => StoredSeverity::Error,
             },
-            start: range.start().into(),
-            end: range.end().into(),
+            anchor: match diagnostic.anchor {
+                Anchor::Project => StoredAnchor::Project,
+                Anchor::Span { range, .. } => StoredAnchor::Span {
+                    start: range.start().into(),
+                    end: range.end().into(),
+                },
+            },
             message: diagnostic.message.clone(),
-        })
+            labels: diagnostic
+                .labels
+                .iter()
+                .map(|label| StoredLabel {
+                    target: match &label.target {
+                        LabelTarget::Local { range } => StoredLabelTarget::Local {
+                            start: range.start().into(),
+                            end: range.end().into(),
+                        },
+                        LabelTarget::Symbolic { symbol } => StoredLabelTarget::Symbolic {
+                            symbol: symbol.clone(),
+                        },
+                    },
+                    message: label.message.clone(),
+                })
+                .collect(),
+            notes: diagnostic.notes.clone(),
+            suggestions: diagnostic
+                .suggestions
+                .iter()
+                .map(|suggestion| StoredSuggestion {
+                    message: suggestion.message.clone(),
+                    confidence: match suggestion.confidence {
+                        Confidence::Safe => StoredConfidence::Safe,
+                        Confidence::NeedsReview => StoredConfidence::NeedsReview,
+                    },
+                    edits: suggestion
+                        .edits
+                        .iter()
+                        .map(|edit| StoredTextEdit {
+                            start: edit.range.start().into(),
+                            end: edit.range.end().into(),
+                            replacement: edit.replacement.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
     }
 
-    /// `None` when the stored identifier is unknown to the registry (the
-    /// entry comes from another era), the stored range has `start > end`
-    /// (the entry cannot come from any real computation: `TextRange::new`
-    /// asserts the ordering and panics otherwise), or the range reaches
-    /// past `content_length` (no computation over these bytes could have
-    /// produced it). Either way the answer is the same: discard the entry
-    /// and let the file recompute. The blake3 checksum a pack carries
-    /// proves only that its bytes were not corrupted in transit, never
-    /// that whoever wrote them was honest, so both bounds must be checked
-    /// here rather than trusted.
+    /// `None` when the stored identifier is unknown to the registry, or
+    /// when ANY stored range (the anchor's, a local label's, an edit's)
+    /// is inverted or reaches past `content_length`. The blake3 checksum
+    /// a pack carries proves only that its bytes were not corrupted in
+    /// transit, never that whoever wrote them was honest, so every range
+    /// is checked here rather than trusted (design section 3).
     pub fn to_diagnostic(&self, file: FileId, content_length: u32) -> Option<Diagnostic> {
-        if self.start > self.end || self.end > content_length {
-            return None;
+        let in_bounds = |start: u32, end: u32| start <= end && end <= content_length;
+        let anchor = match self.anchor {
+            StoredAnchor::Project => Anchor::Project,
+            StoredAnchor::Span { start, end } => {
+                if !in_bounds(start, end) {
+                    return None;
+                }
+                Anchor::Span {
+                    file,
+                    range: TextRange::new(TextSize::from(start), TextSize::from(end)),
+                }
+            }
+        };
+        let mut labels = Vec::with_capacity(self.labels.len());
+        for label in &self.labels {
+            let target = match &label.target {
+                StoredLabelTarget::Local { start, end } => {
+                    if !in_bounds(*start, *end) {
+                        return None;
+                    }
+                    LabelTarget::Local {
+                        range: TextRange::new(TextSize::from(*start), TextSize::from(*end)),
+                    }
+                }
+                StoredLabelTarget::Symbolic { symbol } => LabelTarget::Symbolic {
+                    symbol: symbol.clone(),
+                },
+            };
+            labels.push(Label {
+                target,
+                message: label.message.clone(),
+            });
         }
-        Some(Diagnostic::spanned(
-            find_identifier(&self.id)?,
-            match self.severity {
+        let mut suggestions = Vec::with_capacity(self.suggestions.len());
+        for suggestion in &self.suggestions {
+            let mut edits = Vec::with_capacity(suggestion.edits.len());
+            for edit in &suggestion.edits {
+                if !in_bounds(edit.start, edit.end) {
+                    return None;
+                }
+                edits.push(TextEdit {
+                    file,
+                    range: TextRange::new(TextSize::from(edit.start), TextSize::from(edit.end)),
+                    replacement: edit.replacement.clone(),
+                });
+            }
+            suggestions.push(Suggestion {
+                message: suggestion.message.clone(),
+                confidence: match suggestion.confidence {
+                    StoredConfidence::Safe => Confidence::Safe,
+                    StoredConfidence::NeedsReview => Confidence::NeedsReview,
+                },
+                edits,
+            });
+        }
+        Some(Diagnostic {
+            id: find_identifier(&self.id)?,
+            severity: match self.severity {
                 StoredSeverity::Warning => Severity::Warning,
                 StoredSeverity::Error => Severity::Error,
             },
-            file,
-            TextRange::new(TextSize::from(self.start), TextSize::from(self.end)),
-            self.message.clone(),
-        ))
+            anchor,
+            message: self.message.clone(),
+            labels,
+            notes: self.notes.clone(),
+            suggestions,
+        })
     }
 }
 
@@ -784,16 +931,19 @@ pub struct StoredVerdict {
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
-    use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
+    use celerrate_diagnostics::{
+        Confidence, Diagnostic, DiagnosticId, Label, LabelTarget, Severity, Suggestion,
+    };
     use celerrate_semantics::{
         ItemTree, MemberKind, MemberTree, ResolutionAnswer, TraitAdaptation,
     };
-    use celerrate_source::{FileId, TextRange, TextSize};
+    use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
     use celerrate_stubs::{StubAvailability, StubDeprecation};
 
     use super::{
-        StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
-        StoredSeverity,
+        StoredAnchor, StoredAnswer, StoredConfidence, StoredDiagnostic, StoredItemTree,
+        StoredLabel, StoredLabelTarget, StoredMemberTree, StoredRecord, StoredSeverity,
+        StoredSuggestion, StoredTextEdit,
     };
 
     fn parsed_tree(file: u32, source: &str) -> ItemTree {
@@ -915,7 +1065,7 @@ mod tests {
             TextRange::new(TextSize::from(5), TextSize::from(12)),
             "unknown class Missing".to_owned(),
         );
-        let stored = StoredDiagnostic::of(&original).unwrap();
+        let stored = StoredDiagnostic::of(&original);
         let remapped = stored.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(remapped.id, original.id);
         assert_eq!(remapped.severity, original.severity);
@@ -943,9 +1093,11 @@ mod tests {
         let reversed = StoredDiagnostic {
             id: "CEL0018".to_owned(),
             severity: StoredSeverity::Error,
-            start: 17,
-            end: 10,
+            anchor: StoredAnchor::Span { start: 17, end: 10 },
             message: "crafted".to_owned(),
+            labels: Vec::new(),
+            notes: Vec::new(),
+            suggestions: Vec::new(),
         };
         assert!(reversed.to_diagnostic(FileId::new(9), 100).is_none());
     }
@@ -957,9 +1109,11 @@ mod tests {
         let empty = StoredDiagnostic {
             id: "CEL0018".to_owned(),
             severity: StoredSeverity::Error,
-            start: 10,
-            end: 10,
+            anchor: StoredAnchor::Span { start: 10, end: 10 },
             message: "empty span".to_owned(),
+            labels: Vec::new(),
+            notes: Vec::new(),
+            suggestions: Vec::new(),
         };
         let diagnostic = empty.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(
@@ -978,9 +1132,11 @@ mod tests {
         let oversized = StoredDiagnostic {
             id: "CEL0018".to_owned(),
             severity: StoredSeverity::Error,
-            start: 10,
-            end: 40,
+            anchor: StoredAnchor::Span { start: 10, end: 40 },
             message: "crafted".to_owned(),
+            labels: Vec::new(),
+            notes: Vec::new(),
+            suggestions: Vec::new(),
         };
         assert!(oversized.to_diagnostic(FileId::new(9), 20).is_none());
         assert!(
@@ -1032,5 +1188,87 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn an_enriched_diagnostic_round_trips_with_its_anatomy() {
+        let diagnostic = Diagnostic {
+            labels: vec![
+                Label {
+                    target: LabelTarget::Local {
+                        range: TextRange::new(TextSize::from(2), TextSize::from(5)),
+                    },
+                    message: "declared `int` here".to_owned(),
+                },
+                Label {
+                    target: LabelTarget::Symbolic {
+                        symbol: "App\\User::save".to_owned(),
+                    },
+                    message: "declared here".to_owned(),
+                },
+            ],
+            notes: vec!["inferred `string|null` on this path".to_owned()],
+            suggestions: vec![Suggestion {
+                message: "did you mean `format`".to_owned(),
+                confidence: Confidence::NeedsReview,
+                edits: vec![TextEdit {
+                    file: FileId::new(7),
+                    range: TextRange::new(TextSize::from(4), TextSize::from(10)),
+                    replacement: "format".to_owned(),
+                }],
+            }],
+            ..Diagnostic::spanned(
+                DiagnosticId::new("CEL0030"),
+                Severity::Error,
+                FileId::new(7),
+                TextRange::new(TextSize::from(4), TextSize::from(10)),
+                "unknown method `fromat`".to_owned(),
+            )
+        };
+        let stored = StoredDiagnostic::of(&diagnostic);
+        let restored = stored.to_diagnostic(FileId::new(7), 100).unwrap();
+        assert_eq!(restored, diagnostic);
+    }
+
+    #[test]
+    fn hostile_stored_ranges_discard_the_entry() {
+        let sound = StoredDiagnostic::of(&Diagnostic::spanned(
+            DiagnosticId::new("CEL0030"),
+            Severity::Error,
+            FileId::new(7),
+            TextRange::new(TextSize::from(4), TextSize::from(10)),
+            "unknown method".to_owned(),
+        ));
+        // A label range past the content length.
+        let mut hostile_label = sound.clone();
+        hostile_label.labels = vec![StoredLabel {
+            target: StoredLabelTarget::Local { start: 0, end: 999 },
+            message: "here".to_owned(),
+        }];
+        assert!(hostile_label.to_diagnostic(FileId::new(7), 100).is_none());
+        // An inverted edit range.
+        let mut hostile_edit = sound.clone();
+        hostile_edit.suggestions = vec![StoredSuggestion {
+            message: "did you mean `format`".to_owned(),
+            confidence: StoredConfidence::NeedsReview,
+            edits: vec![StoredTextEdit {
+                start: 10,
+                end: 4,
+                replacement: "format".to_owned(),
+            }],
+        }];
+        assert!(hostile_edit.to_diagnostic(FileId::new(7), 100).is_none());
+    }
+
+    #[test]
+    fn a_project_anchored_diagnostic_round_trips_without_bounds() {
+        let diagnostic = Diagnostic::project(
+            DiagnosticId::new("CEL0025"),
+            Severity::Warning,
+            "no composer.json found".to_owned(),
+        );
+        let stored = StoredDiagnostic::of(&diagnostic);
+        let restored = stored.to_diagnostic(FileId::new(0), 0).unwrap();
+        assert_eq!(restored, diagnostic);
     }
 }

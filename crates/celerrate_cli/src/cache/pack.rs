@@ -36,7 +36,10 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 ///
 /// 5 = typed artifacts: member-tree pack, inferred-signature pack,
 /// typed verdict fields, plugin-set header digest (plan 9a).
-pub const CACHE_SCHEMA_VERSION: u32 = 5;
+///
+/// 6: `StoredDiagnostic` carries the enriched anatomy — anchor, labels,
+/// notes, and suggestions (design section 3) — rather than a bare span.
+pub const CACHE_SCHEMA_VERSION: u32 = 6;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, the plugin set, and the PHP version range.
