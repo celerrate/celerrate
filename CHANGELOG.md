@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- The shared diagnostic model carries the rich anatomy the
+  diagnostics-and-fixes design specifies: an anchor that admits
+  project-level findings, labeled secondary spans (concrete in the same
+  file, symbolic across files), notes, and structured suggestions with
+  confidence and finalized text edits. The persistent-cache verdict
+  schema moves to 6 and bounds-checks every stored range on load. Model
+  groundwork only: no producer emits anatomy yet and no output changes.
 - The plugin API boundary is sealed (issue #61): `DynamicTypeProvider`
   receives a call-scoped `InvocationSite` instead of a raw salsa
   database handle, `AnnotationSite` no longer exposes `database()`,
