@@ -8,10 +8,14 @@
 
 mod diagnostic;
 mod identifier;
+mod label;
 mod registry;
 mod severity;
+mod suggestion;
 
 pub use diagnostic::Diagnostic;
 pub use identifier::DiagnosticId;
+pub use label::{Label, LabelTarget};
 pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier};
 pub use severity::Severity;
+pub use suggestion::{Confidence, Suggestion};
