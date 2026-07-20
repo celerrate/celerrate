@@ -21,6 +21,7 @@ celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_phpdoc_bridge = { path = "../celerrate_phpdoc_bridge" }
 celerrate_plugin = { path = "../celerrate_plugin" }
 celerrate_project = { path = "../celerrate_project" }
+celerrate_rules = { path = "../celerrate_rules" }
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_source = { path = "../celerrate_source" }
 celerrate_stdlib_provider = { path = "../celerrate_stdlib_provider" }

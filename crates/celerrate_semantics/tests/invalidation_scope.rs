@@ -19,7 +19,6 @@ use celerrate_semantics::{
     AstId, BodyQuery, MemberKind, MemberQuery, SymbolQuery, SymbolResolution, SymbolSources,
     SymbolSpace, UseTables, ast_id_map, body_ir, folded_symbol_key, item_tree, lookup_member,
     lookup_symbol, member_tree, reference_diagnostics, resolve_name, source_symbol_table,
-    syntax_version_diagnostics,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
@@ -548,43 +547,6 @@ fn an_unrelated_declaration_spares_other_files_reference_checks() {
         executions_of(&log, "reference_outcomes"),
         1,
         "only the edited file's walk re-runs; the consumer's lookups backdate: {log:?}",
-    );
-}
-
-#[test]
-fn a_version_range_change_re_runs_the_gating_queries() {
-    let mut db = TestDatabase::default();
-    let file = SourceFile::new(
-        &db,
-        FileId::new(0),
-        b"<?php readonly class Point {}".to_vec(),
-    );
-    let configuration = test_configuration(&db);
-    assert_eq!(
-        syntax_version_diagnostics(&db, file, configuration).len(),
-        1
-    );
-    db.take_executed();
-
-    configuration
-        .set_php_version_range(&mut db)
-        .to(PhpVersionRange::new(
-            PhpVersion::new(8, 2),
-            PhpVersion::new(8, 5),
-        ));
-    let diagnostics = syntax_version_diagnostics(&db, file, configuration);
-
-    assert_eq!(diagnostics, &vec![]);
-    let log = db.take_executed();
-    assert_eq!(
-        executions_of(&log, "syntax_version_diagnostics"),
-        1,
-        "the configuration is an input of the gating query: {log:?}",
-    );
-    assert_eq!(
-        executions_of(&log, "gated_syntax_uses"),
-        0,
-        "the walk is version-independent; a range change only re-filters: {log:?}",
     );
 }
 

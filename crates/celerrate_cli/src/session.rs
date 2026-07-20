@@ -27,7 +27,7 @@ use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
-use crate::plugins::{RegisteredPlugins, plugin_set_digest, register_plugins};
+use crate::plugins::{RegisteredPlugins, plugin_set_digest, register_core_rules, register_plugins};
 use crate::watch::{InputMutation, reconcile};
 
 /// Something that must never happen happened. The run continues, the
@@ -140,6 +140,10 @@ impl Session {
         // set `register_plugins` actually produced, not a second,
         // independently-collected descriptor list.
         let plugins = register_plugins(&database);
+        // The core rules register under their reserved identity, outside
+        // the admitted plugin set the digest keys on: core behavior is
+        // keyed by binary identity, not by the plugin-set digest.
+        register_core_rules(&database);
         // Computed once and threaded through: load and persist must key
         // packs on the same digest, never recompute it independently.
         let plugin_set_digest = plugin_set_digest(&plugins);

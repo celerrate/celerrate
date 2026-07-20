@@ -150,6 +150,7 @@ dependencies = [
  "celerrate_phpdoc_bridge",
  "celerrate_plugin",
  "celerrate_project",
+ "celerrate_rules",
  "celerrate_semantics",
  "celerrate_source",
  "celerrate_stdlib_provider",

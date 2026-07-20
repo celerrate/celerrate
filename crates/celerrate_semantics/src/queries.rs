@@ -64,9 +64,11 @@ pub fn member_tree(db: &dyn salsa::Database, file: SourceFile) -> MemberTree {
 }
 
 /// Every semantic diagnostic of one file: the reference families
-/// (unknown symbols, symbol version gating) and syntax version gating,
-/// merged and deterministically ordered. Syntax and decode findings
-/// live in `celerrate_db::file_diagnostics`; the CLI composes both.
+/// (unknown symbols, symbol version gating), deterministically ordered.
+/// Syntax version gating now belongs to the rule framework's syntax
+/// phase (`celerrate_rules::syntax_phase_diagnostics`), which the CLI
+/// composes alongside this query; syntax and decode findings live in
+/// `celerrate_db::file_diagnostics`.
 #[salsa::tracked(returns(ref))]
 pub fn semantic_diagnostics(
     db: &dyn salsa::Database,
@@ -78,11 +80,6 @@ pub fn semantic_diagnostics(
     let mut diagnostics =
         crate::reference_checks::reference_diagnostics(db, file, files, stubs, configuration)
             .clone();
-    diagnostics.extend(
-        crate::syntax_gating::syntax_version_diagnostics(db, file, configuration)
-            .iter()
-            .cloned(),
-    );
     diagnostics.sort();
     diagnostics
 }
@@ -167,9 +164,11 @@ mod tests {
     }
 
     #[test]
-    fn semantic_diagnostics_merge_both_families_in_order() {
-        // One unknown class after one gated construct: the merged output
-        // is sorted by range, families interleaved.
+    fn semantic_diagnostics_carry_the_reference_family_only() {
+        // Same fixture as before — one gated construct then one unknown
+        // class — but syntax version gating now belongs to the rule
+        // framework's syntax phase, so this query reports only the
+        // reference family: CEL0018, never CEL0024.
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
@@ -188,10 +187,7 @@ mod tests {
         .new(&db);
         let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
         let identifiers: Vec<&str> = diagnostics.iter().map(|d| d.id.as_str()).collect();
-        assert_eq!(identifiers, vec!["CEL0024", "CEL0018"]);
-        let mut sorted = diagnostics.clone();
-        sorted.sort();
-        assert_eq!(&sorted, diagnostics);
+        assert_eq!(identifiers, vec!["CEL0018"]);
     }
 
     #[test]

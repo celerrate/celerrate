@@ -56,8 +56,9 @@ mod tests {
 
     use celerrate_db::SourceFile;
     use celerrate_db::testing::TestDatabase;
+    use celerrate_diagnostics::{Diagnostic, Severity};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-    use celerrate_semantics::PluginIdentity;
+    use celerrate_semantics::{PluginIdentity, SYNTAX_NOT_AVAILABLE};
     use celerrate_source::FileId;
 
     use crate::metadata::Tier;
@@ -94,15 +95,124 @@ mod tests {
         (db, file, configuration)
     }
 
+    /// The full framework path for one source at one range minimum: the
+    /// registry is populated from `core_rules`, so this exercises exactly
+    /// what the CLI composes.
+    fn gated(source: &str, minimum: PhpVersion) -> Vec<Diagnostic> {
+        let (db, file, configuration) = registered_setup(source, minimum);
+        syntax_phase_diagnostics(&db, file, configuration).clone()
+    }
+
     #[test]
-    fn the_rule_reproduces_the_legacy_query_byte_for_byte() {
-        let source = "<?php\nreadonly class Point {}\nclass Box { public const int X = 1; }\n";
-        let (db, file, configuration) = registered_setup(source, PhpVersion::new(8, 1));
+    fn a_readonly_class_is_gated_below_its_version() {
+        let diagnostics = gated("<?php readonly class Point {}", PhpVersion::new(8, 1));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, SYNTAX_NOT_AVAILABLE);
+        assert_eq!(diagnostics[0].severity, Severity::Error);
         assert_eq!(
-            syntax_phase_diagnostics(&db, file, configuration),
-            celerrate_semantics::syntax_version_diagnostics(&db, file, configuration),
+            diagnostics[0].message,
+            "`readonly class` requires PHP 8.2, but the project's minimum PHP version is 8.1",
         );
-        assert_eq!(syntax_phase_diagnostics(&db, file, configuration).len(), 2);
+    }
+
+    #[test]
+    fn a_readonly_property_is_not_a_readonly_class() {
+        assert_eq!(
+            gated(
+                "<?php class Point { public readonly int $x; }",
+                PhpVersion::new(8, 1),
+            ),
+            vec![],
+        );
+    }
+
+    #[test]
+    fn each_gated_construct_reports_its_version() {
+        let cases: &[(&str, &str, &str)] = &[
+            (
+                "<?php function f((Left&Right)|null $x) {}",
+                "parenthesized (DNF) type",
+                "8.2",
+            ),
+            (
+                "<?php class C { const int LIMIT = 1; }",
+                "typed constant",
+                "8.3",
+            ),
+            (
+                "<?php $x = Config::{$name};",
+                "dynamic class constant fetch",
+                "8.3",
+            ),
+            (
+                "<?php class C { public string $p { get => 'v'; } }",
+                "property hooks",
+                "8.4",
+            ),
+            (
+                "<?php class C { public private(set) string $p; }",
+                "asymmetric visibility",
+                "8.4",
+            ),
+            ("<?php $y = $x |> strlen(...);", "pipe operator", "8.5"),
+            (
+                "<?php $c = clone($point, ['x' => 1]);",
+                "clone with arguments",
+                "8.5",
+            ),
+        ];
+        for (source, label, version) in cases {
+            let diagnostics = gated(source, PhpVersion::new(8, 1));
+            let expected = format!(
+                "`{label}` requires PHP {version}, but the project's minimum PHP version is 8.1",
+            );
+            assert!(
+                diagnostics.iter().any(|d| d.message == expected),
+                "{source}: {diagnostics:?}",
+            );
+            assert_eq!(gated(source, PhpVersion::new(8, 5)), vec![], "{source}");
+        }
+    }
+
+    #[test]
+    fn a_static_property_access_is_not_a_dynamic_constant_fetch() {
+        assert_eq!(
+            gated("<?php $x = Config::$value;", PhpVersion::new(8, 1)),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_single_positional_clone_argument_is_not_gated() {
+        // Pre-8.5 PHP reads `clone($x)` as `clone` of a parenthesized
+        // expression; gating it would be a false positive.
+        assert_eq!(
+            gated("<?php $c = clone($point);", PhpVersion::new(8, 1)),
+            vec![]
+        );
+        let named = gated("<?php $c = clone(object: $point);", PhpVersion::new(8, 1));
+        assert_eq!(named.len(), 1);
+    }
+
+    #[test]
+    fn an_identifier_class_constant_is_not_a_dynamic_fetch() {
+        assert_eq!(
+            gated("<?php $x = Config::VERSION;", PhpVersion::new(8, 1)),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn a_promoted_property_with_asymmetric_visibility_is_gated() {
+        let source =
+            "<?php class C { public function __construct(public private(set) string $x) {} }";
+        let diagnostics = gated(source, PhpVersion::new(8, 1));
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].message,
+            "`asymmetric visibility` requires PHP 8.4, but the project's minimum PHP version is 8.1",
+        );
+        assert_eq!(gated(source, PhpVersion::new(8, 5)), vec![]);
     }
 
     #[test]
