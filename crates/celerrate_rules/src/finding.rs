@@ -41,12 +41,8 @@ pub struct FindingSink<'rule> {
 }
 
 impl<'rule> FindingSink<'rule> {
-    /// Crate-internal construction: only the phase-query runner (a
-    /// later task) drives a rule and owns a sink's lifetime. Unread
-    /// from production code until that task wires it up, hence the
-    /// `dead_code` allow (the same situation as
-    /// `celerrate_types::checks::CheckContext`).
-    #[allow(dead_code)]
+    /// Crate-internal construction: only the phase-query runner drives
+    /// a rule and owns a sink's lifetime.
     pub(crate) fn new(metadata: &'rule RuleMetadata) -> Self {
         Self {
             metadata,
@@ -66,11 +62,8 @@ impl<'rule> FindingSink<'rule> {
         });
     }
 
-    /// Crate-internal drain: only the phase-query runner (a later
-    /// task) collects a rule's findings once it finishes reporting.
-    /// Unread from production code until that task wires it up, hence
-    /// the `dead_code` allow.
-    #[allow(dead_code)]
+    /// Crate-internal drain: only the phase-query runner collects a
+    /// rule's findings once it finishes reporting.
     pub(crate) fn into_findings(self) -> Vec<Finding> {
         self.findings
     }
