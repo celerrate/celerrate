@@ -16,9 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # See ci.yml's `changes` job: gate the corpus gates on a real code change so
-  # a documentation-only pull request skips them (and stays mergeable, since a
-  # skipped required job satisfies branch protection).
+  # See ci.yml's `changes` job. The snapshot, bench and phpdoc-cases contexts
+  # are required by branch protection, so those jobs always start and gate
+  # every step on `code` (issue #89): on a documentation-only pull request
+  # they no-op in seconds and report success. The ground-truth, mixed-rate
+  # and memory contexts are not required, so those jobs keep the cheaper
+  # job-level skip.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -75,19 +78,23 @@ jobs:
 
   snapshot:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/cache@v4
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
-      - run: cargo xtask corpus
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask corpus
 
   ground-truth:
     needs: changes
@@ -123,20 +130,25 @@ jobs:
 
   bench:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/cache@v4
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
-      - run: sudo apt-get update && sudo apt-get install --yes hyperfine
-      - run: cargo xtask bench --ceilings
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: sudo apt-get update && sudo apt-get install --yes hyperfine
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask bench --ceilings
 
   memory:
     needs: changes
@@ -157,16 +169,20 @@ jobs:
 
   phpdoc-cases:
     needs: changes
-    if: ${{ needs.changes.outputs.code == 'true' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@v1
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
         with:
           toolchain: "1.94"
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/cache@v4
         with:
           path: target/phpdoc-parser
           key: phpdoc-parser-${{ hashFiles('xtask/phpdoc-parser.pin') }}
-      - run: cargo xtask phpdoc-cases --check
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask phpdoc-cases --check
