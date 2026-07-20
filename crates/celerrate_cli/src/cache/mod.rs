@@ -531,7 +531,10 @@ fn composed_verdict_with_lever(
         None
     };
     StoredVerdict {
-        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        diagnostics: diagnostics
+            .iter()
+            .filter_map(StoredDiagnostic::of)
+            .collect(),
         records: records.iter().map(StoredRecord::of).collect(),
         typed,
     }
@@ -611,7 +614,10 @@ fn composed_typed_verdict(
         ))
         .collect();
     StoredTypedVerdict {
-        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        diagnostics: diagnostics
+            .iter()
+            .filter_map(StoredDiagnostic::of)
+            .collect(),
         classes,
         functions,
         inferred,

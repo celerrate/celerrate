@@ -13,7 +13,7 @@ mod registry;
 mod severity;
 mod suggestion;
 
-pub use diagnostic::Diagnostic;
+pub use diagnostic::{Anchor, Diagnostic};
 pub use identifier::DiagnosticId;
 pub use label::{Label, LabelTarget};
 pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier};

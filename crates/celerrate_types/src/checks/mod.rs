@@ -384,13 +384,13 @@ pub fn typed_diagnostics(
         .filter_map(|verdict| {
             let map = body_source_map(db, file, BodyQuery::new(db, verdict.body)).as_ref()?;
             let pointer = map.expression_pointer(verdict.expression)?;
-            Some(Diagnostic {
-                id: verdict.kind.identifier(),
-                severity: Severity::Error,
-                file: file_id,
-                range: pointer.text_range(),
-                message: verdict.kind.message(),
-            })
+            Some(Diagnostic::spanned(
+                verdict.kind.identifier(),
+                Severity::Error,
+                file_id,
+                pointer.text_range(),
+                verdict.kind.message(),
+            ))
         })
         .collect();
     diagnostics.sort();

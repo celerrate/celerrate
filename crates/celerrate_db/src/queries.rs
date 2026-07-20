@@ -62,13 +62,13 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[SOURCE_TOO_LARGE];
 pub fn file_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
     let file_id = file.file_id(db);
     match source_text(db, file) {
-        Err(_) => vec![Diagnostic {
-            id: SOURCE_TOO_LARGE,
-            severity: Severity::Error,
-            file: file_id,
-            range: TextRange::empty(TextSize::from(0)),
-            message: "the file exceeds the 4 GiB source size limit".to_owned(),
-        }],
+        Err(_) => vec![Diagnostic::spanned(
+            SOURCE_TOO_LARGE,
+            Severity::Error,
+            file_id,
+            TextRange::empty(TextSize::from(0)),
+            "the file exceeds the 4 GiB source size limit".to_owned(),
+        )],
         Ok(_) => parse(db, file)
             .diagnostics()
             .iter()
@@ -140,7 +140,10 @@ mod tests {
         let diagnostics = file_diagnostics(&db, file);
         assert!(!diagnostics.is_empty());
         for diagnostic in diagnostics {
-            assert_eq!(diagnostic.file, FileId::new(9));
+            assert_eq!(
+                diagnostic.span().map(|(file, _)| file),
+                Some(FileId::new(9))
+            );
             assert_eq!(diagnostic.severity, celerrate_diagnostics::Severity::Error);
             assert!(diagnostic.id.as_str().starts_with("CEL"));
         }

@@ -619,17 +619,18 @@ pub struct StoredDiagnostic {
 }
 
 impl StoredDiagnostic {
-    pub fn of(diagnostic: &Diagnostic) -> Self {
-        Self {
+    pub fn of(diagnostic: &Diagnostic) -> Option<Self> {
+        let (_, range) = diagnostic.span()?;
+        Some(Self {
             id: diagnostic.id.as_str().to_owned(),
             severity: match diagnostic.severity {
                 Severity::Warning => StoredSeverity::Warning,
                 Severity::Error => StoredSeverity::Error,
             },
-            start: diagnostic.range.start().into(),
-            end: diagnostic.range.end().into(),
+            start: range.start().into(),
+            end: range.end().into(),
             message: diagnostic.message.clone(),
-        }
+        })
     }
 
     /// `None` when the stored identifier is unknown to the registry (the
@@ -646,16 +647,16 @@ impl StoredDiagnostic {
         if self.start > self.end || self.end > content_length {
             return None;
         }
-        Some(Diagnostic {
-            id: find_identifier(&self.id)?,
-            severity: match self.severity {
+        Some(Diagnostic::spanned(
+            find_identifier(&self.id)?,
+            match self.severity {
                 StoredSeverity::Warning => Severity::Warning,
                 StoredSeverity::Error => Severity::Error,
             },
             file,
-            range: TextRange::new(TextSize::from(self.start), TextSize::from(self.end)),
-            message: self.message.clone(),
-        })
+            TextRange::new(TextSize::from(self.start), TextSize::from(self.end)),
+            self.message.clone(),
+        ))
     }
 }
 
@@ -907,19 +908,21 @@ mod tests {
 
     #[test]
     fn a_diagnostic_round_trips_and_an_unknown_identifier_is_rejected() {
-        let original = Diagnostic {
-            id: DiagnosticId::new("CEL0018"),
-            severity: Severity::Error,
-            file: FileId::new(3),
-            range: TextRange::new(TextSize::from(5), TextSize::from(12)),
-            message: "unknown class Missing".to_owned(),
-        };
-        let stored = StoredDiagnostic::of(&original);
+        let original = Diagnostic::spanned(
+            DiagnosticId::new("CEL0018"),
+            Severity::Error,
+            FileId::new(3),
+            TextRange::new(TextSize::from(5), TextSize::from(12)),
+            "unknown class Missing".to_owned(),
+        );
+        let stored = StoredDiagnostic::of(&original).unwrap();
         let remapped = stored.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(remapped.id, original.id);
         assert_eq!(remapped.severity, original.severity);
-        assert_eq!(remapped.file, FileId::new(9));
-        assert_eq!(remapped.range, original.range);
+        assert_eq!(
+            remapped.span(),
+            Some((FileId::new(9), original.span().unwrap().1))
+        );
         assert_eq!(remapped.message, original.message);
 
         let unknown = StoredDiagnostic {
@@ -960,7 +963,7 @@ mod tests {
         };
         let diagnostic = empty.to_diagnostic(FileId::new(9), 100).unwrap();
         assert_eq!(
-            diagnostic.range,
+            diagnostic.span().unwrap().1,
             TextRange::new(TextSize::from(10), TextSize::from(10))
         );
     }
