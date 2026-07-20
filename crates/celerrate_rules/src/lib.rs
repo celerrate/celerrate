@@ -6,9 +6,14 @@
 mod context;
 mod finding;
 mod metadata;
+mod registry;
 mod traits;
 
 pub use context::{ReportingContext, SyntaxContext, testing_syntax_context};
 pub use finding::{FindingAnchor, FindingSink};
 pub use metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};
+pub use registry::{
+    CORE_IDENTITY_NAME, RuleConflict, RuleImplementation, RuleRegistration, RuleRegistry,
+    validate_rules,
+};
 pub use traits::{ReportingRule, SemanticRule, SyntaxRule, TypedBodyRule};
