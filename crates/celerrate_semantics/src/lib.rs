@@ -28,6 +28,7 @@ mod reference_checks;
 mod references;
 mod resolve;
 mod revalidation;
+mod rule_context;
 mod strict_types;
 mod symbols;
 mod syntax_gating;
@@ -77,6 +78,7 @@ pub use reference_checks::{
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};
 pub use revalidation::{ResolutionAnswer, ResolutionRecord, answer_of, resolution_records};
+pub use rule_context::{SemanticContext, semantic_context};
 pub use strict_types::file_strict_types;
 pub use symbols::{SymbolSpace, folded_symbol_key, fully_qualified_name};
 pub use syntax_gating::{
