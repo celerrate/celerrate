@@ -149,7 +149,10 @@ fn retain_unsuppressed(
         .map(|text| TextSize::of(text.text()))
         .unwrap_or_default();
     diagnostics.retain(|diagnostic| {
-        !celerrate_semantics::is_suppressed(suppressed, diagnostic.range.start(), text_end)
+        let Some((_, range)) = diagnostic.span() else {
+            return true;
+        };
+        !celerrate_semantics::is_suppressed(suppressed, range.start(), text_end)
     });
 }
 
@@ -403,13 +406,13 @@ mod tests {
     use super::{Panicked, assemble, guarded, isolated};
 
     fn diagnostic(file: u32, offset: u32) -> Diagnostic {
-        Diagnostic {
-            id: DiagnosticId::new("CEL0018"),
-            severity: Severity::Error,
-            file: FileId::new(file),
-            range: TextRange::empty(TextSize::from(offset)),
-            message: "unknown class".to_owned(),
-        }
+        Diagnostic::spanned(
+            DiagnosticId::new("CEL0018"),
+            Severity::Error,
+            FileId::new(file),
+            TextRange::empty(TextSize::from(offset)),
+            "unknown class".to_owned(),
+        )
     }
 
     #[test]

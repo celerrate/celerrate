@@ -170,30 +170,30 @@ fn availability_diagnostics(
     if let Some(introduced) = availability.introduced
         && introduced > version_range.minimum
     {
-        diagnostics.push(Diagnostic {
-            id: SYMBOL_NOT_AVAILABLE,
-            severity: Severity::Error,
+        diagnostics.push(Diagnostic::spanned(
+            SYMBOL_NOT_AVAILABLE,
+            Severity::Error,
             file,
-            range: reference.range,
-            message: format!(
+            reference.range,
+            format!(
                 "`{}` requires PHP {introduced}, but the project's minimum PHP version is {}",
                 reference.written, version_range.minimum,
             ),
-        });
+        ));
     }
     if let Some(removed) = availability.removed
         && removed <= version_range.maximum
     {
-        diagnostics.push(Diagnostic {
-            id: SYMBOL_REMOVED,
-            severity: Severity::Error,
+        diagnostics.push(Diagnostic::spanned(
+            SYMBOL_REMOVED,
+            Severity::Error,
             file,
-            range: reference.range,
-            message: format!(
+            reference.range,
+            format!(
                 "`{}` was removed in PHP {removed}, but the project's maximum PHP version is {}",
                 reference.written, version_range.maximum,
             ),
-        });
+        ));
     }
     if let Some(deprecation) = availability.deprecated {
         let applies = deprecation
@@ -204,13 +204,13 @@ fn availability_diagnostics(
                 Some(since) => format!("`{}` is deprecated since PHP {since}", reference.written),
                 None => format!("`{}` is deprecated", reference.written),
             };
-            diagnostics.push(Diagnostic {
-                id: SYMBOL_DEPRECATED,
-                severity: Severity::Warning,
+            diagnostics.push(Diagnostic::spanned(
+                SYMBOL_DEPRECATED,
+                Severity::Warning,
                 file,
-                range: reference.range,
+                reference.range,
                 message,
-            });
+            ));
         }
     }
 }
@@ -221,13 +221,13 @@ fn unknown_symbol(reference: &Reference, file: FileId) -> Diagnostic {
         SymbolSpace::Function => (UNKNOWN_FUNCTION, "function"),
         SymbolSpace::Constant => (UNKNOWN_CONSTANT, "constant"),
     };
-    Diagnostic {
+    Diagnostic::spanned(
         id,
-        severity: Severity::Error,
+        Severity::Error,
         file,
-        range: reference.range,
-        message: format!("unknown {kind} `{}`", reference.written),
-    }
+        reference.range,
+        format!("unknown {kind} `{}`", reference.written),
+    )
 }
 
 #[cfg(test)]
@@ -305,8 +305,9 @@ mod tests {
         assert_eq!(diagnostic.id, UNKNOWN_CLASS);
         assert_eq!(diagnostic.severity, Severity::Error);
         assert_eq!(diagnostic.message, "unknown class `Client`");
-        let start: usize = diagnostic.range.start().into();
-        let end: usize = diagnostic.range.end().into();
+        let (_, range) = diagnostic.span().unwrap();
+        let start: usize = range.start().into();
+        let end: usize = range.end().into();
         assert_eq!(&source[start..end], "Client");
     }
 

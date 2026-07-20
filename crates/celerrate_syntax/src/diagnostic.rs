@@ -201,13 +201,13 @@ impl SyntaxDiagnostic {
     /// Projects this syntax diagnostic into the shared model. Every
     /// syntax finding is an error: the file does not parse as written.
     pub fn to_diagnostic(&self, file: FileId) -> Diagnostic {
-        Diagnostic {
-            id: self.diagnostic_id(),
-            severity: Severity::Error,
+        Diagnostic::spanned(
+            self.diagnostic_id(),
+            Severity::Error,
             file,
-            range: self.range,
-            message: self.message(),
-        }
+            self.range,
+            self.message(),
+        )
     }
 }
 
@@ -267,8 +267,10 @@ mod tests {
         let diagnostic = syntax_diagnostic.to_diagnostic(FileId::new(7));
         assert_eq!(diagnostic.id.as_str(), "CEL0004");
         assert_eq!(diagnostic.severity, Severity::Error);
-        assert_eq!(diagnostic.file, FileId::new(7));
-        assert_eq!(diagnostic.range, syntax_diagnostic.range);
+        assert_eq!(
+            diagnostic.span(),
+            Some((FileId::new(7), syntax_diagnostic.range))
+        );
     }
 
     #[test]

@@ -7,11 +7,17 @@
 //! rendering is always an upper layer's business.
 
 mod diagnostic;
+mod explain;
 mod identifier;
+mod label;
 mod registry;
 mod severity;
+mod suggestion;
 
-pub use diagnostic::Diagnostic;
+pub use diagnostic::{Anchor, Diagnostic};
+pub use explain::ExplainPage;
 pub use identifier::DiagnosticId;
-pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier};
+pub use label::{Label, LabelTarget};
+pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier, find_page};
 pub use severity::Severity;
+pub use suggestion::{Confidence, Suggestion};

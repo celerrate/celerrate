@@ -35,15 +35,17 @@ pub fn syntax_version_diagnostics(
     let mut diagnostics: Vec<Diagnostic> = gated_uses(&root)
         .into_iter()
         .filter(|gated| gated.required > minimum)
-        .map(|gated| Diagnostic {
-            id: SYNTAX_NOT_AVAILABLE,
-            severity: Severity::Error,
-            file: file_id,
-            range: gated.range,
-            message: format!(
-                "`{}` requires PHP {}, but the project's minimum PHP version is {minimum}",
-                gated.label, gated.required,
-            ),
+        .map(|gated| {
+            Diagnostic::spanned(
+                SYNTAX_NOT_AVAILABLE,
+                Severity::Error,
+                file_id,
+                gated.range,
+                format!(
+                    "`{}` requires PHP {}, but the project's minimum PHP version is {minimum}",
+                    gated.label, gated.required,
+                ),
+            )
         })
         .collect();
     diagnostics.sort();

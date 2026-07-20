@@ -9,7 +9,7 @@
 
 use std::io::{self, Write};
 
-use celerrate_diagnostics::Diagnostic;
+use celerrate_diagnostics::{Anchor, Diagnostic};
 use celerrate_source::{FileId, TextSize};
 
 use crate::analysis::AnalysisOutcome;
@@ -93,13 +93,18 @@ pub fn render_cycle(
 /// `path:line:column identifier message`, one-based, relative to the
 /// project root.
 fn render_diagnostic(session: &Session, diagnostic: &Diagnostic) -> String {
-    let (line, column) = position(session, diagnostic.file, diagnostic.range.start());
-    format!(
-        "{}:{line}:{column} {} {}",
-        display_path(session, diagnostic.file),
-        diagnostic.id.as_str(),
-        diagnostic.message,
-    )
+    match diagnostic.anchor {
+        Anchor::Span { file, range } => {
+            let (line, column) = position(session, file, range.start());
+            format!(
+                "{}:{line}:{column} {} {}",
+                display_path(session, file),
+                diagnostic.id.as_str(),
+                diagnostic.message,
+            )
+        }
+        Anchor::Project => format!("notice {}: {}", diagnostic.id.as_str(), diagnostic.message),
+    }
 }
 
 /// The line index is zero-based, and its column is a byte offset within
