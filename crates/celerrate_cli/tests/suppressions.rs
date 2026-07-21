@@ -146,3 +146,254 @@ function run(?User $user): void
         "suppression is family-agnostic: {output}"
     );
 }
+
+#[test]
+fn issue_58_suppressing_one_code_keeps_the_co_located_other_reported() {
+    // The acceptance test of the #58 triage: two diagnostics on one
+    // line (CEL0018 and CEL0019), a directive naming only the class
+    // identifier. Before identifier-level correspondence this
+    // suppressed both.
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); // @phpstan-ignore class.notFound\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(!text.contains("CEL0018"), "{text}");
+    assert!(text.contains("CEL0019"), "{text}");
+}
+
+#[test]
+fn a_fully_mapped_identifier_list_suppresses_the_union() {
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); // @phpstan-ignore class.notFound, function.notFound\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+#[test]
+fn any_unmapped_identifier_falls_back_to_the_whole_scope() {
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); // @phpstan-ignore class.notFound, some.unknownIdentifier\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+#[test]
+fn psalm_suppress_all_is_scope_wide() {
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); /* @psalm-suppress all */\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+#[test]
+fn correspondence_lookup_is_exact_case() {
+    // The properly cased identifier narrows (CEL0019 survives); the
+    // miscased one is unmapped and widens to the whole scope. Both
+    // honor the user's suppression; only the exact-case form is
+    // precise.
+    let narrowed = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); /* @psalm-suppress UndefinedClass */\n",
+    )]);
+    let (outcome, text) = check(narrowed.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(text.contains("CEL0019"), "{text}");
+
+    let widened = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); /* @psalm-suppress undefinedclass */\n",
+    )]);
+    let (outcome, text) = check(widened.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+// The per-code semantic-evidence gate (design section 8): the
+// correspondence-table gate (`suppression_correspondence.rs`) only
+// proves the table and the vendored catalogues agree on which
+// identifiers exist, never that a mapped `Codes` entry names the
+// *right* Celerrate code. A wrong entry under-suppresses invisibly —
+// the corpus snapshot is pinned at zero diagnostics, so it cannot
+// catch it. For every distinct CEL code named in a `Codes` entry,
+// provoke that code in a small fixture and prove that one
+// representative identifier mapped to it actually suppresses it. Any
+// failure here is a wrong table entry, not a wrong test: fix
+// `correspondence.rs`, not the fixture.
+//
+// CEL0021 and CEL0022 also appear in `Codes` entries, always bundled
+// with CEL0018/CEL0019/CEL0020 under the same identifiers exercised
+// below (`class.notFound`/`UndefinedClass`,
+// `function.notFound`/`UndefinedFunction`,
+// `constant.notFound`/`UndefinedConstant`). They get no arm of their
+// own here: CEL0021 needs the same version-gated-symbol fixture as
+// `cel0021_a_known_gated_symbol_is_reported` in `seeded_defects.rs`
+// to provoke on its own, and CEL0022 has no product-level fixture at
+// all today (see the comment beside that same test). Their presence
+// in the bundled three-code sets is exercised indirectly: the
+// CEL0018/CEL0019/CEL0020 arms below suppress the very same union,
+// so a table entry that dropped CEL0021 or CEL0022 from the bundle
+// would not be caught here, only by the two fixtures named above.
+
+const PER_CODE_MANIFEST: &str =
+    r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
+
+struct PerCodeSeed {
+    code: &'static str,
+    identifier: &'static str,
+    source: &'static str,
+}
+
+fn assert_fully_suppressed(seed: &PerCodeSeed) {
+    let root = project(&[
+        ("composer.json", PER_CODE_MANIFEST),
+        ("src/Seed.php", seed.source),
+    ]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(
+        outcome,
+        Outcome::Clean,
+        "{} via `{}` must be fully suppressed:\n{text}",
+        seed.code,
+        seed.identifier,
+    );
+}
+
+#[test]
+fn every_mapped_phpstan_code_is_actually_suppressed_by_its_identifier() {
+    const SEEDS: &[PerCodeSeed] = &[
+        PerCodeSeed {
+            code: "CEL0018",
+            identifier: "class.notFound",
+            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); } // @phpstan-ignore class.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0019",
+            identifier: "function.notFound",
+            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); } // @phpstan-ignore function.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0020",
+            identifier: "constant.notFound",
+            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; } // @phpstan-ignore constant.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0023",
+            identifier: "function.deprecated",
+            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); } // @phpstan-ignore function.deprecated\n",
+        },
+        PerCodeSeed {
+            code: "CEL0030",
+            identifier: "method.notFound",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); } // @phpstan-ignore method.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0031",
+            identifier: "property.notFound",
+            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; } // @phpstan-ignore property.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0032",
+            identifier: "classConstant.notFound",
+            source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; } // @phpstan-ignore classConstant.notFound\n",
+        },
+        PerCodeSeed {
+            code: "CEL0034",
+            identifier: "method.nonObject",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); } // @phpstan-ignore method.nonObject\n",
+        },
+        PerCodeSeed {
+            code: "CEL0035",
+            identifier: "argument.type",
+            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); } // @phpstan-ignore argument.type\n",
+        },
+        PerCodeSeed {
+            code: "CEL0036",
+            identifier: "arguments.count",
+            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); } // @phpstan-ignore arguments.count\n",
+        },
+        PerCodeSeed {
+            code: "CEL0037",
+            identifier: "arguments.count",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); } // @phpstan-ignore arguments.count\n",
+        },
+        PerCodeSeed {
+            code: "CEL0038",
+            identifier: "argument.unknown",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); } // @phpstan-ignore argument.unknown\n",
+        },
+    ];
+    for seed in SEEDS {
+        assert_fully_suppressed(seed);
+    }
+}
+
+#[test]
+fn every_mapped_psalm_code_is_actually_suppressed_by_its_identifier() {
+    const SEEDS: &[PerCodeSeed] = &[
+        PerCodeSeed {
+            code: "CEL0018",
+            identifier: "UndefinedClass",
+            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); } /* @psalm-suppress UndefinedClass */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0019",
+            identifier: "UndefinedFunction",
+            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); } /* @psalm-suppress UndefinedFunction */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0020",
+            identifier: "UndefinedConstant",
+            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; } /* @psalm-suppress UndefinedConstant */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0023",
+            identifier: "DeprecatedFunction",
+            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); } /* @psalm-suppress DeprecatedFunction */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0030",
+            identifier: "UndefinedMethod",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); } /* @psalm-suppress UndefinedMethod */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0031",
+            identifier: "UndefinedPropertyFetch",
+            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; } /* @psalm-suppress UndefinedPropertyFetch */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0034",
+            identifier: "PossiblyNullReference",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); } /* @psalm-suppress PossiblyNullReference */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0035",
+            identifier: "InvalidArgument",
+            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); } /* @psalm-suppress InvalidArgument */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0036",
+            identifier: "TooFewArguments",
+            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); } /* @psalm-suppress TooFewArguments */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0037",
+            identifier: "TooManyArguments",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); } /* @psalm-suppress TooManyArguments */\n",
+        },
+        PerCodeSeed {
+            code: "CEL0038",
+            identifier: "InvalidNamedArgument",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); } /* @psalm-suppress InvalidNamedArgument */\n",
+        },
+    ];
+    for seed in SEEDS {
+        assert_fully_suppressed(seed);
+    }
+}

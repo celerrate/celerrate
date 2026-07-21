@@ -17,16 +17,20 @@
 //! (design section 5: over-suppression, never under-suppression). A
 //! docblock-attached `@psalm-suppress` maps to the annotated
 //! declaration's whole span — its Psalm scope, not the docblock's own
-//! line where no diagnostic ever fires. Identifiers are carried, never
-//! matched: identifier-level correspondence is the rule framework's.
-//! Malformed content yields fewer identifiers or no directive, never
-//! an error — no docblock diagnostics.
+//! line where no diagnostic ever fires. Identifiers are marked through
+//! the correspondence table (design section 8): the bridge marks each
+//! written identifier as mapped to its Celerrate codes, explicitly
+//! scope-wide, or unmapped; the matcher downstream (`celerrate_semantics`)
+//! is where that mark turns into a filter. Malformed content yields
+//! fewer identifiers or no directive, never an error — no docblock
+//! diagnostics.
 
 use celerrate_plugin::{
     CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveOrigin, DirectiveScope,
     SuppressionIdentifier,
 };
 
+use crate::correspondence::{Dialect, ForeignMapping, foreign_mapping};
 use crate::syntax::PhpdocBridge;
 
 const PHPSTAN_IGNORE: &str = "@phpstan-ignore";
@@ -62,11 +66,12 @@ pub fn comment_directives(kind: CommentKind, text: &str) -> Vec<CommentDirective
 /// `-next-line` before `-line` before the bare identifier-bearing form.
 fn phpstan_directive(after_tag: &str) -> Option<CommentDirective> {
     if let Some(rest) = after_tag.strip_prefix("-next-line") {
-        ends_word(rest).then(|| suppress(DirectiveScope::NextLine, Vec::new()))
+        ends_word(rest).then(|| suppress(Dialect::Phpstan, DirectiveScope::NextLine, Vec::new()))
     } else if let Some(rest) = after_tag.strip_prefix("-line") {
-        ends_word(rest).then(|| suppress(DirectiveScope::CurrentLine, Vec::new()))
+        ends_word(rest).then(|| suppress(Dialect::Phpstan, DirectiveScope::CurrentLine, Vec::new()))
     } else if ends_word(after_tag) {
         Some(suppress(
+            Dialect::Phpstan,
             DirectiveScope::CurrentAndNextLine,
             identifiers_of(after_tag),
         ))
@@ -87,16 +92,32 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
         // resolution the bare form uses (design section 5).
         _ => DirectiveScope::CurrentAndNextLine,
     };
-    Some(suppress(scope, identifiers_of(after_tag)))
+    Some(suppress(Dialect::Psalm, scope, identifiers_of(after_tag)))
 }
 
-fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
+/// One written identifier, marked through the correspondence table
+/// (design section 8): mapped with its code strings, explicitly
+/// scope-wide, or unmapped. This resolves the long-standing "carried,
+/// never matched" reservation: the bridge marks, the matcher
+/// downstream matches.
+fn foreign_identifier(dialect: Dialect, written: String) -> SuppressionIdentifier {
+    match foreign_mapping(dialect, &written) {
+        ForeignMapping::Codes(codes) => SuppressionIdentifier::mapped(
+            written,
+            codes.iter().map(|code| (*code).to_owned()).collect(),
+        ),
+        ForeignMapping::ScopeWide => SuppressionIdentifier::scope_wide(written),
+        ForeignMapping::Unmapped => SuppressionIdentifier::unmapped(written),
+    }
+}
+
+fn suppress(dialect: Dialect, scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
     CommentDirective::suppress(
         scope,
         DirectiveOrigin::Foreign,
         identifiers
             .into_iter()
-            .map(SuppressionIdentifier::unmapped)
+            .map(|written| foreign_identifier(dialect, written))
             .collect(),
     )
 }
@@ -135,14 +156,17 @@ mod tests {
 
     use super::*;
 
-    fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
-        CommentDirective::suppress(
-            scope,
-            DirectiveOrigin::Foreign,
-            identifiers
-                .iter()
-                .map(|written| SuppressionIdentifier::unmapped((*written).to_owned()))
-                .collect(),
+    fn suppress(
+        scope: DirectiveScope,
+        identifiers: Vec<SuppressionIdentifier>,
+    ) -> CommentDirective {
+        CommentDirective::suppress(scope, DirectiveOrigin::Foreign, identifiers)
+    }
+
+    fn mapped(written: &str, codes: &[&str]) -> SuppressionIdentifier {
+        SuppressionIdentifier::mapped(
+            written.to_owned(),
+            codes.iter().map(|code| (*code).to_owned()).collect(),
         )
     }
 
@@ -156,7 +180,7 @@ mod tests {
         ] {
             assert_eq!(
                 comment_directives(kind, text),
-                vec![suppress(DirectiveScope::CurrentLine, &[])],
+                vec![suppress(DirectiveScope::CurrentLine, vec![])],
                 "{text}",
             );
         }
@@ -166,7 +190,7 @@ mod tests {
     fn ignore_next_line_suppresses_the_next_line_and_is_not_read_as_the_bare_form() {
         assert_eq!(
             comment_directives(CommentKind::Line, "// @phpstan-ignore-next-line"),
-            vec![suppress(DirectiveScope::NextLine, &[])],
+            vec![suppress(DirectiveScope::NextLine, vec![])],
         );
     }
 
@@ -179,12 +203,15 @@ mod tests {
             ),
             vec![suppress(
                 DirectiveScope::CurrentAndNextLine,
-                &["method.notFound", "property.notFound"],
+                vec![
+                    mapped("method.notFound", &["CEL0030"]),
+                    mapped("property.notFound", &["CEL0031"]),
+                ],
             )],
         );
         assert_eq!(
             comment_directives(CommentKind::Line, "// @phpstan-ignore"),
-            vec![suppress(DirectiveScope::CurrentAndNextLine, &[])],
+            vec![suppress(DirectiveScope::CurrentAndNextLine, vec![])],
         );
     }
 
@@ -197,7 +224,10 @@ mod tests {
             ),
             vec![suppress(
                 DirectiveScope::AnnotatedDeclaration,
-                &["PossiblyNullReference", "InvalidArgument"],
+                vec![
+                    mapped("PossiblyNullReference", &["CEL0034"]),
+                    mapped("InvalidArgument", &["CEL0035"]),
+                ],
             )],
         );
     }
@@ -208,7 +238,7 @@ mod tests {
             comment_directives(CommentKind::Block, "/* @psalm-suppress InvalidArgument */"),
             vec![suppress(
                 DirectiveScope::CurrentAndNextLine,
-                &["InvalidArgument"],
+                vec![mapped("InvalidArgument", &["CEL0035"])],
             )],
         );
     }
@@ -221,8 +251,11 @@ mod tests {
                 "/**\n * @psalm-suppress UndefinedClass\n * @phpstan-ignore-next-line\n */",
             ),
             vec![
-                suppress(DirectiveScope::AnnotatedDeclaration, &["UndefinedClass"]),
-                suppress(DirectiveScope::NextLine, &[]),
+                suppress(
+                    DirectiveScope::AnnotatedDeclaration,
+                    vec![mapped("UndefinedClass", &["CEL0018", "CEL0021", "CEL0022"])],
+                ),
+                suppress(DirectiveScope::NextLine, vec![]),
             ],
         );
     }

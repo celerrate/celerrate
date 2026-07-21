@@ -12,6 +12,16 @@
 //! family's; over-suppression is the accepted direction; when in
 //! doubt, `Unmapped` (the fallback widens to the whole scope, exactly
 //! the pre-correspondence behavior).
+//!
+//! Review checklist: a new or changed `Codes` entry must come with (or
+//! adjust) its per-code fixture in
+//! `celerrate_cli/tests/suppressions.rs` (the
+//! `every_mapped_phpstan_code_is_actually_suppressed_by_its_identifier`
+//! and `every_mapped_psalm_code_is_actually_suppressed_by_its_identifier`
+//! tables). The catalogue gate proves the table is complete and
+//! transportable, never that a mapping is right; a wrong `Codes` entry
+//! under-suppresses invisibly, and only the per-code fixture catches
+//! that.
 
 /// The two written dialects the bridge recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
