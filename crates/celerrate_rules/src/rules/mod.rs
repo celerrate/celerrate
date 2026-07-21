@@ -28,6 +28,15 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     symbol_version_gating::SYMBOL_REMOVED,
     symbol_version_gating::SYMBOL_DEPRECATED,
     syntax_version_gating::SYNTAX_NOT_AVAILABLE,
+    unknown_members::UNKNOWN_METHOD,
+    unknown_members::UNKNOWN_PROPERTY,
+    unknown_members::UNKNOWN_CLASS_CONSTANT,
+    unknown_members::UNKNOWN_ENUM_CASE,
+    null_dereference::NULL_DEREFERENCE,
+    argument_checks::ARGUMENT_TYPE,
+    argument_checks::TOO_FEW_ARGUMENTS,
+    argument_checks::TOO_MANY_ARGUMENTS,
+    argument_checks::UNKNOWN_NAMED_ARGUMENT,
 ];
 
 /// The core rule set, in registration order.

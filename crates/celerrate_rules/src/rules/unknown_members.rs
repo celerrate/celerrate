@@ -176,12 +176,20 @@ function f(User $u): void { $u->save(); }
         assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 
-    /// The migration's equivalence proof, alive only while both paths
-    /// exist (task 9 deletes the legacy one): on a fixture firing all
-    /// three typed families, the phase output equals
-    /// `celerrate_types::typed_diagnostics` byte for byte.
+    /// The migration's closing pin, on the very fixture whose parity
+    /// test proved this output equal to the legacy renderer's byte for
+    /// byte before that renderer was deleted: one file firing all three
+    /// typed families, asserted whole and literally. The order is the
+    /// `Diagnostic` total order, which keys on the anchor first, so the
+    /// list reads in source order rather than by identifier and the two
+    /// `CEL0036` findings sit apart.
+    ///
+    /// The full list is asserted rather than a length or a subset on
+    /// purpose: a fixture that quietly stopped firing one family would
+    /// otherwise still satisfy the pin, which is exactly what this pin
+    /// exists to catch.
     #[test]
-    fn the_phase_reproduces_the_legacy_typed_diagnostics_byte_for_byte() {
+    fn the_phase_reports_all_three_families_in_the_total_order() {
         let source = r#"<?php
 class User { public function save(): void {} }
 function f(User $u, ?User $n): void {
@@ -194,14 +202,55 @@ function g(): void { pair(1); pair(1, 2, 3); pair(a: 1, c: 2); }
 "#;
         let fixture = registered_fixture(&[source], vec![], default_range());
         let phase = typed_body_diagnostics_of(&fixture);
-        let legacy = celerrate_types::typed_diagnostics(
-            &fixture.db,
-            fixture.files,
-            fixture.stubs,
-            fixture.configuration,
-            fixture.file,
+        let reported: Vec<(&str, Severity, &str)> = phase
+            .iter()
+            .map(|diagnostic| {
+                (
+                    diagnostic.id.as_str(),
+                    diagnostic.severity,
+                    diagnostic.message.as_str(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            reported,
+            vec![
+                (
+                    "CEL0030",
+                    Severity::Error,
+                    "unknown method `svae` on `User`"
+                ),
+                (
+                    "CEL0031",
+                    Severity::Error,
+                    "unknown property `$nmae` on `User`"
+                ),
+                (
+                    "CEL0034",
+                    Severity::Error,
+                    "accessing `save` on a possibly null `User|null`"
+                ),
+                (
+                    "CEL0036",
+                    Severity::Error,
+                    "too few arguments to `pair`: 1 given, 2 required"
+                ),
+                (
+                    "CEL0037",
+                    Severity::Error,
+                    "too many arguments to `pair`: 3 given, at most 2 accepted"
+                ),
+                (
+                    "CEL0036",
+                    Severity::Error,
+                    "too few arguments to `pair`: 2 given, 2 required"
+                ),
+                (
+                    "CEL0038",
+                    Severity::Error,
+                    "unknown named argument `$c` on `pair`"
+                ),
+            ],
         );
-        assert!(!phase.is_empty(), "the fixture must fire");
-        assert_eq!(&phase, legacy);
     }
 }

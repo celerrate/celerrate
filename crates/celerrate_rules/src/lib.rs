@@ -27,5 +27,4 @@ pub use registry::{
 };
 pub use rules::ALLOCATED_IDENTIFIERS;
 pub use rules::core_rules;
-pub use rules::syntax_version_gating::SYNTAX_NOT_AVAILABLE;
 pub use traits::{ReportingRule, SemanticRule, SyntaxRule, TypedBodyRule};

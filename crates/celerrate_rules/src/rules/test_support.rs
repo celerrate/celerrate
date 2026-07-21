@@ -149,9 +149,9 @@ pub(crate) fn semantic_diagnostics(
 /// The typed-body phase drained for a fixture's checked file.
 ///
 /// Split from [`typed_body_diagnostics`] so a caller can keep the
-/// fixture it drove: the migration's parity test drives both this phase
-/// and the legacy `celerrate_types::typed_diagnostics` from one
-/// database, which a helper owning its own fixture could not offer.
+/// fixture it drove: a test that drives another query over the same
+/// database, or reads the fixture's own handles, cannot do so through a
+/// helper that builds its fixture and drops it.
 pub(crate) fn typed_body_diagnostics_of(fixture: &Fixture) -> Vec<Diagnostic> {
     typed_body_phase_diagnostics(
         &fixture.db,

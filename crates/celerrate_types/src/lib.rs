@@ -118,8 +118,7 @@ mod written;
 
 pub use cache::{TypedArtifactCache, TypedCacheHandle, TypedCacheInput};
 pub use checks::{
-    ALLOCATED_IDENTIFIERS, ArgumentLabel, TypedFileResult, TypedVerdict, TypedVerdictKind,
-    typed_diagnostics, typed_file_verdicts,
+    ArgumentLabel, TypedFileResult, TypedVerdict, TypedVerdictKind, typed_file_verdicts,
 };
 pub use declared::{
     DeclaredParameter, DeclaredSignature, FunctionQuery, MemberAnnotations, Trust,
