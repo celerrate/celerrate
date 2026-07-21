@@ -207,12 +207,53 @@ pub(crate) fn body_typed_verdicts<'db>(
     }
 }
 
-/// The typed findings of one file: every body the member tree names
-/// (free functions and methods of non-trait class-likes), in tree
-/// order, plus the summed inference instrument. Trait-owned bodies
-/// are skipped (decision 3: plan 6 analyzes them per using class;
-/// checking one against the trait's own surface is a false-positive
-/// class). Debt ledger: typed checks never run inside trait-owned
+/// Every body the typed families check, in the one order both of its
+/// consumers depend on: the file's free functions in member-tree
+/// order, then the methods of its non-trait class-likes, again in
+/// member-tree order.
+///
+/// Trait-owned bodies are skipped (decision 3: plan 6 analyzes them
+/// per using class; checking one against the trait's own surface is a
+/// false-positive class).
+///
+/// One function, two call sites, on purpose. [`typed_file_verdicts`]
+/// below folds each enumerated body's consulted classes into the
+/// file's [`FileDependencies`], and
+/// `celerrate_rules::typed_body_phase_diagnostics` renders each
+/// enumerated body's diagnostics. The persistent cache pairs those two
+/// artifacts: it revalidates the stored diagnostics against the stored
+/// dependency records. Two hand-maintained copies of this walk could
+/// drift, and either direction of drift is a bug the pairing exists to
+/// prevent. A body enumerated only here would stop being reported at
+/// all; a body enumerated only in the phase would be reported against
+/// a dependency set that never folded in the classes it consulted, so
+/// a warm run would serve a stale verdict after an edit to one of
+/// them.
+///
+/// The order is observable through the diagnostics list (the phase
+/// pushes in this order, and this file's verdicts come out in it), so
+/// it is part of the contract, not an implementation detail.
+pub fn checked_body_ast_ids(db: &dyn salsa::Database, file: SourceFile) -> Vec<AstId> {
+    let tree = member_tree(db, file);
+    let function_bodies = tree.functions.iter().map(|function| function.ast_id);
+    let method_bodies = tree
+        .classes
+        .iter()
+        .filter(|class| class.kind != DeclarationKind::Trait)
+        .flat_map(|class| {
+            class
+                .members
+                .iter()
+                .filter(|member| member.kind == MemberKind::Method)
+                .map(|member| member.ast_id)
+        });
+    function_bodies.chain(method_bodies).collect()
+}
+
+/// The typed findings of one file: every body
+/// [`checked_body_ast_ids`] names, in that order (traits excluded, and
+/// documented there), plus the summed inference instrument.
+/// Debt ledger: typed checks never run inside trait-owned
 /// bodies — owner: a per-using-class walk over plan 6's
 /// `InferenceContext` seam, future. Top-level statement code has no
 /// member-tree body and stays unchecked by the typed families — owner:
@@ -226,21 +267,8 @@ pub fn typed_file_verdicts(
     configuration: ProjectConfiguration,
     file: SourceFile,
 ) -> TypedFileResult {
-    let tree = member_tree(db, file);
     let mut result = TypedFileResult::default();
-    let function_bodies = tree.functions.iter().map(|function| function.ast_id);
-    let method_bodies = tree
-        .classes
-        .iter()
-        .filter(|class| class.kind != DeclarationKind::Trait)
-        .flat_map(|class| {
-            class
-                .members
-                .iter()
-                .filter(|member| member.kind == MemberKind::Method)
-                .map(|member| member.ast_id)
-        });
-    for ast_id in function_bodies.chain(method_bodies) {
+    for ast_id in checked_body_ast_ids(db, file) {
         let body = BodyQuery::new(db, ast_id);
         let body_result = body_typed_verdicts(db, files, stubs, configuration, file, body);
         result.verdicts.extend(body_result.verdicts.iter().cloned());
@@ -270,7 +298,49 @@ mod tests {
     #![allow(clippy::unwrap_used, clippy::panic, clippy::indexing_slicing)]
 
     use super::test_support::{fixture, handle_of};
-    use super::typed_file_verdicts;
+    use super::{checked_body_ast_ids, typed_file_verdicts};
+
+    /// The enumeration two crates now share: `typed_file_verdicts`
+    /// folds each named body's consulted classes into the file's
+    /// dependency record, and
+    /// `celerrate_rules::typed_body_phase_diagnostics` renders each
+    /// named body's diagnostics, so the persistent cache's pairing of
+    /// the two only holds while both read this one list. It pins the
+    /// list itself over a file carrying all three shapes: two free
+    /// functions, a class with two methods, and a trait with one.
+    /// Free functions come first in tree order, then the non-trait
+    /// class-like's methods; the trait's method is never enumerated.
+    #[test]
+    fn the_checked_bodies_are_the_free_functions_then_the_non_trait_methods() {
+        let fixture = fixture(&[r#"<?php
+function alpha(): void {}
+class Widget {
+    public function make(): void {}
+    public function reset(): void {}
+}
+trait Helper {
+    public function assist(): void {}
+}
+function beta(): void {}
+"#]);
+        let file = handle_of(&fixture, 0);
+        // Declarations are numbered by a preorder walk over the file's
+        // item nodes, class members included: alpha 0, Widget 1, make
+        // 2, reset 3, Helper 4, assist 5, beta 6.
+        let bodies = checked_body_ast_ids(&fixture.db, file);
+        let indices: Vec<u32> = bodies.iter().map(|ast_id| ast_id.index).collect();
+        assert_eq!(
+            indices,
+            vec![0, 6, 2, 3],
+            "both free functions come first, in tree order, then \
+             `Widget`'s two methods; `Helper::assist` (5) is excluded",
+        );
+        let file_id = file.file_id(&fixture.db);
+        assert!(
+            bodies.iter().all(|ast_id| ast_id.file == file_id),
+            "every enumerated body names the checked file: {bodies:?}",
+        );
+    }
 
     /// Plan 9a, task 3: a file whose body dereferences `$user->name`
     /// (`User` defined in a SEPARATE file, resolved through the

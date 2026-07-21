@@ -1,7 +1,7 @@
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
-use celerrate_semantics::{BodyQuery, DeclarationKind, MemberKind};
+use celerrate_semantics::BodyQuery;
 use celerrate_source::FileId;
 use celerrate_stubs::StubIndexInput;
 
@@ -127,8 +127,9 @@ pub(crate) fn body_phase_findings<'db>(
 }
 
 /// The typed phase: aggregates the per-body tier over the file's
-/// function and method bodies (the `typed_file_verdicts` enumeration,
-/// traits excluded) and reconciles anchors at the tail. Wired into the
+/// function and method bodies (`celerrate_types::checked_body_ast_ids`,
+/// the single enumeration `celerrate_types::typed_file_verdicts` reads
+/// too, traits excluded) and reconciles anchors at the tail. Wired into the
 /// CLI composition: `crates/celerrate_cli/src/analysis.rs`'s
 /// `typed_portion` calls this query as the typed families' serving
 /// path. It and `celerrate_types::typed_file_verdicts` both read
@@ -144,21 +145,8 @@ pub fn typed_body_phase_diagnostics(
     configuration: ProjectConfiguration,
 ) -> Vec<Diagnostic> {
     let file_id = file.file_id(db);
-    let tree = celerrate_semantics::member_tree(db, file);
     let mut diagnostics = Vec::new();
-    let function_bodies = tree.functions.iter().map(|function| function.ast_id);
-    let method_bodies = tree
-        .classes
-        .iter()
-        .filter(|class| class.kind != DeclarationKind::Trait)
-        .flat_map(|class| {
-            class
-                .members
-                .iter()
-                .filter(|member| member.kind == MemberKind::Method)
-                .map(|member| member.ast_id)
-        });
-    for ast_id in function_bodies.chain(method_bodies) {
+    for ast_id in celerrate_types::checked_body_ast_ids(db, file) {
         let body = BodyQuery::new(db, ast_id);
         for finding in body_phase_findings(db, file, files, stubs, configuration, body) {
             if let Some(diagnostic) = resolved_diagnostic(db, file, file_id, finding.clone()) {
