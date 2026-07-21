@@ -154,18 +154,18 @@ error (`'static` implementation bound), and the database handle is
 unreachable. The acceptance property holds in shape, not just in
 intent.
 
-## Amendment 2026-07-21: the rule-phase projection
+## 10. Amendment 2026-07-21: the rule-phase projection
 
 The rule framework's plugin-facing traits project onto the same model:
 plain data or opaque handles cross the boundary, contexts become host
 interrogation calls, and the finding sink becomes a plain-data return
-value (a list of findings — identifier string, anchor, message — needs
-no handle table at all). The `Reporting` phase is core-only and does
-not project in this sub-project.
+value (a list of findings, each carrying an identifier string, an
+anchor, and a message, needs no handle table at all). The `Reporting`
+phase is core-only and does not project in this sub-project.
 
 | Native trait (owner) | Guest exports | Host families needed |
 |---|---|---|
-| `SyntaxRule` (`celerrate_rules`) | `metadata() -> rule metadata`, `check(file) -> list<finding>` | syntax outcomes: `gated_syntax_uses() -> list<(label, required_version, range)>`, `php_version_range() -> ((major, minor), (major, minor))` — plain data out |
+| `SyntaxRule` (`celerrate_rules`) | `metadata() -> rule metadata`, `check(file) -> list<finding>` | syntax outcomes: `gated_syntax_uses() -> list<(label, required_version, range)>`, `php_version_range() -> ((major, minor), (major, minor))`; plain data out |
 | `SemanticRule` (`celerrate_semantics` context) | `metadata() -> rule metadata`, `check(file) -> list<finding>` | symbol lookup (family 4), resolution outcomes when part 4 fixes the context surface |
 | `TypedBodyRule` (`celerrate_types` context) | `metadata() -> rule metadata`, `check(body) -> list<finding>` | type interrogation (family 2) plus body-handle interrogation when part 4 fixes the context surface |
 
