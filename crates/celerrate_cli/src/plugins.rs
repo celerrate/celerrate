@@ -132,6 +132,13 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
 /// the admitted plugin set: core behavior is keyed by binary identity,
 /// never by the plugin-set digest (design section 2). Order here is
 /// the deterministic dispatch order, like the other four registries.
+///
+/// Every composition root that composes diagnostics must call this
+/// function. The `RuleRegistry` input has no default: if it is left
+/// unset, `celerrate_rules` treats the registry as empty rather than
+/// producing an error, so core-rule diagnostic families (for example
+/// CEL0024) go silently missing, with no compile error to catch the
+/// omission.
 pub fn register_core_rules(database: &AnalysisDatabase) {
     let identity = core_identity();
     let registrations: Vec<celerrate_rules::RuleRegistration> = celerrate_rules::core_rules()
