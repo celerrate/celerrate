@@ -13,13 +13,13 @@
 - Design: `.claude/superpowers/specs/2026-07-20-diagnostics-and-fixes-design.md` (sections 3, 4, 8, 11; this plan is step 5 of section 12)
 - Issue #58 and its triage (the correspondence policy the design restates as normative in section 8)
 - Part 3 (framework): `.claude/superpowers/plans/2026-07-21-diagnostics-and-fixes-3-framework-skeleton.md`
-- Part 4 (migration): `.claude/superpowers/plans/2026-07-21-diagnostics-and-fixes-4-remaining-migration.md`
+- Part 4 (migration): landed through PR #95 (`feat-diagnostics-remaining-migration-4`); its plan document was never committed, so read the PR and its diff when part-4 context is needed
 
 ## Global Constraints
 
 - Zero panic, mechanically enforced: Clippy denies `unwrap_used`, `expect_used`, `indexing_slicing`, `panic` workspace-wide; `unsafe_code` is forbidden. Test modules may locally `#[allow]` these lints.
-- TDD: failing test, minimal implementation, refactor. Behavior-preserving refactors (tasks 1, 2, 6) keep the existing suites green through the move; behavior changes (tasks 4, 5, 8, 9) get red tests first.
-- Strict layering: `celerrate_semantics` may use `celerrate_diagnostics` (it already depends on it); the bridge depends on `celerrate_plugin` alone (the `dependency_shape` xtask gate); `celerrate_rules` sits above `celerrate_semantics`.
+- TDD: failing test, minimal implementation, refactor. Behavior-preserving refactors (tasks 1, 2, 6) keep the existing suites green through the move; behavior changes (tasks 4, 5, 7, 8, 9) get red tests first.
+- Strict layering: `celerrate_semantics` may use `celerrate_diagnostics` (a DAG-legal downward edge - diagnostics is the second-lowest layer - but NOT yet a declared dependency: task 2 adds it to the crate's Cargo.toml); the bridge depends on `celerrate_plugin` alone (the `dependency_shape` xtask gate); `celerrate_rules` sits above `celerrate_semantics`.
 - Determinism: no wall-clock time, randomness, or environment reads inside queries. Providers stay deterministic pure functions of `(CommentKind, &str)`.
 - Error resilience: malformed directive content yields fewer identifiers or no directive, never an error and never a panic.
 - The exit-code contract does not move: 0 clean, 1 any span-anchored diagnostic (severity does not matter - CEL0041/CEL0042 warnings flip exit 1 exactly as CEL0023 does), 2 internal error. Project-anchored findings stay exit-neutral.
@@ -27,7 +27,7 @@
 - The emission-side scan governs `celerrate_semantics` and `celerrate_types`: nothing in this plan may construct a `Diagnostic` there. CEL0041/CEL0042 are constructed in `celerrate_rules` only.
 - Everything in English, full words, no abbreviated names (standard acronyms fine). No em-dashes in prose or comments.
 - Commits: gitmoji + Conventional Commits, authored with the repository-configured identity. Never any Claude attribution.
-- Local commands: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all`, `cargo deny check`. Closure additionally runs `cargo xtask fetch-corpus` then `cargo xtask corpus` and `cargo xtask mixed-rate`.
+- Local commands: `cargo test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo fmt --all` (run it before every commit so formatting fallout never floats free), `cargo deny check`. Closure additionally runs the CI structural gates `cargo xtask dependency-shape` and `cargo xtask emission-scan`, then `cargo xtask fetch-corpus`, `cargo xtask corpus`, and `cargo xtask mixed-rate`.
 
 ## Context: where parts 1 to 4 left the code
 
@@ -48,16 +48,16 @@ Read these before starting; every task below assumes them.
 
 1. **The vocabulary distinguishes four identifier fates, and the directive carries its origin.** `SuppressionIdentifier` is `Mapped { written, codes }`, `ScopeWide { written }`, `Unmapped { written }`, or `Native { written }`; `CommentDirective::Suppress` gains `origin: DirectiveOrigin` (`Foreign` or `Native`). The origin field exists because the empty-identifier case diverges: a bare foreign directive suppresses the whole scope (the #58 policy), while a bare `@celerrate-ignore` suppresses nothing (identifiers are mandatory by design) and is what CEL0042 reports. Codes travel as plain strings (`"CEL0030"`) and are interned downstream through `find_identifier` - the facade grows no identifier vocabulary (design section 8's amendment).
 2. **`suppressed_ranges` becomes `suppression_directives`, one query, per directive.** It returns `Vec<ResolvedDirective>` - anchor (the carrying comment token's range), resolved scope, `SuppressionFilter` (`All` or `Only(sorted DiagnosticIds)`), the written identifiers, the origin. "Co-located filters merge by union" is satisfied semantically: a diagnostic is suppressed if and only if any directive admits it, and every admitting directive is attributed (any-match used-ness), so no merged intermediate structure exists to drift. `is_suppressed` is replaced by `ResolvedDirective::admits`, which keeps the end-of-file exception verbatim.
-3. **Fallback policy, stated once and implemented once (in `filter_of`).** Foreign: empty identifier list, any `ScopeWide`, any `Unmapped`, or any code string that fails interning → `All` (widen, never under-suppress; the correspondence gate makes the failed-intern arm unreachable, it exists as the honest fallback). Native: the union of the identifiers that intern; unknown ones are silently excluded from the filter (they suppress nothing - that is CEL0041's reason to exist) and never widen.
-4. **The correspondence table is data plus evidence.** The bridge holds one sorted const table per dialect (`ForeignMapping::Codes | ScopeWide | Unmapped`), exact-case binary search, and exposes `correspondence_entries(dialect)` for inspection. The published catalogues are vendored verbatim as text files next to the table (source URL, upstream version, retrieval date in a header). The triage gate lives at the composition root (`celerrate_cli/tests/suppression_correspondence.rs`, the ledger precedent): table keys equal catalogue lines exactly, both directions, per dialect; every `Codes` entry is non-empty and every code re-interns. The bridge cannot run that last check itself (it may not depend on `celerrate_diagnostics`), which is why the gate sits above.
+3. **Fallback policy, stated once and implemented once (in `filter_of`).** Foreign: empty identifier list, any `ScopeWide`, any `Unmapped`, any `Mapped` whose code list is empty, or any code string that fails interning → `All` (widen, never under-suppress; the bridge's own tests make the failed-intern and empty-`Mapped` arms unreachable from the bridge - they exist as the honest fallback because the constructors are public facade surface any provider can call). Native: the union of the identifiers that intern; unknown ones are silently excluded from the filter (they suppress nothing - that is CEL0041's reason to exist) and never widen.
+4. **The correspondence table is data plus evidence.** The bridge holds one sorted const table per dialect (`ForeignMapping::Codes | ScopeWide | Unmapped`), exact-case binary search, and exposes `correspondence_entries(dialect)` for inspection. The published catalogues are vendored as text files next to the table - extracted from pinned upstream sources and hand-curated (source URL, upstream version or release tag, retrieval date in a header). The triage gate lives at the composition root (`celerrate_cli/tests/suppression_correspondence.rs`, the ledger precedent): table keys equal catalogue lines exactly, both directions, per dialect, and every mapped code re-interns. The bridge cannot run the interning check itself (it may not depend on `celerrate_diagnostics`), which is why the gate sits above; the non-empty-`Codes` invariant is a bridge unit test, next to the data it constrains. Set-equality proves the table is complete and transportable, never that a mapping is right - the semantic evidence is task 4's per-code fixture tier.
 5. **Triage guideline:** map a foreign identifier when its finding class overlaps a CEL family's; over-suppression is the accepted direction; when in doubt, `Unmapped` (the fallback widens to the whole scope, which is exactly today's behavior, so doubt is behavior-preserving).
-6. **The native scope variant is `DirectiveScope::TrailingOrNextLine`.** Resolved in `resolve_scope` (the token and line index are visible there, never in a provider): code preceding the comment on the comment's first line → the comment's own line(s) (the `CurrentLine` computation); the comment alone on its line → the next line (the `NextLine` computation). "Code" is any token that is neither whitespace nor comment trivia - a preceding comment does not make the directive trailing; a `<?php` open tag does. Docblock placement maps to `AnnotatedDeclaration` in the provider (the kind is provider-visible), keeping the declaration scope.
+6. **The native scope variant is `DirectiveScope::TrailingOrNextLine`.** Resolved in `resolve_scope` (the token and line index are visible there, never in a provider): code adjacent to the comment on the comment's own lines - preceding it on its first line, or following it on its last line (a block comment can lead its statement) → the comment's own line(s) (the `CurrentLine` computation); the comment alone on its line(s) → the next line (the `NextLine` computation). "Code" is any token that is neither whitespace nor comment trivia - a neighboring comment does not make the directive trailing; a `<?php` open tag does. When the comment stands alone on the file's last line, the next line does not exist: the scope degenerates to the empty end-of-file range - the directive survives resolution (CEL0041/CEL0042 must still see it) and, through the end-of-file exception in `admits`, covers exactly the diagnostics anchored at the text's end, the same coverage the empty final line of a newline-terminated file already gets. Docblock placement maps to `AnnotatedDeclaration` in the provider (the kind is provider-visible), keeping the declaration scope.
 7. **The native parser is a sibling, not a shared helper.** `native_directives` duplicates the small `ends_word`/`identifiers_of` helpers rather than sharing them with the bridge: `celerrate_semantics` sits below the bridge in the DAG, and the two grammars may diverge (the native one is Celerrate's own to evolve). About twenty lines of acknowledged duplication, noted in the module doc.
-8. **Match records are stored per half.** `StoredVerdict.directives: Vec<StoredDirective>` carries each directive's identity (anchor, scope, filter, written identifiers, native flag) plus `matched: bool` for the untyped half; `StoredTypedVerdict.matched_directives: Vec<u32>` carries the typed half's admitting indexes into that same list. Rationale: the two halves validate and serve independently (a partial hit is first-class), and a stored union flag would go stale exactly when the typed half recomputes. The reporting phase consumes the union, computed at composition time from whichever source each half used. Directive order is the query's deterministic order, so indexes align between stored and fresh by construction; any mismatch on load (bounds, unknown filter code, out-of-range index) discards the verdict, like a failed diagnostic conversion - the checksum proves transport, never honesty.
+8. **Match records are stored per half.** `StoredVerdict.directives: Vec<StoredDirective>` carries each directive's identity (anchor, scope, filter, written identifiers, native flag) plus `matched: bool` for the untyped half; `StoredTypedVerdict.matched_directives: Vec<u32>` carries the typed half's admitting indexes into that same list. Rationale: the two halves validate and serve independently (a partial hit is first-class), and a stored union flag would go stale exactly when the typed half recomputes. The reporting phase consumes the union, computed at composition time from whichever source each half used. Directive order is the query's deterministic order, so indexes align between stored and fresh by construction; any mismatch on load (bounds, unknown filter code, out-of-range or unsorted index list) discards the verdict, like a failed diagnostic conversion - the checksum proves transport, never honesty. Two sharp edges of that doctrine, decided here: (a) every list a consumer binary-searches is canonicalized or validated on load - stored `Only` codes are re-sorted and deduplicated after interning, and stored `matched_directives` must be strictly increasing or the verdict is discarded - so a hand-crafted, checksum-valid pack cannot make a `binary_search` lie (the `cache_seeding.rs` posture); (b) on a partial hit the stored untyped records and the fresh typed indexes are never compared against each other - their alignment rests on the content hash plus the binary-identity pack key, a deliberate, named exception to load validation (the same trust every other stored half already extends).
 9. **The `Reporting` phase is a plain function, not a salsa query.** `reporting_phase_diagnostics(db, file_id, text_end, outcomes)` runs the registered `Reporting` rules from `DirectiveOutcome` records (directive plus final matched flag). Its input is composed by the orchestration layer (stored records on a warm hit, the query on a miss), which is exactly why it cannot be keyed as a query - and why it needs no parse. Reporting diagnostics are never persisted: both paths recompute them from the records, which is cheap (directives per file are few) and keeps the stored verdict's meaning unchanged (the cache-servable halves).
-10. **The one-pass suppression algorithm, exactly.** (a) Rules emit CEL0041/CEL0042 findings from the final match outcomes; a CEL0042 finding records its subject directive index. (b) One pass over those findings: a finding admitted by any directive is dropped, and every admitting directive is marked used. (c) CEL0042 findings whose subject was marked used in (b) are dropped. Nothing iterates: uses recorded in (b) do not re-open (b), and drops in (c) do not un-use anything. This is the reading under which "suppressing it counts as use" has an effect without a fixpoint.
+10. **The one-pass suppression algorithm, exactly.** (a) Rules emit CEL0041/CEL0042 findings from the final match outcomes; every directive finding records its subject directive index. (b) One pass over those findings: a finding admitted by any directive OTHER THAN ITS OWN SUBJECT is dropped, and every admitting directive is marked used - a directive never admits a finding that reports on itself, or `$x = 1; // @celerrate-ignore CEL0042` trailing its own line would permanently cloak its own unused warning (self-cloaking; cross-suppression between two distinct directives stays legal - it is explicit). (c) CEL0042 findings whose subject was marked used in (b) are dropped. Nothing iterates: uses recorded in (b) do not re-open (b), and drops in (c) do not un-use anything. This is the reading under which "suppressing it counts as use" has an effect without a fixpoint.
 11. **CEL0042 evaluability.** A native directive is evaluable for CEL0042 only when it matched nothing AND every identifier is known (an unknown identifier already produces CEL0041; stacking "unused" on top of "typo" reports the same mistake twice) AND no identifier belongs to an inactive rule (the design's exemption: nursery demotion must not convert existing suppressions into a warning storm). The inactive set is the identifiers claimed by registrations with `active == false`; resilience identifiers are claimed by no rule and are always emitted, so they are never inactive.
-12. **CEL0041/CEL0042 anchor at the carrying comment token's range** (`ResolvedDirective.anchor`), message naming the written identifier. Per-identifier sub-ranges inside the comment would need providers to report offsets - machinery no shipped rule needs yet (the YAGNI criterion).
+12. **CEL0041/CEL0042 anchor at the carrying comment token's range** (`ResolvedDirective.anchor`); CEL0041's message names the written identifier, CEL0042's names the directive (it has no single identifier to name). Per-identifier sub-ranges inside the comment would need providers to report offsets - machinery no shipped rule needs yet (the YAGNI criterion).
 13. **`PLUGIN_API_VERSION` stays 0.** The vocabulary reshape is breaking, but version 0 is the declared pre-stability era, both plugins compile in-tree, and parts 3 and 4 set the precedent; the version starts moving when the WASM sub-project makes out-of-tree plugins possible.
 14. **The reason trailer is parsed and dropped.** `@celerrate-ignore CEL0030 (reason)` excludes the parenthesized trailer from identifier parsing (the existing `identifiers_of` affordance). The reason text is not carried on `ResolvedDirective`: its only consumer (a verbose widened-directive channel) is sub-project 5 product surface.
 15. **Rule names:** `unknown-suppression-identifier` (CEL0041) and `unused-suppression` (CEL0042), both group `Correctness`, tier `Default`, severity `Warning`, owner `celerrate_rules`. Two rules, not one family: they answer different questions and the design names them separately. Explain pages arrive with part 8's workstream (the registry's `explain` field stays `Option` until then).
@@ -77,6 +77,7 @@ Created:
 
 Modified:
 
+- `crates/celerrate_semantics/Cargo.toml` (the new `celerrate_diagnostics` dependency, task 2; `Cargo.lock` follows)
 - `crates/celerrate_semantics/src/comment_directives.rs` (vocabulary, `TrailingOrNextLine`, `suppression_directives`, `ResolvedDirective`, `SuppressionFilter`, `filter_of`; `suppressed_ranges`/`is_suppressed` deleted)
 - `crates/celerrate_semantics/src/lib.rs` (export updates, `native_directive` module)
 - `crates/celerrate_plugin/src/lib.rs` (re-export `SuppressionIdentifier`, `DirectiveOrigin`)
@@ -87,6 +88,7 @@ Modified:
 - `crates/celerrate_cli/src/cache/pack.rs` (`CACHE_SCHEMA_VERSION` 7)
 - `crates/celerrate_cli/src/cache/mod.rs` (`composed_verdict_with_lever`, `composed_typed_verdict`, `collect_entries` reuse guard)
 - `crates/celerrate_cli/src/plugins.rs` (native provider registration; composition-root tests)
+- `crates/celerrate_rules/src/traits.rs` (the `ReportingRule` reservation comment resolved, task 8)
 - `crates/celerrate_rules/src/context.rs` (`ReportingContext` real surface, `DirectiveOutcome`)
 - `crates/celerrate_rules/src/finding.rs` (`Finding.subject`, `report_directive`)
 - `crates/celerrate_rules/src/phases.rs` (`reporting_phase_diagnostics`)
@@ -95,6 +97,7 @@ Modified:
 - `crates/celerrate_diagnostics/src/registry.rs` (CEL0041, CEL0042; gapless count 42)
 - `crates/celerrate_cli/tests/suppressions.rs` (foreign and native matrices)
 - `crates/celerrate_cli/tests/cache_suppression.rs`, `tests/cache_equivalence.rs` (records and reporting equivalence)
+- `xtask/src/emission_scan.rs` (module-doc touch-up, task 2: semantics now names the diagnostics crate for identifier vocabulary while the `Diagnostic` value model stays unnamed)
 - `docs/diagnostics.md` (CEL0041/CEL0042 section, the native directive), `docs/phpdoc-bridge.md` (identifier-level correspondence)
 - `CHANGELOG.md`
 
@@ -208,10 +211,30 @@ fn an_open_tag_counts_as_code_for_placement_resolution() {
 }
 
 #[test]
-fn a_trailing_directive_alone_on_the_last_line_suppresses_nothing() {
+fn code_following_the_comment_on_its_line_makes_it_trailing() {
+    // A block comment can lead its statement: code after the comment
+    // on the comment's last line is adjacency too (decision 6).
+    let source = "<?php\n/* @trailing */ $x = 1;\n$y = 2;\n";
+    let (db, file) = fixture(source);
+    assert!(suppressed_at(&db, file, source, "$x"));
+    assert!(!suppressed_at(&db, file, source, "$y"));
+}
+
+#[test]
+fn a_trailing_directive_alone_on_the_last_line_still_resolves() {
+    // The next line does not exist: the scope degenerates to the empty
+    // end-of-file range (decision 6). Nothing on an ordinary line is
+    // suppressed, but the directive survives resolution - task 8's
+    // reporting rules must see it - and through the end-of-file
+    // exception it covers exactly the end-of-file position, the same
+    // coverage the empty final line of a newline-terminated file gets.
     let source = "<?php\n$x = 1;\n// @trailing";
     let (db, file) = fixture(source);
     assert!(!suppressed_at(&db, file, source, "$x"));
+    let end = TextSize::of(source);
+    let ranges = suppressed_ranges(&db, file);
+    assert_eq!(ranges.len(), 1);
+    assert_eq!(ranges.first().copied(), Some(TextRange::empty(end)));
 }
 ```
 
@@ -340,22 +363,34 @@ Extend `resolve_scope` with the arm and its helper:
 
 ```rust
         DirectiveScope::TrailingOrNextLine => {
-            if code_precedes_on_line(token, index) {
+            if code_adjacent_on_line(token, index) {
                 whole_lines(index, text_end, first_line, last_line)
             } else {
-                let next = last_line.checked_add(1)?;
-                whole_lines(index, text_end, next, next)
+                // The comment stands alone: the next line. When that
+                // line does not exist (the directive sits on the
+                // file's last line), the scope degenerates to the
+                // empty end-of-file range: the directive survives
+                // resolution - the reporting rules must see it - and,
+                // through the end-of-file exception, covers exactly
+                // the diagnostics anchored at the text's end, the same
+                // coverage the empty final line of a newline-terminated
+                // file gets (decision 6 of the part-5 plan).
+                let next_line = last_line
+                    .checked_add(1)
+                    .and_then(|next| whole_lines(index, text_end, next, next));
+                Some(next_line.unwrap_or_else(|| TextRange::empty(text_end)))
             }
         }
 ```
 
 ```rust
-/// Whether any non-trivia token starts before `token` on the token's
-/// first line: the placement question `TrailingOrNextLine` resolves
-/// on. Comment trivia does not count as code (a stacked comment leaves
-/// the directive alone on its line); anything else, the `<?php` open
-/// tag included, does.
-fn code_precedes_on_line(token: &SyntaxToken, index: &LineIndex) -> bool {
+/// Whether any non-trivia token shares a line with `token`: before it
+/// on the token's first line, or after it on the token's last line (a
+/// block comment can lead its statement) - the placement question
+/// `TrailingOrNextLine` resolves on. Comment trivia does not count as
+/// code (a neighboring comment leaves the directive alone on its
+/// line); anything else, the `<?php` open tag included, does.
+fn code_adjacent_on_line(token: &SyntaxToken, index: &LineIndex) -> bool {
     let first_line = index.line_column(token.text_range().start()).line;
     let Some(line_start) = index.offset(LineColumn {
         line: first_line,
@@ -366,20 +401,36 @@ fn code_precedes_on_line(token: &SyntaxToken, index: &LineIndex) -> bool {
     let mut current = token.prev_token();
     while let Some(previous) = current {
         if previous.text_range().end() <= line_start {
-            return false;
+            break;
         }
-        if !matches!(
-            previous.kind(),
-            SyntaxKind::Whitespace
-                | SyntaxKind::LineComment
-                | SyntaxKind::BlockComment
-                | SyntaxKind::DocComment
-        ) {
+        if !is_comment_or_whitespace(previous.kind()) {
             return true;
         }
         current = previous.prev_token();
     }
+    let last_line = index.line_column(token.text_range().end()).line;
+    let mut current = token.next_token();
+    while let Some(next) = current {
+        if index.line_column(next.text_range().start()).line > last_line {
+            break;
+        }
+        if !is_comment_or_whitespace(next.kind()) {
+            return true;
+        }
+        current = next.next_token();
+    }
     false
+}
+
+/// The trivia kinds that do not count as code for placement.
+fn is_comment_or_whitespace(kind: SyntaxKind) -> bool {
+    matches!(
+        kind,
+        SyntaxKind::Whitespace
+            | SyntaxKind::LineComment
+            | SyntaxKind::BlockComment
+            | SyntaxKind::DocComment
+    )
 }
 ```
 
@@ -434,9 +485,11 @@ git commit -m "✨ feat(semantics): grow the directive vocabulary and placement-
 
 **Files:**
 
+- Modify: `crates/celerrate_semantics/Cargo.toml` (and `Cargo.lock`)
 - Modify: `crates/celerrate_semantics/src/comment_directives.rs`
 - Modify: `crates/celerrate_semantics/src/lib.rs`
 - Modify: `crates/celerrate_cli/src/analysis.rs`
+- Modify: `xtask/src/emission_scan.rs` (module-doc touch-up)
 
 **Interfaces:**
 
@@ -519,6 +572,19 @@ fn an_explicit_scope_wide_identifier_widens_to_the_whole_scope() {
 }
 
 #[test]
+fn a_mapped_identifier_with_no_codes_widens_to_the_whole_scope() {
+    // Constructible through the public facade constructor even though
+    // the bridge's table never produces it (a bridge unit test pins
+    // non-empty code sets): malformed provider input widens, never
+    // narrows to Only(empty) - the global fallback direction.
+    let identifiers = vec![SuppressionIdentifier::mapped("odd.entry".to_owned(), Vec::new())];
+    assert_eq!(
+        filter_of(DirectiveOrigin::Foreign, &identifiers),
+        SuppressionFilter::All
+    );
+}
+
+#[test]
 fn a_native_directive_unions_its_known_identifiers_and_drops_unknown_ones() {
     let identifiers = vec![
         SuppressionIdentifier::native("CEL0030".to_owned()),
@@ -579,6 +645,23 @@ fn the_end_of_file_exception_survives_in_admits() {
 }
 
 #[test]
+fn an_empty_scope_at_the_end_of_file_admits_only_the_end_position() {
+    // The degenerate last-line scope (decision 6): the end-of-file
+    // exception is its whole coverage.
+    let end = TextSize::from(20);
+    let directive = ResolvedDirective {
+        anchor: TextRange::new(TextSize::from(8), TextSize::from(20)),
+        scope: TextRange::empty(end),
+        filter: SuppressionFilter::All,
+        identifiers: Vec::new(),
+        origin: DirectiveOrigin::Native,
+    };
+    let cel0007 = celerrate_diagnostics::find_identifier("CEL0007").unwrap();
+    assert!(directive.admits(cel0007, end, end));
+    assert!(!directive.admits(cel0007, TextSize::from(10), end));
+}
+
+#[test]
 fn the_query_resolves_anchor_scope_and_origin_per_directive() {
     let source = "<?php\n$x = 1; // @line\n";
     let (db, file) = fixture(source);
@@ -592,7 +675,7 @@ fn the_query_resolves_anchor_scope_and_origin_per_directive() {
 }
 ```
 
-Keep and re-target the existing scope-resolution tests (`a_current_line_directive_covers_its_whole_line_and_only_it`, the placement tests of task 1, and so on): the `suppressed_at` helper above keeps them meaningful unchanged. Re-target `identical_resolved_ranges_deduplicate` (two markers in one comment produce two identical `ResolvedDirective` values → deduplicated to one) and the backdate test (rename `suppression_count` to read `suppression_directives(db, file).len()`; the assertion text keeps its meaning: the own-tree read re-runs on any edit, an identical directive set backdates).
+Keep and re-target the existing scope-resolution tests (`a_current_line_directive_covers_its_whole_line_and_only_it`, the placement tests of task 1, and so on): the `suppressed_at` helper above keeps them meaningful unchanged. Re-target `identical_resolved_ranges_deduplicate` carefully: after task 1 the old `// @line @fake` fixture yields two directives that DIFFER in `identifiers` (the `@fake` marker carries one, `@line` carries none), so it no longer pins deduplication - instead register the fake provider twice (two `CommentDirectiveRegistration` values sharing one provider) over a plain `"<?php\n$x = 1; // @line\n"` fixture: the two registrations produce identical `ResolvedDirective` values and the query answers exactly one. Re-target the backdate test in two places: rename `suppression_count`'s body to read `suppression_directives(db, file).len()`, AND change its executed-queries probe from `query.contains("suppressed_ranges")` to `query.contains("suppression_directives")` - the old probe string would silently match nothing after the rename (the assertion text keeps its meaning: the own-tree read re-runs on any edit, an identical directive set backdates).
 
 - [ ] **Step 2: Run the tests to verify they fail**
 
@@ -601,7 +684,7 @@ Expected: compile errors (`SuppressionFilter`, `ResolvedDirective`, `filter_of`,
 
 - [ ] **Step 3: Implement the resolution query**
 
-In `comment_directives.rs` (also add `celerrate_diagnostics` to imports; the crate already depends on it):
+First add the dependency the vocabulary needs: `crates/celerrate_semantics/Cargo.toml` gains `celerrate_diagnostics = { path = "../celerrate_diagnostics" }` under `[dependencies]` (a DAG-legal downward edge - diagnostics sits second-lowest; the emission-scan gate stays green because nothing here spells `Diagnostic::spanned(`, `Diagnostic::project(`, or `Diagnostic {`). While there, touch up `xtask/src/emission_scan.rs`'s module doc, whose "the type is not named in either governed crate's src/ at all" narrative goes stale: semantics now names the diagnostics crate for identifier vocabulary (`DiagnosticId`, `find_identifier`) while the `Diagnostic` value model stays unnamed. Then in `comment_directives.rs`:
 
 ```rust
 use celerrate_diagnostics::DiagnosticId;
@@ -680,6 +763,13 @@ pub(crate) fn filter_of(
             for identifier in identifiers {
                 match identifier {
                     SuppressionIdentifier::Mapped { codes: mapped, .. } => {
+                        // An empty mapped set is malformed input from
+                        // a non-bridge provider (the bridge's unit
+                        // tests pin non-empty entries): widen, never
+                        // narrow.
+                        if mapped.is_empty() {
+                            return SuppressionFilter::All;
+                        }
                         for code in mapped {
                             match celerrate_diagnostics::find_identifier(code) {
                                 Some(id) => codes.push(id),
@@ -828,7 +918,7 @@ fn retain_unsuppressed(
 }
 ```
 
-Both call sites (`persistable_diagnostics`, `typed_portion`) change their local from `suppressed` to `directives = celerrate_semantics::suppression_directives(database, file)` and discard the return for now (`let _ = retain_unsuppressed(...)`); the threading is task 6. Touch up the two prose mentions of `suppressed_ranges` in module docs (`crates/celerrate_cli/src/cache/stored.rs`, `crates/celerrate_cli/tests/cache_suppression.rs`) to name `suppression_directives` - the suppression-note semantics they describe are unchanged.
+Both call sites (`persistable_diagnostics`, `typed_portion`) change their local from `suppressed` to `directives = celerrate_semantics::suppression_directives(database, file)` and discard the return for now (`let _ = retain_unsuppressed(...)`); the threading is task 6. Touch up the one prose mention of `suppressed_ranges` in `crates/celerrate_cli/src/cache/stored.rs`'s module doc to name `suppression_directives` - the suppression-note semantics it describes are unchanged.
 
 - [ ] **Step 5: Run the workspace tests**
 
@@ -838,7 +928,7 @@ Expected: PASS. Every product suppression test (`suppressions.rs`, `cache_suppre
 - [ ] **Step 6: Commit**
 
 ```bash
-git add crates/celerrate_semantics crates/celerrate_cli
+git add Cargo.lock crates/celerrate_semantics crates/celerrate_cli xtask
 git commit -m "♻️ refactor(semantics): resolve directives with filters and attribution"
 ```
 
@@ -863,17 +953,19 @@ The triage workstream, scheduled as work (the stub-curation lesson). Pure data p
 
 - [ ] **Step 1: Fetch and vendor the published catalogues**
 
-Fetch both catalogues, pinning source and date in a `#`-comment header (parsers below skip `#` lines and blanks). PHPStan publishes its identifier catalogue at `https://phpstan.org/error-identifiers` (backing list in the `phpstan/phpstan-src` repository); Psalm enumerates its issue types in its documentation (`https://psalm.dev/docs/running_psalm/issues/`) and exhaustively in `config.xsd` of the `vimeo/psalm` repository. Suggested extraction (verify the output by eye - a page layout change is a data bug here, not a tooling one):
+Fetch both catalogues from pinned upstream sources, recording source, version, and date in a `#`-comment header (parsers below skip `#` lines and blanks). PHPStan publishes its identifier catalogue at `https://phpstan.org/error-identifiers` (the page states the PHPStan version it was generated from - record it in the header). Psalm enumerates its issue types exhaustively in `config.xsd`, which must be fetched at a release tag, never at `master` (an unpinned moving target defeats the vendoring): first resolve the latest release tag from `https://github.com/vimeo/psalm/releases`, then fetch `https://raw.githubusercontent.com/vimeo/psalm/<tag>/config.xsd` and record the tag in the header. Suggested extraction (verify the output by eye - a page layout change is a data bug here, not a tooling one):
 
 ```bash
 mkdir -p crates/celerrate_phpdoc_bridge/catalogues
 # PHPStan: one identifier per line from the published catalogue page.
 curl -sL https://phpstan.org/error-identifiers | grep -oE '<code>[a-zA-Z]+(\.[a-zA-Z]+)+</code>' | sed -E 's|</?code>||g' | sort -u > /tmp/phpstan-raw.txt
-# Psalm: issue types from the repository's config.xsd enumeration.
-curl -sL https://raw.githubusercontent.com/vimeo/psalm/master/config.xsd | grep -oE 'name="[A-Za-z]+"' | sed -E 's/name="|"//g' | sort -u > /tmp/psalm-raw.txt
+# Psalm: issue types from the release-tagged config.xsd enumeration.
+curl -sL "https://raw.githubusercontent.com/vimeo/psalm/<tag>/config.xsd" | grep -oE 'name="[A-Za-z]+"' | sed -E 's/name="|"//g' | sort -u > /tmp/psalm-raw.txt
 ```
 
-Hand-inspect both raw lists (the Psalm extraction over-matches non-issue element names such as `psalm`, `plugins`, `issueHandlers`; strip anything that is not an issue type - issue types are the elements documented on the issues page). Then write each catalogue file with a header of this exact shape before the identifier lines:
+**If the network is unavailable, or either extraction looks structurally wrong (empty output, HTML fragments, an implausible count), stop and escalate to the operator - never synthesize or hand-write catalogue lines from memory: an invented catalogue poisons the triage gate's evidence.**
+
+Hand-inspect both raw lists (the Psalm extraction over-matches non-issue element names such as `psalm`, `plugins`, `issueHandlers`; strip anything that is not an issue type - issue types are the elements documented on `https://psalm.dev/docs/running_psalm/issues/`). The vendored files are extracted and hand-curated, not verbatim copies (decision 4). Then write each catalogue file with a header of this exact shape before the identifier lines (the Psalm header names the pinned release tag as its upstream version):
 
 ```text
 # PHPStan error identifiers, https://phpstan.org/error-identifiers
@@ -1310,11 +1402,18 @@ Update the module doc: delete the "Identifiers are carried, never matched" sente
 Run: `cargo test -p celerrate_phpdoc_bridge && cargo test -p celerrate_cli --test suppressions && cargo test --workspace`
 Expected: PASS.
 
-- [ ] **Step 5: Update the bridge documentation**
+- [ ] **Step 5: The per-code semantic evidence (the mapping-correctness tier)**
+
+The triage gate proves the table is complete and transportable, never that a mapping is right - and a wrong `Codes` entry under-suppresses, the declared bug direction, invisibly (the corpus snapshot is pinned at zero diagnostics, so it cannot catch it). Pin the semantics: in `suppressions.rs`, add one table-driven test per dialect that, for every distinct CEL code appearing in any `Codes` entry (twelve today: CEL0018, CEL0019, CEL0020, CEL0023, CEL0030, CEL0031, CEL0032, CEL0034, CEL0035, CEL0036, CEL0037, CEL0038), provokes that code in a small fixture and asserts that one representative foreign identifier mapped to it (picked from the seeds, per dialect) suppresses it. If a code cannot be provoked in a small fixture (for example one needing stub surface the test project lacks), document why in a comment next to that code's arm instead of silently skipping it. Also add a review-checklist note at the top of `correspondence.rs`: a new or changed `Codes` entry must come with (or adjust) its per-code fixture.
+
+Run: `cargo test -p celerrate_cli --test suppressions`
+Expected: PASS; any failure here is a wrong mapping (fix the table entry, not the test).
+
+- [ ] **Step 6: Update the bridge documentation**
 
 In `docs/phpdoc-bridge.md`, extend the suppression section: the scope table gains a sentence stating that identifiers now filter (a directive whose identifiers all map suppresses only the union of their mapped CEL codes; any unmapped identifier keeps the scope-wide fallback; `@psalm-suppress all` is explicitly scope-wide; lookup is exact-case). The `documentation.rs` gate only requires the four written forms, which remain present.
 
-- [ ] **Step 6: Commit**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add crates/celerrate_phpdoc_bridge crates/celerrate_cli docs/phpdoc-bridge.md
@@ -1678,7 +1777,7 @@ Expected: PASS, the six product tests included.
 
 - [ ] **Step 7: Document the native directive**
 
-In `docs/diagnostics.md`, add a "Suppressing diagnostics" section (before the identifier tables): the native form `// @celerrate-ignore CEL0030, CEL0031 (reason)`, its three comment kinds and scopes (trailing → its line; alone → the next line; docblock → the annotated declaration), mandatory identifiers with no blanket form, the reason trailer, and a pointer to `docs/phpdoc-bridge.md` for the foreign forms.
+In `docs/diagnostics.md`, add a "Suppressing diagnostics" section (before the identifier tables): the native form `// @celerrate-ignore CEL0030, CEL0031 (reason)`, its three comment kinds and scopes (trailing a line of code → that line; alone → the next line, or the end-of-file position when no next line exists - such a directive is then reported unused; docblock → the annotated declaration), mandatory identifiers with no blanket form, the reason trailer, and a pointer to `docs/phpdoc-bridge.md` for the foreign forms.
 
 - [ ] **Step 8: Commit**
 
@@ -1871,7 +1970,47 @@ fn a_directive_record_with_an_unknown_filter_code_is_discarded() {
     };
     assert!(stored.to_directive(100).is_none());
 }
+
+#[test]
+fn a_stored_filter_is_canonicalized_on_load() {
+    // A hand-crafted, checksum-valid pack could store an unsorted or
+    // duplicated list; `admits` binary-searches, so load canonicalizes
+    // (decision 8's sharp edge (a)).
+    let stored = StoredDirective {
+        anchor_start: 0,
+        anchor_end: 5,
+        scope_start: 0,
+        scope_end: 5,
+        filter: StoredSuppressionFilter::Only(vec![
+            "CEL0030".to_owned(),
+            "CEL0018".to_owned(),
+            "CEL0030".to_owned(),
+        ]),
+        identifiers: Vec::new(),
+        native: true,
+        matched: false,
+    };
+    let (directive, _) = stored.to_directive(100).expect("converts");
+    assert_eq!(
+        directive.filter,
+        SuppressionFilter::Only(vec![
+            celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+            celerrate_diagnostics::find_identifier("CEL0030").unwrap(),
+        ]),
+    );
+}
+
+#[test]
+fn unsorted_typed_match_indexes_discard_the_verdict() {
+    // Build the StoredVerdict the way this module's existing tests do:
+    // two convertible directive records, a typed half whose
+    // matched_directives is [1, 0]. `directives_convert` must answer
+    // None; flipping the list to [0, 1] must answer Some (decision 8's
+    // sharp edge (a): binary-searched lists validate or discard).
+}
 ```
+
+(Write `unsorted_typed_match_indexes_discard_the_verdict` against the module's existing `StoredVerdict`/`StoredTypedVerdict` test constructors; the comment above is its specification.)
 
 And a product-level pin appended to `cache_suppression.rs`:
 
@@ -1981,6 +2120,12 @@ impl StoredDirective {
                 for code in codes {
                     interned.push(find_identifier(code)?);
                 }
+                // Canonicalize: `admits` binary-searches this list,
+                // and a hand-crafted, checksum-valid pack must not
+                // smuggle an unsorted list past validation (decision
+                // 8's sharp edge (a)).
+                interned.sort();
+                interned.dedup();
                 SuppressionFilter::Only(interned)
             }
         };
@@ -2013,8 +2158,9 @@ impl StoredDirective {
 ```rust
 impl StoredVerdict {
     /// Every stored directive record converted, in stored order, with
-    /// the typed half's indexes checked against the list's length.
-    /// `None` means the whole verdict is untrustworthy.
+    /// the typed half's indexes checked against the list's length and
+    /// for strictly increasing order. `None` means the whole verdict
+    /// is untrustworthy.
     pub fn directives_convert(
         &self,
         content_length: u32,
@@ -2025,13 +2171,21 @@ impl StoredVerdict {
             .map(|directive| directive.to_directive(content_length))
             .collect();
         let records = records?;
-        if let Some(typed) = &self.typed
-            && !typed
+        if let Some(typed) = &self.typed {
+            let in_range = typed
                 .matched_directives
                 .iter()
-                .all(|&index| (index as usize) < records.len())
-        {
-            return None;
+                .all(|&index| (index as usize) < records.len());
+            // Strictly increasing: `directive_outcomes` binary-searches
+            // this list; unsorted or duplicated indexes in a
+            // checksum-valid pack must discard, not misattribute
+            // (decision 8's sharp edge (a)).
+            let sorted = typed
+                .matched_directives
+                .is_sorted_by(|left, right| left < right);
+            if !in_range || !sorted {
+                return None;
+            }
         }
         Some(records)
     }
@@ -2103,11 +2257,11 @@ The registry grows two identifiers; `ReportingContext` gets its real surface; th
 - Modify: `docs/diagnostics.md`
 - Create: `crates/celerrate_rules/src/rules/unknown_suppression_identifier.rs`
 - Create: `crates/celerrate_rules/src/rules/unused_suppression.rs`
-- Modify: `crates/celerrate_rules/src/context.rs`, `src/finding.rs`, `src/phases.rs`, `src/rules/mod.rs`, `src/lib.rs`
+- Modify: `crates/celerrate_rules/src/traits.rs`, `src/context.rs`, `src/finding.rs`, `src/phases.rs`, `src/rules/mod.rs`, `src/lib.rs`
 
 **Interfaces:**
 
-- Consumes: `ResolvedDirective` (task 2), `RuleRegistry`, `FindingSink`, `resolved_diagnostic`'s `Range` arm.
+- Consumes: `ResolvedDirective` (task 2), `RuleRegistry`, `FindingSink`. Deliberately NOT `resolved_diagnostic`: the reporting phase has no `SourceFile` and must not parse (decision 9), and its findings are range-anchored by construction, so the runner builds `Diagnostic::spanned` directly - the one phase that bypasses the shared reconciliation tail, by design and documented in the runner.
 - Produces: `DirectiveOutcome { pub directive: ResolvedDirective, pub matched: bool }` (in `celerrate_rules::context`); `ReportingContext::new(outcomes, inactive)` with methods `outcomes()`, `is_known(written)`, `is_inactive(written)`; `Finding.subject: Option<u32>` and `FindingSink::report_directive(identifier, subject, anchor, message)` (crate-internal); `reporting_phase_diagnostics(db, file_id, text_end, outcomes) -> Vec<Diagnostic>` (a plain public function, NOT a salsa query - decision 9); constants `unknown_suppression_identifier::UNKNOWN_SUPPRESSION_IDENTIFIER` (CEL0041) and `unused_suppression::UNUSED_SUPPRESSION` (CEL0042). Task 9 calls `reporting_phase_diagnostics` from the CLI. Nothing here enters the plugin facade (`ReportingRule` stays core-only).
 
 - [ ] **Step 1: Allocate the identifiers (failing ledger first)**
@@ -2134,15 +2288,15 @@ does not emit).
 
 | Identifier | Severity | Meaning |
 | --- | --- | --- |
-| CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know (a typo must not silently suppress nothing) |
-| CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run) |
+| CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know, so a typo cannot silently suppress nothing |
+| CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run, or an unknown identifier - that mistake is already CEL0041's) |
 ```
 
-Run `cargo test -p celerrate_diagnostics && cargo test -p celerrate_cli --test documentation`: green. The composition-root ledger (`crates/celerrate_cli/tests/registry.rs`) may now be RED if it cross-checks registry entries against each owner's `ALLOCATED_IDENTIFIERS` - that red is this task's TDD driver for the rules half and clears in step 4 when the two constants join the list.
+Run `cargo test -p celerrate_diagnostics && cargo test -p celerrate_cli --test documentation`: green. The composition-root ledger IS now RED: `the_producers_and_the_registry_agree` in `crates/celerrate_cli/tests/registry.rs` cross-checks registry entries against each owner's `ALLOCATED_IDENTIFIERS`, both directions - that guaranteed red is this task's TDD driver for the rules half and clears in step 4 when the two constants join the list.
 
 - [ ] **Step 2: Write the failing rule and runner tests**
 
-In a new test module at the bottom of `crates/celerrate_rules/src/phases.rs` (or extend the existing one), driving `reporting_phase_diagnostics` with synthetic records against the registered core rules:
+Extend the existing test module at the bottom of `crates/celerrate_rules/src/phases.rs` (its `#![allow]` header already covers the `unwrap`/indexing these tests use; a fresh module without it would trip clippy), driving `reporting_phase_diagnostics` with synthetic records against the registered core rules:
 
 ```rust
     // ---- Reporting phase ----
@@ -2325,12 +2479,37 @@ In a new test module at the bottom of `crates/celerrate_rules/src/phases.rs` (or
     }
 
     #[test]
+    fn a_directive_cannot_suppress_its_own_reports() {
+        // A trailing directive whose scope covers its own anchor and
+        // whose filter admits CEL0042 must not cloak its own unused
+        // warning: self-admission is forbidden (decision 10), so the
+        // warning survives.
+        let db = reporting_setup();
+        let outcome = DirectiveOutcome {
+            directive: directive(
+                (10, 40),
+                (0, 50),
+                SuppressionFilter::Only(vec![
+                    celerrate_diagnostics::find_identifier("CEL0042").unwrap(),
+                ]),
+                &["CEL0042"],
+                DirectiveOrigin::Native,
+            ),
+            matched: false,
+        };
+        let diagnostics = report(&db, &[outcome]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].id, unused_suppression::UNUSED_SUPPRESSION);
+    }
+
+    #[test]
     fn a_suppressed_directive_diagnostic_counts_as_use_in_one_pass() {
-        // Directive A (indexes 0) is unused: its CEL0042 would fire at
+        // Directive A (index 0) is unused: its CEL0042 would fire at
         // its anchor. Directive B admits CEL0042 on a scope covering
         // A's anchor: A's warning is dropped, B counts as used, and
-        // B's own CEL0042 is dropped by the subject rule - one pass,
-        // no iteration (decision 10).
+        // B's own CEL0042 is dropped by the subject rule in step (c) -
+        // never by self-admission, which decision 10 forbids - one
+        // pass, no iteration.
         let db = reporting_setup();
         let a = native_unused((10, 40), &["CEL0030"]);
         let b = native_unused((50, 90), &["CEL0042"]);
@@ -2375,6 +2554,8 @@ Run: `cargo test -p celerrate_rules`
 Expected: compile errors (`DirectiveOutcome`, the rule modules, `reporting_phase_diagnostics` do not exist).
 
 - [ ] **Step 4: Implement the context, sink extension, rules, and runner**
+
+`crates/celerrate_rules/src/traits.rs` - resolve the reservation: delete the "its execution point and context surface arrive in part 5" comment on `ReportingRule` and state the arrival instead (executed by `reporting_phase_diagnostics`, a plain function fed by the orchestration layer, never a salsa query - decision 9 of the part-5 plan). The `check(&self, &ReportingContext, &mut FindingSink)` signature is already declared and is the one the rules implement.
 
 `crates/celerrate_rules/src/context.rs` - replace the placeholder:
 
@@ -2581,11 +2762,12 @@ impl ReportingRule for UnusedSuppression {
 /// pure function of the registry and the outcomes).
 ///
 /// The one additional, non-iterated suppression pass: (a) rules emit
-/// findings, a CEL0042 finding naming its subject directive; (b) one
-/// pass drops every finding some directive admits and marks every
-/// admitting directive used; (c) findings whose subject became used in
-/// (b) are dropped. Uses recorded in (b) never re-open (b), and drops
-/// in (c) never un-use anything: no fixpoint.
+/// findings, every directive finding naming its subject directive;
+/// (b) one pass drops every finding some directive OTHER than its own
+/// subject admits (self-cloaking is forbidden, decision 10) and marks
+/// every admitting directive used; (c) CEL0042 findings whose subject
+/// became used in (b) are dropped. Uses recorded in (b) never re-open
+/// (b), and drops in (c) never un-use anything: no fixpoint.
 pub fn reporting_phase_diagnostics(
     db: &dyn salsa::Database,
     file_id: FileId,
@@ -2624,11 +2806,25 @@ pub fn reporting_phase_diagnostics(
     let mut used: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
     let mut kept = Vec::new();
     for finding in findings {
+        // Reporting findings anchor at directive ranges by
+        // construction: `report_directive` is the only affordance the
+        // reporting rules use, and the context has no tree, so a
+        // symbolic anchor could not resolve here anyway. A non-range
+        // anchor is a future rule's authoring error: dropped, and the
+        // invariant is stated here so the drop is a documented
+        // contract, not an accident.
         let FindingAnchor::Range(range) = finding.anchor else {
             continue;
         };
         let mut suppressed = false;
         for (index, outcome) in outcomes.iter().enumerate() {
+            // A directive never admits a finding that reports on
+            // itself: self-cloaking is forbidden (decision 10);
+            // cross-suppression between distinct directives stays
+            // legal.
+            if u32::try_from(index).is_ok_and(|index| finding.subject == Some(index)) {
+                continue;
+            }
             if outcome
                 .directive
                 .admits(finding.identifier, range.start(), text_end)
@@ -2792,6 +2988,17 @@ fn a_bare_native_directive_reports_cel0042() {
 }
 
 #[test]
+fn a_native_directive_alone_on_the_last_line_reports_cel0042() {
+    // No next line exists: the scope degenerates to the empty
+    // end-of-file range (decision 6), nothing is suppressed, and the
+    // directive is still visible to the reporting rules.
+    let root = project(&[("a.php", "<?php\n$x = 1;\n// @celerrate-ignore CEL0018")]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(text.contains("CEL0042"), "{text}");
+}
+
+#[test]
 fn an_unused_foreign_directive_is_never_reported() {
     let root = project(&[("a.php", "<?php\n$x = 1; // @phpstan-ignore-line\n")]);
     let (outcome, text) = check(root.path());
@@ -2851,7 +3058,11 @@ In `analysis.rs`:
 /// Builds the reporting phase's input: converted directive records
 /// (identity plus untyped matched flag) unioned with the typed half's
 /// admitting indexes. Both cache paths and the recompute path funnel
-/// through this one constructor so the union cannot drift.
+/// through this one constructor so the union cannot drift. On a
+/// partial hit the stored records and the fresh typed indexes align
+/// because a verdict hit implies identical content and the pack is
+/// keyed on binary identity - the one load-time property taken on
+/// faith from the content hash (decision 8's sharp edge (b)).
 pub fn directive_outcomes(
     directives: &[(celerrate_semantics::ResolvedDirective, bool)],
     matched_typed: &[u32],
@@ -2891,24 +3102,38 @@ pub fn reporting_portion(
 }
 ```
 
+The fresh-records helper both recompute paths share:
+
+```rust
+/// The fresh equivalent of the stored directive records: the query's
+/// directives paired with the untyped half's match outcomes. Shared by
+/// `composed_diagnostics` and `analyze_one`'s recompute arms so the
+/// two derivations cannot drift.
+fn fresh_directive_records(
+    inputs: &AnalysisInputs,
+    file: SourceFile,
+    matched_untyped: &[u32],
+) -> Vec<(celerrate_semantics::ResolvedDirective, bool)> {
+    celerrate_semantics::suppression_directives(&inputs.database, file)
+        .iter()
+        .enumerate()
+        .map(|(index, directive)| {
+            let matched = u32::try_from(index)
+                .map(|index| matched_untyped.binary_search(&index).is_ok())
+                .unwrap_or(false);
+            (directive.clone(), matched)
+        })
+        .collect()
+}
+```
+
 `composed_diagnostics` (the recompute truth, reporting included):
 
 ```rust
 pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
-    let database = &inputs.database;
     let untyped = persistable_diagnostics(inputs, file);
     let typed = typed_portion(inputs, file);
-    let fresh: Vec<(celerrate_semantics::ResolvedDirective, bool)> =
-        celerrate_semantics::suppression_directives(database, file)
-            .iter()
-            .enumerate()
-            .map(|(index, directive)| {
-                let matched = u32::try_from(index)
-                    .map(|index| untyped.matched.binary_search(&index).is_ok())
-                    .unwrap_or(false);
-                (directive.clone(), matched)
-            })
-            .collect();
+    let fresh = fresh_directive_records(inputs, file, &untyped.matched);
     let outcomes = directive_outcomes(&fresh, &typed.matched);
     let mut diagnostics = untyped.diagnostics;
     diagnostics.extend(typed.diagnostics);
@@ -2918,17 +3143,7 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
 }
 ```
 
-`analyze_one`: the hit arm's reuse condition additionally requires `verdict.directives_convert(content_length)` to answer `Some` (bind it; a `None` joins the `verdicts_discarded` fallback, exactly like a failed diagnostic conversion). The tail becomes:
-
-```rust
-        let (mut diagnostics, typed_source, records) = match ... {
-            // Hit arm: (diagnostics, typed_source, Some(converted_records))
-            // Fallback arms: (persistable_diagnostics(...).diagnostics - no:
-            //   bind the portion, keep .matched) ...
-        };
-```
-
-Concretely, restructure so every arm produces `(Vec<Diagnostic>, Option<&StoredTypedVerdict>, Vec<(ResolvedDirective, bool)>)`: the hit arm answers the converted stored records; each fallback arm binds `let portion = persistable_diagnostics(inputs, file);` and derives the fresh pairs from the query exactly as `composed_diagnostics` does (extract that six-line derivation into a private helper `fresh_directive_records(inputs, file, matched_untyped: &[u32]) -> Vec<(ResolvedDirective, bool)>` used by both). Then:
+`analyze_one`: the hit arm's reuse condition additionally requires `verdict.directives_convert(content_length)` to answer `Some` (bind it; a `None` joins the `verdicts_discarded` fallback, exactly like a failed diagnostic conversion). Restructure so every arm produces `(Vec<Diagnostic>, Option<&StoredTypedVerdict>, Vec<(ResolvedDirective, bool)>)`: the hit arm answers the converted stored records; each fallback arm binds `let portion = persistable_diagnostics(inputs, file);` and answers `fresh_directive_records(inputs, file, &portion.matched)`. Then:
 
 ```rust
         let typed = served_typed_diagnostics(inputs, file, typed_source);
@@ -2993,7 +3208,7 @@ git commit -m "✨ feat(cli): run the reporting phase from match records on both
 
 ### Task 10: The warm-path product pins and the suppression matrix completion
 
-The remaining section-11 matrix rows: a warm run reports the same directive diagnostics parse-free (through the product pipeline, statistics-verified), a directive edit restores precision, and the partial-hit union stays honest.
+The remaining section-11 matrix rows: a warm run reports the same directive diagnostics parse-free (through the product pipeline, proven by elimination - the stored diagnostics never contain a reporting diagnostic), a directive edit restores precision, and the partial-hit union stays honest.
 
 **Files:**
 
@@ -3029,10 +3244,10 @@ fn a_warm_run_reports_the_same_directive_diagnostics_from_the_records() {
 
 #[test]
 fn the_warm_replay_serves_the_verdict_rather_than_recomputing() {
-    // The parse-free claim, checked through the counters the session
-    // reports: the second run's verdict is served, not recomputed, and
-    // the CEL0042 still appears - so the reporting phase ran from the
-    // stored records, since the stored diagnostics never contain it.
+    // The parse-free claim, by elimination: the stored diagnostics
+    // never contain CEL0042, yet the warm run reports it - so the
+    // reporting phase ran from the stored match records, not from a
+    // persisted diagnostic.
     let root = project(&[(
         "a.php",
         "<?php\n$x = 1; // @celerrate-ignore CEL0018\n",
@@ -3130,9 +3345,11 @@ cargo fmt --all
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 cargo deny check
+cargo xtask dependency-shape
+cargo xtask emission-scan
 ```
 
-Expected: all green. Also verify the two reserved comments are gone: `grep -rn "never matched" crates/celerrate_semantics/src crates/celerrate_phpdoc_bridge/src` finds nothing reserving identifier-level correspondence for later.
+Expected: all green (the two xtask gates are the CI structural gates this plan's surfaces touch: semantics gained a diagnostics dependency, the bridge gained a module and data files - `cargo test --workspace` does not run them). If `cargo fmt --all` reformats anything a task's commit missed, that fallout joins step 5's commit. Also verify the two reserved comments are gone: `grep -rn "never matched" crates/celerrate_semantics/src crates/celerrate_phpdoc_bridge/src` finds nothing reserving identifier-level correspondence for later.
 
 - [ ] **Step 2: The corpus gate, with the verify-then-accept protocol**
 
@@ -3169,7 +3386,8 @@ Under `## [Unreleased]` / `### Added`:
   declaration).
 - Two directive rules riding the new `Reporting` phase: CEL0041
   (unknown identifier in a native directive) and CEL0042 (unused native
-  suppression, exempt for identifiers of inactive rules). Both warnings
+  suppression, exempt for identifiers of inactive rules and for unknown
+  identifiers, which CEL0041 already reports). Both warnings
   apply to native directives only, are themselves suppressible in one
   non-iterated pass, and report identically on warm and cold runs from
   per-directive match records persisted with the verdict (cache schema
@@ -3190,8 +3408,8 @@ git commit -m "📝 docs(changelog): record identifier-level suppression and the
 ## Verification summary (the design's closure gates this plan carries)
 
 - **The #58 acceptance test**: two co-located diagnostics, suppressing one code keeps the other reported (task 4).
-- **The correspondence-table triage gate**: both catalogues vendored and covered exactly, every mapped code interned (task 3's composition-root test).
-- **The suppression matrix**: foreign mapped, unmapped, mixed, and bare forms; `@psalm-suppress all`; exact-case lookup (task 4); native placement forms, reason trailer, unknown-identifier non-widening, co-located native and foreign union (task 5); any-match attribution, CEL0041/CEL0042 self-suppression in one pass, the inactive-rule exemption (tasks 8 and 9).
+- **The correspondence-table triage gate**: both catalogues vendored from pinned sources and covered exactly, every mapped code interned (task 3's composition-root test), and every distinct mapped CEL code behaviorally pinned per dialect (task 4's per-code fixture tier - the mapping-correctness evidence set-equality cannot give).
+- **The suppression matrix**: foreign mapped, unmapped, mixed, and bare forms; `@psalm-suppress all`; exact-case lookup (task 4); native placement forms, reason trailer, unknown-identifier non-widening, co-located native and foreign union (task 5); any-match attribution, CEL0041/CEL0042 suppressibility in one pass with self-cloaking forbidden, the inactive-rule exemption (tasks 8 and 9); the last-line degenerate scope (tasks 1, 2, and 9).
 - **Warm/cold equivalence extended to the `Reporting` phase**: the harness layers the reporting portion from stored records and asserts equality with recomputation (task 9); byte-identical warm and cold reports at the product level, records-only replay pinned (task 10).
 - **Cache honesty**: schema 7, per-half match records, bounds and interning validated on load, any mismatch discards the verdict (task 7).
 - **The corpus snapshot byte-identical** (or a hand-verified narrowing delta under verify-then-accept) and **the mixed-rate baseline unchanged** (task 11).
