@@ -107,6 +107,7 @@ mod operators;
 mod ordering;
 mod records;
 mod representation;
+mod rule_context;
 mod solver;
 pub mod stored;
 mod substitution;
@@ -143,6 +144,7 @@ pub use records::{
 pub use representation::{
     CallableParameter, ElementPositions, FloatBits, ShapeField, ShapeKey, TypeId,
 };
+pub use rule_context::{TypedBodyContext, typed_body_context};
 pub use stored::{
     StoredClassDependency, StoredFunctionDependency, StoredInferredEdge, StoredInferredSignature,
     StoredParameter, StoredSignature, StoredSignatureKey, StoredTrust, StoredType,

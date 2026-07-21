@@ -52,6 +52,19 @@ pub use celerrate_types::{
     SymbolClaim, Trust, TypeContext, TypeId, TypeSyntax,
 };
 
+// The rule-authoring surface: the traits a plugin implements, the
+// sealed contexts they receive, and the metadata and reporting
+// vocabulary around them. Nominal re-exports only — never the rule
+// registry, never the core-only `Reporting` phase, never the
+// construction seams (composition-root vocabulary; design section 8
+// defers plugin-registered rules).
+pub use celerrate_rules::{
+    DiagnosticId, ExplainPage, FindingAnchor, FindingSink, RuleGroup, RuleIdentifier, RuleMetadata,
+    SemanticRule, Severity, SyntaxContext, SyntaxRule, Tier, TypedBodyRule,
+};
+pub use celerrate_semantics::SemanticContext;
+pub use celerrate_types::TypedBodyContext;
+
 #[cfg(test)]
 mod tests {
     #[test]

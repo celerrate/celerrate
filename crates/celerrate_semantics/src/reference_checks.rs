@@ -47,8 +47,7 @@ pub const SYMBOL_REMOVED: DiagnosticId = DiagnosticId::new("CEL0022");
 pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
 
 /// Every identifier this crate allocates, for the registry check at the
-/// composition root. `SYNTAX_NOT_AVAILABLE` lives in `syntax_gating`,
-/// and joins the list here so there is exactly one list per crate.
+/// composition root.
 pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     UNKNOWN_CLASS,
     UNKNOWN_FUNCTION,
@@ -56,7 +55,6 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     SYMBOL_NOT_AVAILABLE,
     SYMBOL_REMOVED,
     SYMBOL_DEPRECATED,
-    crate::syntax_gating::SYNTAX_NOT_AVAILABLE,
 ];
 
 /// The findings and answers of one file's reference walk, produced by

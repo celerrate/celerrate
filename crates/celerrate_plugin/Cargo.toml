@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+celerrate_rules = { path = "../celerrate_rules" }
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_types = { path = "../celerrate_types" }
 

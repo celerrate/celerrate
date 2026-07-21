@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `celerrate_plugin::ReportingRule`
+ --> tests/seal/reporting_rule_reexport.rs:3:5
+  |
+3 | use celerrate_plugin::ReportingRule;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `ReportingRule` in the root
+  |
+help: consider importing this trait instead
+  |
+3 - use celerrate_plugin::ReportingRule;
+3 + use celerrate_rules::ReportingRule;
+  |

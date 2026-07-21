@@ -28,8 +28,17 @@ pub struct RegisteredPlugins {
 }
 
 /// The dormant API-version gate (the parent's crash semantics:
-/// exclude, degrade, never crash).
+/// exclude, degrade, never crash), plus the core-name reservation: the
+/// `celerrate-core` identity is the composition root's own, keyed by
+/// binary identity rather than the plugin-set digest, so a plugin
+/// claiming it is excluded before the API-version check ever runs.
 fn admission(descriptor: &PluginDescriptor) -> Result<(), String> {
+    if descriptor.identity.name == celerrate_rules::CORE_IDENTITY_NAME {
+        return Err(format!(
+            "the name {} is reserved for core registrations",
+            celerrate_rules::CORE_IDENTITY_NAME,
+        ));
+    }
     if descriptor.api_version == PLUGIN_API_VERSION {
         Ok(())
     } else {
@@ -119,6 +128,43 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     RegisteredPlugins { admitted, excluded }
 }
 
+/// Registers the core rules under the reserved core identity, outside
+/// the admitted plugin set: core behavior is keyed by binary identity,
+/// never by the plugin-set digest (design section 2). Order here is
+/// the deterministic dispatch order, like the other four registries.
+///
+/// Every composition root that composes diagnostics must call this
+/// function. The `RuleRegistry` input has no default: if it is left
+/// unset, `celerrate_rules` treats the registry as empty rather than
+/// producing an error, so core-rule diagnostic families (for example
+/// CEL0024) go silently missing, with no compile error to catch the
+/// omission.
+pub fn register_core_rules(database: &AnalysisDatabase) {
+    let identity = core_identity();
+    let registrations: Vec<celerrate_rules::RuleRegistration> = celerrate_rules::core_rules()
+        .into_iter()
+        .map(
+            |(metadata, implementation)| celerrate_rules::RuleRegistration {
+                identity: identity.clone(),
+                active: metadata.tier == celerrate_rules::Tier::Default,
+                metadata,
+                implementation,
+            },
+        )
+        .collect();
+    let _ = celerrate_rules::RuleRegistry::builder(registrations)
+        .durability(salsa::Durability::HIGH)
+        .new(database);
+}
+
+fn core_identity() -> PluginIdentity {
+    PluginIdentity {
+        name: celerrate_rules::CORE_IDENTITY_NAME.to_owned(),
+        version: env!("CARGO_PKG_VERSION").to_owned(),
+        configuration: String::new(),
+    }
+}
+
 /// Overlapping claims exclude the later registrant and the set is
 /// rebuilt until it validates: registration order is the precedence.
 fn admit_dynamic_providers(
@@ -202,7 +248,8 @@ mod tests {
     )]
 
     use super::{
-        ExcludedPlugin, RegisteredPlugins, admission, plugin_set_digest, register_plugins,
+        ExcludedPlugin, RegisteredPlugins, admission, plugin_set_digest, register_core_rules,
+        register_plugins,
     };
     use crate::database::AnalysisDatabase;
 
@@ -311,6 +358,61 @@ mod tests {
             vec![bridge_name.as_str(), stdlib_name.as_str()],
         );
         assert!(plugins.excluded.is_empty());
+    }
+
+    #[test]
+    fn core_rules_register_under_the_reserved_identity_and_validate() {
+        let db = AnalysisDatabase::default();
+        register_core_rules(&db);
+        let registry =
+            celerrate_rules::RuleRegistry::try_get(&db).expect("core rules are always registered");
+        let registrations = registry.registrations(&db);
+        assert!(!registrations.is_empty());
+        assert!(registrations.iter().all(|registration| {
+            registration.identity.name == celerrate_rules::CORE_IDENTITY_NAME
+        }));
+        assert_eq!(celerrate_rules::validate_rules(registrations), Ok(()));
+    }
+
+    #[test]
+    fn core_rules_never_enter_the_admitted_plugin_set() {
+        let db = AnalysisDatabase::default();
+        let registered = register_plugins(&db);
+        register_core_rules(&db);
+        assert!(
+            registered
+                .admitted
+                .iter()
+                .all(|identity| { identity.name != celerrate_rules::CORE_IDENTITY_NAME })
+        );
+    }
+
+    #[test]
+    fn a_plugin_claiming_the_reserved_core_name_is_excluded() {
+        // Mirror `an_api_version_mismatch_excludes_and_reports`: build a
+        // descriptor through the same fake-plugin path, but with the
+        // reserved core identity name rather than a mismatched API
+        // version. Admission must refuse it with a reason naming the
+        // reservation, so the composition root would push it to
+        // `excluded` and it never reaches a registry.
+        let reserved = celerrate_plugin::PluginDescriptor::new(
+            celerrate_semantics::PluginIdentity {
+                name: celerrate_rules::CORE_IDENTITY_NAME.to_owned(),
+                version: env!("CARGO_PKG_VERSION").to_owned(),
+                configuration: String::new(),
+            },
+            celerrate_plugin::PLUGIN_API_VERSION,
+        );
+        let verdict = admission(&reserved);
+        let reason = verdict.expect_err("the reserved core name must be refused");
+        assert!(
+            reason.contains(celerrate_rules::CORE_IDENTITY_NAME),
+            "the reason names the reserved identity: {reason}",
+        );
+        assert!(
+            reason.contains("reserved"),
+            "the reason states the reservation: {reason}",
+        );
     }
 
     #[derive(Debug)]

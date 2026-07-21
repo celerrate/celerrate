@@ -150,6 +150,7 @@ dependencies = [
  "celerrate_phpdoc_bridge",
  "celerrate_plugin",
  "celerrate_project",
+ "celerrate_rules",
  "celerrate_semantics",
  "celerrate_source",
  "celerrate_stdlib_provider",
@@ -212,6 +213,7 @@ dependencies = [
 name = "celerrate_plugin"
 version = "0.0.3"
 dependencies = [
+ "celerrate_rules",
  "celerrate_semantics",
  "celerrate_types",
  "trybuild",
@@ -227,6 +229,19 @@ dependencies = [
  "salsa",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "celerrate_rules"
+version = "0.0.3"
+dependencies = [
+ "celerrate_db",
+ "celerrate_diagnostics",
+ "celerrate_project",
+ "celerrate_semantics",
+ "celerrate_source",
+ "celerrate_types",
+ "salsa",
 ]
 
 [[package]]

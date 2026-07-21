@@ -1,0 +1,11 @@
+error[E0432]: unresolved import `celerrate_plugin::RuleRegistry`
+ --> tests/seal/rule_registry_reexport.rs:4:5
+  |
+4 | use celerrate_plugin::RuleRegistry;
+  |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ no `RuleRegistry` in the root
+  |
+help: consider importing this struct instead
+  |
+4 - use celerrate_plugin::RuleRegistry;
+4 + use celerrate_rules::RuleRegistry;
+  |
