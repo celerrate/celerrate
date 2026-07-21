@@ -14,7 +14,9 @@ mod traits;
 pub use context::{ReportingContext, SyntaxContext, testing_syntax_context};
 pub use finding::{FindingAnchor, FindingSink};
 pub use metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};
-pub use phases::syntax_phase_diagnostics;
+pub use phases::{
+    semantic_phase_diagnostics, syntax_phase_diagnostics, typed_body_phase_diagnostics,
+};
 pub use registry::{
     CORE_IDENTITY_NAME, RuleConflict, RuleImplementation, RuleRegistration, RuleRegistry,
     validate_rules,

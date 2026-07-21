@@ -1,7 +1,7 @@
 use celerrate_db::SourceFile;
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
-use celerrate_semantics::BodyQuery;
+use celerrate_semantics::{BodyQuery, DeclarationKind, MemberKind};
 use celerrate_source::FileId;
 
 use crate::context::SyntaxContext;
@@ -38,6 +38,104 @@ pub fn syntax_phase_diagnostics(
                 .into_iter()
                 .filter_map(|finding| resolved_diagnostic(db, file, file_id, finding)),
         );
+    }
+    diagnostics.sort();
+    diagnostics
+}
+
+/// The semantic phase: one query per file. Empty until part 4 migrates
+/// the semantic families onto it; wired into the CLI now so that
+/// migration lands in existing plumbing rather than needing its own.
+#[salsa::tracked(returns(ref))]
+pub fn semantic_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
+    let Some(registry) = RuleRegistry::try_get(db) else {
+        return Vec::new();
+    };
+    let file_id = file.file_id(db);
+    let mut diagnostics = Vec::new();
+    for registration in registry.registrations(db) {
+        if !registration.active {
+            continue;
+        }
+        let RuleImplementation::Semantic(rule) = &registration.implementation else {
+            continue;
+        };
+        let context = celerrate_semantics::semantic_context(db, file);
+        let mut sink = FindingSink::new(&registration.metadata);
+        rule.check(&context, &mut sink);
+        diagnostics.extend(
+            sink.into_findings()
+                .into_iter()
+                .filter_map(|finding| resolved_diagnostic(db, file, file_id, finding)),
+        );
+    }
+    diagnostics.sort();
+    diagnostics
+}
+
+/// The typed findings of one body. Tracked per body on purpose: the
+/// framework preserves `body_typed_verdicts`' proven tier — editing one
+/// body never re-checks its siblings. The `body_ir` guard is the tier's
+/// honest content dependency: a body that does not lower has nothing to
+/// check, and a body edit invalidates exactly this body's query while
+/// an offset-only edit backdates it.
+#[salsa::tracked(returns(ref))]
+pub(crate) fn body_phase_findings<'db>(
+    db: &'db dyn salsa::Database,
+    file: SourceFile,
+    body: BodyQuery<'db>,
+) -> Vec<Finding> {
+    if celerrate_semantics::body_ir(db, file, body).is_none() {
+        return Vec::new();
+    }
+    let Some(registry) = RuleRegistry::try_get(db) else {
+        return Vec::new();
+    };
+    let mut findings = Vec::new();
+    for registration in registry.registrations(db) {
+        if !registration.active {
+            continue;
+        }
+        let RuleImplementation::TypedBody(rule) = &registration.implementation else {
+            continue;
+        };
+        let context = celerrate_types::typed_body_context(db, body.ast_id(db));
+        let mut sink = FindingSink::new(&registration.metadata);
+        rule.check(&context, &mut sink);
+        findings.extend(sink.into_findings());
+    }
+    findings
+}
+
+/// The typed phase: aggregates the per-body tier over the file's
+/// function and method bodies (the `typed_file_verdicts` enumeration,
+/// traits excluded) and reconciles anchors at the tail. Not yet wired
+/// into the CLI composition: part 4's typed migration wires it together
+/// with the stored-verdict co-production.
+#[salsa::tracked(returns(ref))]
+pub fn typed_body_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
+    let file_id = file.file_id(db);
+    let tree = celerrate_semantics::member_tree(db, file);
+    let mut diagnostics = Vec::new();
+    let function_bodies = tree.functions.iter().map(|function| function.ast_id);
+    let method_bodies = tree
+        .classes
+        .iter()
+        .filter(|class| class.kind != DeclarationKind::Trait)
+        .flat_map(|class| {
+            class
+                .members
+                .iter()
+                .filter(|member| member.kind == MemberKind::Method)
+                .map(|member| member.ast_id)
+        });
+    for ast_id in function_bodies.chain(method_bodies) {
+        let body = BodyQuery::new(db, ast_id);
+        for finding in body_phase_findings(db, file, body) {
+            if let Some(diagnostic) = resolved_diagnostic(db, file, file_id, finding.clone()) {
+                diagnostics.push(diagnostic);
+            }
+        }
     }
     diagnostics.sort();
     diagnostics
@@ -99,15 +197,19 @@ mod tests {
     use celerrate_db::testing::TestDatabase;
     use celerrate_diagnostics::{DiagnosticId, Severity};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-    use celerrate_semantics::{AstId, ExpressionId, PluginIdentity};
+    use celerrate_semantics::{AstId, ExpressionId, PluginIdentity, SemanticContext};
     use celerrate_source::{FileId, TextRange, TextSize};
+    use celerrate_types::TypedBodyContext;
 
-    use super::{resolved_diagnostic, syntax_phase_diagnostics};
+    use super::{
+        resolved_diagnostic, semantic_phase_diagnostics, syntax_phase_diagnostics,
+        typed_body_phase_diagnostics,
+    };
     use crate::context::SyntaxContext;
     use crate::finding::{Finding, FindingAnchor, FindingSink};
     use crate::metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};
     use crate::registry::{RuleImplementation, RuleRegistration, RuleRegistry};
-    use crate::traits::SyntaxRule;
+    use crate::traits::{SemanticRule, SyntaxRule, TypedBodyRule};
 
     fn test_setup(source: &str) -> (TestDatabase, SourceFile, ProjectConfiguration) {
         let db = TestDatabase::default();
@@ -294,5 +396,100 @@ mod tests {
         };
         let diagnostic = resolved_diagnostic(&db, file, FileId::new(0), finding);
         assert!(diagnostic.is_none());
+    }
+
+    struct EmitPerFile;
+
+    impl SemanticRule for EmitPerFile {
+        fn check(&self, _context: &SemanticContext<'_>, sink: &mut FindingSink<'_>) {
+            sink.report(
+                DiagnosticId::new("CEL9997"),
+                FindingAnchor::Range(TextRange::new(TextSize::from(0), TextSize::from(5))),
+                "per file".to_owned(),
+            );
+        }
+    }
+
+    fn semantic_registration() -> RuleRegistration {
+        RuleRegistration {
+            identity: PluginIdentity {
+                name: "test-plugin".to_owned(),
+                version: "0.0.0".to_owned(),
+                configuration: String::new(),
+            },
+            active: true,
+            metadata: RuleMetadata {
+                name: "emit-per-file".to_owned(),
+                group: RuleGroup::Correctness,
+                identifiers: vec![RuleIdentifier {
+                    id: DiagnosticId::new("CEL9997"),
+                    severity: Severity::Error,
+                }],
+                tier: Tier::Default,
+            },
+            implementation: RuleImplementation::Semantic(Arc::new(EmitPerFile)),
+        }
+    }
+
+    #[test]
+    fn a_semantic_rule_reports_once_per_file() {
+        let (db, file, _configuration) = test_setup("<?php echo 1;");
+        register(&db, vec![semantic_registration()]);
+        assert_eq!(semantic_phase_diagnostics(&db, file).len(), 1);
+    }
+
+    struct MarkEveryBody;
+
+    impl TypedBodyRule for MarkEveryBody {
+        fn check(&self, context: &TypedBodyContext<'_>, sink: &mut FindingSink<'_>) {
+            sink.report(
+                DiagnosticId::new("CEL9996"),
+                FindingAnchor::Declaration(context.body()),
+                "marked body".to_owned(),
+            );
+        }
+    }
+
+    fn typed_registration() -> RuleRegistration {
+        RuleRegistration {
+            identity: PluginIdentity {
+                name: "test-plugin".to_owned(),
+                version: "0.0.0".to_owned(),
+                configuration: String::new(),
+            },
+            active: true,
+            metadata: RuleMetadata {
+                name: "mark-every-body".to_owned(),
+                group: RuleGroup::Correctness,
+                identifiers: vec![RuleIdentifier {
+                    id: DiagnosticId::new("CEL9996"),
+                    severity: Severity::Error,
+                }],
+                tier: Tier::Default,
+            },
+            implementation: RuleImplementation::TypedBody(Arc::new(MarkEveryBody)),
+        }
+    }
+
+    #[test]
+    fn a_typed_body_rule_runs_once_per_function_and_method_body() {
+        let source = "<?php\nfunction first() { echo 1; }\nclass Demo { public function second(): void { echo 2; } }\n";
+        let (db, file, _configuration) = test_setup(source);
+        register(&db, vec![typed_registration()]);
+        let diagnostics = typed_body_phase_diagnostics(&db, file);
+        assert_eq!(
+            diagnostics.len(),
+            2,
+            "one finding per body, both reconciled"
+        );
+    }
+
+    #[test]
+    fn a_trait_method_body_is_not_enumerated() {
+        // Mirrors `typed_file_verdicts`' trait filter.
+        let source = "<?php\ntrait Helper { public function inside(): void { echo 1; } }\n";
+        let (db, file, _configuration) = test_setup(source);
+        register(&db, vec![typed_registration()]);
+        assert!(typed_body_phase_diagnostics(&db, file).is_empty());
     }
 }

@@ -190,6 +190,11 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
             .iter()
             .cloned(),
     );
+    diagnostics.extend(
+        celerrate_rules::semantic_phase_diagnostics(database, file)
+            .iter()
+            .cloned(),
+    );
     let suppressed = celerrate_semantics::suppressed_ranges(database, file);
     if !suppressed.is_empty() {
         retain_unsuppressed(database, file, suppressed, &mut diagnostics);
