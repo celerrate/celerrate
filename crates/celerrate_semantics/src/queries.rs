@@ -63,11 +63,13 @@ pub fn member_tree(db: &dyn salsa::Database, file: SourceFile) -> MemberTree {
     MemberTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 
-/// Every semantic diagnostic of one file: the reference families
-/// (unknown symbols, symbol version gating), deterministically ordered.
-/// Syntax version gating now belongs to the rule framework's syntax
-/// phase (`celerrate_rules::syntax_phase_diagnostics`), which the CLI
-/// composes alongside this query; syntax and decode findings live in
+/// Every semantic diagnostic of one file: the symbol version-gating
+/// family, deterministically ordered. Syntax version gating belongs to
+/// the rule framework's syntax phase
+/// (`celerrate_rules::syntax_phase_diagnostics`) and the unknown-symbol
+/// family to its semantic phase
+/// (`celerrate_rules::semantic_phase_diagnostics`), both composed by the
+/// CLI alongside this query; syntax and decode findings live in
 /// `celerrate_db::file_diagnostics`.
 #[salsa::tracked(returns(ref))]
 pub fn semantic_diagnostics(
@@ -93,7 +95,9 @@ mod tests {
     use celerrate_db::testing::TestDatabase;
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
+    use celerrate_stubs::{
+        StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
+    };
     use celerrate_syntax::SyntaxKind;
     use salsa::Setter;
 
@@ -164,21 +168,33 @@ mod tests {
     }
 
     #[test]
-    fn semantic_diagnostics_carry_the_reference_family_only() {
-        // Same fixture as before — one gated construct then one unknown
-        // class — but syntax version gating now belongs to the rule
-        // framework's syntax phase, so this query reports only the
-        // reference family: CEL0018, never CEL0024.
+    fn semantic_diagnostics_carry_the_symbol_gating_family_only() {
+        // Three references' worth of fixture — one gated construct, one
+        // unresolved class, one stub call gated by its availability
+        // window — narrowed twice: syntax version gating belongs to the
+        // rule framework's syntax phase (never CEL0024 here), and the
+        // unknown-symbol family now belongs to its semantic phase
+        // (never CEL0018 here). What is left for this query is the
+        // symbol version-gating family alone.
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
             FileId::new(0),
-            b"<?php readonly class Point {} $x = new Missing();".to_vec(),
+            b"<?php readonly class Point {} $x = new Missing(); array_find([], fn($v) => $v);"
+                .to_vec(),
         );
         let files = AnalyzedFileSet::new(&db, vec![file]);
-        let stubs = StubIndexInput::builder(StubIndex::default())
-            .durability(salsa::Durability::HIGH)
-            .new(&db);
+        let stubs = StubIndexInput::builder(StubIndex::from_symbols(vec![StubSymbol {
+            name: "array_find".to_owned(),
+            kind: StubSymbolKind::Function,
+            availability: StubAvailability {
+                introduced: Some(PhpVersion::new(8, 4)),
+                removed: None,
+                deprecated: None,
+            },
+        }]))
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
             PhpVersion::new(8, 1),
             PhpVersion::new(8, 5),
@@ -187,7 +203,7 @@ mod tests {
         .new(&db);
         let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
         let identifiers: Vec<&str> = diagnostics.iter().map(|d| d.id.as_str()).collect();
-        assert_eq!(identifiers, vec!["CEL0018"]);
+        assert_eq!(identifiers, vec!["CEL0021"]);
     }
 
     #[test]

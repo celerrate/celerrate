@@ -191,9 +191,15 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
             .cloned(),
     );
     diagnostics.extend(
-        celerrate_rules::semantic_phase_diagnostics(database, file)
-            .iter()
-            .cloned(),
+        celerrate_rules::semantic_phase_diagnostics(
+            database,
+            file,
+            inputs.files,
+            inputs.stubs,
+            inputs.configuration,
+        )
+        .iter()
+        .cloned(),
     );
     let suppressed = celerrate_semantics::suppressed_ranges(database, file);
     if !suppressed.is_empty() {

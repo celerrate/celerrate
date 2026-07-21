@@ -1,21 +1,25 @@
-//! Two diagnostic families over the statically named references of one
-//! file: the unknown-symbol family (CEL0018-CEL0020), reporting a
-//! reference that resolves to no declaration, and the symbol
-//! version-gating family (CEL0021-CEL0023), reporting a reference that
-//! resolves to a stub symbol whose availability window does not fully
-//! cover the project's supported PHP version range. Two conservative
-//! stances are documented engine semantics: dynamic references are out
-//! of scope, and a symbol declared anywhere in project, vendor, or
-//! stubs counts as declared, no reachability analysis of conditional
-//! declarations.
+//! The statically named references of one file, resolved once: the
+//! symbol version-gating family (CEL0021-CEL0023) reports a reference
+//! that resolves to a stub symbol whose availability window does not
+//! fully cover the project's supported PHP version range. Two
+//! conservative stances are documented engine semantics: dynamic
+//! references are out of scope, and a symbol declared anywhere in
+//! project, vendor, or stubs counts as declared, no reachability
+//! analysis of conditional declarations.
+//!
+//! The unknown-symbol family (CEL0018-CEL0020) is no longer constructed
+//! here: the walk records an [`ResolutionOutcome::Unresolved`] outcome
+//! and `celerrate_rules::rules::unknown_symbols` turns it into a
+//! diagnostic. What moved is construction, never the walk.
 //!
 //! [`reference_outcomes`] walks the file's references exactly once,
-//! resolving each name a single time and deriving both the diagnostics
-//! above and the revalidation records of `revalidation.rs` from that
-//! same resolution. `reference_diagnostics` and
-//! `crate::revalidation::resolution_records` are thin projections over
-//! it: one walk produces findings and answers, so drift between them is
-//! structurally impossible — the `composed_diagnostics` closure,
+//! resolving each name a single time and deriving all three outputs
+//! from that same resolution: the plain-data outcomes the semantic-phase
+//! rules consume, the diagnostics above, and the revalidation records of
+//! `revalidation.rs`. [`reference_resolutions`], [`reference_diagnostics`]
+//! and `crate::revalidation::resolution_records` are thin projections
+//! over it: one walk produces findings and answers, so drift between
+//! them is structurally impossible — the `composed_diagnostics` closure,
 //! applied to the second mirror, plan 9a.
 
 use std::collections::HashMap;
@@ -33,12 +37,6 @@ use crate::resolve::{SymbolSources, UseTables, resolve_name};
 use crate::revalidation::{ResolutionRecord, answer_of};
 use crate::symbols::SymbolSpace;
 
-/// A class-like reference that resolves to no declaration.
-pub const UNKNOWN_CLASS: DiagnosticId = DiagnosticId::new("CEL0018");
-/// A function call that resolves to no declaration.
-pub const UNKNOWN_FUNCTION: DiagnosticId = DiagnosticId::new("CEL0019");
-/// A constant reference that resolves to no declaration.
-pub const UNKNOWN_CONSTANT: DiagnosticId = DiagnosticId::new("CEL0020");
 /// A stub symbol introduced after the range minimum.
 pub const SYMBOL_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0021");
 /// A stub symbol removed at or before the range maximum.
@@ -48,14 +46,8 @@ pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
 
 /// Every identifier this crate allocates, for the registry check at the
 /// composition root.
-pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
-    UNKNOWN_CLASS,
-    UNKNOWN_FUNCTION,
-    UNKNOWN_CONSTANT,
-    SYMBOL_NOT_AVAILABLE,
-    SYMBOL_REMOVED,
-    SYMBOL_DEPRECATED,
-];
+pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] =
+    &[SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, SYMBOL_DEPRECATED];
 
 /// How one statically named reference resolved, as plain data: the
 /// outcome the semantic-phase rules consume (design section 2). The
@@ -96,11 +88,12 @@ pub struct ReferenceOutcomes {
 
 /// The single walk over the statically named references of one file:
 /// for every reference, `resolve_name` runs exactly once, and its
-/// result feeds both outputs — the diagnostic match that may report an
-/// unknown-symbol or symbol version-gating finding, and the
-/// revalidation record that reduces the same resolution to its answer.
-/// Diagnostics are sorted; records keep walk (tree) order, the
-/// convention `resolution_records`' tests pin.
+/// result feeds all three outputs — the plain-data outcome the
+/// semantic-phase rules consume, the diagnostic match that may report a
+/// symbol version-gating finding, and the revalidation record that
+/// reduces the same resolution to its answer. Diagnostics are sorted;
+/// outcomes and records keep walk (tree) order, the convention
+/// `resolution_records`' tests pin.
 #[salsa::tracked(returns(ref))]
 pub fn reference_outcomes(
     db: &dyn salsa::Database,
@@ -149,7 +142,6 @@ pub fn reference_outcomes(
         match resolution {
             None => {
                 outcomes.push(outcome_of(ResolutionOutcome::Unresolved));
-                diagnostics.push(unknown_symbol(&reference, file_id));
             }
             Some(SymbolResolution::Stub { availability, .. }) => {
                 outcomes.push(outcome_of(ResolutionOutcome::Stub { availability }));
@@ -175,10 +167,9 @@ pub fn reference_outcomes(
 }
 
 /// The per-file reference diagnostics: for every statically named
-/// reference, either an unknown-symbol diagnostic when it fails to
-/// resolve, or a symbol version-gating diagnostic when it resolves to a
-/// stub symbol whose availability does not fully cover the project's
-/// supported PHP version range. A projection of [`reference_outcomes`]
+/// reference that resolves to a stub symbol whose availability does not
+/// fully cover the project's supported PHP version range, a symbol
+/// version-gating diagnostic. A projection of [`reference_outcomes`]
 /// (module doc): backdates independently of `resolution_records`, but
 /// both read the same walk.
 #[salsa::tracked(returns(ref))]
@@ -272,21 +263,6 @@ fn availability_diagnostics(
     }
 }
 
-fn unknown_symbol(reference: &Reference, file: FileId) -> Diagnostic {
-    let (id, kind) = match reference.space {
-        SymbolSpace::ClassLike => (UNKNOWN_CLASS, "class"),
-        SymbolSpace::Function => (UNKNOWN_FUNCTION, "function"),
-        SymbolSpace::Constant => (UNKNOWN_CONSTANT, "constant"),
-    };
-    Diagnostic::spanned(
-        id,
-        Severity::Error,
-        file,
-        reference.range,
-        format!("unknown {kind} `{}`", reference.written),
-    )
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -351,103 +327,6 @@ mod tests {
     /// version gating.
     fn full_range() -> PhpVersionRange {
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5))
-    }
-
-    #[test]
-    fn an_unresolved_class_is_reported_at_its_written_name() {
-        let source = "<?php namespace App; $x = new Client();";
-        let diagnostics = checked_in_range(&[source], vec![], full_range());
-        let diagnostic = diagnostics.first().unwrap();
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostic.id, UNKNOWN_CLASS);
-        assert_eq!(diagnostic.severity, Severity::Error);
-        assert_eq!(diagnostic.message, "unknown class `Client`");
-        let (_, range) = diagnostic.span().unwrap();
-        let start: usize = range.start().into();
-        let end: usize = range.end().into();
-        assert_eq!(&source[start..end], "Client");
-    }
-
-    #[test]
-    fn a_declaration_anywhere_in_the_file_set_counts() {
-        assert_eq!(
-            checked_in_range(
-                &[
-                    "<?php namespace App; use Lib\\Helper; $x = new Helper();",
-                    "<?php namespace Lib; class Helper {}",
-                ],
-                vec![],
-                full_range(),
-            ),
-            vec![],
-        );
-    }
-
-    #[test]
-    fn a_stub_declaration_counts() {
-        assert_eq!(
-            checked_in_range(
-                &["<?php $x = strlen('a'); $t = new \\ArrayObject();"],
-                vec![
-                    stub("strlen", StubSymbolKind::Function),
-                    stub("ArrayObject", StubSymbolKind::Class),
-                ],
-                full_range(),
-            ),
-            vec![],
-        );
-    }
-
-    #[test]
-    fn an_unresolved_alias_reports_the_written_name() {
-        let diagnostics = checked_in_range(
-            &["<?php use Lib\\Missing as M; $x = new M();"],
-            vec![],
-            full_range(),
-        );
-        assert_eq!(diagnostics.first().unwrap().message, "unknown class `M`");
-    }
-
-    #[test]
-    fn functions_fall_back_to_the_global_namespace() {
-        let diagnostics = checked_in_range(
-            &["<?php namespace App; strlen('a'); missing('b');"],
-            vec![stub("strlen", StubSymbolKind::Function)],
-            full_range(),
-        );
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics.first().unwrap().id, UNKNOWN_FUNCTION);
-        assert_eq!(
-            diagnostics.first().unwrap().message,
-            "unknown function `missing`"
-        );
-    }
-
-    #[test]
-    fn constant_terminal_segments_stay_case_sensitive() {
-        let diagnostics = checked_in_range(
-            &["<?php $a = PHP_EOL; $b = php_eol;"],
-            vec![stub("PHP_EOL", StubSymbolKind::Constant)],
-            full_range(),
-        );
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics.first().unwrap().id, UNKNOWN_CONSTANT);
-        assert_eq!(
-            diagnostics.first().unwrap().message,
-            "unknown constant `php_eol`"
-        );
-    }
-
-    #[test]
-    fn a_conditionally_declared_symbol_counts_as_declared() {
-        assert_eq!(
-            checked_in_range(
-                &["<?php if (!function_exists('helper')) { function helper() {} } helper();"],
-                vec![stub("function_exists", StubSymbolKind::Function)],
-                full_range(),
-            ),
-            vec![],
-        );
     }
 
     #[test]
@@ -531,26 +410,6 @@ mod tests {
     }
 
     #[test]
-    fn a_symbol_absent_from_the_whole_range_is_unknown_not_gated() {
-        // Removed at or before the minimum: filtered out of the stub table
-        // by stubs_in_range, so the reference reports unknown symbol.
-        let diagnostics = checked_in_range(
-            &["<?php ancient();"],
-            vec![stub_with(
-                "ancient",
-                StubSymbolKind::Function,
-                StubAvailability {
-                    introduced: None,
-                    removed: Some(PhpVersion::new(8, 1)),
-                    deprecated: None,
-                },
-            )],
-            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-        );
-        assert_eq!(diagnostics.first().unwrap().id, UNKNOWN_FUNCTION);
-    }
-
-    #[test]
     fn a_project_declaration_is_never_gated() {
         let diagnostics = checked_in_range(
             &["<?php function utf8_encode($s) { return $s; } utf8_encode('a');"],
@@ -566,28 +425,6 @@ mod tests {
             PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
         );
         assert_eq!(diagnostics, vec![]);
-    }
-
-    #[test]
-    fn a_dynamically_named_define_is_not_indexed() {
-        let diagnostics = checked_in_range(
-            &["<?php define($name, 1); echo APP_ROOT;"],
-            vec![stub("define", StubSymbolKind::Function)],
-            full_range(),
-        );
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
-    }
-
-    #[test]
-    fn a_define_keeps_its_terminal_segment_case_sensitive() {
-        let diagnostics = checked_in_range(
-            &["<?php define('APP_ROOT', 1); echo App_Root;"],
-            vec![stub("define", StubSymbolKind::Function)],
-            full_range(),
-        );
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
     }
 
     /// The outcomes of the FIRST source, with the given stubs and range.

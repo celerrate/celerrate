@@ -1,20 +1,46 @@
-use celerrate_db::SourceFile;
+use celerrate_db::{AnalyzedFileSet, SourceFile};
+use celerrate_project::{PhpVersionRange, ProjectConfiguration};
 use celerrate_source::FileId;
+use celerrate_stubs::StubIndexInput;
+
+use crate::reference_checks::{ReferenceOutcome, reference_resolutions};
 
 /// The semantic-phase context, owned by this crate (design section 4).
 /// Sealed: private database, delegating methods, no salsa vocabulary
-/// rule-side. Part 4's family migrations enumerate its real facade
-/// methods (resolution outcomes, symbol index); until then it carries
-/// only plain file identity.
+/// rule-side. The surface is exactly what the shipped semantic rules
+/// consume (the part-3 YAGNI criterion); the symbol index arrives with
+/// its first client.
 pub struct SemanticContext<'db> {
     db: &'db dyn salsa::Database,
     file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
 }
 
-impl SemanticContext<'_> {
+impl<'db> SemanticContext<'db> {
     /// The checked file's identity.
     pub fn file(&self) -> FileId {
         self.file.file_id(self.db)
+    }
+
+    /// Every statically named reference's resolution outcome, in walk
+    /// order. Delegates to the same memoized walk that co-produces the
+    /// cache's revalidation records, so consulting cannot drift from
+    /// recording (design section 2).
+    pub fn reference_resolutions(&self) -> &'db [ReferenceOutcome] {
+        reference_resolutions(
+            self.db,
+            self.file,
+            self.files,
+            self.stubs,
+            self.configuration,
+        )
+    }
+
+    /// The project's supported PHP version range.
+    pub fn php_version_range(&self) -> PhpVersionRange {
+        self.configuration.php_version_range(self.db)
     }
 }
 
@@ -25,8 +51,17 @@ impl SemanticContext<'_> {
 pub fn semantic_context<'db>(
     db: &'db dyn salsa::Database,
     file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
 ) -> SemanticContext<'db> {
-    SemanticContext { db, file }
+    SemanticContext {
+        db,
+        file,
+        files,
+        stubs,
+        configuration,
+    }
 }
 
 #[cfg(test)]
@@ -40,17 +75,34 @@ mod tests {
         clippy::panic
     )]
 
-    use celerrate_db::SourceFile;
     use celerrate_db::testing::TestDatabase;
+    use celerrate_db::{AnalyzedFileSet, SourceFile};
+    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
+    use celerrate_stubs::{StubIndex, StubIndexInput};
 
+    use crate::reference_checks::ResolutionOutcome;
     use crate::rule_context::semantic_context;
 
     #[test]
     fn the_semantic_context_exposes_the_files_identity_and_never_the_database() {
         let db = TestDatabase::default();
-        let file = SourceFile::new(&db, FileId::new(0), b"<?php".to_vec());
-        let context = semantic_context(&db, file);
+        let file = SourceFile::new(&db, FileId::new(0), b"<?php new Missing();".to_vec());
+        let files = AnalyzedFileSet::new(&db, vec![file]);
+        let stubs = StubIndexInput::builder(StubIndex::default())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
+            PhpVersion::new(8, 1),
+            PhpVersion::new(8, 5),
+        ))
+        .durability(salsa::Durability::MEDIUM)
+        .new(&db);
+        let context = semantic_context(&db, file, files, stubs, configuration);
         assert_eq!(context.file(), FileId::new(0));
+        let outcomes = context.reference_resolutions();
+        assert_eq!(outcomes.len(), 1, "{outcomes:?}");
+        assert_eq!(outcomes[0].written, "Missing");
+        assert_eq!(outcomes[0].resolution, ResolutionOutcome::Unresolved);
     }
 }

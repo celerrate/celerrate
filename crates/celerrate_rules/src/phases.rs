@@ -1,8 +1,9 @@
-use celerrate_db::SourceFile;
+use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::{BodyQuery, DeclarationKind, MemberKind};
 use celerrate_source::FileId;
+use celerrate_stubs::StubIndexInput;
 
 use crate::context::SyntaxContext;
 use crate::finding::{Finding, FindingAnchor, FindingSink};
@@ -43,11 +44,18 @@ pub fn syntax_phase_diagnostics(
     diagnostics
 }
 
-/// The semantic phase: one query per file. Empty until part 4 migrates
-/// the semantic families onto it; wired into the CLI now so that
-/// migration lands in existing plumbing rather than needing its own.
+/// The semantic phase: one query per file, draining the active
+/// semantic rules against the sealed context. The inputs are exactly
+/// what the context's facade methods read (part 3 reserved this
+/// extension).
 #[salsa::tracked(returns(ref))]
-pub fn semantic_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
+pub fn semantic_phase_diagnostics(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+) -> Vec<Diagnostic> {
     let Some(registry) = RuleRegistry::try_get(db) else {
         return Vec::new();
     };
@@ -60,7 +68,7 @@ pub fn semantic_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) ->
         let RuleImplementation::Semantic(rule) = &registration.implementation else {
             continue;
         };
-        let context = celerrate_semantics::semantic_context(db, file);
+        let context = celerrate_semantics::semantic_context(db, file, files, stubs, configuration);
         let mut sink = FindingSink::new(&registration.metadata);
         rule.check(&context, &mut sink);
         diagnostics.extend(
@@ -193,12 +201,13 @@ mod tests {
 
     use std::sync::Arc;
 
-    use celerrate_db::SourceFile;
     use celerrate_db::testing::TestDatabase;
+    use celerrate_db::{AnalyzedFileSet, SourceFile};
     use celerrate_diagnostics::{DiagnosticId, Severity};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{AstId, ExpressionId, PluginIdentity, SemanticContext};
     use celerrate_source::{FileId, TextRange, TextSize};
+    use celerrate_stubs::{StubIndex, StubIndexInput};
     use celerrate_types::TypedBodyContext;
 
     use super::{
@@ -211,16 +220,31 @@ mod tests {
     use crate::registry::{RuleImplementation, RuleRegistration, RuleRegistry};
     use crate::traits::{SemanticRule, SyntaxRule, TypedBodyRule};
 
-    fn test_setup(source: &str) -> (TestDatabase, SourceFile, ProjectConfiguration) {
+    /// The salsa inputs every phase query reads: the one-file analyzed
+    /// set and the empty stub surface come along so the semantic phase
+    /// can be driven from the same setup as the syntax one.
+    fn test_setup(
+        source: &str,
+    ) -> (
+        TestDatabase,
+        SourceFile,
+        AnalyzedFileSet,
+        StubIndexInput,
+        ProjectConfiguration,
+    ) {
         let db = TestDatabase::default();
         let file = SourceFile::new(&db, FileId::new(0), source.as_bytes().to_vec());
+        let files = AnalyzedFileSet::new(&db, vec![file]);
+        let stubs = StubIndexInput::builder(StubIndex::default())
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
         let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
             PhpVersion::new(8, 1),
             PhpVersion::new(8, 5),
         ))
         .durability(salsa::Durability::MEDIUM)
         .new(&db);
-        (db, file, configuration)
+        (db, file, files, stubs, configuration)
     }
 
     fn register(db: &TestDatabase, registrations: Vec<RuleRegistration>) {
@@ -274,13 +298,13 @@ mod tests {
 
     #[test]
     fn an_unset_registry_is_the_empty_path() {
-        let (db, file, configuration) = test_setup("<?php echo 1;");
+        let (db, file, _files, _stubs, configuration) = test_setup("<?php echo 1;");
         assert!(syntax_phase_diagnostics(&db, file, configuration).is_empty());
     }
 
     #[test]
     fn an_active_syntax_rule_reports_through_the_phase() {
-        let (db, file, configuration) = test_setup("<?php echo 1;");
+        let (db, file, _files, _stubs, configuration) = test_setup("<?php echo 1;");
         register(&db, vec![fake_registration(true)]);
         let diagnostics = syntax_phase_diagnostics(&db, file, configuration);
         assert_eq!(diagnostics.len(), 1);
@@ -290,7 +314,7 @@ mod tests {
 
     #[test]
     fn an_inactive_rule_is_skipped() {
-        let (db, file, configuration) = test_setup("<?php echo 1;");
+        let (db, file, _files, _stubs, configuration) = test_setup("<?php echo 1;");
         register(&db, vec![fake_registration(false)]);
         assert!(syntax_phase_diagnostics(&db, file, configuration).is_empty());
     }
@@ -299,7 +323,7 @@ mod tests {
     fn the_output_is_sorted_by_the_diagnostic_total_order() {
         // Two rules registered in reverse positional order; the phase
         // sorts, so the result is position-ordered regardless.
-        let (db, file, configuration) = test_setup("<?php echo 1;");
+        let (db, file, _files, _stubs, configuration) = test_setup("<?php echo 1;");
         let later = registration_at(
             "later-rule",
             true,
@@ -328,7 +352,8 @@ mod tests {
 
     #[test]
     fn a_declaration_anchor_resolves_through_the_ast_id_map() {
-        let (db, file, _configuration) = test_setup("<?php function demo() { echo 1; }");
+        let (db, file, _files, _stubs, _configuration) =
+            test_setup("<?php function demo() { echo 1; }");
         // Index 0 is the file's first declaration in tree order.
         let ast_id = AstId {
             file: FileId::new(0),
@@ -346,7 +371,8 @@ mod tests {
 
     #[test]
     fn a_declaration_anchor_of_another_file_is_dropped() {
-        let (db, file, _configuration) = test_setup("<?php function demo() { echo 1; }");
+        let (db, file, _files, _stubs, _configuration) =
+            test_setup("<?php function demo() { echo 1; }");
         let ast_id = AstId {
             file: FileId::new(1),
             index: 0,
@@ -364,7 +390,8 @@ mod tests {
     #[test]
     fn an_expression_anchor_resolves_through_the_body_source_map() {
         // A body with one expression; `ExpressionId::from_index(0)` resolves.
-        let (db, file, _configuration) = test_setup("<?php function f() { return 1; }");
+        let (db, file, _files, _stubs, _configuration) =
+            test_setup("<?php function f() { return 1; }");
         let body = AstId {
             file: FileId::new(0),
             index: 0,
@@ -383,7 +410,8 @@ mod tests {
     #[test]
     fn a_dangling_anchor_is_dropped_never_a_panic() {
         // `AstId { index: u32::MAX }` on a real file -> None.
-        let (db, file, _configuration) = test_setup("<?php function demo() { echo 1; }");
+        let (db, file, _files, _stubs, _configuration) =
+            test_setup("<?php function demo() { echo 1; }");
         let ast_id = AstId {
             file: FileId::new(0),
             index: u32::MAX,
@@ -433,9 +461,12 @@ mod tests {
 
     #[test]
     fn a_semantic_rule_reports_once_per_file() {
-        let (db, file, _configuration) = test_setup("<?php echo 1;");
+        let (db, file, files, stubs, configuration) = test_setup("<?php echo 1;");
         register(&db, vec![semantic_registration()]);
-        assert_eq!(semantic_phase_diagnostics(&db, file).len(), 1);
+        assert_eq!(
+            semantic_phase_diagnostics(&db, file, files, stubs, configuration).len(),
+            1
+        );
     }
 
     struct MarkEveryBody;
@@ -474,7 +505,7 @@ mod tests {
     #[test]
     fn a_typed_body_rule_runs_once_per_function_and_method_body() {
         let source = "<?php\nfunction first() { echo 1; }\nclass Demo { public function second(): void { echo 2; } }\n";
-        let (db, file, _configuration) = test_setup(source);
+        let (db, file, _files, _stubs, _configuration) = test_setup(source);
         register(&db, vec![typed_registration()]);
         let diagnostics = typed_body_phase_diagnostics(&db, file);
         assert_eq!(
@@ -488,7 +519,7 @@ mod tests {
     fn a_trait_method_body_is_not_enumerated() {
         // Mirrors `typed_file_verdicts`' trait filter.
         let source = "<?php\ntrait Helper { public function inside(): void { echo 1; } }\n";
-        let (db, file, _configuration) = test_setup(source);
+        let (db, file, _files, _stubs, _configuration) = test_setup(source);
         register(&db, vec![typed_registration()]);
         assert!(typed_body_phase_diagnostics(&db, file).is_empty());
     }

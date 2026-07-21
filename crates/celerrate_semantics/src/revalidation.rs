@@ -84,8 +84,8 @@ mod tests {
     };
 
     use crate::reference_checks::{
-        SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, UNKNOWN_CLASS, UNKNOWN_CONSTANT,
-        UNKNOWN_FUNCTION, reference_outcomes,
+        ResolutionOutcome, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED,
+        reference_outcomes,
     };
     use crate::revalidation::{ResolutionAnswer, resolution_records};
     use crate::symbols::SymbolSpace;
@@ -174,12 +174,16 @@ mod tests {
     }
 
     /// The drift pin: `reference_outcomes` runs one walk that produces
-    /// findings and answers together, so every diagnostic it reports
-    /// must be explained by a record from the very same call — a
-    /// correspondence the two hand-maintained walks this replaces could
-    /// never guarantee. The fixture carries one unknown class, one
-    /// source-resolved class, and one stub reference whose availability
-    /// window violates the project's supported range.
+    /// findings, outcomes and answers together, so every diagnostic it
+    /// reports and every outcome it records must be explained by a
+    /// record from the very same call — a correspondence the two
+    /// hand-maintained walks this replaces could never guarantee. The
+    /// fixture carries one unknown class, one source-resolved class,
+    /// and one stub reference whose availability window violates the
+    /// project's supported range. The unknown class no longer produces
+    /// a diagnostic here (`celerrate_rules::rules::unknown_symbols`
+    /// constructs it from the outcome), so it is pinned on the
+    /// outcome side instead.
     #[test]
     fn findings_and_answers_come_from_one_walk() {
         let db = TestDatabase::default();
@@ -221,8 +225,8 @@ mod tests {
         );
         assert_eq!(
             outcomes.diagnostics.len(),
-            2,
-            "one unknown class and one gated stub reference: {:?}",
+            1,
+            "one gated stub reference: {:?}",
             outcomes.diagnostics,
         );
 
@@ -234,13 +238,6 @@ mod tests {
                 .find(|record| record.written == written)
                 .unwrap_or_else(|| panic!("no record explains diagnostic {diagnostic:?}"));
             match diagnostic.id {
-                id if id == UNKNOWN_CLASS || id == UNKNOWN_FUNCTION || id == UNKNOWN_CONSTANT => {
-                    assert_eq!(
-                        record.answer,
-                        ResolutionAnswer::Unknown,
-                        "an unknown-symbol diagnostic must be explained by an unknown answer",
-                    );
-                }
                 id if id == SYMBOL_NOT_AVAILABLE
                     || id == SYMBOL_REMOVED
                     || id == SYMBOL_DEPRECATED =>
@@ -252,6 +249,30 @@ mod tests {
                 }
                 other => panic!("unexpected diagnostic id {other:?}"),
             }
+        }
+
+        // The unknown-symbol side of the same pin, now that the family
+        // is constructed above rather than here: every unresolved
+        // outcome must be explained by an unknown answer from the very
+        // same call.
+        let unresolved: Vec<&str> = outcomes
+            .outcomes
+            .iter()
+            .filter(|outcome| outcome.resolution == ResolutionOutcome::Unresolved)
+            .map(|outcome| outcome.written.as_str())
+            .collect();
+        assert_eq!(unresolved, vec!["Missing"], "{:?}", outcomes.outcomes);
+        for written in unresolved {
+            let record = outcomes
+                .records
+                .iter()
+                .find(|record| record.written == written)
+                .unwrap_or_else(|| panic!("no record explains outcome {written}"));
+            assert_eq!(
+                record.answer,
+                ResolutionAnswer::Unknown,
+                "an unresolved outcome must be explained by an unknown answer",
+            );
         }
     }
 }
