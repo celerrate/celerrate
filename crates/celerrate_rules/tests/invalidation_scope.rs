@@ -42,7 +42,7 @@ use celerrate_rules::{
     syntax_phase_diagnostics, typed_body_phase_diagnostics,
 };
 use celerrate_semantics::PluginIdentity;
-use celerrate_source::FileId;
+use celerrate_source::{FileId, TextRange, TextSize};
 use celerrate_types::TypedBodyContext;
 use salsa::Setter;
 
@@ -256,9 +256,27 @@ fn an_edit_above_a_body_reruns_no_body_phase() {
         FileId::new(0),
         b"<?php\nfunction first() { echo 1; }\nfunction second() { echo 2; }\n".to_vec(),
     );
-    assert_eq!(typed_body_phase_diagnostics(&db, file).len(), 2);
+    let first = typed_body_phase_diagnostics(&db, file);
+    assert_eq!(first.len(), 2);
+    // Capture the pre-edit ranges as owned values: `first` is a `&Vec`
+    // borrowed from the salsa memo (`returns(ref)`), and the upcoming
+    // edit invalidates it, so the ranges must survive the re-query on
+    // their own.
+    let pre_edit_ranges: Vec<TextRange> = first
+        .iter()
+        .filter_map(|diagnostic| diagnostic.span().map(|(_, range)| range))
+        .collect();
+    assert_eq!(
+        pre_edit_ranges.len(),
+        2,
+        "both findings resolve to a concrete span before the edit",
+    );
     db.take_executed();
 
+    let leading_comment = "// a comment line\n";
+    let delta = TextSize::from(
+        u32::try_from(leading_comment.len()).expect("the comment line fits in a u32 offset"),
+    );
     file.set_bytes(&mut db).to(
         b"<?php\n// a comment line\nfunction first() { echo 1; }\nfunction second() { echo 2; }\n"
             .to_vec(),
@@ -272,4 +290,23 @@ fn an_edit_above_a_body_reruns_no_body_phase() {
         "range-free findings backdate under an offset shift: {log:?}",
     );
     assert_eq!(second.len(), 2, "the diagnostics moved with their ranges");
+    let post_edit_ranges: Vec<TextRange> = second
+        .iter()
+        .filter_map(|diagnostic| diagnostic.span().map(|(_, range)| range))
+        .collect();
+    // Both lists come out of `typed_body_phase_diagnostics`, which sorts
+    // by anchor before returning; a uniform shift never reorders spans,
+    // so pairing by index is exact, not merely convenient. A stale-range
+    // reconciliation bug (post-edit ranges left at their pre-edit
+    // offsets) would make this fail, since `pre + delta != pre` for a
+    // non-zero shift.
+    assert_eq!(
+        post_edit_ranges,
+        pre_edit_ranges
+            .iter()
+            .map(|range| *range + delta)
+            .collect::<Vec<_>>(),
+        "each diagnostic's range should have shifted by the prepended \
+         comment's byte length, not stayed at its pre-edit location",
+    );
 }
