@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
 use celerrate_project::{PhpVersionRange, ProjectConfiguration};
-use celerrate_source::FileId;
+use celerrate_source::{FileId, TextRange};
 use celerrate_stubs::{StubAvailability, StubIndexInput};
 
 use crate::lookup::SymbolResolution;
@@ -57,13 +57,39 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     SYMBOL_DEPRECATED,
 ];
 
+/// How one statically named reference resolved, as plain data: the
+/// outcome the semantic-phase rules consume (design section 2). The
+/// version policy (comparing an availability window against the
+/// supported range) belongs to the rules, mirroring `GatedSyntaxUse`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReferenceOutcome {
+    pub written: String,
+    pub space: SymbolSpace,
+    pub range: TextRange,
+    pub resolution: ResolutionOutcome,
+}
+
+/// The three ways a reference resolves. `Stub` carries the window so
+/// the gating rule can judge it against the project's range.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolutionOutcome {
+    /// No declaration anywhere in project, vendor, or stubs.
+    Unresolved,
+    /// A stub declaration, with its availability window.
+    Stub { availability: StubAvailability },
+    /// A source declaration (never gated).
+    Source,
+}
+
 /// The findings and answers of one file's reference walk, produced by
 /// [`reference_outcomes`] from the same pass over the same resolutions:
-/// `diagnostics` is what `reference_diagnostics` used to compute alone,
-/// `records` is what `resolution_records` used to compute alone. See
-/// the module doc.
+/// `outcomes` is the plain-data co-product the semantic-phase rules
+/// consume, `diagnostics` is what `reference_diagnostics` used to
+/// compute alone, `records` is what `resolution_records` used to
+/// compute alone. See the module doc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceOutcomes {
+    pub outcomes: Vec<ReferenceOutcome>,
     pub diagnostics: Vec<Diagnostic>,
     pub records: Vec<ResolutionRecord>,
 }
@@ -93,6 +119,7 @@ pub fn reference_outcomes(
     let file_id = file.file_id(db);
     let version_range = configuration.php_version_range(db);
     let mut tables_by_namespace: HashMap<String, UseTables> = HashMap::new();
+    let mut outcomes = Vec::new();
     let mut diagnostics = Vec::new();
     let mut records = Vec::new();
     for reference in collect_references(&root) {
@@ -113,9 +140,19 @@ pub fn reference_outcomes(
             namespace: reference.namespace.clone(),
             answer: answer_of(resolution),
         });
+        let outcome_of = |resolution: ResolutionOutcome| ReferenceOutcome {
+            written: reference.written.clone(),
+            space: reference.space,
+            range: reference.range,
+            resolution,
+        };
         match resolution {
-            None => diagnostics.push(unknown_symbol(&reference, file_id)),
+            None => {
+                outcomes.push(outcome_of(ResolutionOutcome::Unresolved));
+                diagnostics.push(unknown_symbol(&reference, file_id));
+            }
             Some(SymbolResolution::Stub { availability, .. }) => {
+                outcomes.push(outcome_of(ResolutionOutcome::Stub { availability }));
                 availability_diagnostics(
                     &reference,
                     availability,
@@ -124,11 +161,14 @@ pub fn reference_outcomes(
                     &mut diagnostics,
                 );
             }
-            Some(SymbolResolution::Source { .. }) => {}
+            Some(SymbolResolution::Source { .. }) => {
+                outcomes.push(outcome_of(ResolutionOutcome::Source));
+            }
         }
     }
     diagnostics.sort();
     ReferenceOutcomes {
+        outcomes,
         diagnostics,
         records,
     }
@@ -151,6 +191,25 @@ pub fn reference_diagnostics(
 ) -> Vec<Diagnostic> {
     reference_outcomes(db, file, files, stubs, configuration)
         .diagnostics
+        .clone()
+}
+
+/// The per-reference resolution outcomes of one file, as plain data: a
+/// thin, independently backdating projection over
+/// [`reference_outcomes`], the same slot `reference_diagnostics`
+/// occupies for the constructed form. The semantic-phase context
+/// consumes this, so the phase query's early cutoff is independent of
+/// the revalidation records.
+#[salsa::tracked(returns(ref))]
+pub fn reference_resolutions(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+) -> Vec<ReferenceOutcome> {
+    reference_outcomes(db, file, files, stubs, configuration)
+        .outcomes
         .clone()
 }
 
@@ -529,5 +588,74 @@ mod tests {
         );
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].id, UNKNOWN_CONSTANT);
+    }
+
+    /// The outcomes of the FIRST source, with the given stubs and range.
+    fn resolutions_in_range(
+        sources: &[&str],
+        stub_symbols: Vec<StubSymbol>,
+        range: PhpVersionRange,
+    ) -> Vec<ReferenceOutcome> {
+        let db = TestDatabase::default();
+        let handles: Vec<SourceFile> = sources
+            .iter()
+            .enumerate()
+            .map(|(index, source)| {
+                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
+            })
+            .collect();
+        let file = *handles.first().unwrap();
+        let files = AnalyzedFileSet::new(&db, handles);
+        let stubs = StubIndexInput::builder(StubIndex::from_symbols(stub_symbols))
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let configuration = ProjectConfiguration::builder(range)
+            .durability(salsa::Durability::MEDIUM)
+            .new(&db);
+        reference_resolutions(&db, file, files, stubs, configuration).clone()
+    }
+
+    #[test]
+    fn the_walk_produces_one_plain_outcome_per_reference() {
+        let source = "<?php namespace App; $x = new Missing(); strlen('a'); $h = new Helper();";
+        let outcomes = resolutions_in_range(
+            &[source, "<?php namespace App; class Helper {}"],
+            vec![stub("strlen", StubSymbolKind::Function)],
+            full_range(),
+        );
+        assert_eq!(outcomes.len(), 3, "{outcomes:?}");
+        assert_eq!(outcomes[0].written, "Missing");
+        assert_eq!(outcomes[0].space, SymbolSpace::ClassLike);
+        assert_eq!(outcomes[0].resolution, ResolutionOutcome::Unresolved);
+        let start: usize = outcomes[0].range.start().into();
+        let end: usize = outcomes[0].range.end().into();
+        assert_eq!(&source[start..end], "Missing");
+        assert_eq!(outcomes[1].written, "strlen");
+        assert!(matches!(
+            outcomes[1].resolution,
+            ResolutionOutcome::Stub { .. }
+        ));
+        assert_eq!(outcomes[2].resolution, ResolutionOutcome::Source);
+    }
+
+    #[test]
+    fn a_stub_outcome_carries_its_availability_window() {
+        let outcomes = resolutions_in_range(
+            &["<?php json_validate('{}');"],
+            vec![stub_with(
+                "json_validate",
+                StubSymbolKind::Function,
+                StubAvailability {
+                    introduced: Some(PhpVersion::new(8, 3)),
+                    removed: None,
+                    deprecated: None,
+                },
+            )],
+            full_range(),
+        );
+        let ResolutionOutcome::Stub { availability } = &outcomes[0].resolution else {
+            panic!("expected a stub outcome: {outcomes:?}");
+        };
+        assert_eq!(availability.introduced, Some(PhpVersion::new(8, 3)));
     }
 }
