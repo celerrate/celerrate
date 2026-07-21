@@ -244,6 +244,17 @@ mod tests {
     }
 
     #[test]
+    fn psalm_suppress_all_marks_the_identifier_scope_wide() {
+        assert_eq!(
+            comment_directives(CommentKind::Block, "/* @psalm-suppress all */"),
+            vec![suppress(
+                DirectiveScope::CurrentAndNextLine,
+                vec![SuppressionIdentifier::scope_wide("all".to_owned())],
+            )],
+        );
+    }
+
+    #[test]
     fn a_docblock_may_carry_several_directives() {
         assert_eq!(
             comment_directives(

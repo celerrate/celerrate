@@ -219,13 +219,19 @@ fn correspondence_lookup_is_exact_case() {
 // correspondence-table gate (`suppression_correspondence.rs`) only
 // proves the table and the vendored catalogues agree on which
 // identifiers exist, never that a mapped `Codes` entry names the
-// *right* Celerrate code. A wrong entry under-suppresses invisibly —
+// *right* Celerrate code. A wrong entry under-suppresses invisibly -
 // the corpus snapshot is pinned at zero diagnostics, so it cannot
 // catch it. For every distinct CEL code named in a `Codes` entry,
 // provoke that code in a small fixture and prove that one
 // representative identifier mapped to it actually suppresses it. Any
 // failure here is a wrong table entry, not a wrong test: fix
 // `correspondence.rs`, not the fixture.
+//
+// Each arm is self-proving: the bare fixture (the directive absent)
+// must first report the intended code, so an arm can never turn green
+// because a rule refactor or a stub change stopped provoking it in the
+// first place; only then is the directive applied and the outcome
+// asserted clean.
 //
 // CEL0021 and CEL0022 also appear in `Codes` entries, always bundled
 // with CEL0018/CEL0019/CEL0020 under the same identifiers exercised
@@ -244,25 +250,66 @@ fn correspondence_lookup_is_exact_case() {
 const PER_CODE_MANIFEST: &str =
     r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
 
+/// One per-code fixture, the directive-bearing comment stripped so the
+/// helper can prove both halves of the round trip: the bare source
+/// alone provokes `code`, and the source with `identifier`'s directive
+/// appended suppresses it.
 struct PerCodeSeed {
     code: &'static str,
     identifier: &'static str,
+    /// The fixture without any suppression directive, ending in a
+    /// single trailing newline.
     source: &'static str,
 }
 
-fn assert_fully_suppressed(seed: &PerCodeSeed) {
-    let root = project(&[
+/// Runs one seed through both halves of the round trip: first the bare
+/// fixture, which must still report `seed.code` (proving the fixture
+/// actually provokes it); then the same fixture with `seed.identifier`'s
+/// directive appended on the same line via `comment`, which must fully
+/// suppress it.
+fn assert_round_trips(seed: &PerCodeSeed, comment: impl Fn(&str) -> String) {
+    let bare_root = project(&[
         ("composer.json", PER_CODE_MANIFEST),
         ("src/Seed.php", seed.source),
     ]);
-    let (outcome, text) = check(root.path());
+    let (bare_outcome, bare_text) = check(bare_root.path());
     assert_eq!(
-        outcome,
+        bare_outcome,
+        Outcome::DiagnosticsReported,
+        "{} must be provoked by the bare fixture (no directive present):\n{bare_text}",
+        seed.code,
+    );
+    assert!(
+        bare_text.contains(seed.code),
+        "{} must be provoked by the bare fixture (no directive present):\n{bare_text}",
+        seed.code,
+    );
+
+    let directed_source = format!(
+        "{}{}\n",
+        seed.source.trim_end_matches('\n'),
+        comment(seed.identifier)
+    );
+    let directed_root = project(&[
+        ("composer.json", PER_CODE_MANIFEST),
+        ("src/Seed.php", directed_source.as_str()),
+    ]);
+    let (directed_outcome, directed_text) = check(directed_root.path());
+    assert_eq!(
+        directed_outcome,
         Outcome::Clean,
-        "{} via `{}` must be fully suppressed:\n{text}",
+        "{} via `{}` must be fully suppressed:\n{directed_text}",
         seed.code,
         seed.identifier,
     );
+}
+
+fn phpstan_ignore_comment(identifier: &str) -> String {
+    format!(" // @phpstan-ignore {identifier}")
+}
+
+fn psalm_suppress_comment(identifier: &str) -> String {
+    format!(" /* @psalm-suppress {identifier} */")
 }
 
 #[test]
@@ -271,66 +318,66 @@ fn every_mapped_phpstan_code_is_actually_suppressed_by_its_identifier() {
         PerCodeSeed {
             code: "CEL0018",
             identifier: "class.notFound",
-            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); } // @phpstan-ignore class.notFound\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); }\n",
         },
         PerCodeSeed {
             code: "CEL0019",
             identifier: "function.notFound",
-            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); } // @phpstan-ignore function.notFound\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); }\n",
         },
         PerCodeSeed {
             code: "CEL0020",
             identifier: "constant.notFound",
-            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; } // @phpstan-ignore constant.notFound\n",
+            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; }\n",
         },
         PerCodeSeed {
             code: "CEL0023",
             identifier: "function.deprecated",
-            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); } // @phpstan-ignore function.deprecated\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); }\n",
         },
         PerCodeSeed {
             code: "CEL0030",
             identifier: "method.notFound",
-            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); } // @phpstan-ignore method.notFound\n",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); }\n",
         },
         PerCodeSeed {
             code: "CEL0031",
             identifier: "property.notFound",
-            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; } // @phpstan-ignore property.notFound\n",
+            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; }\n",
         },
         PerCodeSeed {
             code: "CEL0032",
             identifier: "classConstant.notFound",
-            source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; } // @phpstan-ignore classConstant.notFound\n",
+            source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; }\n",
         },
         PerCodeSeed {
             code: "CEL0034",
             identifier: "method.nonObject",
-            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); } // @phpstan-ignore method.nonObject\n",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); }\n",
         },
         PerCodeSeed {
             code: "CEL0035",
             identifier: "argument.type",
-            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); } // @phpstan-ignore argument.type\n",
+            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); }\n",
         },
         PerCodeSeed {
             code: "CEL0036",
             identifier: "arguments.count",
-            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); } // @phpstan-ignore arguments.count\n",
+            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); }\n",
         },
         PerCodeSeed {
             code: "CEL0037",
             identifier: "arguments.count",
-            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); } // @phpstan-ignore arguments.count\n",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); }\n",
         },
         PerCodeSeed {
             code: "CEL0038",
             identifier: "argument.unknown",
-            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); } // @phpstan-ignore argument.unknown\n",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); }\n",
         },
     ];
     for seed in SEEDS {
-        assert_fully_suppressed(seed);
+        assert_round_trips(seed, phpstan_ignore_comment);
     }
 }
 
@@ -340,60 +387,65 @@ fn every_mapped_psalm_code_is_actually_suppressed_by_its_identifier() {
         PerCodeSeed {
             code: "CEL0018",
             identifier: "UndefinedClass",
-            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); } /* @psalm-suppress UndefinedClass */\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { $x = new MissingService(); }\n",
         },
         PerCodeSeed {
             code: "CEL0019",
             identifier: "UndefinedFunction",
-            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); } /* @psalm-suppress UndefinedFunction */\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { missing_helper(); }\n",
         },
         PerCodeSeed {
             code: "CEL0020",
             identifier: "UndefinedConstant",
-            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; } /* @psalm-suppress UndefinedConstant */\n",
+            source: "<?php\nnamespace App;\nfunction f(): int { return MISSING_LIMIT; }\n",
         },
         PerCodeSeed {
             code: "CEL0023",
             identifier: "DeprecatedFunction",
-            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); } /* @psalm-suppress DeprecatedFunction */\n",
+            source: "<?php\nnamespace App;\nfunction f(): void { \\utf8_encode('x'); }\n",
         },
         PerCodeSeed {
             code: "CEL0030",
             identifier: "UndefinedMethod",
-            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); } /* @psalm-suppress UndefinedMethod */\n",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(User $u): void { $u->svae(); }\n",
         },
         PerCodeSeed {
             code: "CEL0031",
             identifier: "UndefinedPropertyFetch",
-            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; } /* @psalm-suppress UndefinedPropertyFetch */\n",
+            source: "<?php\nnamespace App;\nclass User { public string $name = ''; }\nfunction f(User $u): void { $x = $u->nmae; }\n",
+        },
+        PerCodeSeed {
+            code: "CEL0032",
+            identifier: "UndefinedConstant",
+            source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; }\n",
         },
         PerCodeSeed {
             code: "CEL0034",
             identifier: "PossiblyNullReference",
-            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); } /* @psalm-suppress PossiblyNullReference */\n",
+            source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); }\n",
         },
         PerCodeSeed {
             code: "CEL0035",
             identifier: "InvalidArgument",
-            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); } /* @psalm-suppress InvalidArgument */\n",
+            source: "<?php\ndeclare(strict_types=1);\nnamespace App;\nclass Plain {}\nfunction takes(int $n): void {}\nfunction f(Plain $p): void { takes($p); }\n",
         },
         PerCodeSeed {
             code: "CEL0036",
             identifier: "TooFewArguments",
-            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); } /* @psalm-suppress TooFewArguments */\n",
+            source: "<?php\nnamespace App;\nfunction pair(int $a, int $b): void {}\nfunction f(): void { pair(1); }\n",
         },
         PerCodeSeed {
             code: "CEL0037",
             identifier: "TooManyArguments",
-            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); } /* @psalm-suppress TooManyArguments */\n",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(1, 2); }\n",
         },
         PerCodeSeed {
             code: "CEL0038",
             identifier: "InvalidNamedArgument",
-            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); } /* @psalm-suppress InvalidNamedArgument */\n",
+            source: "<?php\nnamespace App;\nfunction single(int $a): void {}\nfunction f(): void { single(a: 1, b: 2); }\n",
         },
     ];
     for seed in SEEDS {
-        assert_fully_suppressed(seed);
+        assert_round_trips(seed, psalm_suppress_comment);
     }
 }

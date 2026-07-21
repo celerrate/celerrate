@@ -21,7 +21,13 @@
 //! tables). The catalogue gate proves the table is complete and
 //! transportable, never that a mapping is right; a wrong `Codes` entry
 //! under-suppresses invisibly, and only the per-code fixture catches
-//! that.
+//! that. That per-code gate also has a structural blind spot: its arm
+//! list is derived from the codes present in each dialect's own table,
+//! so a code reachable from one dialect but not the other is invisible
+//! to the gate by construction. When a code is reachable from only one
+//! side, ask whether the other dialect genuinely has no identifier for
+//! it (a real gap in the upstream vocabulary) or whether a fold is
+//! simply unmapped there (a gap in this table).
 
 /// The two written dialects the bridge recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1740,13 +1746,22 @@ const PSALM: &[(&str, ForeignMapping)] = &[
     // single narrower code, and under-suppression is the one failure
     // direction this project treats as a defect. Do not shrink these
     // back to one code.
+    //
+    // `UndefinedConstant` carries a second fold on top of the
+    // version-window one: Psalm has no separate identifier for an
+    // undefined class constant, so it reports both an undefined global
+    // constant and an undefined class constant (CEL0032) under this
+    // same name. The vendored catalogue has no `UndefinedClassConstant`
+    // entry, so `UndefinedConstant` is the only identifier a Psalm user
+    // can write over a missing class constant. The entry must therefore
+    // cover CEL0032 as well; shrinking it back would under-suppress.
     (
         "UndefinedClass",
         ForeignMapping::Codes(&["CEL0018", "CEL0021", "CEL0022"]),
     ),
     (
         "UndefinedConstant",
-        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022"]),
+        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022", "CEL0032"]),
     ),
     ("UndefinedDocblockClass", ForeignMapping::Unmapped),
     (
