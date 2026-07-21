@@ -240,6 +240,7 @@ dependencies = [
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",
+ "celerrate_stubs",
  "celerrate_types",
  "salsa",
 ]
@@ -249,7 +250,6 @@ name = "celerrate_semantics"
 version = "0.0.3"
 dependencies = [
  "celerrate_db",
- "celerrate_diagnostics",
  "celerrate_project",
  "celerrate_source",
  "celerrate_stubs",
@@ -307,7 +307,6 @@ version = "0.0.3"
 dependencies = [
  "blake3",
  "celerrate_db",
- "celerrate_diagnostics",
  "celerrate_project",
  "celerrate_semantics",
  "celerrate_source",

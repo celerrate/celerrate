@@ -18,7 +18,7 @@ use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
     AstId, BodyQuery, MemberKind, MemberQuery, SymbolQuery, SymbolResolution, SymbolSources,
     SymbolSpace, UseTables, ast_id_map, body_ir, folded_symbol_key, item_tree, lookup_member,
-    lookup_symbol, member_tree, reference_diagnostics, resolve_name, source_symbol_table,
+    lookup_symbol, member_tree, reference_resolutions, resolve_name, source_symbol_table,
 };
 use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
@@ -528,18 +528,18 @@ fn an_unrelated_declaration_spares_other_files_reference_checks() {
     let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
     let stubs = test_stubs(&db);
     let configuration = test_configuration(&db);
-    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
-    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    let _ = reference_resolutions(&db, library, files, stubs, configuration);
+    let _ = reference_resolutions(&db, consumer, files, stubs, configuration);
     db.take_executed();
 
     library
         .set_bytes(&mut db)
         .to(b"<?php namespace Lib; class Helper {} class Extra {}".to_vec());
-    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
-    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    let _ = reference_resolutions(&db, library, files, stubs, configuration);
+    let _ = reference_resolutions(&db, consumer, files, stubs, configuration);
 
     let log = db.take_executed();
-    // `reference_diagnostics` is a thin, independently backdating
+    // `reference_resolutions` is a thin, independently backdating
     // projection over `reference_outcomes` (plan 9a task 4): the walk
     // itself, and therefore the query whose re-execution this test
     // observes, now lives in `reference_outcomes`.
@@ -566,19 +566,19 @@ fn a_comment_only_edit_elsewhere_spares_the_consumer() {
     let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
     let stubs = test_stubs(&db);
     let configuration = test_configuration(&db);
-    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
-    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    let _ = reference_resolutions(&db, library, files, stubs, configuration);
+    let _ = reference_resolutions(&db, consumer, files, stubs, configuration);
     db.take_executed();
 
     library
         .set_bytes(&mut db)
         .to(b"<?php namespace Lib; class Helper { /* note */ }".to_vec());
-    let _ = reference_diagnostics(&db, library, files, stubs, configuration);
-    let _ = reference_diagnostics(&db, consumer, files, stubs, configuration);
+    let _ = reference_resolutions(&db, library, files, stubs, configuration);
+    let _ = reference_resolutions(&db, consumer, files, stubs, configuration);
 
     let log = db.take_executed();
     // See the comment on the same assertion above: the walk
-    // (`reference_outcomes`) is what re-executes; `reference_diagnostics`
+    // (`reference_outcomes`) is what re-executes; `reference_resolutions`
     // is a projection that backdates independently once the walk's
     // output is unchanged (plan 9a task 4).
     assert_eq!(

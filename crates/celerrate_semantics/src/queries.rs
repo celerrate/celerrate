@@ -1,15 +1,11 @@
-//! The boundary as salsa queries. Four per-file queries: the numbering
+//! The boundary as salsa queries. Three per-file queries: the numbering
 //! carries ranges and re-runs whenever they shift; the item tree and
 //! the member tree carry none, so a body or member edit backdates and
-//! everything downstream is spared; the semantic diagnostics query
-//! merges the reference checks and the syntax version gating built on
-//! top of the item tree. Query definitions live here, in their domain
-//! crate; the concrete database is assembled at the composition root.
+//! everything downstream is spared. Query definitions live here, in
+//! their domain crate; the concrete database is assembled at the
+//! composition root.
 
-use celerrate_db::{AnalyzedFileSet, SourceFile};
-use celerrate_diagnostics::Diagnostic;
-use celerrate_project::ProjectConfiguration;
-use celerrate_stubs::StubIndexInput;
+use celerrate_db::SourceFile;
 
 use crate::ast_id::AstIdMap;
 use crate::items::ItemTree;
@@ -63,41 +59,17 @@ pub fn member_tree(db: &dyn salsa::Database, file: SourceFile) -> MemberTree {
     MemberTree::from_root(file.file_id(db), &celerrate_db::parse(db, file).tree())
 }
 
-/// Every semantic diagnostic of one file: the reference families
-/// (unknown symbols, symbol version gating), deterministically ordered.
-/// Syntax version gating now belongs to the rule framework's syntax
-/// phase (`celerrate_rules::syntax_phase_diagnostics`), which the CLI
-/// composes alongside this query; syntax and decode findings live in
-/// `celerrate_db::file_diagnostics`.
-#[salsa::tracked(returns(ref))]
-pub fn semantic_diagnostics(
-    db: &dyn salsa::Database,
-    file: SourceFile,
-    files: AnalyzedFileSet,
-    stubs: StubIndexInput,
-    configuration: ProjectConfiguration,
-) -> Vec<Diagnostic> {
-    let mut diagnostics =
-        crate::reference_checks::reference_diagnostics(db, file, files, stubs, configuration)
-            .clone();
-    diagnostics.sort();
-    diagnostics
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use celerrate_db::AnalyzedFileSet;
     use celerrate_db::SourceFile;
     use celerrate_db::testing::TestDatabase;
-    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_source::FileId;
-    use celerrate_stubs::{StubIndex, StubIndexInput};
     use celerrate_syntax::SyntaxKind;
     use salsa::Setter;
 
-    use super::{ast_id_map, item_tree, semantic_diagnostics};
+    use super::{ast_id_map, item_tree};
 
     #[test]
     fn the_item_tree_query_projects_a_file() {
@@ -161,33 +133,6 @@ mod tests {
         let db = TestDatabase::default();
         let file = SourceFile::new(&db, FileId::new(0), b"\xFF\xFE<?php".to_vec());
         let _ = item_tree(&db, file);
-    }
-
-    #[test]
-    fn semantic_diagnostics_carry_the_reference_family_only() {
-        // Same fixture as before — one gated construct then one unknown
-        // class — but syntax version gating now belongs to the rule
-        // framework's syntax phase, so this query reports only the
-        // reference family: CEL0018, never CEL0024.
-        let db = TestDatabase::default();
-        let file = SourceFile::new(
-            &db,
-            FileId::new(0),
-            b"<?php readonly class Point {} $x = new Missing();".to_vec(),
-        );
-        let files = AnalyzedFileSet::new(&db, vec![file]);
-        let stubs = StubIndexInput::builder(StubIndex::default())
-            .durability(salsa::Durability::HIGH)
-            .new(&db);
-        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-            PhpVersion::new(8, 1),
-            PhpVersion::new(8, 5),
-        ))
-        .durability(salsa::Durability::MEDIUM)
-        .new(&db);
-        let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
-        let identifiers: Vec<&str> = diagnostics.iter().map(|d| d.id.as_str()).collect();
-        assert_eq!(identifiers, vec!["CEL0018"]);
     }
 
     #[test]

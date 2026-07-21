@@ -175,7 +175,12 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
     let database = &inputs.database;
     let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
     diagnostics.extend(
-        celerrate_semantics::semantic_diagnostics(
+        celerrate_rules::syntax_phase_diagnostics(database, file, inputs.configuration)
+            .iter()
+            .cloned(),
+    );
+    diagnostics.extend(
+        celerrate_rules::semantic_phase_diagnostics(
             database,
             file,
             inputs.files,
@@ -185,16 +190,6 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
         .iter()
         .cloned(),
     );
-    diagnostics.extend(
-        celerrate_rules::syntax_phase_diagnostics(database, file, inputs.configuration)
-            .iter()
-            .cloned(),
-    );
-    diagnostics.extend(
-        celerrate_rules::semantic_phase_diagnostics(database, file)
-            .iter()
-            .cloned(),
-    );
     let suppressed = celerrate_semantics::suppressed_ranges(database, file);
     if !suppressed.is_empty() {
         retain_unsuppressed(database, file, suppressed, &mut diagnostics);
@@ -202,10 +197,12 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
     diagnostics
 }
 
-/// The typed families, suppression applied, computed fresh from the live
-/// project — the recompute-path building block, never called on a
-/// typed-serve hit. Plan 9a (task 9) gave the typed families their own
-/// persistent artifact class (`crate::cache::stored::StoredTypedVerdict`,
+/// The typed families as the rule framework's typed-body phase
+/// (`celerrate_rules::typed_body_phase_diagnostics`) renders them,
+/// suppression applied, computed fresh from the live project: the
+/// recompute-path building block, never called on a typed-serve hit.
+/// Plan 9a (task 9) gave the typed families their own persistent
+/// artifact class (`crate::cache::stored::StoredTypedVerdict`,
 /// validated by `crate::cache::verdict::TypedOutcome`); this function is
 /// what every recompute path calls once its outcome is `Recompute`:
 /// `served_typed_diagnostics`'s fallback (the orchestration layer's own
@@ -218,12 +215,12 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
 /// stands in for.
 pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
     let database = &inputs.database;
-    let mut diagnostics = celerrate_types::typed_diagnostics(
+    let mut diagnostics = celerrate_rules::typed_body_phase_diagnostics(
         database,
+        file,
         inputs.files,
         inputs.stubs,
         inputs.configuration,
-        file,
     )
     .clone();
     let suppressed = celerrate_semantics::suppressed_ranges(database, file);

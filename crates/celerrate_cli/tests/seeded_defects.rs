@@ -167,3 +167,75 @@ function f(): void { single(b: 1); }
 "#,
     );
 }
+
+#[test]
+fn cel0018_a_known_unknown_class_is_reported() {
+    seeded(
+        "CEL0018",
+        r#"<?php
+namespace App;
+function f(): void { $x = new MissingService(); }
+"#,
+    );
+}
+
+#[test]
+fn cel0019_a_known_unknown_function_is_reported() {
+    seeded(
+        "CEL0019",
+        r#"<?php
+namespace App;
+function f(): void { missing_helper(); }
+"#,
+    );
+}
+
+#[test]
+fn cel0020_a_known_unknown_constant_is_reported() {
+    seeded(
+        "CEL0020",
+        r#"<?php
+namespace App;
+function f(): int { return MISSING_LIMIT; }
+"#,
+    );
+}
+
+#[test]
+fn cel0021_a_known_gated_symbol_is_reported() {
+    // `json_validate` was introduced in PHP 8.3 and the shipped stub
+    // blob carries that window; the manifest's `^8.1` puts the range
+    // minimum below it.
+    seeded(
+        "CEL0021",
+        r#"<?php
+namespace App;
+function f(): bool { return \json_validate('{}'); }
+"#,
+    );
+}
+
+#[test]
+fn cel0023_a_known_deprecated_symbol_is_reported() {
+    // Deprecated since PHP 8.2 in the shipped stub blob; the range
+    // maximum under `^8.1` is past it. A warning still exits 1
+    // (`a_warning_alone_still_exits_one` in check.rs pins that), so
+    // the shared harness applies unchanged.
+    seeded(
+        "CEL0023",
+        r#"<?php
+namespace App;
+function f(): void { \utf8_encode('x'); }
+"#,
+    );
+}
+
+// CEL0022 (symbol removed within the supported range) has no
+// product-level fixture, deliberately: the shipped stub blob carries
+// no symbol whose removal falls inside the supported window 8.1 to
+// 8.5 (a removal at or below the minimum drops the symbol from the
+// table entirely and reports CEL0019 instead). Its recall fixture
+// drives the full framework path with a synthetic stub instead:
+// `cel0022_a_removed_symbol_is_reported_through_the_phase` in
+// `crates/celerrate_rules/src/rules/symbol_version_gating.rs`. It
+// moves here the day a real removal enters the supported window.

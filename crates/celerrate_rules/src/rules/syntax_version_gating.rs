@@ -12,10 +12,6 @@ use crate::traits::SyntaxRule;
 /// A syntax construct newer than the range minimum.
 pub const SYNTAX_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0024");
 
-/// Every identifier this crate allocates, for the registry check at
-/// the composition root.
-pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[SYNTAX_NOT_AVAILABLE];
-
 /// The rule that reports uses of syntax constructs newer than the
 /// project's minimum PHP version.
 pub struct SyntaxVersionGating;

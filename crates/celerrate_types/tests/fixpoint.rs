@@ -22,7 +22,7 @@ use celerrate_stdlib_provider::StdlibProvider;
 use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::{
     DynamicTypeProviderRegistration, DynamicTypeProviderRegistry, FunctionQuery, MethodQuery,
-    inferred_body_types, inferred_function_return, inferred_method_return, typed_diagnostics,
+    inferred_body_types, inferred_function_return, inferred_method_return, typed_file_verdicts,
 };
 
 struct Fixture {
@@ -706,17 +706,20 @@ function consume(mixed $anything): void {
 
 /// Task 13's closing determinism pin: the typed checks layer over a
 /// body exercising the unknown-method and nullability families
-/// answers identically across two fresh, unrelated databases. Interner
-/// handles differ across databases (each owns its own `salsa`
-/// interner), so the comparison renders each diagnostic through its
-/// stable identifier plus its pre-rendered message rather than
-/// comparing any interned value directly — the thread-count
-/// byte-identity over the full product is the corpus/equivalence
-/// harness's job (extended in task 10); this pin is the single-database,
-/// single-thread baseline the checks layer itself owns.
+/// answers identically across two fresh, unrelated databases. The
+/// rendering layer moved up into the rule framework's typed-body
+/// phase, so this pin compares the verdict aggregate this crate still
+/// owns, one layer down: the same determinism proof over range-free
+/// records, which carry no interner handle at all (each database owns
+/// its own `salsa` interner) and so compare directly across two
+/// databases. The rendered form's own determinism is pinned by the
+/// rules-side tests, and the thread-count byte-identity over the full
+/// product is the corpus/equivalence harness's job (extended in task
+/// 10); this pin is the single-database, single-thread baseline the
+/// checks layer itself owns.
 #[test]
-fn typed_diagnostics_are_identical_across_fresh_databases() {
-    let render = || {
+fn typed_verdicts_are_identical_across_fresh_databases() {
+    let compute = || {
         let f = fixture(&[r#"<?php
 class A { public function shared(): void {} }
 class B {}
@@ -725,10 +728,12 @@ function f(A|B $either, ?A $nullable): void {
     $nullable->shared();
 }
 "#]);
-        typed_diagnostics(&f.db, f.files, f.stubs, f.configuration, f.handles[0])
-            .iter()
-            .map(|d| format!("{} {}", d.id.as_str(), d.message))
-            .collect::<Vec<String>>()
+        typed_file_verdicts(&f.db, f.files, f.stubs, f.configuration, f.handles[0]).clone()
     };
-    assert_eq!(render(), render());
+    let first = compute();
+    assert!(
+        !first.verdicts.is_empty(),
+        "the fixture must fire, or the comparison below proves nothing",
+    );
+    assert_eq!(first, compute());
 }

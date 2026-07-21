@@ -25,6 +25,6 @@ pub use registry::{
     CORE_IDENTITY_NAME, RuleConflict, RuleImplementation, RuleRegistration, RuleRegistry,
     validate_rules,
 };
+pub use rules::ALLOCATED_IDENTIFIERS;
 pub use rules::core_rules;
-pub use rules::syntax_version_gating::{ALLOCATED_IDENTIFIERS, SYNTAX_NOT_AVAILABLE};
 pub use traits::{ReportingRule, SemanticRule, SyntaxRule, TypedBodyRule};
