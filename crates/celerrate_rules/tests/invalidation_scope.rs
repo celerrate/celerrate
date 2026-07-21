@@ -14,12 +14,12 @@
 //! `TypedBody` rule (`MarkEveryBody`) registered so the tier has
 //! something to invalidate.
 //!
-//! No semantic-phase pin lives here yet: the skeleton's fake semantic
-//! rule (`EmitPerFile`, in `phases.rs`'s own tests) reads no file
-//! content at all, so a cross-file invalidation pin against it would
-//! measure the fake, not the framework. The semantic phase's real
-//! invalidation pins arrive in part 4, once it carries its real
-//! families and something to actually invalidate.
+//! The semantic-phase pin below arrived with part 4, once the phase
+//! carried its real families (`unknown-symbols`, `symbol-version-gating`)
+//! and so something real to invalidate: a same-file body edit that
+//! changes reference outcomes re-runs that file's own walk and phase,
+//! while every other file's phase backdates behind the unchanged item
+//! tree and never runs at all.
 
 // `unwrap`/`expect`/indexing are fine in a test: failing loudly is what
 // a test should do.
@@ -32,17 +32,18 @@
 
 use std::sync::Arc;
 
-use celerrate_db::SourceFile;
 use celerrate_db::testing::TestDatabase;
+use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::{DiagnosticId, Severity};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_rules::{
     CORE_IDENTITY_NAME, FindingAnchor, FindingSink, RuleGroup, RuleIdentifier, RuleImplementation,
     RuleMetadata, RuleRegistration, RuleRegistry, Tier, TypedBodyRule, core_rules,
-    syntax_phase_diagnostics, typed_body_phase_diagnostics,
+    semantic_phase_diagnostics, syntax_phase_diagnostics, typed_body_phase_diagnostics,
 };
 use celerrate_semantics::PluginIdentity;
 use celerrate_source::{FileId, TextRange, TextSize};
+use celerrate_stubs::{StubIndex, StubIndexInput};
 use celerrate_types::TypedBodyContext;
 use salsa::Setter;
 
@@ -308,5 +309,66 @@ fn an_edit_above_a_body_reruns_no_body_phase() {
             .collect::<Vec<_>>(),
         "each diagnostic's range should have shifted by the prepended \
          comment's byte length, not stayed at its pre-edit location",
+    );
+}
+
+#[test]
+fn a_body_edit_reruns_its_own_semantic_walk_and_never_anothers_phase() {
+    let mut db = TestDatabase::default();
+    register(&db);
+    let library = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php namespace Lib; class Helper { public function go(): void {} }".to_vec(),
+    );
+    let consumer = SourceFile::new(
+        &db,
+        FileId::new(1),
+        b"<?php namespace App; use Lib\\Helper; $x = new Helper(); $y = new Missing();".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![library, consumer]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = configuration_for(&db, PhpVersion::new(8, 1));
+    assert!(semantic_phase_diagnostics(&db, library, files, stubs, configuration).is_empty());
+    assert_eq!(
+        semantic_phase_diagnostics(&db, consumer, files, stubs, configuration).len(),
+        1,
+        "the consumer's unknown class reports",
+    );
+    db.take_executed();
+
+    // A body edit that introduces an unresolved reference inside the
+    // library's method: the item tree is unchanged, so the consumer's
+    // resolutions backdate behind the unchanged symbol table and its
+    // phase never runs; the library's own per-file walk honestly
+    // re-runs (the design's stated same-file behavior), its outcomes
+    // change, and its phase re-runs over them.
+    library.set_bytes(&mut db).to(
+        b"<?php namespace Lib; class Helper { public function go(): void { new Ghost(); } }"
+            .to_vec(),
+    );
+    assert_eq!(
+        semantic_phase_diagnostics(&db, library, files, stubs, configuration).len(),
+        1,
+        "the library's new unknown class reports",
+    );
+    assert_eq!(
+        semantic_phase_diagnostics(&db, consumer, files, stubs, configuration).len(),
+        1,
+    );
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "reference_outcomes"),
+        1,
+        "only the edited file's walk re-runs: {log:?}",
+    );
+    assert_eq!(
+        executions_of(&log, "semantic_phase_diagnostics"),
+        1,
+        "the library's phase re-runs over its changed outcomes; the \
+         consumer's backdates whole: {log:?}",
     );
 }
