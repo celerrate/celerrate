@@ -199,7 +199,7 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
 
 /// The typed families as the rule framework's typed-body phase
 /// (`celerrate_rules::typed_body_phase_diagnostics`) renders them,
-/// suppression applied, computed fresh from the live project — the
+/// suppression applied, computed fresh from the live project: the
 /// recompute-path building block, never called on a typed-serve hit.
 /// Plan 9a (task 9) gave the typed families their own persistent
 /// artifact class (`crate::cache::stored::StoredTypedVerdict`,

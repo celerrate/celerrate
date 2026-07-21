@@ -13,7 +13,7 @@
 //! framework's per-body tier, `body_phase_findings`. They used to run
 //! against a fake `TypedBody` rule (`MarkEveryBody`, registered by a
 //! `register_typed_fake` helper) because core carried no typed-body
-//! family at the time these pins were first written (part 3) — that is
+//! family at the time these pins were first written (part 3). That is
 //! part 3 history now. Three real typed families
 //! (`unknown-members`, `null-dereference`, `argument-checks`) are
 //! registered by `core_rules` and, as of the previous task, are the
@@ -257,7 +257,7 @@ fn a_body_edit_reruns_only_the_editing_bodys_phase() {
 /// all. If findings were keyed by `TextRange` anywhere above the
 /// reconciliation tail, this edit would force every body's
 /// `body_phase_findings` (and the `body_typed_verdicts` walk beneath
-/// it) to re-run; the design's claim is the opposite — the finding is
+/// it) to re-run; the design's claim is the opposite. The finding is
 /// anchored by declaration identity, range-free, so it backdates under
 /// the shift and only `resolved_diagnostic`'s mapping work (through the
 /// aggregate query) redoes anything, the reported diagnostic moving to

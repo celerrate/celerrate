@@ -1922,7 +1922,7 @@ function bystander(User $u): void { $u->save(); }
 /// The design's claim is the opposite: the verdict is keyed by
 /// `(AstId, ExpressionId)`, range-free, so it backdates under the
 /// shift and only the offset-to-range reconciliation redoes its cheap
-/// mapping work — the reported diagnostic still renders, moved to its
+/// mapping work; the reported diagnostic still renders, moved to its
 /// new location. That reconciliation now belongs to the rule
 /// framework's typed-body phase, so the rendering-side twin of this
 /// pin lives in `celerrate_rules/tests/invalidation_scope.rs`; what
