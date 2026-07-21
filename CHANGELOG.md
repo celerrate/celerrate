@@ -102,6 +102,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   because it has no symbol table to confirm enum-ness at lowering time
   (lowering a non-enum `Foo::BAR` would fabricate unknown-member reports).
   Tracked for unification in #86. Test-only; zero corpus delta.
+- The rule framework skeleton: rules are declarative families with a
+  name, a group, a closed identifier list carrying per-identifier
+  default severities, and a `Default`/`Nursery` tier. Four phase
+  traits (syntax, semantic, typed-body, and the core-only reporting
+  phase) check through sealed contexts and report into a
+  metadata-severitied finding sink; a fifth extension-point registry
+  holds registrations, with core rules registered under a reserved
+  core identity that never keys the plugin-set digest. The
+  syntax-version-gating family (`CEL0024`) is the first migrated
+  family: the gated-construct walk stays in `celerrate_semantics` as
+  an outcome query, the rule constructs the diagnostics, and the
+  identifier's ownership moves to `celerrate_rules`. Internal
+  machinery only: reported diagnostics, exit codes, the corpus
+  snapshot, and the cache format are all byte-identical.
 
 ### Fixed
 
