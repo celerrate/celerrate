@@ -19,7 +19,7 @@
 //! **The suppression note (plan 9a, task 9).** `StoredVerdict.diagnostics`
 //! and `StoredTypedVerdict.diagnostics` are both stored POST-suppression
 //! (schema 4's convention, unchanged): every persisted diagnostic has
-//! already survived `celerrate_semantics::suppressed_ranges`'s filter.
+//! already survived `celerrate_semantics::suppression_directives`'s filter.
 //! Suppression directives are strictly file-local facts read from the
 //! same file the verdict's content-hash key covers, so editing even a
 //! comment — never mind the directive itself — moves the hash and

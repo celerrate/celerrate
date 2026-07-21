@@ -10,7 +10,7 @@ use std::sync::Arc;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
-use celerrate_source::{FileId, TextRange, TextSize};
+use celerrate_source::{FileId, TextSize};
 use celerrate_stubs::StubIndexInput;
 use rayon::prelude::*;
 
@@ -132,28 +132,41 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(pass)).map_err(|_| Panicked)
 }
 
-/// Filters `diagnostics` down to what no suppression directive covers.
-/// Shared by `persistable_diagnostics` and `typed_portion` so the two
-/// composers apply the exact same filter rather than each maintaining
-/// its own copy: suppression is family-agnostic (design section 5), and
-/// that must hold for the typed families exactly as it does for the two
-/// that predate them.
+/// Filters `diagnostics` down to what no suppression directive
+/// admits, and answers the sorted indexes (into
+/// `suppression_directives(db, file)`) of every directive that
+/// admitted at least one diagnostic - any-match attribution: a
+/// diagnostic admitted by several co-located directives marks them
+/// all used (design section 4). Shared by `persistable_diagnostics`
+/// and `typed_portion` so the two composers apply the exact same
+/// filter.
 fn retain_unsuppressed(
     database: &dyn salsa::Database,
     file: SourceFile,
-    suppressed: &[TextRange],
+    directives: &[celerrate_semantics::ResolvedDirective],
     diagnostics: &mut Vec<Diagnostic>,
-) {
+) -> Vec<u32> {
     let text_end = celerrate_db::source_text(database, file)
         .as_ref()
         .map(|text| TextSize::of(text.text()))
         .unwrap_or_default();
+    let mut matched = std::collections::BTreeSet::new();
     diagnostics.retain(|diagnostic| {
         let Some((_, range)) = diagnostic.span() else {
             return true;
         };
-        !celerrate_semantics::is_suppressed(suppressed, range.start(), text_end)
+        let mut suppressed = false;
+        for (index, directive) in directives.iter().enumerate() {
+            if directive.admits(diagnostic.id, range.start(), text_end) {
+                suppressed = true;
+                if let Ok(index) = u32::try_from(index) {
+                    matched.insert(index);
+                }
+            }
+        }
+        !suppressed
     });
+    matched.into_iter().collect()
 }
 
 /// The cache-servable portion: syntax, decode, and semantic families,
@@ -190,9 +203,9 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
         .iter()
         .cloned(),
     );
-    let suppressed = celerrate_semantics::suppressed_ranges(database, file);
-    if !suppressed.is_empty() {
-        retain_unsuppressed(database, file, suppressed, &mut diagnostics);
+    let directives = celerrate_semantics::suppression_directives(database, file);
+    if !directives.is_empty() {
+        let _ = retain_unsuppressed(database, file, directives, &mut diagnostics);
     }
     diagnostics
 }
@@ -223,9 +236,9 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnosti
         inputs.configuration,
     )
     .clone();
-    let suppressed = celerrate_semantics::suppressed_ranges(database, file);
-    if !suppressed.is_empty() {
-        retain_unsuppressed(database, file, suppressed, &mut diagnostics);
+    let directives = celerrate_semantics::suppression_directives(database, file);
+    if !directives.is_empty() {
+        let _ = retain_unsuppressed(database, file, directives, &mut diagnostics);
     }
     diagnostics
 }

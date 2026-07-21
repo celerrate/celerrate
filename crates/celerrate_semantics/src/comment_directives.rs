@@ -9,15 +9,15 @@
 //! written tag table (what `@phpstan-ignore-line` *means*) is
 //! bridge-internal, like the tag precedence table (design section 4).
 //! Scopes are symbolic — a provider is a pure function of the comment
-//! and cannot see positions; `suppressed_ranges` resolves them.
-//! Identifiers travel with a directive but are not yet matched here:
-//! identifier-level matching lives in `suppression_directives`' filter
-//! computation (task 2 of the part-5 plan resolves the long-standing
-//! reservation).
+//! and cannot see positions; `suppression_directives` resolves them.
+//! Identifier-level correspondence is resolved here too: `filter_of`
+//! is the single implementation of the correspondence policy (design
+//! section 8), closing the reservation this module used to carry.
 
 use std::sync::Arc;
 
 use celerrate_db::SourceFile;
+use celerrate_diagnostics::DiagnosticId;
 use celerrate_source::{LineColumn, LineIndex, TextRange, TextSize};
 use celerrate_syntax::{SyntaxKind, SyntaxToken};
 
@@ -201,14 +201,124 @@ pub struct CommentDirectiveRegistry {
     pub registrations: Vec<CommentDirectiveRegistration>,
 }
 
-/// The file's suppressed ranges: every comment handed to every
-/// registered provider, the symbolic scopes resolved against the line
-/// index, sorted and deduplicated. An own-tree read for strictly-local
-/// output — the syntax-gating precedent. `Eq`-comparable: a comment
-/// edit that leaves the directive set unchanged backdates, and
-/// dependents never re-run.
+/// What a directive's identifier list resolved to: the matcher input.
+/// Design section 8's mechanics - a filter per range, `All` or
+/// `Only(sorted codes)`; co-location merges by union semantically,
+/// because a diagnostic is suppressed exactly when any directive
+/// admits it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SuppressionFilter {
+    /// Every diagnostic family on the scope.
+    All,
+    /// Exactly these identifiers, sorted and deduplicated (binary
+    /// search relies on the order).
+    Only(Vec<DiagnosticId>),
+}
+
+/// One directive, resolved against the file: where it sits (the
+/// carrying comment token - where CEL0041/CEL0042 anchor), what it
+/// covers, what it admits, and what the reporting rules need to speak
+/// about it. The reason trailer is deliberately not carried: its only
+/// consumer (a verbose widened-directive channel) is sub-project 5
+/// product surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedDirective {
+    pub anchor: TextRange,
+    pub scope: TextRange,
+    pub filter: SuppressionFilter,
+    /// The written identifiers, verbatim, in written order.
+    pub identifiers: Vec<String>,
+    pub origin: DirectiveOrigin,
+}
+
+impl ResolvedDirective {
+    /// Whether this directive admits (suppresses) a diagnostic of `id`
+    /// anchored at `offset`. Position matching is by the diagnostic's
+    /// start, end-exclusive, except at the very end of the file: a
+    /// diagnostic anchored exactly at the text's end (an
+    /// unexpected-end-of-file parse error) belongs to the last line
+    /// and must be suppressible from it (the rule `is_suppressed`
+    /// carried, preserved verbatim).
+    pub fn admits(&self, id: DiagnosticId, offset: TextSize, text_end: TextSize) -> bool {
+        let in_scope = offset >= self.scope.start()
+            && (offset < self.scope.end()
+                || (offset == self.scope.end() && self.scope.end() == text_end));
+        if !in_scope {
+            return false;
+        }
+        match &self.filter {
+            SuppressionFilter::All => true,
+            SuppressionFilter::Only(codes) => codes.binary_search(&id).is_ok(),
+        }
+    }
+}
+
+/// The single implementation of the correspondence policy (design
+/// section 8, fixed by the #58 triage). Foreign: a bare list, any
+/// scope-wide or unmapped identifier, or a mapped code that fails
+/// interning widens to `All` - over-suppression, never
+/// under-suppression (the correspondence gate makes the failed-intern
+/// arm unreachable; it is the honest fallback, not a code path).
+/// Native: the union of the identifiers that intern; unknown ones are
+/// excluded and never widen (they suppress nothing - CEL0041's reason
+/// to exist).
+pub(crate) fn filter_of(
+    origin: DirectiveOrigin,
+    identifiers: &[SuppressionIdentifier],
+) -> SuppressionFilter {
+    let mut codes: Vec<DiagnosticId> = Vec::new();
+    match origin {
+        DirectiveOrigin::Foreign => {
+            if identifiers.is_empty() {
+                return SuppressionFilter::All;
+            }
+            for identifier in identifiers {
+                match identifier {
+                    SuppressionIdentifier::Mapped { codes: mapped, .. } => {
+                        // An empty mapped set is malformed input from
+                        // a non-bridge provider (the bridge's unit
+                        // tests pin non-empty entries): widen, never
+                        // narrow.
+                        if mapped.is_empty() {
+                            return SuppressionFilter::All;
+                        }
+                        for code in mapped {
+                            match celerrate_diagnostics::find_identifier(code) {
+                                Some(id) => codes.push(id),
+                                None => return SuppressionFilter::All,
+                            }
+                        }
+                    }
+                    _ => return SuppressionFilter::All,
+                }
+            }
+        }
+        DirectiveOrigin::Native => {
+            for identifier in identifiers {
+                if let SuppressionIdentifier::Native { written } = identifier
+                    && let Some(id) = celerrate_diagnostics::find_identifier(written)
+                {
+                    codes.push(id);
+                }
+            }
+        }
+    }
+    codes.sort();
+    codes.dedup();
+    SuppressionFilter::Only(codes)
+}
+
+/// The file's directives, resolved: every comment handed to every
+/// registered provider, symbolic scopes resolved against the line
+/// index, filters computed under the correspondence policy, sorted and
+/// deduplicated. An own-tree read for strictly-local output.
+/// `Eq`-comparable: a comment edit that leaves the directive set
+/// unchanged backdates, and dependents never re-run.
 #[salsa::tracked(returns(ref))]
-pub fn suppressed_ranges(db: &dyn salsa::Database, file: SourceFile) -> Vec<TextRange> {
+pub fn suppression_directives(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+) -> Vec<ResolvedDirective> {
     let Some(registry) = CommentDirectiveRegistry::try_get(db) else {
         return Vec::new();
     };
@@ -219,7 +329,7 @@ pub fn suppressed_ranges(db: &dyn salsa::Database, file: SourceFile) -> Vec<Text
     let root = celerrate_db::parse(db, file).tree();
     let index = celerrate_db::line_index(db, file);
     let text_end = root.text_range().end();
-    let mut ranges = Vec::new();
+    let mut directives = Vec::new();
     for element in root.descendants_with_tokens() {
         let Some(token) = element.as_token() else {
             continue;
@@ -230,32 +340,46 @@ pub fn suppressed_ranges(db: &dyn salsa::Database, file: SourceFile) -> Vec<Text
         for registration in registrations {
             for directive in registration.provider.directives(kind, token.text()) {
                 match directive {
-                    CommentDirective::Suppress { scope, .. } => {
-                        if let Some(range) = resolve_scope(scope, token, index, text_end) {
-                            ranges.push(range);
-                        }
+                    CommentDirective::Suppress {
+                        scope,
+                        origin,
+                        identifiers,
+                    } => {
+                        let Some(resolved) = resolve_scope(scope, token, index, text_end) else {
+                            continue;
+                        };
+                        directives.push(ResolvedDirective {
+                            anchor: token.text_range(),
+                            scope: resolved,
+                            filter: filter_of(origin, &identifiers),
+                            identifiers: identifiers
+                                .iter()
+                                .map(|identifier| identifier.written().to_owned())
+                                .collect(),
+                            origin,
+                        });
                     }
                 }
             }
         }
     }
-    ranges.sort_by_key(|range| (range.start(), range.end()));
-    ranges.dedup();
-    ranges
-}
-
-/// Whether a diagnostic anchored at `offset` falls in a suppressed
-/// range. Matching is by the diagnostic's start — the location the
-/// report names — end-exclusive, except at the very end of the file:
-/// a diagnostic anchored exactly at the text's end (an
-/// unexpected-end-of-file parse error) belongs to the last line and
-/// must be suppressible from it, or the suppression under-suppresses
-/// (design section 5's rule, in the one place every consumer shares).
-pub fn is_suppressed(suppressed: &[TextRange], offset: TextSize, text_end: TextSize) -> bool {
-    suppressed.iter().any(|range| {
-        offset >= range.start()
-            && (offset < range.end() || (offset == range.end() && range.end() == text_end))
-    })
+    directives.sort_by(|left, right| {
+        (
+            left.anchor.start(),
+            left.anchor.end(),
+            left.scope.start(),
+            left.scope.end(),
+        )
+            .cmp(&(
+                right.anchor.start(),
+                right.anchor.end(),
+                right.scope.start(),
+                right.scope.end(),
+            ))
+            .then_with(|| format!("{left:?}").cmp(&format!("{right:?}")))
+    });
+    directives.dedup();
+    directives
 }
 
 /// The trivia kinds a provider may read.
@@ -475,11 +599,15 @@ mod tests {
         source: &str,
         needle: &str,
     ) -> bool {
-        is_suppressed(
-            suppressed_ranges(db, file),
-            offset_of(source, needle),
-            TextSize::of(source),
-        )
+        let directives = suppression_directives(db, file);
+        let offset = offset_of(source, needle);
+        let text_end = TextSize::of(source);
+        // The test marker directives carry no mapped identifier, so any
+        // registered identifier probes the position logic.
+        let id = celerrate_diagnostics::find_identifier("CEL0018").unwrap();
+        directives
+            .iter()
+            .any(|directive| directive.admits(id, offset, text_end))
     }
 
     #[test]
@@ -534,7 +662,7 @@ mod tests {
         let db = TestDatabase::default();
         let source = "<?php\n$x = 1; // @line\n";
         let file = celerrate_db::SourceFile::new(&db, FileId::new(0), source.as_bytes().to_vec());
-        assert!(suppressed_ranges(&db, file).is_empty());
+        assert!(suppression_directives(&db, file).is_empty());
     }
 
     #[test]
@@ -594,21 +722,27 @@ mod tests {
     fn a_next_line_directive_on_the_last_line_suppresses_nothing() {
         let source = "<?php\n$x = 1; // @next";
         let (db, file) = fixture(source);
-        assert!(suppressed_ranges(&db, file).is_empty());
+        assert!(!suppressed_at(&db, file, source, "$x"));
     }
 
     #[test]
     fn an_end_of_file_anchor_is_suppressible_from_the_last_line() {
         // Decision 5's exception: a diagnostic anchored exactly at the
         // text's end (an unexpected-end-of-file parse error) belongs
-        // to the last line.
+        // to the last line. `suppressed_at` is needle-based and cannot
+        // name a position past the last character, so this probes
+        // `admits` directly at `text_end`, the same primitive the
+        // helper calls.
         let source = "<?php\n$x = 1; // @line";
         let (db, file) = fixture(source);
-        assert!(is_suppressed(
-            suppressed_ranges(&db, file),
-            TextSize::of(source),
-            TextSize::of(source),
-        ));
+        let directives = suppression_directives(&db, file);
+        let end = TextSize::of(source);
+        let id = celerrate_diagnostics::find_identifier("CEL0018").unwrap();
+        assert!(
+            directives
+                .iter()
+                .any(|directive| directive.admits(id, end, end))
+        );
     }
 
     #[test]
@@ -707,21 +841,37 @@ mod tests {
         let (db, file) = fixture(source);
         assert!(!suppressed_at(&db, file, source, "$x"));
         let end = TextSize::of(source);
-        let ranges = suppressed_ranges(&db, file);
-        assert_eq!(ranges.len(), 1);
-        assert_eq!(ranges.first().copied(), Some(TextRange::empty(end)));
+        let directives = suppression_directives(&db, file);
+        assert_eq!(directives.len(), 1);
+        assert_eq!(
+            directives.first().map(|directive| directive.scope),
+            Some(TextRange::empty(end))
+        );
     }
 
     #[test]
     fn identical_resolved_ranges_deduplicate() {
-        let source = "<?php\n$x = 1; // @line @fake\n";
-        let (db, file) = fixture(source);
-        assert_eq!(suppressed_ranges(&db, file).len(), 1);
+        let db = TestDatabase::default();
+        let _ = CommentDirectiveRegistry::builder(vec![
+            CommentDirectiveRegistration {
+                identity: identity("fake-a"),
+                provider: std::sync::Arc::new(FakeProvider),
+            },
+            CommentDirectiveRegistration {
+                identity: identity("fake-b"),
+                provider: std::sync::Arc::new(FakeProvider),
+            },
+        ])
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+        let source = "<?php\n$x = 1; // @line\n";
+        let file = celerrate_db::SourceFile::new(&db, FileId::new(0), source.as_bytes().to_vec());
+        assert_eq!(suppression_directives(&db, file).len(), 1);
     }
 
     #[salsa::tracked]
     fn suppression_count(db: &dyn salsa::Database, file: celerrate_db::SourceFile) -> usize {
-        suppressed_ranges(db, file).len()
+        suppression_directives(db, file).len()
     }
 
     #[test]
@@ -739,7 +889,7 @@ mod tests {
         assert!(
             executed
                 .iter()
-                .any(|query| query.contains("suppressed_ranges")),
+                .any(|query| query.contains("suppression_directives")),
             "the own-tree read re-runs on any edit: {executed:?}",
         );
         assert!(
@@ -748,5 +898,160 @@ mod tests {
                 .any(|query| query.contains("suppression_count")),
             "an identical set backdates: the consumer never re-ran: {executed:?}",
         );
+    }
+
+    #[test]
+    fn a_foreign_directive_with_only_mapped_identifiers_narrows_to_their_union() {
+        let identifiers = vec![
+            SuppressionIdentifier::mapped(
+                "arguments.count".to_owned(),
+                vec!["CEL0036".to_owned(), "CEL0037".to_owned()],
+            ),
+            SuppressionIdentifier::mapped("class.notFound".to_owned(), vec!["CEL0018".to_owned()]),
+        ];
+        let filter = filter_of(DirectiveOrigin::Foreign, &identifiers);
+        assert_eq!(
+            filter,
+            SuppressionFilter::Only(vec![
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+                celerrate_diagnostics::find_identifier("CEL0036").unwrap(),
+                celerrate_diagnostics::find_identifier("CEL0037").unwrap(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn a_bare_foreign_directive_suppresses_the_whole_scope() {
+        assert_eq!(
+            filter_of(DirectiveOrigin::Foreign, &[]),
+            SuppressionFilter::All
+        );
+    }
+
+    #[test]
+    fn any_unmapped_foreign_identifier_widens_to_the_whole_scope() {
+        let identifiers = vec![
+            SuppressionIdentifier::mapped("class.notFound".to_owned(), vec!["CEL0018".to_owned()]),
+            SuppressionIdentifier::unmapped("something.else".to_owned()),
+        ];
+        assert_eq!(
+            filter_of(DirectiveOrigin::Foreign, &identifiers),
+            SuppressionFilter::All
+        );
+    }
+
+    #[test]
+    fn an_explicit_scope_wide_identifier_widens_to_the_whole_scope() {
+        let identifiers = vec![SuppressionIdentifier::scope_wide("all".to_owned())];
+        assert_eq!(
+            filter_of(DirectiveOrigin::Foreign, &identifiers),
+            SuppressionFilter::All
+        );
+    }
+
+    #[test]
+    fn a_mapped_identifier_with_no_codes_widens_to_the_whole_scope() {
+        // Constructible through the public facade constructor even though
+        // the bridge's table never produces it (a bridge unit test pins
+        // non-empty code sets): malformed provider input widens, never
+        // narrows to Only(empty) - the global fallback direction.
+        let identifiers = vec![SuppressionIdentifier::mapped(
+            "odd.entry".to_owned(),
+            Vec::new(),
+        )];
+        assert_eq!(
+            filter_of(DirectiveOrigin::Foreign, &identifiers),
+            SuppressionFilter::All
+        );
+    }
+
+    #[test]
+    fn a_native_directive_unions_its_known_identifiers_and_drops_unknown_ones() {
+        let identifiers = vec![
+            SuppressionIdentifier::native("CEL0030".to_owned()),
+            SuppressionIdentifier::native("CEL9999".to_owned()),
+            SuppressionIdentifier::native("CEL0018".to_owned()),
+        ];
+        assert_eq!(
+            filter_of(DirectiveOrigin::Native, &identifiers),
+            SuppressionFilter::Only(vec![
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+                celerrate_diagnostics::find_identifier("CEL0030").unwrap(),
+            ]),
+        );
+    }
+
+    #[test]
+    fn a_bare_native_directive_suppresses_nothing() {
+        assert_eq!(
+            filter_of(DirectiveOrigin::Native, &[]),
+            SuppressionFilter::Only(Vec::new()),
+        );
+    }
+
+    #[test]
+    fn an_only_filter_admits_exactly_its_codes_on_its_scope() {
+        let directive = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(10), TextSize::from(30)),
+            scope: TextRange::new(TextSize::from(0), TextSize::from(31)),
+            filter: SuppressionFilter::Only(vec![
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+            ]),
+            identifiers: vec!["class.notFound".to_owned()],
+            origin: DirectiveOrigin::Foreign,
+        };
+        let text_end = TextSize::from(100);
+        let inside = TextSize::from(5);
+        let outside = TextSize::from(50);
+        let cel0018 = celerrate_diagnostics::find_identifier("CEL0018").unwrap();
+        let cel0019 = celerrate_diagnostics::find_identifier("CEL0019").unwrap();
+        assert!(directive.admits(cel0018, inside, text_end));
+        assert!(!directive.admits(cel0019, inside, text_end));
+        assert!(!directive.admits(cel0018, outside, text_end));
+    }
+
+    #[test]
+    fn the_end_of_file_exception_survives_in_admits() {
+        let end = TextSize::from(20);
+        let directive = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(8), TextSize::from(20)),
+            scope: TextRange::new(TextSize::from(6), end),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let cel0007 = celerrate_diagnostics::find_identifier("CEL0007").unwrap();
+        assert!(directive.admits(cel0007, end, end));
+        assert!(!directive.admits(cel0007, end, TextSize::from(40)));
+    }
+
+    #[test]
+    fn an_empty_scope_at_the_end_of_file_admits_only_the_end_position() {
+        // The degenerate last-line scope (decision 6): the end-of-file
+        // exception is its whole coverage.
+        let end = TextSize::from(20);
+        let directive = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(8), TextSize::from(20)),
+            scope: TextRange::empty(end),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Native,
+        };
+        let cel0007 = celerrate_diagnostics::find_identifier("CEL0007").unwrap();
+        assert!(directive.admits(cel0007, end, end));
+        assert!(!directive.admits(cel0007, TextSize::from(10), end));
+    }
+
+    #[test]
+    fn the_query_resolves_anchor_scope_and_origin_per_directive() {
+        let source = "<?php\n$x = 1; // @line\n";
+        let (db, file) = fixture(source);
+        let directives = suppression_directives(&db, file);
+        assert_eq!(directives.len(), 1);
+        let directive = &directives[0];
+        assert_eq!(directive.origin, DirectiveOrigin::Foreign);
+        assert_eq!(directive.filter, SuppressionFilter::All);
+        let comment_start = offset_of(source, "// @line");
+        assert_eq!(directive.anchor.start(), comment_start);
     }
 }

@@ -44,8 +44,8 @@ pub use body::{
 pub use cache::{ArtifactCache, ArtifactCacheInput, CacheHandle};
 pub use comment_directives::{
     CommentDirective, CommentDirectiveProvider, CommentDirectiveRegistration,
-    CommentDirectiveRegistry, CommentKind, DirectiveOrigin, DirectiveScope, SuppressionIdentifier,
-    is_suppressed, suppressed_ranges,
+    CommentDirectiveRegistry, CommentKind, DirectiveOrigin, DirectiveScope, ResolvedDirective,
+    SuppressionFilter, SuppressionIdentifier, suppression_directives,
 };
 pub use index::{
     StubFrontier, StubSignatureTable, StubSymbolEntry, StubSymbolTable, SymbolEntry, SymbolOrigin,
