@@ -11,7 +11,11 @@ pub trait SyntaxRule: Send + Sync {
 }
 
 /// A rule of the semantic phase: reference resolution outcomes and the
-/// symbol index (surface arrives with part 4's migrated families).
+/// symbol index. Part 4's migrated families arrived as their own
+/// typed-body phase below (`TypedBodyRule`), not as an extension of
+/// this surface: three typed rule families are registered in
+/// `core_rules()` today (`unknown-members`, `null-dereference`,
+/// `argument-checks`).
 pub trait SemanticRule: Send + Sync {
     fn check(&self, context: &SemanticContext<'_>, sink: &mut FindingSink<'_>);
 }

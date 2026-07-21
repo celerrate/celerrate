@@ -128,9 +128,13 @@ pub(crate) fn body_phase_findings<'db>(
 
 /// The typed phase: aggregates the per-body tier over the file's
 /// function and method bodies (the `typed_file_verdicts` enumeration,
-/// traits excluded) and reconciles anchors at the tail. Not yet wired
-/// into the CLI composition: part 4's typed migration wires it together
-/// with the stored-verdict co-production.
+/// traits excluded) and reconciles anchors at the tail. Wired into the
+/// CLI composition: `crates/celerrate_cli/src/analysis.rs`'s
+/// `typed_portion` calls this query as the typed families' serving
+/// path. It and `celerrate_types::typed_file_verdicts` both read
+/// `body_typed_verdicts`, the same memoized per-body walk, so the
+/// diagnostics served here and the stored verdict's revalidation
+/// records are co-produced from one walk, never a second.
 #[salsa::tracked(returns(ref))]
 pub fn typed_body_phase_diagnostics(
     db: &dyn salsa::Database,

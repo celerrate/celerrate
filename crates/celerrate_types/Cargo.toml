@@ -13,7 +13,6 @@ blake3 = { workspace = true }
 postcard = { workspace = true }
 serde = { workspace = true }
 celerrate_db = { path = "../celerrate_db" }
-celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_project = { path = "../celerrate_project" }
 celerrate_semantics = { path = "../celerrate_semantics" }
 celerrate_source = { path = "../celerrate_source" }
