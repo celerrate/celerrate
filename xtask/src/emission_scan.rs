@@ -24,7 +24,7 @@
 //! does name `celerrate_diagnostics` now, for identifier vocabulary
 //! (`DiagnosticId`, `find_identifier`) its suppression-filter
 //! resolution needs - the `Diagnostic` value model itself stays
-//! unnamed in neither governed crate's `src/`, which is the point of
+//! unnamed in both governed crates' `src/`, which is the point of
 //! the migration these crates went through. Should the value model
 //! ever appear, it is a legitimate reason for this gate to ask a human
 //! to look, since a governed crate has no business naming the
