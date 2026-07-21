@@ -1,10 +1,13 @@
 //! The core rules. Everything here is registered at the composition
 //! root under the reserved core identity.
 
+pub mod argument_checks;
+pub mod null_dereference;
 pub mod symbol_version_gating;
 pub mod syntax_version_gating;
 #[cfg(test)]
 pub(crate) mod test_support;
+pub mod unknown_members;
 pub mod unknown_symbols;
 
 use std::sync::Arc;
@@ -41,6 +44,18 @@ pub fn core_rules() -> Vec<(RuleMetadata, RuleImplementation)> {
         (
             symbol_version_gating::metadata(),
             RuleImplementation::Semantic(Arc::new(symbol_version_gating::SymbolVersionGating)),
+        ),
+        (
+            unknown_members::metadata(),
+            RuleImplementation::TypedBody(Arc::new(unknown_members::UnknownMembers)),
+        ),
+        (
+            null_dereference::metadata(),
+            RuleImplementation::TypedBody(Arc::new(null_dereference::NullDereference)),
+        ),
+        (
+            argument_checks::metadata(),
+            RuleImplementation::TypedBody(Arc::new(argument_checks::ArgumentChecks)),
         ),
     ]
 }

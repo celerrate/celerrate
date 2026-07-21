@@ -28,7 +28,7 @@ use celerrate_source::FileId;
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 
 use crate::metadata::Tier;
-use crate::phases::semantic_phase_diagnostics;
+use crate::phases::{semantic_phase_diagnostics, typed_body_phase_diagnostics};
 use crate::registry::{RuleRegistration, RuleRegistry};
 
 /// A stub symbol available in every PHP version.
@@ -144,4 +144,33 @@ pub(crate) fn semantic_diagnostics(
     stub_symbols: Vec<StubSymbol>,
 ) -> Vec<Diagnostic> {
     semantic_diagnostics_in_range(sources, stub_symbols, default_range())
+}
+
+/// The typed-body phase drained for a fixture's checked file.
+///
+/// Split from [`typed_body_diagnostics`] so a caller can keep the
+/// fixture it drove: the migration's parity test drives both this phase
+/// and the legacy `celerrate_types::typed_diagnostics` from one
+/// database, which a helper owning its own fixture could not offer.
+pub(crate) fn typed_body_diagnostics_of(fixture: &Fixture) -> Vec<Diagnostic> {
+    typed_body_phase_diagnostics(
+        &fixture.db,
+        fixture.file,
+        fixture.files,
+        fixture.stubs,
+        fixture.configuration,
+    )
+    .clone()
+}
+
+/// The typed-body phase drained for the FIRST source, over
+/// [`default_range`] and the empty stub surface.
+///
+/// No stub argument, unlike the semantic helpers: every typed-family
+/// fixture declares its own classes and functions, so the argument
+/// would be `vec![]` at every call site. A test that does need a stub
+/// composes [`registered_fixture`] with [`typed_body_diagnostics_of`]
+/// instead.
+pub(crate) fn typed_body_diagnostics(sources: &[&str]) -> Vec<Diagnostic> {
+    typed_body_diagnostics_of(&registered_fixture(sources, vec![], default_range()))
 }
