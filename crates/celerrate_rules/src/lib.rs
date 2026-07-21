@@ -11,6 +11,10 @@ mod registry;
 pub mod rules;
 mod traits;
 
+// The diagnostics vocabulary this crate's API uses. Nominal re-exports
+// only, so a facade consumer can take everything from one crate.
+pub use celerrate_diagnostics::{DiagnosticId, ExplainPage, Severity};
+
 pub use context::{ReportingContext, SyntaxContext, testing_syntax_context};
 pub use finding::{FindingAnchor, FindingSink};
 pub use metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};

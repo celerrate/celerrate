@@ -213,6 +213,7 @@ dependencies = [
 name = "celerrate_plugin"
 version = "0.0.3"
 dependencies = [
+ "celerrate_rules",
  "celerrate_semantics",
  "celerrate_types",
  "trybuild",
