@@ -8,9 +8,37 @@
 use celerrate_db::testing::TestDatabase;
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
-use celerrate_semantics::semantic_diagnostics;
+use celerrate_rules::{
+    CORE_IDENTITY_NAME, RuleRegistration, RuleRegistry, Tier, core_rules,
+    semantic_phase_diagnostics,
+};
+use celerrate_semantics::PluginIdentity;
 use celerrate_source::FileId;
 use celerrate_stubs::{StubIndexInput, embedded_stub_index};
+
+/// The core-rule registration the composition root performs, repeated
+/// here: an integration test cannot reach the crate's `#[cfg(test)]`
+/// `rules::test_support` harness, so this file owns its own copy of the
+/// four lines `register_core_rules` composes.
+fn register_core_rules(db: &TestDatabase) {
+    let identity = PluginIdentity {
+        name: CORE_IDENTITY_NAME.to_owned(),
+        version: "test".to_owned(),
+        configuration: String::new(),
+    };
+    let registrations = core_rules()
+        .into_iter()
+        .map(|(metadata, implementation)| RuleRegistration {
+            identity: identity.clone(),
+            active: metadata.tier == Tier::Default,
+            metadata,
+            implementation,
+        })
+        .collect();
+    let _ = RuleRegistry::builder(registrations)
+        .durability(salsa::Durability::HIGH)
+        .new(db);
+}
 
 const REALISTIC_SOURCES: &[&str] = &[
     // Conditional declaration, calls, constants, magic constants.
@@ -103,8 +131,9 @@ fn realistic_sources_produce_no_diagnostics() {
     ))
     .durability(salsa::Durability::MEDIUM)
     .new(&db);
+    register_core_rules(&db);
     for file in handles {
-        let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
+        let diagnostics = semantic_phase_diagnostics(&db, file, files, stubs, configuration);
         assert_eq!(diagnostics, &vec![], "file {:?}", file.file_id(&db));
     }
 }
@@ -124,7 +153,8 @@ fn assert_no_diagnostics(source: &str) {
     ))
     .durability(salsa::Durability::MEDIUM)
     .new(&db);
-    let diagnostics = semantic_diagnostics(&db, file, files, stubs, configuration);
+    register_core_rules(&db);
+    let diagnostics = semantic_phase_diagnostics(&db, file, files, stubs, configuration);
     assert_eq!(diagnostics, &vec![], "source: {source}");
 }
 

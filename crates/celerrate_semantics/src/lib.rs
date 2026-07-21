@@ -69,11 +69,10 @@ pub use members::{
     ParameterSignature, TraitAdaptation, TraitUse, Visibility,
 };
 pub use plugin::PluginIdentity;
-pub use queries::{ast_id_map, item_tree, member_tree, semantic_diagnostics};
+pub use queries::{ast_id_map, item_tree, member_tree};
 pub use reference_checks::{
-    ALLOCATED_IDENTIFIERS, ReferenceOutcome, ReferenceOutcomes, ResolutionOutcome,
-    SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, reference_diagnostics,
-    reference_outcomes, reference_resolutions,
+    ReferenceOutcome, ReferenceOutcomes, ResolutionOutcome, reference_outcomes,
+    reference_resolutions,
 };
 pub use references::{Reference, collect_references};
 pub use resolve::{SymbolSources, UseTables, resolve_candidates, resolve_name};

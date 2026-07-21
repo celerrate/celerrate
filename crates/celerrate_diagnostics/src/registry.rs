@@ -62,9 +62,9 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
     registered("CEL0018", "unknown class", "celerrate_rules"),
     registered("CEL0019", "unknown function", "celerrate_rules"),
     registered("CEL0020", "unknown constant", "celerrate_rules"),
-    registered("CEL0021", "symbol not available", "celerrate_semantics"),
-    registered("CEL0022", "symbol removed", "celerrate_semantics"),
-    registered("CEL0023", "symbol deprecated", "celerrate_semantics"),
+    registered("CEL0021", "symbol not available", "celerrate_rules"),
+    registered("CEL0022", "symbol removed", "celerrate_rules"),
+    registered("CEL0023", "symbol deprecated", "celerrate_rules"),
     registered(
         "CEL0024",
         "syntax construct not available",

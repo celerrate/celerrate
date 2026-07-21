@@ -7,10 +7,11 @@
 //!
 //! `resolution_records` is a thin projection over
 //! `crate::reference_checks::reference_outcomes`: one walk produces
-//! findings and answers together, so drift between this module's
-//! records and `reference_checks`' diagnostics is structurally
-//! impossible — the `composed_diagnostics` closure, applied to the
-//! second mirror, plan 9a.
+//! outcomes and answers together, so drift between this module's
+//! records and the outcomes the semantic-phase rules construct their
+//! diagnostics from is structurally impossible, the
+//! `composed_diagnostics` closure applied to the second mirror,
+//! plan 9a.
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;
@@ -20,10 +21,10 @@ use crate::lookup::SymbolResolution;
 use crate::reference_checks::reference_outcomes;
 use crate::symbols::SymbolSpace;
 
-/// The answer a resolution reduces to: exactly what the reference
-/// diagnostics depend on, and nothing more. A `Source` answer produces
-/// no diagnostic whatever its declaration kind, so the kind is
-/// dropped; a `Stub` answer's diagnostics are a function of its
+/// The answer a resolution reduces to: exactly what the diagnostics
+/// derived from a reference depend on, and nothing more. A `Source`
+/// answer produces no diagnostic whatever its declaration kind, so the
+/// kind is dropped; a `Stub` answer's diagnostics are a function of its
 /// availability window, so the window is kept whole.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ResolutionAnswer {
@@ -56,7 +57,7 @@ pub struct ResolutionRecord {
 /// Every statically named reference of the file with its current
 /// answer, in tree order. A projection of
 /// `crate::reference_checks::reference_outcomes` (module doc):
-/// backdates independently of `reference_diagnostics`, but both read
+/// backdates independently of `reference_resolutions`, but both read
 /// the same walk.
 #[salsa::tracked(returns(ref))]
 pub fn resolution_records(
@@ -83,10 +84,7 @@ mod tests {
         StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind,
     };
 
-    use crate::reference_checks::{
-        ResolutionOutcome, SYMBOL_DEPRECATED, SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED,
-        reference_outcomes,
-    };
+    use crate::reference_checks::{ResolutionOutcome, reference_outcomes};
     use crate::revalidation::{ResolutionAnswer, resolution_records};
     use crate::symbols::SymbolSpace;
 
@@ -165,27 +163,19 @@ mod tests {
         assert_eq!(after[0].answer, ResolutionAnswer::Source);
     }
 
-    /// The name a diagnostic message backtick-quotes first: every
-    /// gating message this crate emits (availability, removal,
-    /// deprecation) opens with the reference's written name as its
-    /// first backtick-quoted token.
-    fn written_name(message: &str) -> &str {
-        message.split('`').nth(1).unwrap_or_default()
-    }
-
     /// The drift pin: `reference_outcomes` runs one walk that produces
-    /// findings, outcomes and answers together, so every diagnostic it
-    /// reports and every outcome it records must be explained by a
-    /// record from the very same call — a correspondence the two
-    /// hand-maintained walks this replaces could never guarantee. The
-    /// fixture carries one unknown class, one source-resolved class,
-    /// and one stub reference whose availability window violates the
-    /// project's supported range. The unknown class no longer produces
-    /// a diagnostic here (`celerrate_rules::rules::unknown_symbols`
-    /// constructs it from the outcome), so it is pinned on the
-    /// outcome side instead.
+    /// outcomes and answers together, so every outcome it records must
+    /// be explained by a record from the very same call, a
+    /// correspondence the two hand-maintained walks this replaces could
+    /// never guarantee. The fixture carries one unknown class, one
+    /// source-resolved class, and one stub reference whose availability
+    /// window violates the project's supported range. Neither family
+    /// constructs its diagnostic here any more
+    /// (`celerrate_rules::rules::unknown_symbols` and
+    /// `celerrate_rules::rules::symbol_version_gating` do, from the
+    /// outcomes), so both are pinned on the outcome side.
     #[test]
-    fn findings_and_answers_come_from_one_walk() {
+    fn outcomes_and_answers_come_from_one_walk() {
         let db = TestDatabase::default();
         let file = SourceFile::new(
             &db,
@@ -223,36 +213,43 @@ mod tests {
             outcomes.records,
             records,
         );
+        // The gating side of the pin, now that the family is
+        // constructed above rather than here: every stub outcome must
+        // be explained by a stub answer carrying the very same
+        // availability window, from the very same call.
+        let gated: Vec<(&str, StubAvailability)> = outcomes
+            .outcomes
+            .iter()
+            .filter_map(|outcome| match outcome.resolution {
+                ResolutionOutcome::Stub { availability } => {
+                    Some((outcome.written.as_str(), availability))
+                }
+                _ => None,
+            })
+            .collect();
         assert_eq!(
-            outcomes.diagnostics.len(),
-            1,
+            gated
+                .iter()
+                .map(|(written, _)| *written)
+                .collect::<Vec<_>>(),
+            vec!["array_find"],
             "one gated stub reference: {:?}",
-            outcomes.diagnostics,
+            outcomes.outcomes,
         );
-
-        for diagnostic in &outcomes.diagnostics {
-            let written = written_name(&diagnostic.message);
+        for (written, availability) in gated {
             let record = outcomes
                 .records
                 .iter()
                 .find(|record| record.written == written)
-                .unwrap_or_else(|| panic!("no record explains diagnostic {diagnostic:?}"));
-            match diagnostic.id {
-                id if id == SYMBOL_NOT_AVAILABLE
-                    || id == SYMBOL_REMOVED
-                    || id == SYMBOL_DEPRECATED =>
-                {
-                    assert!(
-                        matches!(record.answer, ResolutionAnswer::Stub { .. }),
-                        "a gating diagnostic must be explained by a stub answer",
-                    );
-                }
-                other => panic!("unexpected diagnostic id {other:?}"),
-            }
+                .unwrap_or_else(|| panic!("no record explains outcome {written}"));
+            assert_eq!(
+                record.answer,
+                ResolutionAnswer::Stub { availability },
+                "a gating outcome must be explained by a stub answer",
+            );
         }
 
-        // The unknown-symbol side of the same pin, now that the family
-        // is constructed above rather than here: every unresolved
+        // The unknown-symbol side of the same pin: every unresolved
         // outcome must be explained by an unknown answer from the very
         // same call.
         let unresolved: Vec<&str> = outcomes

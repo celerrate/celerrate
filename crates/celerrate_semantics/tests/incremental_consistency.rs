@@ -12,7 +12,7 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
 use celerrate_semantics::{
     AstId, BodyQuery, SymbolResolution, SymbolSources, SymbolSpace, UseTables, ast_id_map, body_ir,
-    item_tree, resolve_name, semantic_diagnostics, source_symbol_table,
+    item_tree, reference_outcomes, resolve_name, source_symbol_table,
 };
 use celerrate_stubs::{StubAvailability, StubIndex, StubIndexInput, StubSymbol, StubSymbolKind};
 
@@ -200,7 +200,7 @@ fn resolution_matches_a_from_scratch_analysis_after_every_edit() {
 }
 
 #[test]
-fn semantic_diagnostics_match_from_scratch_analysis() {
+fn reference_outcomes_match_from_scratch_analysis() {
     let initial: &[&[u8]] = &[
         b"<?php namespace App; use Lib\\Helper; $x = new Helper(); missing();",
         b"<?php namespace Lib; class Helper {}",
@@ -243,14 +243,14 @@ fn semantic_diagnostics_match_from_scratch_analysis() {
                 incremental_files.iter().zip(scratch_files.iter())
             {
                 assert_eq!(
-                    semantic_diagnostics(
+                    reference_outcomes(
                         incremental_db,
                         *incremental_file,
                         *incremental_set,
                         *incremental_stubs,
                         *incremental_configuration,
                     ),
-                    semantic_diagnostics(
+                    reference_outcomes(
                         scratch_db,
                         *scratch_file,
                         *scratch_set,

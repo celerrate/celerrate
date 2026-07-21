@@ -1,53 +1,41 @@
-//! The statically named references of one file, resolved once: the
-//! symbol version-gating family (CEL0021-CEL0023) reports a reference
-//! that resolves to a stub symbol whose availability window does not
-//! fully cover the project's supported PHP version range. Two
+//! The statically named references of one file, resolved once. Two
 //! conservative stances are documented engine semantics: dynamic
 //! references are out of scope, and a symbol declared anywhere in
 //! project, vendor, or stubs counts as declared, no reachability
 //! analysis of conditional declarations.
 //!
-//! The unknown-symbol family (CEL0018-CEL0020) is no longer constructed
-//! here: the walk records an [`ResolutionOutcome::Unresolved`] outcome
-//! and `celerrate_rules::rules::unknown_symbols` turns it into a
-//! diagnostic. What moved is construction, never the walk.
+//! No diagnostic is constructed here. The unknown-symbol family
+//! (CEL0018-CEL0020) reads a [`ResolutionOutcome::Unresolved`] outcome
+//! through `celerrate_rules::rules::unknown_symbols`, and the symbol
+//! version-gating family (CEL0021-CEL0023) judges a
+//! [`ResolutionOutcome::Stub`] outcome's availability window against
+//! the project's supported range through
+//! `celerrate_rules::rules::symbol_version_gating`. What moved is
+//! construction, never the walk.
 //!
 //! [`reference_outcomes`] walks the file's references exactly once,
-//! resolving each name a single time and deriving all three outputs
-//! from that same resolution: the plain-data outcomes the semantic-phase
-//! rules consume, the diagnostics above, and the revalidation records of
-//! `revalidation.rs`. [`reference_resolutions`], [`reference_diagnostics`]
-//! and `crate::revalidation::resolution_records` are thin projections
-//! over it: one walk produces findings and answers, so drift between
-//! them is structurally impossible — the `composed_diagnostics` closure,
-//! applied to the second mirror, plan 9a.
+//! resolving each name a single time and deriving both outputs from
+//! that same resolution: the plain-data outcomes the semantic-phase
+//! rules consume, and the revalidation records of `revalidation.rs`.
+//! [`reference_resolutions`] and
+//! `crate::revalidation::resolution_records` are thin projections over
+//! it: one walk produces outcomes and answers, so drift between them is
+//! structurally impossible, the `composed_diagnostics` closure applied
+//! to the second mirror, plan 9a.
 
 use std::collections::HashMap;
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
-use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
-use celerrate_project::{PhpVersionRange, ProjectConfiguration};
-use celerrate_source::{FileId, TextRange};
+use celerrate_project::ProjectConfiguration;
+use celerrate_source::TextRange;
 use celerrate_stubs::{StubAvailability, StubIndexInput};
 
 use crate::lookup::SymbolResolution;
 use crate::queries::item_tree;
-use crate::references::{Reference, collect_references};
+use crate::references::collect_references;
 use crate::resolve::{SymbolSources, UseTables, resolve_name};
 use crate::revalidation::{ResolutionRecord, answer_of};
 use crate::symbols::SymbolSpace;
-
-/// A stub symbol introduced after the range minimum.
-pub const SYMBOL_NOT_AVAILABLE: DiagnosticId = DiagnosticId::new("CEL0021");
-/// A stub symbol removed at or before the range maximum.
-pub const SYMBOL_REMOVED: DiagnosticId = DiagnosticId::new("CEL0022");
-/// A stub symbol deprecated at the range maximum.
-pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
-
-/// Every identifier this crate allocates, for the registry check at the
-/// composition root.
-pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] =
-    &[SYMBOL_NOT_AVAILABLE, SYMBOL_REMOVED, SYMBOL_DEPRECATED];
 
 /// How one statically named reference resolved, as plain data: the
 /// outcome the semantic-phase rules consume (design section 2). The
@@ -73,27 +61,23 @@ pub enum ResolutionOutcome {
     Source,
 }
 
-/// The findings and answers of one file's reference walk, produced by
+/// The outcomes and answers of one file's reference walk, produced by
 /// [`reference_outcomes`] from the same pass over the same resolutions:
 /// `outcomes` is the plain-data co-product the semantic-phase rules
-/// consume, `diagnostics` is what `reference_diagnostics` used to
-/// compute alone, `records` is what `resolution_records` used to
-/// compute alone. See the module doc.
+/// consume, `records` is what `resolution_records` used to compute
+/// alone. See the module doc.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceOutcomes {
     pub outcomes: Vec<ReferenceOutcome>,
-    pub diagnostics: Vec<Diagnostic>,
     pub records: Vec<ResolutionRecord>,
 }
 
 /// The single walk over the statically named references of one file:
 /// for every reference, `resolve_name` runs exactly once, and its
-/// result feeds all three outputs — the plain-data outcome the
-/// semantic-phase rules consume, the diagnostic match that may report a
-/// symbol version-gating finding, and the revalidation record that
-/// reduces the same resolution to its answer. Diagnostics are sorted;
-/// outcomes and records keep walk (tree) order, the convention
-/// `resolution_records`' tests pin.
+/// result feeds both outputs, the plain-data outcome the semantic-phase
+/// rules consume and the revalidation record that reduces the same
+/// resolution to its answer. Outcomes and records keep walk (tree)
+/// order, the convention `resolution_records`' tests pin.
 #[salsa::tracked(returns(ref))]
 pub fn reference_outcomes(
     db: &dyn salsa::Database,
@@ -109,11 +93,8 @@ pub fn reference_outcomes(
     };
     let tree = item_tree(db, file);
     let root = celerrate_db::parse(db, file).tree();
-    let file_id = file.file_id(db);
-    let version_range = configuration.php_version_range(db);
     let mut tables_by_namespace: HashMap<String, UseTables> = HashMap::new();
     let mut outcomes = Vec::new();
-    let mut diagnostics = Vec::new();
     let mut records = Vec::new();
     for reference in collect_references(&root) {
         let tables = tables_by_namespace
@@ -145,52 +126,21 @@ pub fn reference_outcomes(
             }
             Some(SymbolResolution::Stub { availability, .. }) => {
                 outcomes.push(outcome_of(ResolutionOutcome::Stub { availability }));
-                availability_diagnostics(
-                    &reference,
-                    availability,
-                    version_range,
-                    file_id,
-                    &mut diagnostics,
-                );
             }
             Some(SymbolResolution::Source { .. }) => {
                 outcomes.push(outcome_of(ResolutionOutcome::Source));
             }
         }
     }
-    diagnostics.sort();
-    ReferenceOutcomes {
-        outcomes,
-        diagnostics,
-        records,
-    }
-}
-
-/// The per-file reference diagnostics: for every statically named
-/// reference that resolves to a stub symbol whose availability does not
-/// fully cover the project's supported PHP version range, a symbol
-/// version-gating diagnostic. A projection of [`reference_outcomes`]
-/// (module doc): backdates independently of `resolution_records`, but
-/// both read the same walk.
-#[salsa::tracked(returns(ref))]
-pub fn reference_diagnostics(
-    db: &dyn salsa::Database,
-    file: SourceFile,
-    files: AnalyzedFileSet,
-    stubs: StubIndexInput,
-    configuration: ProjectConfiguration,
-) -> Vec<Diagnostic> {
-    reference_outcomes(db, file, files, stubs, configuration)
-        .diagnostics
-        .clone()
+    ReferenceOutcomes { outcomes, records }
 }
 
 /// The per-reference resolution outcomes of one file, as plain data: a
 /// thin, independently backdating projection over
-/// [`reference_outcomes`], the same slot `reference_diagnostics`
-/// occupies for the constructed form. The semantic-phase context
-/// consumes this, so the phase query's early cutoff is independent of
-/// the revalidation records.
+/// [`reference_outcomes`], the sibling of
+/// `crate::revalidation::resolution_records`. The semantic-phase
+/// context consumes this, so the phase query's early cutoff is
+/// independent of the revalidation records.
 #[salsa::tracked(returns(ref))]
 pub fn reference_resolutions(
     db: &dyn salsa::Database,
@@ -202,65 +152,6 @@ pub fn reference_resolutions(
     reference_outcomes(db, file, files, stubs, configuration)
         .outcomes
         .clone()
-}
-
-/// Emits diagnostics for a stub symbol whose availability window does
-/// not fully cover the project's supported PHP version range: not yet
-/// available at the minimum, removed at or before the maximum, or
-/// deprecated at the maximum.
-fn availability_diagnostics(
-    reference: &Reference,
-    availability: StubAvailability,
-    version_range: PhpVersionRange,
-    file: FileId,
-    diagnostics: &mut Vec<Diagnostic>,
-) {
-    if let Some(introduced) = availability.introduced
-        && introduced > version_range.minimum
-    {
-        diagnostics.push(Diagnostic::spanned(
-            SYMBOL_NOT_AVAILABLE,
-            Severity::Error,
-            file,
-            reference.range,
-            format!(
-                "`{}` requires PHP {introduced}, but the project's minimum PHP version is {}",
-                reference.written, version_range.minimum,
-            ),
-        ));
-    }
-    if let Some(removed) = availability.removed
-        && removed <= version_range.maximum
-    {
-        diagnostics.push(Diagnostic::spanned(
-            SYMBOL_REMOVED,
-            Severity::Error,
-            file,
-            reference.range,
-            format!(
-                "`{}` was removed in PHP {removed}, but the project's maximum PHP version is {}",
-                reference.written, version_range.maximum,
-            ),
-        ));
-    }
-    if let Some(deprecation) = availability.deprecated {
-        let applies = deprecation
-            .since
-            .is_none_or(|since| since <= version_range.maximum);
-        if applies {
-            let message = match deprecation.since {
-                Some(since) => format!("`{}` is deprecated since PHP {since}", reference.written),
-                None => format!("`{}` is deprecated", reference.written),
-            };
-            diagnostics.push(Diagnostic::spanned(
-                SYMBOL_DEPRECATED,
-                Severity::Warning,
-                file,
-                reference.range,
-                message,
-            ));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -297,134 +188,10 @@ mod tests {
         }
     }
 
-    /// The diagnostics of the FIRST source, with the given stubs and
-    /// the given supported range.
-    fn checked_in_range(
-        sources: &[&str],
-        stub_symbols: Vec<StubSymbol>,
-        range: PhpVersionRange,
-    ) -> Vec<Diagnostic> {
-        let db = TestDatabase::default();
-        let handles: Vec<SourceFile> = sources
-            .iter()
-            .enumerate()
-            .map(|(index, source)| {
-                SourceFile::new(&db, FileId::new(index as u32), source.as_bytes().to_vec())
-            })
-            .collect();
-        let file = *handles.first().unwrap();
-        let files = AnalyzedFileSet::new(&db, handles);
-        let stubs = StubIndexInput::builder(StubIndex::from_symbols(stub_symbols))
-            .durability(salsa::Durability::HIGH)
-            .new(&db);
-        let configuration = ProjectConfiguration::builder(range)
-            .durability(salsa::Durability::MEDIUM)
-            .new(&db);
-        reference_diagnostics(&db, file, files, stubs, configuration).clone()
-    }
-
     /// The full supported range used by tests that do not exercise
     /// version gating.
     fn full_range() -> PhpVersionRange {
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5))
-    }
-
-    #[test]
-    fn a_symbol_introduced_after_the_minimum_is_gated() {
-        let diagnostics = checked_in_range(
-            &["<?php array_find([], fn($x) => $x);"],
-            vec![stub_with(
-                "array_find",
-                StubSymbolKind::Function,
-                StubAvailability {
-                    introduced: Some(PhpVersion::new(8, 4)),
-                    removed: None,
-                    deprecated: None,
-                },
-            )],
-            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-        );
-        let diagnostic = diagnostics.first().unwrap();
-        assert_eq!(diagnostics.len(), 1);
-        assert_eq!(diagnostic.id, SYMBOL_NOT_AVAILABLE);
-        assert_eq!(diagnostic.severity, Severity::Error);
-        assert_eq!(
-            diagnostic.message,
-            "`array_find` requires PHP 8.4, but the project's minimum PHP version is 8.1",
-        );
-    }
-
-    #[test]
-    fn a_symbol_removed_within_the_range_is_gated() {
-        let diagnostics = checked_in_range(
-            &["<?php utf8_encode('a');"],
-            vec![stub_with(
-                "utf8_encode",
-                StubSymbolKind::Function,
-                StubAvailability {
-                    introduced: None,
-                    removed: Some(PhpVersion::new(8, 3)),
-                    deprecated: Some(celerrate_stubs::StubDeprecation {
-                        since: Some(PhpVersion::new(8, 2)),
-                    }),
-                },
-            )],
-            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-        );
-        assert_eq!(diagnostics.len(), 2);
-        let removed = diagnostics.iter().find(|d| d.id == SYMBOL_REMOVED).unwrap();
-        assert_eq!(
-            removed.message,
-            "`utf8_encode` was removed in PHP 8.3, but the project's maximum PHP version is 8.5",
-        );
-        let deprecated = diagnostics
-            .iter()
-            .find(|d| d.id == SYMBOL_DEPRECATED)
-            .unwrap();
-        assert_eq!(deprecated.severity, Severity::Warning);
-        assert_eq!(
-            deprecated.message,
-            "`utf8_encode` is deprecated since PHP 8.2"
-        );
-    }
-
-    #[test]
-    fn a_versionless_deprecation_still_warns() {
-        let diagnostics = checked_in_range(
-            &["<?php old_helper();"],
-            vec![stub_with(
-                "old_helper",
-                StubSymbolKind::Function,
-                StubAvailability {
-                    introduced: None,
-                    removed: None,
-                    deprecated: Some(celerrate_stubs::StubDeprecation { since: None }),
-                },
-            )],
-            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-        );
-        assert_eq!(
-            diagnostics.first().unwrap().message,
-            "`old_helper` is deprecated"
-        );
-    }
-
-    #[test]
-    fn a_project_declaration_is_never_gated() {
-        let diagnostics = checked_in_range(
-            &["<?php function utf8_encode($s) { return $s; } utf8_encode('a');"],
-            vec![stub_with(
-                "utf8_encode",
-                StubSymbolKind::Function,
-                StubAvailability {
-                    introduced: None,
-                    removed: Some(PhpVersion::new(8, 3)),
-                    deprecated: None,
-                },
-            )],
-            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
-        );
-        assert_eq!(diagnostics, vec![]);
     }
 
     /// The outcomes of the FIRST source, with the given stubs and range.

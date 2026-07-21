@@ -175,17 +175,6 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
     let database = &inputs.database;
     let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
     diagnostics.extend(
-        celerrate_semantics::semantic_diagnostics(
-            database,
-            file,
-            inputs.files,
-            inputs.stubs,
-            inputs.configuration,
-        )
-        .iter()
-        .cloned(),
-    );
-    diagnostics.extend(
         celerrate_rules::syntax_phase_diagnostics(database, file, inputs.configuration)
             .iter()
             .cloned(),
