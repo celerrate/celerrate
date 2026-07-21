@@ -252,7 +252,28 @@ const PHPSTAN: &[(&str, ForeignMapping)] = &[
     ("class.nameInUse", ForeignMapping::Unmapped),
     ("class.noParent", ForeignMapping::Unmapped),
     ("class.nonReadOnly", ForeignMapping::Unmapped),
-    ("class.notFound", ForeignMapping::Codes(&["CEL0018"])),
+    // PHPStan folds two different resolution outcomes into one "not
+    // found" identifier. CEL0018/CEL0019/CEL0020 fire when a reference
+    // resolves nowhere at all, in the project, its Composer
+    // dependencies, or the bundled stubs. CEL0021 and CEL0022 fire on
+    // a different outcome: the reference does resolve through the
+    // stubs, but its availability window falls outside the project's
+    // configured PHP version range (CEL0021 when the symbol is not
+    // yet available at the minimum version, CEL0022 when it was
+    // already removed by the maximum version). PHPStan has no
+    // separate identifier for that version-window case, so
+    // `class.notFound`, `function.notFound`, and `constant.notFound`
+    // below must each widen to all three codes. Narrowing to only the
+    // unknown-symbol code would under-suppress: `@phpstan-ignore
+    // function.notFound` written over a call Celerrate reports as
+    // CEL0022 would see the diagnostic reappear once the directive is
+    // matched against a single narrower code, and under-suppression
+    // is the one failure direction this project treats as a defect.
+    // Do not shrink these back to one code.
+    (
+        "class.notFound",
+        ForeignMapping::Codes(&["CEL0018", "CEL0021", "CEL0022"]),
+    ),
     ("class.prefixed", ForeignMapping::Unmapped),
     ("class.readOnly", ForeignMapping::Unmapped),
     ("class.serializable", ForeignMapping::Unmapped),
@@ -320,7 +341,10 @@ const PHPSTAN: &[(&str, ForeignMapping)] = &[
     ("constant.attributesRuleCannotRun", ForeignMapping::Unmapped),
     ("constant.defineValue", ForeignMapping::Unmapped),
     ("constant.deprecated", ForeignMapping::Codes(&["CEL0023"])),
-    ("constant.notFound", ForeignMapping::Codes(&["CEL0020"])),
+    (
+        "constant.notFound",
+        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022"]),
+    ),
     ("constant.value", ForeignMapping::Unmapped),
     ("constructor.call", ForeignMapping::Unmapped),
     ("constructor.missingParentCall", ForeignMapping::Unmapped),
@@ -423,7 +447,10 @@ const PHPSTAN: &[(&str, ForeignMapping)] = &[
     ("function.inner", ForeignMapping::Unmapped),
     ("function.internal", ForeignMapping::Unmapped),
     ("function.nameCase", ForeignMapping::Unmapped),
-    ("function.notFound", ForeignMapping::Codes(&["CEL0019"])),
+    (
+        "function.notFound",
+        ForeignMapping::Codes(&["CEL0019", "CEL0021", "CEL0022"]),
+    ),
     ("function.resultDiscarded", ForeignMapping::Unmapped),
     ("function.resultUnused", ForeignMapping::Unmapped),
     ("function.strict", ForeignMapping::Unmapped),
@@ -1685,10 +1712,37 @@ const PSALM: &[(&str, ForeignMapping)] = &[
     ("TypeDoesNotContainType", ForeignMapping::Unmapped),
     ("UncaughtThrowInGlobalScope", ForeignMapping::Unmapped),
     ("UndefinedAttributeClass", ForeignMapping::Unmapped),
-    ("UndefinedClass", ForeignMapping::Codes(&["CEL0018"])),
-    ("UndefinedConstant", ForeignMapping::Codes(&["CEL0020"])),
+    // Psalm folds two different resolution outcomes into one
+    // "undefined" identifier. CEL0018/CEL0019/CEL0020 fire when a
+    // reference resolves nowhere at all, in the project, its Composer
+    // dependencies, or the bundled stubs. CEL0021 and CEL0022 fire on
+    // a different outcome: the reference does resolve through the
+    // stubs, but its availability window falls outside the project's
+    // configured PHP version range (CEL0021 when the symbol is not
+    // yet available at the minimum version, CEL0022 when it was
+    // already removed by the maximum version). Psalm has no separate
+    // identifier for that version-window case, so `UndefinedClass`,
+    // `UndefinedConstant`, and `UndefinedFunction` below must each
+    // widen to all three codes. Narrowing to only the undefined-symbol
+    // code would under-suppress: `@psalm-suppress UndefinedFunction`
+    // written over a call Celerrate reports as CEL0022 would see the
+    // diagnostic reappear once the directive is matched against a
+    // single narrower code, and under-suppression is the one failure
+    // direction this project treats as a defect. Do not shrink these
+    // back to one code.
+    (
+        "UndefinedClass",
+        ForeignMapping::Codes(&["CEL0018", "CEL0021", "CEL0022"]),
+    ),
+    (
+        "UndefinedConstant",
+        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022"]),
+    ),
     ("UndefinedDocblockClass", ForeignMapping::Unmapped),
-    ("UndefinedFunction", ForeignMapping::Codes(&["CEL0019"])),
+    (
+        "UndefinedFunction",
+        ForeignMapping::Codes(&["CEL0019", "CEL0021", "CEL0022"]),
+    ),
     ("UndefinedGlobalVariable", ForeignMapping::Unmapped),
     ("UndefinedInterface", ForeignMapping::Unmapped),
     ("UndefinedInterfaceMethod", ForeignMapping::Unmapped),
