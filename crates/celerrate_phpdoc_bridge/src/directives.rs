@@ -22,7 +22,10 @@
 //! Malformed content yields fewer identifiers or no directive, never
 //! an error — no docblock diagnostics.
 
-use celerrate_plugin::{CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveScope};
+use celerrate_plugin::{
+    CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveOrigin, DirectiveScope,
+    SuppressionIdentifier,
+};
 
 use crate::syntax::PhpdocBridge;
 
@@ -88,7 +91,14 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
 }
 
 fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
-    CommentDirective::suppress(scope, identifiers)
+    CommentDirective::suppress(
+        scope,
+        DirectiveOrigin::Foreign,
+        identifiers
+            .into_iter()
+            .map(SuppressionIdentifier::unmapped)
+            .collect(),
+    )
 }
 
 /// A tag ends at a word boundary: the end of the comment, whitespace,
@@ -126,7 +136,14 @@ mod tests {
     use super::*;
 
     fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
-        CommentDirective::suppress(scope, identifiers.iter().map(|s| (*s).to_owned()).collect())
+        CommentDirective::suppress(
+            scope,
+            DirectiveOrigin::Foreign,
+            identifiers
+                .iter()
+                .map(|written| SuppressionIdentifier::unmapped((*written).to_owned()))
+                .collect(),
+        )
     }
 
     #[test]

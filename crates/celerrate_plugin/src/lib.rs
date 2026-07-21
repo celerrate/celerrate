@@ -38,8 +38,9 @@ impl PluginDescriptor {
 
 // Identity and the comment-directive and virtual-symbol extension points.
 pub use celerrate_semantics::{
-    CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveScope, PluginIdentity,
-    VirtualMember, VirtualMemberKind, VirtualParameter, VirtualSymbolProvider,
+    CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveOrigin, DirectiveScope,
+    PluginIdentity, SuppressionIdentifier, VirtualMember, VirtualMemberKind, VirtualParameter,
+    VirtualSymbolProvider,
 };
 
 // The type-syntax and dynamic-type-provider extension points, and the
