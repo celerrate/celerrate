@@ -220,13 +220,21 @@ fn a_body_edit_reruns_only_the_editing_bodys_phase() {
         FileId::new(0),
         b"<?php\nfunction first() { echo 1; }\nfunction second() { echo 2; }\n".to_vec(),
     );
-    assert_eq!(typed_body_phase_diagnostics(&db, file).len(), 2);
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = configuration_for(&db, PhpVersion::new(8, 1));
+    assert_eq!(
+        typed_body_phase_diagnostics(&db, file, files, stubs, configuration).len(),
+        2
+    );
     db.take_executed();
 
     file.set_bytes(&mut db).to(
         b"<?php\nfunction first() { echo 1; }\nfunction second() { echo 2; echo 3; }\n".to_vec(),
     );
-    let second = typed_body_phase_diagnostics(&db, file);
+    let second = typed_body_phase_diagnostics(&db, file, files, stubs, configuration);
     assert_eq!(second.len(), 2, "both bodies still report");
 
     let log = db.take_executed();
@@ -257,7 +265,12 @@ fn an_edit_above_a_body_reruns_no_body_phase() {
         FileId::new(0),
         b"<?php\nfunction first() { echo 1; }\nfunction second() { echo 2; }\n".to_vec(),
     );
-    let first = typed_body_phase_diagnostics(&db, file);
+    let files = AnalyzedFileSet::new(&db, vec![file]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = configuration_for(&db, PhpVersion::new(8, 1));
+    let first = typed_body_phase_diagnostics(&db, file, files, stubs, configuration);
     assert_eq!(first.len(), 2);
     // Capture the pre-edit ranges as owned values: `first` is a `&Vec`
     // borrowed from the salsa memo (`returns(ref)`), and the upcoming
@@ -282,7 +295,7 @@ fn an_edit_above_a_body_reruns_no_body_phase() {
         b"<?php\n// a comment line\nfunction first() { echo 1; }\nfunction second() { echo 2; }\n"
             .to_vec(),
     );
-    let second = typed_body_phase_diagnostics(&db, file);
+    let second = typed_body_phase_diagnostics(&db, file, files, stubs, configuration);
 
     let log = db.take_executed();
     assert_eq!(

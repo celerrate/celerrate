@@ -88,9 +88,13 @@ pub fn semantic_phase_diagnostics(
 /// check, and a body edit invalidates exactly this body's query while
 /// an offset-only edit backdates it.
 #[salsa::tracked(returns(ref))]
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn body_phase_findings<'db>(
     db: &'db dyn salsa::Database,
     file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
     body: BodyQuery<'db>,
 ) -> Vec<Finding> {
     if celerrate_semantics::body_ir(db, file, body).is_none() {
@@ -107,7 +111,14 @@ pub(crate) fn body_phase_findings<'db>(
         let RuleImplementation::TypedBody(rule) = &registration.implementation else {
             continue;
         };
-        let context = celerrate_types::typed_body_context(db, body.ast_id(db));
+        let context = celerrate_types::typed_body_context(
+            db,
+            files,
+            stubs,
+            configuration,
+            file,
+            body.ast_id(db),
+        );
         let mut sink = FindingSink::new(&registration.metadata);
         rule.check(&context, &mut sink);
         findings.extend(sink.into_findings());
@@ -121,7 +132,13 @@ pub(crate) fn body_phase_findings<'db>(
 /// into the CLI composition: part 4's typed migration wires it together
 /// with the stored-verdict co-production.
 #[salsa::tracked(returns(ref))]
-pub fn typed_body_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) -> Vec<Diagnostic> {
+pub fn typed_body_phase_diagnostics(
+    db: &dyn salsa::Database,
+    file: SourceFile,
+    files: AnalyzedFileSet,
+    stubs: StubIndexInput,
+    configuration: ProjectConfiguration,
+) -> Vec<Diagnostic> {
     let file_id = file.file_id(db);
     let tree = celerrate_semantics::member_tree(db, file);
     let mut diagnostics = Vec::new();
@@ -139,7 +156,7 @@ pub fn typed_body_phase_diagnostics(db: &dyn salsa::Database, file: SourceFile) 
         });
     for ast_id in function_bodies.chain(method_bodies) {
         let body = BodyQuery::new(db, ast_id);
-        for finding in body_phase_findings(db, file, body) {
+        for finding in body_phase_findings(db, file, files, stubs, configuration, body) {
             if let Some(diagnostic) = resolved_diagnostic(db, file, file_id, finding.clone()) {
                 diagnostics.push(diagnostic);
             }
@@ -505,9 +522,9 @@ mod tests {
     #[test]
     fn a_typed_body_rule_runs_once_per_function_and_method_body() {
         let source = "<?php\nfunction first() { echo 1; }\nclass Demo { public function second(): void { echo 2; } }\n";
-        let (db, file, _files, _stubs, _configuration) = test_setup(source);
+        let (db, file, files, stubs, configuration) = test_setup(source);
         register(&db, vec![typed_registration()]);
-        let diagnostics = typed_body_phase_diagnostics(&db, file);
+        let diagnostics = typed_body_phase_diagnostics(&db, file, files, stubs, configuration);
         assert_eq!(
             diagnostics.len(),
             2,
@@ -519,8 +536,8 @@ mod tests {
     fn a_trait_method_body_is_not_enumerated() {
         // Mirrors `typed_file_verdicts`' trait filter.
         let source = "<?php\ntrait Helper { public function inside(): void { echo 1; } }\n";
-        let (db, file, _files, _stubs, _configuration) = test_setup(source);
+        let (db, file, files, stubs, configuration) = test_setup(source);
         register(&db, vec![typed_registration()]);
-        assert!(typed_body_phase_diagnostics(&db, file).is_empty());
+        assert!(typed_body_phase_diagnostics(&db, file, files, stubs, configuration).is_empty());
     }
 }
