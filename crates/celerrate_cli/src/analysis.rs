@@ -159,6 +159,11 @@ fn retain_unsuppressed(
         for (index, directive) in directives.iter().enumerate() {
             if directive.admits(diagnostic.id, range.start(), text_end) {
                 suppressed = true;
+                // A file cannot carry more than `u32::MAX` directives, so
+                // this conversion cannot fail in practice. Were it ever to
+                // fail, losing the attribution is the safe direction:
+                // suppression itself (`suppressed = true` above) is
+                // unaffected, only the reporting of which directive did it.
                 if let Ok(index) = u32::try_from(index) {
                     matched.insert(index);
                 }
@@ -433,6 +438,71 @@ mod tests {
             TextRange::empty(TextSize::from(offset)),
             "unknown class".to_owned(),
         )
+    }
+
+    #[test]
+    fn retain_unsuppressed_attributes_every_directive_that_admits() {
+        use celerrate_semantics::{DirectiveOrigin, ResolvedDirective, SuppressionFilter};
+
+        let db = super::AnalysisDatabase::default();
+        let file = celerrate_db::SourceFile::new(&db, FileId::new(0), b"<?php\n$x = 1;\n".to_vec());
+
+        // Two overlapping directives, both covering offset 5.
+        let first = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(0), TextSize::from(5)),
+            scope: TextRange::new(TextSize::from(0), TextSize::from(10)),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let second = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(3), TextSize::from(8)),
+            scope: TextRange::new(TextSize::from(2), TextSize::from(12)),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let directives = vec![first, second];
+
+        let mut both_admit = vec![diagnostic(0, 5)];
+        let attributed = super::retain_unsuppressed(&db, file, &directives, &mut both_admit);
+        assert_eq!(
+            attributed,
+            vec![0, 1],
+            "both admitting directives are attributed, not just the first",
+        );
+        assert!(both_admit.is_empty(), "the admitted diagnostic is dropped");
+    }
+
+    #[test]
+    fn retain_unsuppressed_attributes_only_the_admitting_directive() {
+        use celerrate_semantics::{DirectiveOrigin, ResolvedDirective, SuppressionFilter};
+
+        let db = super::AnalysisDatabase::default();
+        let file = celerrate_db::SourceFile::new(&db, FileId::new(0), b"<?php\n$x = 1;\n".to_vec());
+
+        // Only the second directive's scope covers offset 5.
+        let first = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(0), TextSize::from(4)),
+            scope: TextRange::new(TextSize::from(0), TextSize::from(4)),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let second = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(3), TextSize::from(8)),
+            scope: TextRange::new(TextSize::from(2), TextSize::from(12)),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let directives = vec![first, second];
+
+        let mut only_second_admits = vec![diagnostic(0, 5)];
+        let attributed =
+            super::retain_unsuppressed(&db, file, &directives, &mut only_second_admits);
+        assert_eq!(attributed, vec![1]);
+        assert!(only_second_admits.is_empty());
     }
 
     #[test]

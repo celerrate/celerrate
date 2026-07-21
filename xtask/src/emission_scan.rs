@@ -23,16 +23,16 @@
 //! those currently occur in a governed crate. `celerrate_semantics`
 //! does name `celerrate_diagnostics` now, for identifier vocabulary
 //! (`DiagnosticId`, `find_identifier`) its suppression-filter
-//! resolution needs — the `Diagnostic` value model itself stays
-//! unnamed in either governed crate's `src/`, which is the point of
+//! resolution needs - the `Diagnostic` value model itself stays
+//! unnamed in neither governed crate's `src/`, which is the point of
 //! the migration these crates went through. Should the value model
 //! ever appear, it is a legitimate reason for this gate to ask a human
 //! to look, since a governed crate has no business naming the
 //! diagnostic model at all, constructing or not. Anything this scan
-//! cannot see (reflection,
-//! macro-generated construction, a helper crate re-exporting a wrapping
-//! function under another name) is out of scope; it works on source
-//! text, the same technique `registry.rs` uses for declarations.
+//! cannot see (reflection, macro-generated construction, a helper
+//! crate re-exporting a wrapping function under another name) is out
+//! of scope; it works on source text, the same technique
+//! `registry.rs` uses for declarations.
 
 use std::path::{Path, PathBuf};
 

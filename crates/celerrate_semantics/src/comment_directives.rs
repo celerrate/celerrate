@@ -294,6 +294,14 @@ pub(crate) fn filter_of(
             }
         }
         DirectiveOrigin::Native => {
+            // Invariant: a native provider must emit only
+            // `SuppressionIdentifier::Native` identifiers. Any other
+            // variant here contributes nothing to `codes` and does not
+            // widen to `All` (unlike the foreign arm above), so a
+            // native provider that ever emitted a `Mapped` or
+            // `Unmapped` identifier would silently under-suppress -
+            // the one failure direction this project treats as a
+            // defect.
             for identifier in identifiers {
                 if let SuppressionIdentifier::Native { written } = identifier
                     && let Some(id) = celerrate_diagnostics::find_identifier(written)
@@ -722,6 +730,11 @@ mod tests {
     fn a_next_line_directive_on_the_last_line_suppresses_nothing() {
         let source = "<?php\n$x = 1; // @next";
         let (db, file) = fixture(source);
+        // The `NextLine` arm of `resolve_scope` returns `None` when the
+        // next line does not exist, so no directive survives resolution
+        // at all: this is the property the test pins, not merely that
+        // `$x` happens not to be covered.
+        assert!(suppression_directives(&db, file).is_empty());
         assert!(!suppressed_at(&db, file, source, "$x"));
     }
 
@@ -1044,14 +1057,19 @@ mod tests {
 
     #[test]
     fn the_query_resolves_anchor_scope_and_origin_per_directive() {
-        let source = "<?php\n$x = 1; // @line\n";
+        // `@fake` carries one written identifier (`fake.identifier`), so
+        // this doubles as the query-level pin for `ResolvedDirective`'s
+        // `identifiers` field: the exact written strings, in written
+        // order.
+        let source = "<?php\n$x = 1; // @fake\n";
         let (db, file) = fixture(source);
         let directives = suppression_directives(&db, file);
         assert_eq!(directives.len(), 1);
         let directive = &directives[0];
         assert_eq!(directive.origin, DirectiveOrigin::Foreign);
         assert_eq!(directive.filter, SuppressionFilter::All);
-        let comment_start = offset_of(source, "// @line");
+        assert_eq!(directive.identifiers, vec!["fake.identifier".to_owned()]);
+        let comment_start = offset_of(source, "// @fake");
         assert_eq!(directive.anchor.start(), comment_start);
     }
 }
