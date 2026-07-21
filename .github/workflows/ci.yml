@@ -99,6 +99,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
       - if: ${{ needs.changes.outputs.code == 'true' }}
         run: cargo xtask dependency-shape
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask emission-scan
 
   test:
     needs: changes
