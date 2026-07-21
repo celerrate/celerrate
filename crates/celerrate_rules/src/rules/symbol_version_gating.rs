@@ -199,6 +199,34 @@ mod tests {
         );
     }
 
+    /// The silent half of the deprecation arm's `since` predicate: a
+    /// symbol deprecated ABOVE the project's maximum is not deprecated
+    /// for that project yet, so it must stay quiet. Nothing else
+    /// reaches this branch. No other test supplies a `since` past the
+    /// range maximum, and the shipped stub blob carries no deprecation
+    /// after 8.5, so the corpus cannot exercise it either. Without this
+    /// pin, inverting or dropping the comparison would ship a false
+    /// positive with the whole suite green.
+    #[test]
+    fn a_deprecation_above_the_maximum_stays_silent() {
+        let diagnostics = semantic_diagnostics_in_range(
+            &["<?php future_helper();"],
+            vec![stub_with(
+                "future_helper",
+                StubSymbolKind::Function,
+                StubAvailability {
+                    introduced: None,
+                    removed: None,
+                    deprecated: Some(celerrate_stubs::StubDeprecation {
+                        since: Some(PhpVersion::new(8, 6)),
+                    }),
+                },
+            )],
+            PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
+        );
+        assert_eq!(diagnostics, vec![]);
+    }
+
     #[test]
     fn a_project_declaration_is_never_gated() {
         let diagnostics = semantic_diagnostics_in_range(

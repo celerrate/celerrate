@@ -126,12 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `celerrate_semantics` and `celerrate_types`; the rules consume
   outcomes through the sealed contexts and construct the identical
   diagnostics. No user-visible behavior changes: messages,
-  severities, spans, exit codes, and cache artifacts are preserved
-  byte for byte, gated by the pinned corpus snapshot and a
+  severities, spans, exit codes, and the served diagnostic output are
+  preserved exactly, gated by the pinned corpus snapshot and a
   seeded-defect recall fixture per identifier (now covering
-  CEL0018-CEL0024 and CEL0030-CEL0038). An emission-side scan
-  (`cargo xtask emission-scan`) joins CI so a check family cannot
-  quietly grow back outside the framework.
+  CEL0018-CEL0024 and CEL0030-CEL0038, with CEL0022 pinned by a
+  rule-level fixture over a synthetic stub rather than a product one,
+  since the shipped stub blob carries no symbol removed inside the
+  supported 8.1 to 8.5 window). The persisted verdict's element order
+  shifted, the semantic families now arriving through the phase query
+  rather than ahead of syntax, with no observable effect: every read
+  path sorts. An emission-side scan (`cargo xtask emission-scan`)
+  joins CI so a check family cannot quietly grow back outside the
+  framework.
 
 ### Fixed
 
