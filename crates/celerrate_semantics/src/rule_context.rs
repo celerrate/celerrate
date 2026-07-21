@@ -7,9 +7,10 @@ use crate::reference_checks::{ReferenceOutcome, reference_resolutions};
 
 /// The semantic-phase context, owned by this crate (design section 4).
 /// Sealed: private database, delegating methods, no salsa vocabulary
-/// rule-side. The surface is exactly what the shipped semantic rules
-/// consume (the part-3 YAGNI criterion); the symbol index arrives with
-/// its first client.
+/// rule-side. The surface matches what the shipped semantic rules
+/// consume, plus `php_version_range`, held ready for the
+/// symbol-version-gating rule landing in the next task (the part-3
+/// YAGNI criterion); the symbol index arrives with its first client.
 pub struct SemanticContext<'db> {
     db: &'db dyn salsa::Database,
     file: SourceFile,
@@ -92,17 +93,18 @@ mod tests {
         let stubs = StubIndexInput::builder(StubIndex::default())
             .durability(salsa::Durability::HIGH)
             .new(&db);
-        let configuration = ProjectConfiguration::builder(PhpVersionRange::new(
-            PhpVersion::new(8, 1),
-            PhpVersion::new(8, 5),
-        ))
-        .durability(salsa::Durability::MEDIUM)
-        .new(&db);
+        let range = PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5));
+        let configuration = ProjectConfiguration::builder(range)
+            .durability(salsa::Durability::MEDIUM)
+            .new(&db);
         let context = semantic_context(&db, file, files, stubs, configuration);
         assert_eq!(context.file(), FileId::new(0));
         let outcomes = context.reference_resolutions();
         assert_eq!(outcomes.len(), 1, "{outcomes:?}");
         assert_eq!(outcomes[0].written, "Missing");
         assert_eq!(outcomes[0].resolution, ResolutionOutcome::Unresolved);
+        assert_eq!(context.php_version_range(), range);
+        assert_eq!(context.php_version_range().minimum, PhpVersion::new(8, 1));
+        assert_eq!(context.php_version_range().maximum, PhpVersion::new(8, 5));
     }
 }

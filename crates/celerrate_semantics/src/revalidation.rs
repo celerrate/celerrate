@@ -166,9 +166,9 @@ mod tests {
     }
 
     /// The name a diagnostic message backtick-quotes first: every
-    /// message this crate emits carries the reference's written name
-    /// as its first backtick-quoted token, whether the name opens the
-    /// message (gating) or sits mid-sentence (unknown-symbol).
+    /// gating message this crate emits (availability, removal,
+    /// deprecation) opens with the reference's written name as its
+    /// first backtick-quoted token.
     fn written_name(message: &str) -> &str {
         message.split('`').nth(1).unwrap_or_default()
     }
