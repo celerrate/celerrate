@@ -18,12 +18,37 @@ exits 1 as soon as it reports any diagnostic, **error** and
 (`CEL0025` to `CEL0029`, `CEL0039`, `CEL0040`) are counted separately
 in the summary line and do not affect the exit code.
 
-To silence a single occurrence, use an inline suppression
-(`@phpstan-ignore-line`, `@phpstan-ignore-next-line`,
-`@phpstan-ignore`, or `@psalm-suppress`): see
-[the PHPDoc bridge](phpdoc-bridge.md#suppressions). There is no
-configuration file or baseline yet; inline suppression is the only
-per-site switch in this preview.
+## Suppressing diagnostics
+
+To silence a single occurrence, use an inline suppression comment.
+There is no configuration file or baseline yet; inline suppression is
+the only per-site switch in this preview.
+
+Celerrate's own directive is `@celerrate-ignore`, written in a line
+comment, a block comment, or a docblock:
+
+```text
+// @celerrate-ignore CEL0030, CEL0031 (reason)
+```
+
+Its identifiers are mandatory: there is no blanket form, so a bare
+`@celerrate-ignore` parses but suppresses nothing (a mistake worth
+flagging on its own, rather than silently widening). The optional
+parenthesized trailer after the identifiers is a reason for the
+suppression; it is not otherwise interpreted.
+
+The scope depends on where the directive sits:
+
+- Trailing a line of code (in any of the three comment kinds), it
+  covers that line.
+- Alone on its own line, it covers the line that follows, or, when
+  there is no next line (the directive sits on the file's last line),
+  the end-of-file position; such a directive is then reported unused.
+- In a docblock, it covers the declaration the docblock annotates.
+
+For the foreign dialects `@phpstan-ignore-line`,
+`@phpstan-ignore-next-line`, `@phpstan-ignore`, and `@psalm-suppress`,
+see [the PHPDoc bridge](phpdoc-bridge.md#suppressions).
 
 ## Syntax (CEL0001 to CEL0017)
 

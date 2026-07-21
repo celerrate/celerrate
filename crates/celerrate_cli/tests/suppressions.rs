@@ -215,6 +215,78 @@ fn correspondence_lookup_is_exact_case() {
     assert_eq!(outcome, Outcome::Clean, "{text}");
 }
 
+#[test]
+fn a_trailing_native_directive_suppresses_exactly_its_codes_on_its_line() {
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); // @celerrate-ignore CEL0018\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(!text.contains("CEL0018"), "{text}");
+    assert!(text.contains("CEL0019"), "{text}");
+}
+
+#[test]
+fn a_native_directive_alone_on_its_line_targets_the_next_line() {
+    let root = project(&[(
+        "a.php",
+        "<?php\n// @celerrate-ignore CEL0018\nnew MissingOne();\nnew MissingTwo();\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(!text.contains("MissingOne"), "{text}");
+    assert!(text.contains("MissingTwo"), "{text}");
+}
+
+#[test]
+fn a_native_docblock_directive_covers_the_annotated_declaration() {
+    let root = project(&[(
+        "a.php",
+        "<?php\n/** @celerrate-ignore CEL0018 */\nclass Service {\n    public function boot() { new MissingOne(); }\n}\nnew MissingTwo();\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(!text.contains("MissingOne"), "{text}");
+    assert!(text.contains("MissingTwo"), "{text}");
+}
+
+#[test]
+fn a_native_reason_trailer_is_honored() {
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); // @celerrate-ignore CEL0018 (legacy fixture class)\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+#[test]
+fn an_unknown_native_identifier_suppresses_nothing() {
+    // The typo does not widen: CEL0018 stays reported. Its CEL0041
+    // warning arrives with the reporting phase (a later task).
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); // @celerrate-ignore CEL9999\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
+    assert!(text.contains("CEL0018"), "{text}");
+}
+
+#[test]
+fn co_located_native_and_foreign_directives_union() {
+    // Two separate comments on one line: the native identifier list is
+    // comma-separated and runs to the end of its line, so the foreign
+    // directive must live in its own comment to keep both parses clean.
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); absent_function(); /* @celerrate-ignore CEL0018 */ // @phpstan-ignore function.notFound\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
 // The per-code semantic-evidence gate (design section 8): the
 // correspondence-table gate (`suppression_correspondence.rs`) only
 // proves the table and the vendored catalogues agree on which

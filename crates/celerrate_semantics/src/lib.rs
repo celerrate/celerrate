@@ -22,6 +22,7 @@ mod linearize;
 mod lookup;
 mod member_lookup;
 mod members;
+mod native_directive;
 mod plugin;
 mod queries;
 mod reference_checks;
@@ -69,6 +70,7 @@ pub use members::{
     ClassMembers, FreeFunction, Member, MemberFlags, MemberKind, MemberSignature, MemberTree,
     ParameterSignature, TraitAdaptation, TraitUse, Visibility,
 };
+pub use native_directive::{NativeDirectiveProvider, native_directives};
 pub use plugin::PluginIdentity;
 pub use queries::{ast_id_map, item_tree, member_tree};
 pub use reference_checks::{
