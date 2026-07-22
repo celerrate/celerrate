@@ -14,7 +14,7 @@
 use std::path::Path;
 
 use celerrate_cli::analysis::composed_diagnostics;
-use celerrate_cli::cache::verdict::{VerdictLookup, lookup_verdict};
+use celerrate_cli::cache::verdict::{TypedOutcome, VerdictLookup, lookup_verdict};
 use celerrate_cli::session::Session;
 use celerrate_cli::{Outcome, run};
 
@@ -229,6 +229,92 @@ fn a_typed_suppression_keeps_its_directive_used_on_the_warm_path() {
     let root = project(&[("a.php", source)]);
     let (cold, cold_text) = check(root.path());
     assert_eq!(cold, Outcome::Clean, "{cold_text}");
+    let (warm, warm_text) = check(root.path());
+    assert_eq!(warm, Outcome::Clean, "{warm_text}");
+}
+
+#[test]
+fn a_partial_hit_keeps_a_typed_only_directive_used() {
+    // The genuine partial hit the matrix wanted pinned: untyped
+    // SERVED, typed RECOMPUTED, on the very file that carries the
+    // directive.
+    //
+    // Two files. `src/Consumer.php` carries the directive over the
+    // same kind of finding as
+    // `a_typed_suppression_keeps_its_directive_used_on_the_warm_path`
+    // above (CEL0030, a typed-only finding: `retain_unsuppressed` on
+    // the untyped stream never sees it, so the directive's only
+    // admitting record is typed). `src/Service.php` declares the
+    // `Service` class `Consumer.php` calls into. Between the two runs
+    // `Service.php` gains a new public method and `Consumer.php` stays
+    // byte-identical.
+    //
+    // That split matters because the untyped half and the typed half
+    // validate against different evidence (`crates/celerrate_cli/src/
+    // cache/verdict.rs`): the untyped half revalidates each
+    // `ResolutionRecord`'s `ResolutionAnswer`, which for a `Source`
+    // symbol is reduced to the unit case and carries no member
+    // information at all, so `Service` gaining a method leaves every
+    // one of `Consumer.php`'s stored records matching and its content
+    // hash unmoved - the untyped half is SERVED. The typed half
+    // instead revalidates each consulted class's `class_surface_digest`,
+    // which folds in the full linearized member list
+    // (`crates/celerrate_types/src/records.rs`), so the same edit moves
+    // it and forces `TypedOutcome::Recompute` - the typed half is
+    // RECOMPUTED. This is exactly `cross_file_source_answers_replay_
+    // equal`'s technique in `tests/cache_equivalence.rs`, reused to
+    // move a digest rather than an answer.
+    let service_v1 = "<?php\nclass Service\n{\n    public function boot(): void {}\n}\n";
+    let service_v2 = "<?php\nclass Service\n{\n    public function boot(): void {}\n\n    public function extra(): void {}\n}\n";
+    let consumer = "<?php\nfunction caller(): void\n{\n    $service = new Service();\n    $service->bot(); // @celerrate-ignore CEL0030\n}\n";
+
+    let root = project(&[
+        ("src/Service.php", service_v1),
+        ("src/Consumer.php", consumer),
+    ]);
+    let (cold, cold_text) = check(root.path());
+    assert_eq!(cold, Outcome::Clean, "{cold_text}");
+
+    // Only Service.php moves; Consumer.php, the directive-carrying
+    // file, is never touched.
+    std::fs::write(root.path().join("src/Service.php"), service_v2).unwrap();
+
+    // A read-only inspection session, opened after the edit but before
+    // the actual warm `check()` run below: it loads Service.php's new
+    // bytes and Consumer.php's unchanged ones, then asks the cache
+    // directly what it would serve for Consumer.php, without itself
+    // persisting anything that could paper over a wrong answer before
+    // it is observed.
+    let session = Session::start(root.path());
+    let inputs = session.inputs();
+    let Some(&consumer_file) = session.sources.iter().find_map(|(&id, file)| {
+        session
+            .vfs
+            .path(id)
+            .filter(|path| path.ends_with("Consumer.php"))
+            .map(|_| file)
+    }) else {
+        panic!("Consumer.php must be among the analyzed sources");
+    };
+
+    let VerdictLookup::Hit { typed, .. } = lookup_verdict(&inputs, consumer_file) else {
+        panic!(
+            "the untyped half must still validate: only Service.php changed, \
+             and a resolution record's answer carries no member information",
+        );
+    };
+    assert_eq!(
+        typed,
+        TypedOutcome::Recompute,
+        "the typed half must recompute: Service's surface digest moved \
+         when it gained a public method",
+    );
+
+    // The actual warm run: a fresh session that analyzes and persists.
+    // The union must still be honest - the directive's only admitting
+    // record is typed, and the typed half just recomputed, so this is
+    // the one place a dropped `matched_typed` contribution would show
+    // up as a returned CEL0042.
     let (warm, warm_text) = check(root.path());
     assert_eq!(warm, Outcome::Clean, "{warm_text}");
 }
