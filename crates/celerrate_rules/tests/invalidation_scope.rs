@@ -400,3 +400,55 @@ fn a_body_edit_reruns_its_own_semantic_walk_and_never_anothers_phase() {
          consumer's backdates whole: {log:?}",
     );
 }
+
+/// The did-you-mean gate (design sections 7 and 11): the candidate
+/// search runs at presentation time, outside every phase query, so the
+/// global name set never enters a file's dependency graph. The
+/// graph-side proof: file A reports an unknown symbol; renaming a
+/// declaration in file B that A never references re-runs nothing of
+/// A's semantic phase. Had the phase computed candidates, A would
+/// depend on the whole symbol table and any rename anywhere would
+/// re-run it.
+#[test]
+fn a_rename_in_an_unrelated_file_reruns_no_phase_of_an_unaffected_file() {
+    let mut db = TestDatabase::default();
+    register(&db);
+    let file_a = SourceFile::new(
+        &db,
+        FileId::new(0),
+        b"<?php namespace App; new Cleint();".to_vec(),
+    );
+    let file_b = SourceFile::new(
+        &db,
+        FileId::new(1),
+        b"<?php namespace Lib; class Helper {}".to_vec(),
+    );
+    let files = AnalyzedFileSet::new(&db, vec![file_a, file_b]);
+    let stubs = StubIndexInput::builder(StubIndex::default())
+        .durability(salsa::Durability::HIGH)
+        .new(&db);
+    let configuration = configuration_for(&db, PhpVersion::new(8, 1));
+    let primed = semantic_phase_diagnostics(&db, file_a, files, stubs, configuration);
+    assert_eq!(
+        primed.len(),
+        1,
+        "the unknown class primes A's phase: {primed:?}"
+    );
+    assert_eq!(primed[0].id, DiagnosticId::new("CEL0018"));
+    let _ = semantic_phase_diagnostics(&db, file_b, files, stubs, configuration);
+    db.take_executed();
+
+    // The rename: `Helper` becomes `Aide`. A never references either.
+    file_b
+        .set_bytes(&mut db)
+        .to(b"<?php namespace Lib; class Aide {}".to_vec());
+    let after = semantic_phase_diagnostics(&db, file_a, files, stubs, configuration);
+    assert_eq!(after.len(), 1, "A's report is unchanged");
+
+    let log = db.take_executed();
+    assert_eq!(
+        executions_of(&log, "semantic_phase_diagnostics"),
+        0,
+        "an unrelated rename re-runs no phase of an unaffected file: {log:?}",
+    );
+}
