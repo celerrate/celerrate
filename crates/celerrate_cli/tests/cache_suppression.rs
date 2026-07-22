@@ -119,7 +119,7 @@ fn the_pack_stores_the_directive_match_records() {
         .directives_convert(content_length)
         .expect("stored directive records convert");
     assert_eq!(records.len(), 1);
-    let (directive, matched) = &records[0];
+    let (_, matched) = &records[0];
     assert!(*matched, "the ignore-line directive admitted MissingOne");
     assert_eq!(
         records
@@ -133,7 +133,6 @@ fn the_pack_stores_the_directive_match_records() {
             .collect::<Vec<_>>(),
         "stored records equal the query plus the match outcome",
     );
-    let _ = directive;
 }
 
 #[test]

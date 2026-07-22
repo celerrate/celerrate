@@ -5,17 +5,16 @@
 //! re-interned through the registry. Every `to_*` conversion is total
 //! except identifier re-interning, whose failure discards the entry.
 //!
-//! **The stored diagnostic's anatomy (schema 6, unchanged in schema
-//! 7).** `StoredDiagnostic` mirrors the domain `Diagnostic` whole: its
-//! anchor (`Project` or a
-//! bounds-checked `Span`), its labels (a local range or a symbolic
-//! name), its notes, and its suggestions (a confidence plus same-file
-//! text edits — no file identity of their own, since a suggestion's
-//! edits always target the diagnostic's own file). `to_diagnostic`
-//! bounds-checks EVERY stored range against `content_length` — the
-//! anchor's span, each local label's range, each edit's range — because
-//! a blake3 checksum proves only that a pack's bytes were not corrupted
-//! in transit, never that whoever wrote them was honest.
+//! **The stored diagnostic's anatomy (schema 6, unchanged in schema 7).**
+//! `StoredDiagnostic` mirrors the domain `Diagnostic` whole: its anchor
+//! (`Project` or a bounds-checked `Span`), its labels (a local range or a
+//! symbolic name), its notes, and its suggestions (a confidence plus
+//! same-file text edits — no file identity of their own, since a
+//! suggestion's edits always target the diagnostic's own file).
+//! `to_diagnostic` bounds-checks EVERY stored range against
+//! `content_length` — the anchor's span, each local label's range, each
+//! edit's range — because a blake3 checksum proves only that a pack's bytes
+//! were not corrupted in transit, never that whoever wrote them was honest.
 //!
 //! **The suppression note (plan 9a, task 9).** `StoredVerdict.diagnostics`
 //! and `StoredTypedVerdict.diagnostics` are both stored POST-suppression
@@ -42,7 +41,7 @@
 //! able to make that lie. `StoredVerdict::directives_convert` extends
 //! the same validation to `matched_directives`: every index must be in
 //! range and the list strictly increasing, or the whole verdict is
-//! discarded — the checksum proves transport, never honesty. On a
+//! discarded - the checksum proves transport, never honesty. On a
 //! partial hit, the stored untyped records and a freshly recomputed
 //! typed half's indexes are never cross-checked against each other;
 //! their alignment rests on the content hash plus the binary-identity
@@ -1470,6 +1469,43 @@ mod tests {
         };
         let stored = StoredDirective::of(&directive, false);
         assert!(stored.to_directive(20).is_none());
+
+        // An inverted anchor (`start > end`), otherwise in bounds, with a
+        // valid scope: `start <= end` is its own failure mode, distinct
+        // from `end <= content_length`, and the existing case above never
+        // exercises it on its own.
+        let inverted_anchor = StoredDirective {
+            anchor_start: 40,
+            anchor_end: 10,
+            scope_start: 0,
+            scope_end: 5,
+            filter: StoredSuppressionFilter::All,
+            identifiers: Vec::new(),
+            native: false,
+            matched: false,
+        };
+        assert!(
+            inverted_anchor.to_directive(100).is_none(),
+            "an inverted anchor range must discard even though it is otherwise in bounds",
+        );
+
+        // A valid anchor with an out-of-bounds scope: the check must
+        // actually reach the scope rather than stop once the anchor
+        // passes.
+        let bad_scope = StoredDirective {
+            anchor_start: 0,
+            anchor_end: 5,
+            scope_start: 0,
+            scope_end: 200,
+            filter: StoredSuppressionFilter::All,
+            identifiers: Vec::new(),
+            native: false,
+            matched: false,
+        };
+        assert!(
+            bad_scope.to_directive(100).is_none(),
+            "an out-of-bounds scope must discard even though the anchor is valid",
+        );
     }
 
     #[test]
@@ -1517,9 +1553,12 @@ mod tests {
     }
 
     /// Two convertible directive records, and a typed half whose
-    /// `matched_directives` disagrees with the strictly-increasing rule
-    /// `directive_outcomes` binary-searches against: out of order, and
-    /// (separately) duplicated. Both must discard the whole verdict
+    /// `matched_directives` disagrees with one of the two independent
+    /// rules `StoredVerdict::directives_convert` enforces: the
+    /// strictly-increasing rule (out of order, and separately
+    /// duplicated) and the in-range rule (an index beyond the stored
+    /// list, and separately a non-empty index list against an empty
+    /// stored list). Every case must discard the whole verdict
     /// (decision 8's sharp edge (a)); a sorted, in-range control proves
     /// the rule is actually enforced rather than nothing ever loading.
     #[test]
@@ -1565,6 +1604,28 @@ mod tests {
         assert!(
             verdict_with(vec![0, 0]).directives_convert(100).is_none(),
             "duplicated indexes must discard the verdict too: not strictly increasing",
+        );
+        assert!(
+            verdict_with(vec![0, 5]).directives_convert(100).is_none(),
+            "an index beyond the stored directive list must discard the verdict: \
+             sorted and increasing, but out of range",
+        );
+        let verdict_with_no_directives = StoredVerdict {
+            diagnostics: Vec::new(),
+            records: Vec::new(),
+            directives: Vec::new(),
+            typed: Some(StoredTypedVerdict {
+                diagnostics: Vec::new(),
+                classes: Vec::new(),
+                functions: Vec::new(),
+                inferred: Vec::new(),
+                matched_directives: vec![0],
+            }),
+        };
+        assert!(
+            verdict_with_no_directives.directives_convert(100).is_none(),
+            "a non-empty index list against an empty stored directive list must \
+             discard the verdict: sorted and increasing, but out of range",
         );
         let control = verdict_with(vec![0, 1]).directives_convert(100);
         assert!(control.is_some(), "a sorted, in-range index list must load",);

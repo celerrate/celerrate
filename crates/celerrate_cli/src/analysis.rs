@@ -327,6 +327,15 @@ pub fn served_typed_diagnostics(
             .collect::<Option<Vec<_>>>()
     {
         statistics.typed_served.fetch_add(1, Ordering::Relaxed);
+        // `typed.matched_directives` is unvalidated here: the only
+        // validator is `StoredVerdict::directives_convert`, which lives
+        // on the untyped verdict, not on `StoredTypedVerdict`, and today
+        // is called only from the persist path in `crate::cache`. Any
+        // future consumer of `matched` on this `FilteredPortion` must
+        // call `StoredVerdict::directives_convert` on the same stored
+        // verdict and discard the whole result on `None` BEFORE trusting
+        // these indexes, since they are later binary-searched and a
+        // hostile pack could otherwise make that search lie.
         return FilteredPortion {
             diagnostics,
             matched: typed.matched_directives.clone(),
