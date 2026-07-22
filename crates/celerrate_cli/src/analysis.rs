@@ -270,20 +270,104 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> FilteredPorti
     }
 }
 
+/// Builds the reporting phase's input: converted directive records
+/// (identity plus untyped matched flag) unioned with the typed half's
+/// admitting indexes. Both cache paths and the recompute path funnel
+/// through this one constructor so the union cannot drift. On a
+/// partial hit the stored records and the fresh typed indexes align
+/// because a verdict hit implies identical content and the pack is
+/// keyed on binary identity - the one load-time property taken on
+/// faith from the content hash (decision 8's sharp edge (b)).
+///
+/// `matched_typed` is binary-searched here, so every caller must have
+/// established that it is strictly increasing and in range first. A
+/// stored list earns that through `StoredVerdict::directives_convert`,
+/// which validates it and answers the records this function's first
+/// argument carries: converting the records is therefore the caller's
+/// proof that the indexes are trustworthy, and a `None` there discards
+/// the whole verdict rather than reaching this function.
+pub fn directive_outcomes(
+    directives: &[(celerrate_semantics::ResolvedDirective, bool)],
+    matched_typed: &[u32],
+) -> Vec<celerrate_rules::DirectiveOutcome> {
+    directives
+        .iter()
+        .enumerate()
+        .map(|(index, (directive, matched_untyped))| {
+            let matched = *matched_untyped
+                || u32::try_from(index)
+                    .map(|index| matched_typed.binary_search(&index).is_ok())
+                    .unwrap_or(false);
+            celerrate_rules::DirectiveOutcome {
+                directive: directive.clone(),
+                matched,
+            }
+        })
+        .collect()
+}
+
+/// The reporting portion of one file: the directive rules' output,
+/// computed from final match outcomes on both the warm and the cold
+/// path (design section 4). Shared by `analyze_one`,
+/// `composed_diagnostics`, and the equivalence harness.
+pub fn reporting_portion(
+    inputs: &AnalysisInputs,
+    file: SourceFile,
+    outcomes: &[celerrate_rules::DirectiveOutcome],
+) -> Vec<Diagnostic> {
+    let database = &inputs.database;
+    let file_id = file.file_id(database);
+    let text_end = celerrate_db::source_text(database, file)
+        .as_ref()
+        .map(|text| TextSize::of(text.text()))
+        .unwrap_or_default();
+    celerrate_rules::reporting_phase_diagnostics(database, file_id, text_end, outcomes)
+}
+
+/// The fresh equivalent of the stored directive records: the query's
+/// directives paired with the untyped half's match outcomes. Shared by
+/// `composed_diagnostics` and `analyze_one`'s recompute arms so the
+/// two derivations cannot drift.
+fn fresh_directive_records(
+    inputs: &AnalysisInputs,
+    file: SourceFile,
+    matched_untyped: &[u32],
+) -> Vec<(celerrate_semantics::ResolvedDirective, bool)> {
+    celerrate_semantics::suppression_directives(&inputs.database, file)
+        .iter()
+        .enumerate()
+        .map(|(index, directive)| {
+            let matched = u32::try_from(index)
+                .map(|index| matched_untyped.binary_search(&index).is_ok())
+                .unwrap_or(false);
+            (directive.clone(), matched)
+        })
+        .collect()
+}
+
 /// One file's diagnostics, computed: decode and syntax, then references
 /// and gating, then the typed families, then the directive filter's
-/// effect on each half. The single composition point — `analyze_one`
-/// serves it on a cache miss, `persist`'s `composed_verdict` re-composes
-/// through its `persistable_diagnostics` half, and the equivalence
-/// harness recomputes through it — so the composers cannot drift (audit
-/// finding I2's first hand-maintained mirror).
+/// effect on each half, and finally the reporting phase over the union
+/// of the two halves' match outcomes. The single composition point —
+/// `analyze_one` serves it on a cache miss, `persist`'s
+/// `composed_verdict` re-composes through its `persistable_diagnostics`
+/// half, and the equivalence harness recomputes through it — so the
+/// composers cannot drift (audit finding I2's first hand-maintained
+/// mirror).
+///
+/// The reporting portion is never persisted: both paths recompute it
+/// from the match records, which is what makes a warm run and a cold
+/// run report the same directive diagnostics byte for byte.
 pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
-    let mut portion = persistable_diagnostics(inputs, file);
-    portion
-        .diagnostics
-        .extend(typed_portion(inputs, file).diagnostics);
-    portion.diagnostics.sort();
-    portion.diagnostics
+    let untyped = persistable_diagnostics(inputs, file);
+    let typed = typed_portion(inputs, file);
+    let fresh = fresh_directive_records(inputs, file, &untyped.matched);
+    let outcomes = directive_outcomes(&fresh, &typed.matched);
+    let mut diagnostics = untyped.diagnostics;
+    diagnostics.extend(typed.diagnostics);
+    diagnostics.extend(reporting_portion(inputs, file, &outcomes));
+    diagnostics.sort();
+    diagnostics
 }
 
 /// The typed half of one file's diagnostics on a cache hit (plan 9a,
@@ -329,13 +413,17 @@ pub fn served_typed_diagnostics(
         statistics.typed_served.fetch_add(1, Ordering::Relaxed);
         // `typed.matched_directives` is unvalidated here: the only
         // validator is `StoredVerdict::directives_convert`, which lives
-        // on the untyped verdict, not on `StoredTypedVerdict`, and today
-        // is called only from the persist path in `crate::cache`. Any
-        // future consumer of `matched` on this `FilteredPortion` must
-        // call `StoredVerdict::directives_convert` on the same stored
-        // verdict and discard the whole result on `None` BEFORE trusting
-        // these indexes, since they are later binary-searched and a
-        // hostile pack could otherwise make that search lie.
+        // on the untyped verdict, not on `StoredTypedVerdict`. Every
+        // consumer of `matched` on this `FilteredPortion` must call
+        // `StoredVerdict::directives_convert` on the same stored verdict
+        // and discard the whole result on `None` BEFORE trusting these
+        // indexes, since `directive_outcomes` binary-searches them and a
+        // hostile pack could otherwise make that search lie. Both of
+        // today's consumers do: `analyze_one` only reaches a `Some`
+        // `typed_source` through an arm that already converted the
+        // records (a `None` there joins the `verdicts_discarded`
+        // fallback, which recomputes both halves), and the equivalence
+        // harness converts them before composing the outcomes.
         return FilteredPortion {
             diagnostics,
             matched: typed.matched_directives.clone(),
@@ -361,6 +449,15 @@ pub fn served_typed_diagnostics(
 /// typed recomputed) is a first-class outcome, not a fallback. On a miss
 /// `composed_diagnostics` already produces the full union. Either way
 /// the result is the exact same composed set, sorted once at the end.
+///
+/// The reporting portion is layered on top from the union of both
+/// halves' match records, taken from whichever source each half came
+/// from on this run: the stored records on a served untyped half, a
+/// fresh `fresh_directive_records` otherwise, unioned with the typed
+/// half's own admitting indexes. It is never served from the pack -
+/// reporting diagnostics are not persisted, both paths recompute them
+/// from the records, which is what keeps a warm run and a cold run
+/// reporting the same directive diagnostics byte for byte.
 fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnostic>, FileId> {
     use std::sync::atomic::Ordering;
 
@@ -371,46 +468,71 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
     let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
     guarded(file_id, || {
         let statistics = &inputs.statistics;
-        let (mut diagnostics, typed_source) =
+        // Every arm that cannot serve the untyped half: recompute it,
+        // and derive the directive records from that recomputation. The
+        // typed half is `None` here, so it recomputes too and answers
+        // its own fresh indexes into the same fresh directive list.
+        let recomputed = || {
+            let portion = persistable_diagnostics(inputs, file);
+            let records = fresh_directive_records(inputs, file, &portion.matched);
+            (portion.diagnostics, None, records)
+        };
+        let (mut diagnostics, typed_source, records) =
             match crate::cache::verdict::lookup_verdict(inputs, file) {
-                VerdictLookup::Hit { verdict, typed } => match verdict
-                    .diagnostics
-                    .iter()
-                    .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
-                    .collect::<Option<Vec<_>>>()
-                {
-                    Some(diagnostics) => {
-                        statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
-                        let typed_source = match typed {
-                            TypedOutcome::Served => verdict.typed.as_ref(),
-                            TypedOutcome::Recompute => None,
-                        };
-                        (diagnostics, typed_source)
+                VerdictLookup::Hit { verdict, typed } => {
+                    let served = verdict
+                        .diagnostics
+                        .iter()
+                        .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
+                        .collect::<Option<Vec<_>>>();
+                    // The directive records are converted here, before
+                    // anything reads `verdict.typed`'s own
+                    // `matched_directives`: `directives_convert` is that
+                    // list's ONLY validator (in range, strictly
+                    // increasing), and `directive_outcomes` downstream
+                    // binary-searches it. A `None` therefore has to
+                    // discard the whole verdict, exactly like a failed
+                    // diagnostic conversion, rather than let a
+                    // checksum-valid but dishonest pack reach the
+                    // reporting phase.
+                    match (served, verdict.directives_convert(content_length)) {
+                        (Some(diagnostics), Some(records)) => {
+                            statistics.verdicts_served.fetch_add(1, Ordering::Relaxed);
+                            let typed_source = match typed {
+                                TypedOutcome::Served => verdict.typed.as_ref(),
+                                TypedOutcome::Recompute => None,
+                            };
+                            (diagnostics, typed_source, records)
+                        }
+                        _ => {
+                            // Revalidated, but a stored diagnostic or a
+                            // stored directive record failed conversion:
+                            // the same refusal as a moved answer, and it
+                            // takes the typed half down with it — a
+                            // discarded untyped half has nothing left to
+                            // layer a typed serve over.
+                            statistics
+                                .verdicts_discarded
+                                .fetch_add(1, Ordering::Relaxed);
+                            recomputed()
+                        }
                     }
-                    None => {
-                        // Revalidated, but a stored diagnostic failed
-                        // conversion: the same refusal as a moved answer,
-                        // and it takes the typed half down with it — a
-                        // discarded untyped half has nothing left to layer
-                        // a typed serve over.
-                        statistics
-                            .verdicts_discarded
-                            .fetch_add(1, Ordering::Relaxed);
-                        (persistable_diagnostics(inputs, file).diagnostics, None)
-                    }
-                },
+                }
                 VerdictLookup::Discarded => {
                     statistics
                         .verdicts_discarded
                         .fetch_add(1, Ordering::Relaxed);
-                    (persistable_diagnostics(inputs, file).diagnostics, None)
+                    recomputed()
                 }
                 VerdictLookup::Absent => {
                     statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
-                    (persistable_diagnostics(inputs, file).diagnostics, None)
+                    recomputed()
                 }
             };
-        diagnostics.extend(served_typed_diagnostics(inputs, file, typed_source).diagnostics);
+        let typed = served_typed_diagnostics(inputs, file, typed_source);
+        let outcomes = directive_outcomes(&records, &typed.matched);
+        diagnostics.extend(typed.diagnostics);
+        diagnostics.extend(reporting_portion(inputs, file, &outcomes));
         diagnostics.sort();
         diagnostics
     })

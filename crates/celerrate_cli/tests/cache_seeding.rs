@@ -14,8 +14,9 @@ use celerrate_cli::cache::snapshot::{
     DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
 };
 use celerrate_cli::cache::stored::{
-    StoredAnchor, StoredAnswer, StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord,
-    StoredSeverity, StoredSpace, StoredVerdict,
+    StoredAnchor, StoredAnswer, StoredDiagnostic, StoredDirective, StoredItemTree,
+    StoredMemberTree, StoredRecord, StoredSeverity, StoredSpace, StoredSuppressionFilter,
+    StoredTypedVerdict, StoredVerdict,
 };
 use celerrate_cli::session::Session;
 use celerrate_project::{PhpVersion, PhpVersionRange};
@@ -404,6 +405,99 @@ fn a_verdict_with_a_reversed_range_is_discarded() {
     );
     assert_eq!(outcome.diagnostics.len(), 1, "recomputed honestly");
     assert!(outcome.diagnostics[0].message.contains("Missing"));
+}
+
+/// A file whose one native directive suppresses nothing: an honest run
+/// reports CEL0042 for it. The stored directive record and the typed
+/// half's `matched_directives` are what the reporting phase replays on
+/// a warm hit, and those indexes are binary-searched, so a
+/// checksum-valid but dishonest index list must never reach it.
+const UNUSED_DIRECTIVE_SOURCE: &str = "<?php\n$x = 1; // @celerrate-ignore CEL0018\n";
+
+/// The verdict the fixture above deserves, minus the match outcome: no
+/// diagnostics, no resolution records, one unused native directive, and
+/// a typed half whose own admitting indexes the caller chooses.
+fn unused_directive_verdict(matched_directives: Vec<u32>) -> StoredVerdict {
+    StoredVerdict {
+        diagnostics: Vec::new(),
+        records: Vec::new(),
+        directives: vec![StoredDirective {
+            // The comment's own range, well inside the file.
+            anchor_start: 14,
+            anchor_end: 42,
+            scope_start: 6,
+            scope_end: 42,
+            filter: StoredSuppressionFilter::Only(vec!["CEL0018".to_owned()]),
+            identifiers: vec!["CEL0018".to_owned()],
+            native: true,
+            // The untyped half admitted nothing: only the typed half's
+            // indexes below can make this directive count as used.
+            matched: false,
+        }],
+        typed: Some(StoredTypedVerdict {
+            diagnostics: Vec::new(),
+            classes: Vec::new(),
+            functions: Vec::new(),
+            inferred: Vec::new(),
+            matched_directives,
+        }),
+    }
+}
+
+/// Analyzes the fixture over a hand-written pack carrying
+/// `matched_directives`, and answers the identifiers the run reported.
+fn reported_over_planted_matches(matched_directives: Vec<u32>) -> Vec<String> {
+    let root = project(&[("a.php", UNUSED_DIRECTIVE_SOURCE)]);
+    let hash = *blake3::hash(UNUSED_DIRECTIVE_SOURCE.as_bytes()).as_bytes();
+    let header = PackHeader::current(
+        PhpVersionRange::point(PhpVersion::new(8, 5)),
+        registered_plugin_set_digest(),
+    );
+    write_diagnostics_pack(
+        root.path(),
+        &header,
+        vec![(hash, unused_directive_verdict(matched_directives))],
+    );
+
+    let session = Session::start(root.path());
+    let outcome = analyze(&session.inputs()).unwrap();
+    assert!(
+        outcome.panicked.is_empty(),
+        "a crafted match-index list must never panic the analysis: {:?}",
+        outcome.panicked,
+    );
+    outcome
+        .diagnostics
+        .iter()
+        .map(|diagnostic| diagnostic.id.as_str().to_owned())
+        .collect()
+}
+
+/// The stored match records really do drive the reporting phase (the
+/// control: a sorted, in-range `[0]` marks the directive used and
+/// silences the CEL0042 an honest recomputation would report), and a
+/// crafted index list that is out of range or not strictly increasing
+/// never reaches it: `StoredVerdict::directives_convert` discards the
+/// whole verdict first, the file recomputes, and the honest CEL0042
+/// comes back. Without that ordering the binary search in
+/// `directive_outcomes` would answer over an unsorted or over-long
+/// list, and a hostile pack could silence any directive diagnostic it
+/// liked (decision 8's sharp edge (a); the checksum proves transport,
+/// never honesty).
+#[test]
+fn a_crafted_typed_match_index_never_reaches_the_reporting_phase() {
+    assert!(
+        !reported_over_planted_matches(vec![0]).contains(&"CEL0042".to_owned()),
+        "the control must be served: a valid index list marks the directive used",
+    );
+    for crafted in [vec![1], vec![0, 0], vec![1, 0], vec![u32::MAX]] {
+        let reported = reported_over_planted_matches(crafted.clone());
+        assert!(
+            reported.contains(&"CEL0042".to_owned()),
+            "a verdict carrying {crafted:?} must be discarded and recomputed \
+             honestly, not served: {reported:?}",
+        );
+    }
 }
 
 use celerrate_cli::run;

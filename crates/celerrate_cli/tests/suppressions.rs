@@ -263,8 +263,9 @@ fn a_native_reason_trailer_is_honored() {
 
 #[test]
 fn an_unknown_native_identifier_suppresses_nothing() {
-    // The typo does not widen: CEL0018 stays reported. Its CEL0041
-    // warning arrives with the reporting phase (a later task).
+    // The typo does not widen: CEL0018 stays reported. The reporting
+    // phase now also warns CEL0041 over the typo itself; that half of
+    // the behavior is pinned by `directive_rules.rs`.
     let root = project(&[(
         "a.php",
         "<?php\nnew MissingOne(); // @celerrate-ignore CEL9999\n",
