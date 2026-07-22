@@ -171,8 +171,8 @@ mod tests {
             vec!["save".to_owned(), "wave".to_owned(), "unrelated".to_owned()],
         );
         // `svae` -> `save` is 1 (adjacent transposition); `svae` -> `wave`
-        // is 3, outside the bound of 1: `save` wins uniquely.
-        assert_eq!(outcome, DidYouMean::Unique("save".to_owned()),);
+        // is 2, outside the bound of 1: `save` wins uniquely.
+        assert_eq!(outcome, DidYouMean::Unique("save".to_owned()));
         let outcome = did_you_mean("Activ", vec!["Active".to_owned(), "Passive".to_owned()]);
         assert_eq!(outcome, DidYouMean::Unique("Active".to_owned()));
     }
