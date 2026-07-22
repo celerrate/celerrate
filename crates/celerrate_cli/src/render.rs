@@ -19,17 +19,33 @@ use crate::session::{InternalError, Session};
 /// should not have to compose anything.
 const ISSUE_INVITATION: &str = "https://github.com/celerrate/celerrate/issues/new?labels=internal-error&title=internal+error+while+checking";
 
-/// Notices, then diagnostics, then the summary. Notices come first and in
-/// their own shape because a project-level finding has no span:
-/// `MISSING_COMPOSER_MANIFEST` describes a file that by definition does
-/// not exist, and anchoring it to `composer.json:1:1` would be a fiction.
+/// The complete check screen: the report, then the internal errors.
+/// The watch cycle uses this whole; the single-pass path calls the two
+/// halves itself so the fix trailer can sit between them.
+pub fn render_check(
+    output: &mut dyn Write,
+    session: &Session,
+    outcome: &AnalysisOutcome,
+) -> io::Result<()> {
+    render_report(output, session, outcome)?;
+    render_internal_errors(output, session)
+}
+
+/// Notices, then diagnostics with their note and help sub-lines, then
+/// the summary. No internal errors: the single-pass path prints those
+/// last, after the fix trailer, through `render_internal_errors`.
+///
+/// Notices come first and in their own shape because a project-level
+/// finding has no span: `MISSING_COMPOSER_MANIFEST` describes a file
+/// that by definition does not exist, and anchoring it to
+/// `composer.json:1:1` would be a fiction.
 ///
 /// A notice announces itself as a notice, never as a warning. It is
 /// counted as a notice in the summary and it never touches the exit code,
 /// so the other word would contradict the same screen twice: a warning
 /// diagnostic exits 1, and every notice announces a fallback already
 /// taken.
-pub fn render_check(
+pub fn render_report(
     output: &mut dyn Write,
     session: &Session,
     outcome: &AnalysisOutcome,
@@ -50,6 +66,12 @@ pub fn render_check(
     if !outcome.diagnostics.is_empty() {
         for diagnostic in &outcome.diagnostics {
             writeln!(output, "{}", render_diagnostic(session, diagnostic))?;
+            for note in &diagnostic.notes {
+                writeln!(output, "  note: {note}")?;
+            }
+            for suggestion in &diagnostic.suggestions {
+                writeln!(output, "  help: {}", suggestion.message)?;
+            }
         }
         writeln!(output)?;
     }
@@ -59,9 +81,7 @@ pub fn render_check(
         "{}, {}",
         count(notices.len(), "notice", "notices"),
         count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
-    )?;
-
-    render_internal_errors(output, session)
+    )
 }
 
 /// One watch cycle: the screen cleared, the complete current state

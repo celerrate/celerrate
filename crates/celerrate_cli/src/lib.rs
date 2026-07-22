@@ -101,10 +101,19 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
             session.absorb_outcome(&outcome);
-            if render::render_check(output, &session, &outcome).is_err() {
+            // Presentation only: the persisted verdicts and the exit
+            // code both read `outcome`, never the enriched copy.
+            let presented = analysis::AnalysisOutcome {
+                diagnostics: suggest::enrich(&session, &outcome.diagnostics),
+                panicked: outcome.panicked.clone(),
+            };
+            if render::render_report(output, &session, &presented).is_err() {
                 return Outcome::InternalError;
             }
             cache::persist(&mut session, &outcome);
+            if render::render_internal_errors(output, &session).is_err() {
+                return Outcome::InternalError;
+            }
             session.statistics.report();
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }
