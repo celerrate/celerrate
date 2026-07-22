@@ -750,6 +750,36 @@ mod tests {
     }
 
     #[test]
+    fn a_repeated_unknown_identifier_is_reported_once() {
+        let db = reporting_setup();
+        let diagnostics = report(
+            &db,
+            &[native_unused((10, 40), &["CEL9999", "CEL9999", "CEL9998"])],
+        );
+        let unknown: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.id == unknown_suppression_identifier::UNKNOWN_SUPPRESSION_IDENTIFIER
+            })
+            .collect();
+        assert_eq!(
+            unknown.len(),
+            2,
+            "one finding per distinct written form, not per written occurrence: {unknown:?}",
+        );
+        // The phase orders its output; the rule's own emission order is
+        // first appearance, so only membership is asserted here.
+        for written in ["CEL9998", "CEL9999"] {
+            assert!(
+                unknown
+                    .iter()
+                    .any(|diagnostic| diagnostic.message.contains(written)),
+                "{written} must be reported once: {unknown:?}",
+            );
+        }
+    }
+
+    #[test]
     fn a_foreign_directive_is_never_reported() {
         let db = reporting_setup();
         let outcome = DirectiveOutcome {

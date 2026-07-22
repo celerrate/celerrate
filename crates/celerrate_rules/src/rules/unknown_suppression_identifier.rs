@@ -2,6 +2,8 @@
 //! Native directives only; a known but inactive identifier is not
 //! unknown (design section 8).
 
+use std::collections::BTreeSet;
+
 use celerrate_diagnostics::{DiagnosticId, Severity};
 use celerrate_semantics::DirectiveOrigin;
 
@@ -35,8 +37,14 @@ impl ReportingRule for UnknownSuppressionIdentifier {
             let Ok(subject) = u32::try_from(index) else {
                 continue;
             };
+            // One finding per distinct written form, in order of first
+            // appearance: `@celerrate-ignore CEL9999, CEL9999` is one
+            // mistake written twice, and printing the identical
+            // diagnostic twice tells the reader nothing the first one
+            // did not.
+            let mut reported = BTreeSet::new();
             for written in &outcome.directive.identifiers {
-                if !context.is_known(written) {
+                if !context.is_known(written) && reported.insert(written.as_str()) {
                     sink.report_directive(
                         UNKNOWN_SUPPRESSION_IDENTIFIER,
                         subject,

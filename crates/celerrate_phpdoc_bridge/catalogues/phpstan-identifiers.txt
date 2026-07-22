@@ -10,6 +10,10 @@
 # https://phpstan.org/assets/ErrorIdentifierSearchViewModel-4-eGgVSa.js
 # (1102 identifiers, a strict superset: 102 of them have no detail page
 # yet). This file is their union, 1102 identifiers.
+# That search-index URL is content-hashed and will 404 after any
+# phpstan.org rebuild, so a future refresh must not reuse it verbatim:
+# re-derive the current asset URL from the error-identifiers page HTML
+# (the script tag it loads) instead of editing the hash by hand.
 # One identifier per line. The correspondence table in
 # src/correspondence.rs must cover this list exactly; the gate is
 # crates/celerrate_cli/tests/suppression_correspondence.rs.

@@ -317,13 +317,18 @@ pub fn reporting_portion(
 ) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let file_id = file.file_id(database);
-    // `source_text` decodes here for every file this function is called
-    // on, including the overwhelming majority that carry no directive at
-    // all - a decode, not a parse, and the corpus gate did not move, so
-    // this is not urgent. An `outcomes.is_empty()` early return would be
-    // behavior-preserving (the reporting runner below iterates `outcomes`
-    // in every loop and yields nothing for an empty list), but that
-    // change is left to the task that owns this function body.
+    // Standing note, deliberate. `source_text` decodes here for every
+    // file this function is called on, including the overwhelming
+    // majority that carry no directive at all. The cost is a decode,
+    // not a parse, and the corpus gate has never moved for it. The
+    // remedy is available whenever that cost starts to matter: an
+    // `outcomes.is_empty()` early return is behavior-preserving,
+    // because the reporting runner below iterates `outcomes` in every
+    // loop and yields nothing for an empty list. It is not taken
+    // because the unconditional decode also keeps this function's salsa
+    // dependency footprint uniform across files, and a uniform
+    // footprint is worth more than the decode it saves on a file that
+    // carries no directive.
     let text_end = celerrate_db::source_text(database, file)
         .as_ref()
         .map(|text| TextSize::of(text.text()))
