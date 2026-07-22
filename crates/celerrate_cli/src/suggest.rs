@@ -506,8 +506,9 @@ fn member_did_you_mean(
 ) -> Option<Enrichment> {
     let (member, receiver) = parse_member_message(message)?;
     // A display the folded key cannot round-trip (a union type, an
-    // anonymous class) yields no candidates and therefore no noise.
-    if receiver.contains('|') || receiver.contains('@') {
+    // intersection type, an anonymous class) yields no candidates and
+    // therefore no noise.
+    if receiver.contains('|') || receiver.contains('&') || receiver.contains('@') {
         return None;
     }
     let class_key = receiver_class_key(session, file, range, &receiver);
@@ -521,69 +522,60 @@ fn member_did_you_mean(
     if candidates.is_empty() {
         return None;
     }
-    let text = span_text(session, file, range)?;
     match did_you_mean(&member, candidates) {
         DidYouMean::Nothing => None,
-        DidYouMean::Unique(candidate) => match member_token_range(&text, &member, range.start()) {
-            Some(edit_range) => Some(Enrichment::Suggestion(Suggestion {
-                message: format!("did you mean `{candidate}`?"),
-                confidence: Confidence::NeedsReview,
-                edits: vec![TextEdit {
-                    file,
-                    range: edit_range,
-                    replacement: candidate,
-                }],
-            })),
-            // A unique candidate without a locatable token degrades to
-            // a note: an applicable edit is never guessed.
-            None => Some(Enrichment::Note(format!("did you mean `{candidate}`?"))),
-        },
+        DidYouMean::Unique(candidate) => {
+            // The span is only decoded here, the one arm that needs it:
+            // an undecodable span must not suppress the `Tie` and
+            // token-not-found notes below, which need no source text.
+            let text = span_text(session, file, range)?;
+            match member_token_range(&text, &member, range.start()) {
+                Some(edit_range) => Some(Enrichment::Suggestion(Suggestion {
+                    message: format!("did you mean `{candidate}`?"),
+                    confidence: Confidence::NeedsReview,
+                    edits: vec![TextEdit {
+                        file,
+                        range: edit_range,
+                        replacement: candidate,
+                    }],
+                })),
+                // A unique candidate without a locatable token degrades to
+                // a note: an applicable edit is never guessed.
+                None => Some(Enrichment::Note(format!("did you mean `{candidate}`?"))),
+            }
+        }
         DidYouMean::Tie(names) => Some(Enrichment::Note(tie_note(&names))),
     }
 }
 
-/// The receiver's fully qualified class-like key. Instance access
-/// (`$value->member`) reports the resolved key already
-/// (`receiver_display` in `celerrate_types::checks::receivers`), so
-/// folding it is enough and no syntax tree needs touching. A scoped
-/// access (`Foo::CONST`, `Foo::method()`) instead reports the
-/// as-written subject text verbatim (`written_class_display`, kept for
-/// message legibility): when the folded written text names no known
-/// class, this recomputes the true key from the file's own class-like
-/// reference at this span, exactly like `attempted_keys` does for the
-/// unknown-symbol families. Falling back to the folded written text
-/// when even that fails is safe: an unresolvable key simply yields no
-/// candidates below, which is the same "no enrichment" outcome as
-/// returning `None` here would have produced.
+/// The receiver's fully qualified class-like key. A scoped access
+/// (`Foo::CONST`, `Foo::method()`) reports the as-written subject text
+/// verbatim (`written_class_display`, kept for message legibility): a
+/// bare name resolves in PHP to the current namespace only, with no
+/// global fallback, so the naive fold of that bare text can collide
+/// with an unrelated same-named class that happens to live in the
+/// global namespace (a hand-written global class, or any
+/// phpstorm-stub class, which are all global) even though PHP itself
+/// would never look there. Resolving the file's own class-like
+/// reference at this span through its namespace and `use` tables is
+/// therefore tried first, exactly like `attempted_keys` does for the
+/// unknown-symbol families; only when that resolution yields nothing
+/// does the bare fold get trusted. Instance access (`$value->member`)
+/// reports the already-resolved key (`receiver_display` in
+/// `celerrate_types::checks::receivers`), and no class-like reference
+/// written that way sits inside the diagnostic's span, so
+/// `resolved_receiver_key` always answers `None` there and the fold --
+/// already correct in that case -- is what actually gets used; the
+/// instance path pays for a syntax-tree walk it always loses, in
+/// exchange for one escalation order that is correct for both access
+/// shapes rather than two paths that could drift apart. Falling back
+/// to the folded written text when resolution fails is safe either
+/// way: an unresolvable key simply yields no candidates below, which
+/// is the same "no enrichment" outcome as returning `None` here would
+/// have produced.
 fn receiver_class_key(session: &Session, file: FileId, range: TextRange, receiver: &str) -> String {
-    let folded = folded_symbol_key(SymbolSpace::ClassLike, receiver);
-    if class_exists(session, &folded) {
-        return folded;
-    }
-    resolved_receiver_key(session, file, range, receiver).unwrap_or(folded)
-}
-
-/// Whether a fully qualified key names a known class-like, source or
-/// stub — the same two lookups `member_candidates` itself walks from,
-/// consulted here only to verify a resolution attempt.
-fn class_exists(session: &Session, class_key: &str) -> bool {
-    let db = &session.database;
-    let class = ClassQuery::new(db, class_key.to_owned());
-    if linearized_class(
-        db,
-        session.files,
-        session.stubs,
-        session.configuration,
-        class,
-    )
-    .as_ref()
-    .is_some()
-    {
-        return true;
-    }
-    stub_signature_table(db, session.stubs)
-        .class(class_key)
-        .is_some()
+    resolved_receiver_key(session, file, range, receiver)
+        .unwrap_or_else(|| folded_symbol_key(SymbolSpace::ClassLike, receiver))
 }
 
 /// The fully qualified key a written class-like reference resolves to,
@@ -802,6 +794,12 @@ mod tests {
 
     const MANIFEST: &str =
         r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
+
+    /// Adds a `classmap` root over a single root-level file, alongside
+    /// the usual `App\` psr-4 mapping, so a fixture can also declare a
+    /// genuinely global-namespace class that gets discovered and
+    /// analyzed (not just `src/`-namespaced ones).
+    const MANIFEST_WITH_LEGACY: &str = r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}, "classmap": ["legacy.php"]}}"#;
 
     #[test]
     fn an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion() {
@@ -1152,6 +1150,46 @@ mod tests {
         assert_eq!(
             super::member_token_range("svae", "svae", TextSize::from(0)),
             None,
+        );
+    }
+
+    #[test]
+    fn a_scoped_receiver_prefers_the_namespaced_class_over_a_same_named_global_one() {
+        // Two classes share the bare name `Config`: one in the global
+        // namespace (declared in a classmap root, not under `src/`), one
+        // in `App`. The scoped access is written from inside `App`, so
+        // PHP resolves the bare `Config` to `App\Config` with no global
+        // fallback -- the near-miss suggestion must name `App\Config`'s
+        // member (`LIMIT`), never the global class's (`CAP`). Pins the
+        // escalation order in `receiver_class_key`: resolving the
+        // written class-like reference through the file's own namespace
+        // must be tried before ever trusting the bare fold, because the
+        // bare fold alone would find the global `Config` first and
+        // silently build the wrong candidate pool.
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST_WITH_LEGACY),
+            (
+                "legacy.php",
+                "<?php\nclass Config { public const CAP = 1; }\n",
+            ),
+            (
+                "src/Config.php",
+                "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nfunction f(): void { echo Config::LIMTI; }\n",
+            ),
+        ]);
+        let class_constant: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.id.as_str() == "CEL0032")
+            .collect();
+        assert_eq!(class_constant.len(), 1);
+        assert_eq!(class_constant[0].suggestions.len(), 1);
+        assert_eq!(
+            class_constant[0].suggestions[0].message, "did you mean `LIMIT`?",
+            "the namespaced App\\Config::LIMIT must win, not the global Config::CAP",
         );
     }
 
