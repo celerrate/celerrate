@@ -317,6 +317,13 @@ pub fn reporting_portion(
 ) -> Vec<Diagnostic> {
     let database = &inputs.database;
     let file_id = file.file_id(database);
+    // `source_text` decodes here for every file this function is called
+    // on, including the overwhelming majority that carry no directive at
+    // all - a decode, not a parse, and the corpus gate did not move, so
+    // this is not urgent. An `outcomes.is_empty()` early return would be
+    // behavior-preserving (the reporting runner below iterates `outcomes`
+    // in every loop and yields nothing for an empty list), but that
+    // change is left to the task that owns this function body.
     let text_end = celerrate_db::source_text(database, file)
         .as_ref()
         .map(|text| TextSize::of(text.text()))
@@ -348,10 +355,10 @@ fn fresh_directive_records(
 /// One file's diagnostics, computed: decode and syntax, then references
 /// and gating, then the typed families, then the directive filter's
 /// effect on each half, and finally the reporting phase over the union
-/// of the two halves' match outcomes. The single composition point —
+/// of the two halves' match outcomes. The single composition point -
 /// `analyze_one` serves it on a cache miss, `persist`'s
 /// `composed_verdict` re-composes through its `persistable_diagnostics`
-/// half, and the equivalence harness recomputes through it — so the
+/// half, and the equivalence harness recomputes through it - so the
 /// composers cannot drift (audit finding I2's first hand-maintained
 /// mirror).
 ///
@@ -508,7 +515,7 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
                             // Revalidated, but a stored diagnostic or a
                             // stored directive record failed conversion:
                             // the same refusal as a moved answer, and it
-                            // takes the typed half down with it — a
+                            // takes the typed half down with it - a
                             // discarded untyped half has nothing left to
                             // layer a typed serve over.
                             statistics

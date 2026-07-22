@@ -2,10 +2,11 @@
 //! the full pipeline, native directives only, one-pass suppression
 //! discipline (design sections 8 and 11).
 
-#![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+#![allow(clippy::unwrap_used)]
 
 use std::path::Path;
 
+use celerrate_cli::cache::snapshot::DIAGNOSTICS_PACK;
 use celerrate_cli::{Outcome, run};
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -48,6 +49,43 @@ fn an_unused_native_directive_reports_cel0042() {
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
     assert!(text.contains("CEL0042"), "{text}");
+}
+
+#[test]
+fn a_warm_second_check_reports_cel0042_identically_to_the_cold_first() {
+    // The product matrix above drives every fixture through `check`
+    // exactly once, so only the cold, recompute path is pinned through
+    // the real `run` entry point. Checking the same, unmodified root
+    // twice exercises the warm path too: the first call persists a
+    // verdict pack, and the second loads a session over that same root,
+    // which serves from it rather than recomputing (mirrored by
+    // `cache_seeding.rs`'s `a_second_run_leaves_equivalent_packs_behind`,
+    // the established way this codebase pins a warm run).
+    let root = project(&[("a.php", "<?php\n$x = 1; // @celerrate-ignore CEL0018\n")]);
+
+    let (first_outcome, first_text) = check(root.path());
+    assert_eq!(first_outcome, Outcome::DiagnosticsReported, "{first_text}");
+    assert!(first_text.contains("CEL0042"), "{first_text}");
+
+    // The first check must have persisted a diagnostics pack, or the
+    // second check below would have nothing to warm from and would
+    // silently recompute instead.
+    assert!(
+        root.path()
+            .join(".celerrate/cache")
+            .join(DIAGNOSTICS_PACK)
+            .is_file(),
+        "the first check must persist a diagnostics pack for the second \
+         check to serve the directive diagnostics warm",
+    );
+
+    let (second_outcome, second_text) = check(root.path());
+    assert_eq!(
+        second_outcome,
+        Outcome::DiagnosticsReported,
+        "{second_text}"
+    );
+    assert!(second_text.contains("CEL0042"), "{second_text}");
 }
 
 #[test]

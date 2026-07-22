@@ -475,15 +475,20 @@ fn reported_over_planted_matches(matched_directives: Vec<u32>) -> Vec<String> {
 
 /// The stored match records really do drive the reporting phase (the
 /// control: a sorted, in-range `[0]` marks the directive used and
-/// silences the CEL0042 an honest recomputation would report), and a
-/// crafted index list that is out of range or not strictly increasing
-/// never reaches it: `StoredVerdict::directives_convert` discards the
-/// whole verdict first, the file recomputes, and the honest CEL0042
-/// comes back. Without that ordering the binary search in
+/// silences the CEL0042 an honest recomputation would report). Of the
+/// four crafted lists below, `[0, 0]` and `[1, 0]` prove the discard
+/// rule itself: unsorted or duplicated, `binary_search(&0)` would still
+/// answer `Ok` and silence the honest CEL0042 if served, so
+/// `StoredVerdict::directives_convert` must discard the whole verdict
+/// first, the file recomputes, and the honest CEL0042 comes back.
+/// Without that ordering requirement the binary search in
 /// `directive_outcomes` would answer over an unsorted or over-long
 /// list, and a hostile pack could silence any directive diagnostic it
 /// liked (decision 8's sharp edge (a); the checksum proves transport,
-/// never honesty).
+/// never honesty). `[1]` and `[u32::MAX]` prove a different property:
+/// they miss the binary search whether or not validation runs, so what
+/// they pin is that an out-of-range index never panics the reporting
+/// phase, not the discard rule.
 #[test]
 fn a_crafted_typed_match_index_never_reaches_the_reporting_phase() {
     assert!(
