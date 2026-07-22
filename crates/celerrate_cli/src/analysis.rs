@@ -174,6 +174,18 @@ fn retain_unsuppressed(
     matched.into_iter().collect()
 }
 
+/// One filtered half of a file's diagnostics: what survived the
+/// directive filter, and the sorted indexes (into
+/// `suppression_directives(db, file)`) of every directive that
+/// admitted at least one diagnostic of this half. Halves keep their
+/// own matched sets because they are served independently on a
+/// partial cache hit; the reporting phase consumes the union.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FilteredPortion {
+    pub diagnostics: Vec<Diagnostic>,
+    pub matched: Vec<u32>,
+}
+
 /// The cache-servable portion: syntax, decode, and semantic families,
 /// suppression applied. Exactly what `StoredVerdict` persists — the
 /// typed families stay out of the packs until plan 9a designs their own
@@ -189,7 +201,7 @@ fn retain_unsuppressed(
 /// exit-code count, the printed report, and the persisted verdict the
 /// same post-filter set by construction (the vendor-filter rationale
 /// above, applied again).
-pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> FilteredPortion {
     let database = &inputs.database;
     let mut diagnostics = celerrate_db::file_diagnostics(database, file).clone();
     diagnostics.extend(
@@ -209,10 +221,15 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
         .cloned(),
     );
     let directives = celerrate_semantics::suppression_directives(database, file);
-    if !directives.is_empty() {
-        let _ = retain_unsuppressed(database, file, directives, &mut diagnostics);
+    let matched = if directives.is_empty() {
+        Vec::new()
+    } else {
+        retain_unsuppressed(database, file, directives, &mut diagnostics)
+    };
+    FilteredPortion {
+        diagnostics,
+        matched,
     }
-    diagnostics
 }
 
 /// The typed families as the rule framework's typed-body phase
@@ -231,7 +248,7 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec
 /// typed half validates never reaches this at all — that is the whole
 /// point of the artifact class this function now feeds rather than
 /// stands in for.
-pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
+pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> FilteredPortion {
     let database = &inputs.database;
     let mut diagnostics = celerrate_rules::typed_body_phase_diagnostics(
         database,
@@ -242,10 +259,15 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnosti
     )
     .clone();
     let directives = celerrate_semantics::suppression_directives(database, file);
-    if !directives.is_empty() {
-        let _ = retain_unsuppressed(database, file, directives, &mut diagnostics);
+    let matched = if directives.is_empty() {
+        Vec::new()
+    } else {
+        retain_unsuppressed(database, file, directives, &mut diagnostics)
+    };
+    FilteredPortion {
+        diagnostics,
+        matched,
     }
-    diagnostics
 }
 
 /// One file's diagnostics, computed: decode and syntax, then references
@@ -256,10 +278,12 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnosti
 /// harness recomputes through it — so the composers cannot drift (audit
 /// finding I2's first hand-maintained mirror).
 pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Diagnostic> {
-    let mut diagnostics = persistable_diagnostics(inputs, file);
-    diagnostics.extend(typed_portion(inputs, file));
-    diagnostics.sort();
-    diagnostics
+    let mut portion = persistable_diagnostics(inputs, file);
+    portion
+        .diagnostics
+        .extend(typed_portion(inputs, file).diagnostics);
+    portion.diagnostics.sort();
+    portion.diagnostics
 }
 
 /// The typed half of one file's diagnostics on a cache hit (plan 9a,
@@ -288,7 +312,7 @@ pub fn served_typed_diagnostics(
     inputs: &AnalysisInputs,
     file: SourceFile,
     typed_source: Option<&crate::cache::stored::StoredTypedVerdict>,
-) -> Vec<Diagnostic> {
+) -> FilteredPortion {
     use std::sync::atomic::Ordering;
 
     let database = &inputs.database;
@@ -303,7 +327,12 @@ pub fn served_typed_diagnostics(
             .collect::<Option<Vec<_>>>()
     {
         statistics.typed_served.fetch_add(1, Ordering::Relaxed);
-        return diagnostics;
+        // The stored typed match indexes arrive with cache schema 7 (the
+        // next task); nothing consumes matched before then.
+        return FilteredPortion {
+            diagnostics,
+            matched: Vec::new(),
+        };
     }
     statistics.typed_recomputed.fetch_add(1, Ordering::Relaxed);
     let result = celerrate_types::typed_file_verdicts(
@@ -360,21 +389,21 @@ fn analyze_one(inputs: &AnalysisInputs, file: SourceFile) -> Result<Vec<Diagnost
                         statistics
                             .verdicts_discarded
                             .fetch_add(1, Ordering::Relaxed);
-                        (persistable_diagnostics(inputs, file), None)
+                        (persistable_diagnostics(inputs, file).diagnostics, None)
                     }
                 },
                 VerdictLookup::Discarded => {
                     statistics
                         .verdicts_discarded
                         .fetch_add(1, Ordering::Relaxed);
-                    (persistable_diagnostics(inputs, file), None)
+                    (persistable_diagnostics(inputs, file).diagnostics, None)
                 }
                 VerdictLookup::Absent => {
                     statistics.verdicts_absent.fetch_add(1, Ordering::Relaxed);
-                    (persistable_diagnostics(inputs, file), None)
+                    (persistable_diagnostics(inputs, file).diagnostics, None)
                 }
             };
-        diagnostics.extend(served_typed_diagnostics(inputs, file, typed_source));
+        diagnostics.extend(served_typed_diagnostics(inputs, file, typed_source).diagnostics);
         diagnostics.sort();
         diagnostics
     })
@@ -576,6 +605,33 @@ mod tests {
             outcome.diagnostics,
             vec![diagnostic(0, 9), diagnostic(2, 0)]
         );
+    }
+
+    #[test]
+    fn a_portion_names_every_directive_that_admitted_a_diagnostic() {
+        use crate::session::Session;
+
+        // Line 2's one comment carries two directives (the foreign tag
+        // first: the native identifier list runs to the end of the line,
+        // so it must come last): the native one admits CEL0018, the
+        // foreign blanket admits everything - any-match marks both. The
+        // directive on line 4 admits nothing.
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(
+            root.path().join("a.php"),
+            "<?php\nnew MissingOne(); // @phpstan-ignore-line @celerrate-ignore CEL0018\n$x = 1;\n// @celerrate-ignore CEL0019\n$y = 2;\n",
+        )
+        .unwrap();
+
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let &file = session.sources.values().next().unwrap();
+        let portion = super::persistable_diagnostics(&inputs, file);
+        assert!(portion.diagnostics.is_empty(), "{:?}", portion.diagnostics);
+
+        let directives = celerrate_semantics::suppression_directives(&inputs.database, file);
+        assert_eq!(directives.len(), 3, "{directives:?}");
+        assert_eq!(portion.matched, vec![0, 1], "{directives:?}");
     }
 
     #[test]

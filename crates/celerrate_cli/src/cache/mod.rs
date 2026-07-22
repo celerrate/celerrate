@@ -517,7 +517,10 @@ fn composed_verdict_with_lever(
     persist_typed: bool,
 ) -> StoredVerdict {
     let database = &inputs.database;
-    let diagnostics = crate::analysis::persistable_diagnostics(inputs, file);
+    let crate::analysis::FilteredPortion {
+        diagnostics,
+        matched: _,
+    } = crate::analysis::persistable_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
         database,
         file,
@@ -554,7 +557,10 @@ fn composed_typed_verdict(
     file: celerrate_db::SourceFile,
 ) -> StoredTypedVerdict {
     let database = &inputs.database;
-    let diagnostics = crate::analysis::typed_portion(inputs, file);
+    let crate::analysis::FilteredPortion {
+        diagnostics,
+        matched: _,
+    } = crate::analysis::typed_portion(inputs, file);
     let result = celerrate_types::typed_file_verdicts(
         database,
         inputs.files,

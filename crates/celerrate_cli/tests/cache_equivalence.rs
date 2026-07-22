@@ -83,7 +83,7 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
             TypedOutcome::Served => stored.typed.as_ref(),
             TypedOutcome::Recompute => None,
         };
-        served.extend(served_typed_diagnostics(&inputs, file, typed_source));
+        served.extend(served_typed_diagnostics(&inputs, file, typed_source).diagnostics);
         served.sort();
         let recomputed = composed_diagnostics(&inputs, file);
         assert_eq!(
