@@ -28,6 +28,16 @@
 //! side, ask whether the other dialect genuinely has no identifier for
 //! it (a real gap in the upstream vocabulary) or whether a fold is
 //! simply unmapped there (a gap in this table).
+//!
+//! A new CEL identifier, not just a new or changed table entry, is
+//! itself a trigger to re-triage both tables: CEL0033 leaked because
+//! Celerrate split the class-constant access site finer than either
+//! foreign tool does, so a correct entry became an incomplete one
+//! without anybody touching it. The gate that holds this now is
+//! `every_registry_identifier_is_either_mapped_or_allowlisted` in
+//! `celerrate_cli/tests/suppression_correspondence.rs`: a registry
+//! identifier no `Codes` entry names must be listed there with the
+//! reason no foreign identifier maps to it.
 
 /// The two written dialects the bridge recognizes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -327,9 +337,20 @@ const PHPSTAN: &[(&str, ForeignMapping)] = &[
     ),
     ("classConstant.nonFinal", ForeignMapping::Unmapped),
     ("classConstant.nonObject", ForeignMapping::Unmapped),
+    // Celerrate splits the class-constant access site by receiver kind:
+    // CEL0032 when the receiver is an ordinary class or interface, and
+    // CEL0033 when the receiver is an enum, so the missing member is an
+    // enum case. PHPStan makes no such split. It publishes no
+    // case-not-found identifier at all (the catalogue's only enum-case
+    // entries are the duplicate-declaration ones), and reports both
+    // sites under `classConstant.notFound`, so this entry must cover
+    // CEL0033 as well. Narrowing it back to CEL0032 alone would
+    // under-suppress every enum-case access a PHPStan user has already
+    // silenced, and under-suppression is the one failure direction this
+    // project treats as a defect. Do not shrink this back to one code.
     (
         "classConstant.notFound",
-        ForeignMapping::Codes(&["CEL0032"]),
+        ForeignMapping::Codes(&["CEL0032", "CEL0033"]),
     ),
     ("classConstant.notSupported", ForeignMapping::Unmapped),
     ("classConstant.onTrait", ForeignMapping::Unmapped),
@@ -1433,6 +1454,14 @@ const PSALM: &[(&str, ForeignMapping)] = &[
     ("DeprecatedClass", ForeignMapping::Codes(&["CEL0023"])),
     ("DeprecatedConstant", ForeignMapping::Codes(&["CEL0023"])),
     ("DeprecatedFunction", ForeignMapping::Codes(&["CEL0023"])),
+    // `DeprecatedInterface` and `DeprecatedTrait` stay `Unmapped` while
+    // their five `Deprecated*` siblings map to CEL0023. The asymmetry is
+    // deliberate, not an oversight: Celerrate does not report a
+    // deprecated interface or trait at its reference site, so there is
+    // no narrower behavior to name, and `Unmapped` widens the directive
+    // to its whole scope, which is the accepted failure direction. Do
+    // not "fix" these into CEL0023: that would narrow them, and a
+    // narrowing is how a suppression starts under-suppressing.
     ("DeprecatedInterface", ForeignMapping::Unmapped),
     ("DeprecatedMethod", ForeignMapping::Codes(&["CEL0023"])),
     ("DeprecatedProperty", ForeignMapping::Codes(&["CEL0023"])),
@@ -1755,13 +1784,21 @@ const PSALM: &[(&str, ForeignMapping)] = &[
     // entry, so `UndefinedConstant` is the only identifier a Psalm user
     // can write over a missing class constant. The entry must therefore
     // cover CEL0032 as well; shrinking it back would under-suppress.
+    //
+    // A third fold sits on top of those two: Celerrate splits the
+    // class-constant access site by receiver kind and reports CEL0033
+    // when the receiver is an enum, so the missing member is an enum
+    // case. Psalm has no `UndefinedEnumCase` entry in the vendored
+    // catalogue either, and folds a missing enum case into this same
+    // name, so the entry must cover CEL0033 as well; shrinking it back
+    // would under-suppress.
     (
         "UndefinedClass",
         ForeignMapping::Codes(&["CEL0018", "CEL0021", "CEL0022"]),
     ),
     (
         "UndefinedConstant",
-        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022", "CEL0032"]),
+        ForeignMapping::Codes(&["CEL0020", "CEL0021", "CEL0022", "CEL0032", "CEL0033"]),
     ),
     ("UndefinedDocblockClass", ForeignMapping::Unmapped),
     (

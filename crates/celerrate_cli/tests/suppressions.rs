@@ -424,6 +424,14 @@ fn every_mapped_phpstan_code_is_actually_suppressed_by_its_identifier() {
             source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; }\n",
         },
         PerCodeSeed {
+            // PHPStan publishes no case-not-found identifier, so
+            // `classConstant.notFound` is the only thing a PHPStan user
+            // can write over a missing enum case.
+            code: "CEL0033",
+            identifier: "classConstant.notFound",
+            source: "<?php\nnamespace App;\nenum Suit: string { case Hearts = 'h'; }\nfunction f(): Suit { return Suit::Diamonds; }\n",
+        },
+        PerCodeSeed {
             code: "CEL0034",
             identifier: "method.nonObject",
             source: "<?php\nnamespace App;\nclass User { public function save(): void {} }\nfunction f(?User $u): void { $u->save(); }\n",
@@ -491,6 +499,14 @@ fn every_mapped_psalm_code_is_actually_suppressed_by_its_identifier() {
             code: "CEL0032",
             identifier: "UndefinedConstant",
             source: "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\nfunction f(): int { return Config::LIMTI; }\n",
+        },
+        PerCodeSeed {
+            // Psalm has no `UndefinedEnumCase`, so `UndefinedConstant`
+            // is the only thing a Psalm user can write over a missing
+            // enum case.
+            code: "CEL0033",
+            identifier: "UndefinedConstant",
+            source: "<?php\nnamespace App;\nenum Suit: string { case Hearts = 'h'; }\nfunction f(): Suit { return Suit::Diamonds; }\n",
         },
         PerCodeSeed {
             code: "CEL0034",
