@@ -8,7 +8,9 @@ pub mod syntax_version_gating;
 #[cfg(test)]
 pub(crate) mod test_support;
 pub mod unknown_members;
+pub mod unknown_suppression_identifier;
 pub mod unknown_symbols;
+pub mod unused_suppression;
 
 use std::sync::Arc;
 
@@ -37,6 +39,8 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
     argument_checks::TOO_FEW_ARGUMENTS,
     argument_checks::TOO_MANY_ARGUMENTS,
     argument_checks::UNKNOWN_NAMED_ARGUMENT,
+    unknown_suppression_identifier::UNKNOWN_SUPPRESSION_IDENTIFIER,
+    unused_suppression::UNUSED_SUPPRESSION,
 ];
 
 /// The core rule set, in registration order.
@@ -65,6 +69,16 @@ pub fn core_rules() -> Vec<(RuleMetadata, RuleImplementation)> {
         (
             argument_checks::metadata(),
             RuleImplementation::TypedBody(Arc::new(argument_checks::ArgumentChecks)),
+        ),
+        (
+            unknown_suppression_identifier::metadata(),
+            RuleImplementation::Reporting(Arc::new(
+                unknown_suppression_identifier::UnknownSuppressionIdentifier,
+            )),
+        ),
+        (
+            unused_suppression::metadata(),
+            RuleImplementation::Reporting(Arc::new(unused_suppression::UnusedSuppression)),
         ),
     ]
 }

@@ -95,9 +95,11 @@ fn configuration_for(db: &TestDatabase, minimum: PhpVersion) -> ProjectConfigura
 /// Dispatch order across every phase is registration order (each phase
 /// query drains `registry.registrations(db)` in place, unsorted), so a
 /// silent reorder here would silently reorder every phase's diagnostic
-/// list wherever two findings tie on the total order otherwise.
+/// list wherever two findings tie on the total order otherwise. The
+/// two reporting rules join the tail: they run in their own phase, so
+/// they never interleave with the six analysis families.
 #[test]
-fn the_core_rule_set_carries_the_six_migrated_families() {
+fn the_core_rule_set_carries_the_six_migrated_families_and_the_two_reporting_rules() {
     let names: Vec<String> = core_rules()
         .into_iter()
         .map(|(metadata, _)| metadata.name)
@@ -111,6 +113,8 @@ fn the_core_rule_set_carries_the_six_migrated_families() {
             "unknown-members".to_owned(),
             "null-dereference".to_owned(),
             "argument-checks".to_owned(),
+            "unknown-suppression-identifier".to_owned(),
+            "unused-suppression".to_owned(),
         ],
         "registration order is the deterministic dispatch order",
     );

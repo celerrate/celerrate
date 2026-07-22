@@ -98,6 +98,12 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "unreadable installed packages",
         "celerrate_project",
     ),
+    registered(
+        "CEL0041",
+        "unknown suppression identifier",
+        "celerrate_rules",
+    ),
+    registered("CEL0042", "unused suppression", "celerrate_rules"),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its
@@ -142,7 +148,7 @@ mod tests {
             );
             previous = number;
         }
-        assert_eq!(previous, 40, "forty identifiers allocated so far");
+        assert_eq!(previous, 42, "forty-two identifiers allocated so far");
     }
 
     #[test]

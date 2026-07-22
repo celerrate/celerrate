@@ -186,3 +186,14 @@ is unknown silences arity for that call.
 | CEL0036 | error | too few arguments | a required parameter is bound neither positionally nor by name |
 | CEL0037 | error | too many arguments | more positional arguments than parameters, no variadic |
 | CEL0038 | error | unknown named argument | a named argument matches no declared parameter name |
+
+## Suppression directives (CEL0041, CEL0042)
+
+About Celerrate's own `@celerrate-ignore` directive (never about
+foreign directives, which legitimately target diagnostics Celerrate
+does not emit).
+
+| Identifier | Severity | Meaning |
+| --- | --- | --- |
+| CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know, so a typo cannot silently suppress nothing |
+| CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run, or an unknown identifier - that mistake is already CEL0041's) |

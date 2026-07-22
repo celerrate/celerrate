@@ -2,10 +2,10 @@ use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
 use celerrate_semantics::BodyQuery;
-use celerrate_source::FileId;
+use celerrate_source::{FileId, TextSize};
 use celerrate_stubs::StubIndexInput;
 
-use crate::context::SyntaxContext;
+use crate::context::{DirectiveOutcome, ReportingContext, SyntaxContext};
 use crate::finding::{Finding, FindingAnchor, FindingSink};
 use crate::registry::{RuleImplementation, RuleRegistry};
 
@@ -158,6 +158,121 @@ pub fn typed_body_phase_diagnostics(
     diagnostics
 }
 
+/// The reporting phase: runs the registered `Reporting` rules from
+/// per-directive match outcomes - never from the tree, so the warm
+/// path serves the same records parse-free (design section 4). A plain
+/// function, not a salsa query: its input is composed by the
+/// orchestration layer, which is also why the output is recomputed on
+/// both paths rather than persisted. Deterministic by construction (a
+/// pure function of the registry and the outcomes).
+///
+/// The one additional, non-iterated suppression pass: (a) rules emit
+/// findings, every directive finding naming its subject directive;
+/// (b) one pass drops every finding some directive OTHER than its own
+/// subject admits (self-cloaking is forbidden, decision 10) and marks
+/// every admitting directive used; (c) CEL0042 findings whose subject
+/// became used in (b) are dropped. Uses recorded in (b) never re-open
+/// (b), and drops in (c) never un-use anything: no fixpoint.
+///
+/// Findings become `Diagnostic::spanned` here rather than through
+/// `resolved_diagnostic`: the reporting phase has no `SourceFile` and
+/// must not parse, and its anchors are concrete ranges already. It is
+/// the one phase that bypasses the shared reconciliation tail, by
+/// design.
+pub fn reporting_phase_diagnostics(
+    db: &dyn salsa::Database,
+    file_id: FileId,
+    text_end: TextSize,
+    outcomes: &[DirectiveOutcome],
+) -> Vec<Diagnostic> {
+    let Some(registry) = RuleRegistry::try_get(db) else {
+        return Vec::new();
+    };
+    let inactive: std::collections::BTreeSet<_> = registry
+        .registrations(db)
+        .iter()
+        .filter(|registration| !registration.active)
+        .flat_map(|registration| {
+            registration
+                .metadata
+                .identifiers
+                .iter()
+                .map(|identifier| identifier.id)
+        })
+        .collect();
+    let context = ReportingContext::new(outcomes, &inactive);
+    let mut findings = Vec::new();
+    for registration in registry.registrations(db) {
+        if !registration.active {
+            continue;
+        }
+        let RuleImplementation::Reporting(rule) = &registration.implementation else {
+            continue;
+        };
+        let mut sink = FindingSink::new(&registration.metadata);
+        rule.check(&context, &mut sink);
+        findings.extend(sink.into_findings());
+    }
+
+    let mut used: std::collections::BTreeSet<u32> = std::collections::BTreeSet::new();
+    let mut kept = Vec::new();
+    for finding in findings {
+        // Reporting findings anchor at directive ranges by
+        // construction: `report_directive` is the only affordance the
+        // reporting rules use, and the context has no tree, so a
+        // symbolic anchor could not resolve here anyway. A non-range
+        // anchor is a future rule's authoring error: dropped, and the
+        // invariant is stated here so the drop is a documented
+        // contract, not an accident.
+        let FindingAnchor::Range(range) = finding.anchor else {
+            continue;
+        };
+        let mut suppressed = false;
+        for (index, outcome) in outcomes.iter().enumerate() {
+            // A directive never admits a finding that reports on
+            // itself: self-cloaking is forbidden (decision 10);
+            // cross-suppression between distinct directives stays
+            // legal.
+            if u32::try_from(index).is_ok_and(|index| finding.subject == Some(index)) {
+                continue;
+            }
+            if outcome
+                .directive
+                .admits(finding.identifier, range.start(), text_end)
+            {
+                suppressed = true;
+                if let Ok(index) = u32::try_from(index) {
+                    used.insert(index);
+                }
+            }
+        }
+        if !suppressed {
+            kept.push((finding, range));
+        }
+    }
+
+    let mut diagnostics: Vec<Diagnostic> = kept
+        .into_iter()
+        .filter(|(finding, _)| {
+            !finding
+                .subject
+                .is_some_and(|subject| used.contains(&subject))
+                || finding.identifier != crate::rules::unused_suppression::UNUSED_SUPPRESSION
+        })
+        .map(|(finding, range)| {
+            Diagnostic::spanned(
+                finding.identifier,
+                finding.severity,
+                file_id,
+                range,
+                finding.message,
+            )
+        })
+        .collect();
+    diagnostics.sort();
+    diagnostics
+}
+
 /// The reconciliation tail every phase shares: anchors resolve to
 /// concrete ranges here, where tree access is legitimate. An anchor
 /// that no longer resolves (or that names another file) drops its
@@ -212,7 +327,7 @@ mod tests {
 
     use celerrate_db::testing::TestDatabase;
     use celerrate_db::{AnalyzedFileSet, SourceFile};
-    use celerrate_diagnostics::{DiagnosticId, Severity};
+    use celerrate_diagnostics::{Diagnostic, DiagnosticId, Severity};
     use celerrate_project::{PhpVersion, PhpVersionRange, ProjectConfiguration};
     use celerrate_semantics::{AstId, ExpressionId, PluginIdentity, SemanticContext};
     use celerrate_source::{FileId, TextRange, TextSize};
@@ -373,6 +488,7 @@ mod tests {
             severity: Severity::Error,
             anchor: FindingAnchor::Declaration(ast_id),
             message: "anchored to a declaration".to_owned(),
+            subject: None,
         };
         let diagnostic = resolved_diagnostic(&db, file, FileId::new(0), finding);
         assert!(diagnostic.is_some());
@@ -391,6 +507,7 @@ mod tests {
             severity: Severity::Error,
             anchor: FindingAnchor::Declaration(ast_id),
             message: "anchored to another file".to_owned(),
+            subject: None,
         };
         let diagnostic = resolved_diagnostic(&db, file, FileId::new(0), finding);
         assert!(diagnostic.is_none());
@@ -411,6 +528,7 @@ mod tests {
             severity: Severity::Error,
             anchor: FindingAnchor::Expression { body, expression },
             message: "anchored to an expression".to_owned(),
+            subject: None,
         };
         let diagnostic = resolved_diagnostic(&db, file, FileId::new(0), finding);
         assert!(diagnostic.is_some());
@@ -430,6 +548,7 @@ mod tests {
             severity: Severity::Error,
             anchor: FindingAnchor::Declaration(ast_id),
             message: "dangling".to_owned(),
+            subject: None,
         };
         let diagnostic = resolved_diagnostic(&db, file, FileId::new(0), finding);
         assert!(diagnostic.is_none());
@@ -531,5 +650,264 @@ mod tests {
         let (db, file, files, stubs, configuration) = test_setup(source);
         register(&db, vec![typed_registration()]);
         assert!(typed_body_phase_diagnostics(&db, file, files, stubs, configuration).is_empty());
+    }
+
+    // ---- Reporting phase ----
+
+    use crate::context::DirectiveOutcome;
+    use crate::phases::reporting_phase_diagnostics;
+    use crate::rules::{unknown_suppression_identifier, unused_suppression};
+    use celerrate_semantics::{DirectiveOrigin, ResolvedDirective, SuppressionFilter};
+
+    struct NullSyntaxRule;
+
+    impl SyntaxRule for NullSyntaxRule {
+        fn check(&self, _context: &SyntaxContext<'_>, _sink: &mut FindingSink<'_>) {}
+    }
+
+    fn directive(
+        anchor: (u32, u32),
+        scope: (u32, u32),
+        filter: SuppressionFilter,
+        identifiers: &[&str],
+        origin: DirectiveOrigin,
+    ) -> ResolvedDirective {
+        ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(anchor.0), TextSize::from(anchor.1)),
+            scope: TextRange::new(TextSize::from(scope.0), TextSize::from(scope.1)),
+            filter,
+            identifiers: identifiers.iter().map(|s| (*s).to_owned()).collect(),
+            origin,
+        }
+    }
+
+    fn native_unused(anchor: (u32, u32), identifiers: &[&str]) -> DirectiveOutcome {
+        let codes = identifiers
+            .iter()
+            .filter_map(|written| celerrate_diagnostics::find_identifier(written))
+            .collect();
+        DirectiveOutcome {
+            directive: directive(
+                anchor,
+                (anchor.0, anchor.1),
+                SuppressionFilter::Only(codes),
+                identifiers,
+                DirectiveOrigin::Native,
+            ),
+            matched: false,
+        }
+    }
+
+    /// A database with the full core rule set registered and active.
+    fn reporting_setup() -> TestDatabase {
+        let db = TestDatabase::default();
+        let identity = PluginIdentity {
+            name: "celerrate-core".to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        };
+        let registrations = crate::rules::core_rules()
+            .into_iter()
+            .map(|(metadata, implementation)| RuleRegistration {
+                identity: identity.clone(),
+                active: metadata.tier == Tier::Default,
+                metadata,
+                implementation,
+            })
+            .collect();
+        let _ = RuleRegistry::builder(registrations)
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        db
+    }
+
+    fn report(db: &TestDatabase, outcomes: &[DirectiveOutcome]) -> Vec<Diagnostic> {
+        reporting_phase_diagnostics(db, FileId::new(0), TextSize::from(1000), outcomes)
+    }
+
+    #[test]
+    fn an_unknown_native_identifier_is_reported_and_a_known_one_is_not() {
+        let db = reporting_setup();
+        let diagnostics = report(&db, &[native_unused((10, 40), &["CEL0030", "CEL9999"])]);
+        let unknown: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| {
+                diagnostic.id == unknown_suppression_identifier::UNKNOWN_SUPPRESSION_IDENTIFIER
+            })
+            .collect();
+        assert_eq!(unknown.len(), 1);
+        assert!(
+            unknown[0].message.contains("CEL9999"),
+            "{}",
+            unknown[0].message
+        );
+        assert_eq!(unknown[0].severity, Severity::Warning);
+    }
+
+    #[test]
+    fn a_foreign_directive_is_never_reported() {
+        let db = reporting_setup();
+        let outcome = DirectiveOutcome {
+            directive: directive(
+                (10, 40),
+                (0, 41),
+                SuppressionFilter::All,
+                &["some.unknownIdentifier"],
+                DirectiveOrigin::Foreign,
+            ),
+            matched: false,
+        };
+        assert!(report(&db, &[outcome]).is_empty());
+    }
+
+    #[test]
+    fn an_unused_native_directive_is_reported_and_a_used_one_is_not() {
+        let db = reporting_setup();
+        let unused = native_unused((10, 40), &["CEL0030"]);
+        let mut used = native_unused((50, 80), &["CEL0031"]);
+        used.matched = true;
+        let diagnostics = report(&db, &[unused, used]);
+        let unused_reports: Vec<_> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.id == unused_suppression::UNUSED_SUPPRESSION)
+            .collect();
+        assert_eq!(unused_reports.len(), 1);
+        let (_, range) = unused_reports[0].span().unwrap();
+        assert_eq!(
+            range,
+            TextRange::new(TextSize::from(10), TextSize::from(40))
+        );
+    }
+
+    #[test]
+    fn a_bare_native_directive_is_reported_unused() {
+        let db = reporting_setup();
+        let diagnostics = report(&db, &[native_unused((10, 40), &[])]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id, unused_suppression::UNUSED_SUPPRESSION);
+    }
+
+    #[test]
+    fn an_unknown_identifier_makes_the_directive_not_evaluable_for_unused() {
+        // CEL0041 already reports the typo; CEL0042 must not stack a
+        // second warning on the same mistake (decision 11).
+        let db = reporting_setup();
+        let diagnostics = report(&db, &[native_unused((10, 40), &["CEL9999"])]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(
+            diagnostics[0].id,
+            unknown_suppression_identifier::UNKNOWN_SUPPRESSION_IDENTIFIER,
+        );
+    }
+
+    #[test]
+    fn an_identifier_of_an_inactive_rule_exempts_the_directive() {
+        // Register one INACTIVE rule claiming CEL0034 alongside the
+        // two reporting rules: the nursery-demotion storm guard.
+        let db = TestDatabase::default();
+        let identity = PluginIdentity {
+            name: "celerrate-core".to_owned(),
+            version: "0.0.0".to_owned(),
+            configuration: String::new(),
+        };
+        let mut registrations: Vec<RuleRegistration> = crate::rules::core_rules()
+            .into_iter()
+            .filter(|(metadata, _)| {
+                metadata.name == "unknown-suppression-identifier"
+                    || metadata.name == "unused-suppression"
+            })
+            .map(|(metadata, implementation)| RuleRegistration {
+                identity: identity.clone(),
+                active: true,
+                metadata,
+                implementation,
+            })
+            .collect();
+        registrations.push(RuleRegistration {
+            identity,
+            active: false,
+            metadata: RuleMetadata {
+                name: "demoted-rule".to_owned(),
+                group: RuleGroup::Correctness,
+                identifiers: vec![RuleIdentifier {
+                    id: DiagnosticId::new("CEL0034"),
+                    severity: Severity::Error,
+                }],
+                tier: Tier::Nursery,
+            },
+            implementation: RuleImplementation::Syntax(std::sync::Arc::new(NullSyntaxRule)),
+        });
+        let _ = RuleRegistry::builder(registrations)
+            .durability(salsa::Durability::HIGH)
+            .new(&db);
+        let diagnostics = report(&db, &[native_unused((10, 40), &["CEL0034"])]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+    }
+
+    #[test]
+    fn a_directive_cannot_suppress_its_own_reports() {
+        // A trailing directive whose scope covers its own anchor and
+        // whose filter admits CEL0042 must not cloak its own unused
+        // warning: self-admission is forbidden (decision 10), so the
+        // warning survives.
+        let db = reporting_setup();
+        let outcome = DirectiveOutcome {
+            directive: directive(
+                (10, 40),
+                (0, 50),
+                SuppressionFilter::Only(vec![
+                    celerrate_diagnostics::find_identifier("CEL0042").unwrap(),
+                ]),
+                &["CEL0042"],
+                DirectiveOrigin::Native,
+            ),
+            matched: false,
+        };
+        let diagnostics = report(&db, &[outcome]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].id, unused_suppression::UNUSED_SUPPRESSION);
+    }
+
+    #[test]
+    fn a_suppressed_directive_diagnostic_counts_as_use_in_one_pass() {
+        // Directive A (index 0) is unused: its CEL0042 would fire at
+        // its anchor. Directive B admits CEL0042 on a scope covering
+        // A's anchor: A's warning is dropped, B counts as used, and
+        // B's own CEL0042 is dropped by the subject rule in step (c) -
+        // never by self-admission, which decision 10 forbids - one
+        // pass, no iteration.
+        let db = reporting_setup();
+        let a = native_unused((10, 40), &["CEL0030"]);
+        let b = native_unused((50, 90), &["CEL0042"]);
+        // B's scope must cover A's anchor start.
+        let b = DirectiveOutcome {
+            directive: ResolvedDirective {
+                scope: TextRange::new(TextSize::from(0), TextSize::from(100)),
+                ..b.directive
+            },
+            matched: false,
+        };
+        assert!(report(&db, &[a, b]).is_empty());
+    }
+
+    #[test]
+    fn dropping_a_suppressed_unused_report_does_not_iterate() {
+        // C admits nothing anywhere; B suppresses A's CEL0042. C stays
+        // unused and IS reported: uses recorded in the pass do not
+        // re-open the pass.
+        let db = reporting_setup();
+        let a = native_unused((10, 40), &["CEL0030"]);
+        let b = DirectiveOutcome {
+            directive: ResolvedDirective {
+                scope: TextRange::new(TextSize::from(0), TextSize::from(45)),
+                ..native_unused((50, 90), &["CEL0042"]).directive
+            },
+            matched: false,
+        };
+        let c = native_unused((200, 240), &["CEL0031"]);
+        let diagnostics = report(&db, &[a, b, c]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        let (_, range) = diagnostics[0].span().unwrap();
+        assert_eq!(range.start(), TextSize::from(200));
     }
 }
