@@ -6,10 +6,13 @@
 //! fixpoint: re-running `check` after application shows what remains.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use celerrate_diagnostics::{Confidence, Diagnostic};
 use celerrate_edit::find_conflict;
 use celerrate_source::{FileId, TextEdit};
+
+use crate::session::{InternalError, Session};
 
 /// What the two flags admit: every suggestion at or below the
 /// threshold in the `Confidence` order (`Safe < NeedsReview`).
@@ -96,6 +99,69 @@ pub fn plan(diagnostics: &[Diagnostic], threshold: Confidence) -> PlannedFixes {
         }
     }
     planned
+}
+
+/// The outcome of writing a plan to disk.
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+pub struct AppliedFixes {
+    pub files_written: usize,
+}
+
+/// Applies the planned edits: per file, one splice of all accepted
+/// edits against the exact decoded text the analysis read, written to
+/// disk and echoed into the `Vfs` so the session's effective state
+/// stays true. Every failure is an internal error the run reports and
+/// survives; nothing panics, and no file is ever partially written.
+pub fn apply_to_disk(session: &mut Session, planned: &PlannedFixes) -> AppliedFixes {
+    let mut applied = AppliedFixes::default();
+    for (&file, edits) in &planned.edits_by_file {
+        let Some(&source) = session.sources.get(&file) else {
+            session.internal_errors.push(InternalError::FixUnappliable {
+                file,
+                reason: "the file is no longer in the analyzed set".to_owned(),
+            });
+            continue;
+        };
+        let original = match celerrate_db::source_text(&session.database, source).as_ref() {
+            Ok(text) => text.text().to_owned(),
+            Err(_) => {
+                session.internal_errors.push(InternalError::FixUnappliable {
+                    file,
+                    reason: "the source text could not be decoded".to_owned(),
+                });
+                continue;
+            }
+        };
+        let patched = match celerrate_edit::apply(&original, edits) {
+            Ok(patched) => patched,
+            Err(error) => {
+                session.internal_errors.push(InternalError::FixUnappliable {
+                    file,
+                    reason: format!("{error:?}"),
+                });
+                continue;
+            }
+        };
+        let Some(path) = session.vfs.path(file).map(Path::to_path_buf) else {
+            session.internal_errors.push(InternalError::FixUnappliable {
+                file,
+                reason: "the file has no path in the VFS".to_owned(),
+            });
+            continue;
+        };
+        if let Err(reason) = std::fs::write(&path, patched.as_bytes()) {
+            session.internal_errors.push(InternalError::FixWriteFailed {
+                path,
+                reason: reason.to_string(),
+            });
+            continue;
+        }
+        session
+            .vfs
+            .set_file_contents(&path, Some(patched.into_bytes()));
+        applied.files_written += 1;
+    }
+    applied
 }
 
 #[cfg(test)]
@@ -278,5 +344,105 @@ mod tests {
         assert_eq!(planned.accepted, 0);
         assert!(planned.skipped.is_empty());
         assert!(planned.edits_by_file.is_empty());
+    }
+
+    use crate::session::{InternalError, Session};
+
+    fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for (path, contents) in files {
+            let path = root.path().join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, contents).unwrap();
+        }
+        root
+    }
+
+    #[test]
+    fn accepted_edits_are_spliced_once_and_written_through_the_vfs_to_disk() {
+        let root = project(&[("src/App.php", "<?php aaaa(); bbbb();")]);
+        let mut session = Session::start(root.path());
+        let file = *session.sources.keys().next().unwrap();
+        // Two original-coordinate edits: `aaaa` (6..10) and `bbbb`
+        // (14..18); replacements of different lengths prove the splice
+        // resolves both against the pre-application text.
+        let diagnostics = vec![
+            diagnostic(
+                file.as_u32(),
+                6,
+                10,
+                vec![Suggestion {
+                    message: "did you mean `a`?".to_owned(),
+                    confidence: Confidence::NeedsReview,
+                    edits: vec![TextEdit {
+                        file,
+                        range: TextRange::new(TextSize::from(6), TextSize::from(10)),
+                        replacement: "a".to_owned(),
+                    }],
+                }],
+            ),
+            diagnostic(
+                file.as_u32(),
+                14,
+                18,
+                vec![Suggestion {
+                    message: "did you mean `bb`?".to_owned(),
+                    confidence: Confidence::NeedsReview,
+                    edits: vec![TextEdit {
+                        file,
+                        range: TextRange::new(TextSize::from(14), TextSize::from(18)),
+                        replacement: "bb".to_owned(),
+                    }],
+                }],
+            ),
+        ];
+        let planned = plan(&diagnostics, Confidence::NeedsReview);
+        let applied = super::apply_to_disk(&mut session, &planned);
+        assert_eq!(applied.files_written, 1);
+        assert!(session.internal_errors.is_empty());
+        let patched = std::fs::read_to_string(root.path().join("src/App.php")).unwrap();
+        assert_eq!(patched, "<?php a(); bb();");
+        // The VFS effective state followed the disk.
+        assert_eq!(
+            session.vfs.contents(file),
+            Some("<?php a(); bb();".as_bytes()),
+        );
+    }
+
+    #[test]
+    fn an_out_of_bounds_edit_is_an_internal_error_not_a_panic_and_other_files_still_write() {
+        let root = project(&[
+            ("src/Bad.php", "<?php short();"),
+            ("src/Good.php", "<?php aaaa();"),
+        ]);
+        let mut session = Session::start(root.path());
+        let mut files = session.sources.keys().copied();
+        let bad = files.next().unwrap();
+        let good = files.next().unwrap();
+        let mut planned = super::PlannedFixes::default();
+        planned.edits_by_file.insert(
+            bad,
+            vec![TextEdit {
+                file: bad,
+                range: TextRange::new(TextSize::from(500), TextSize::from(504)),
+                replacement: "x".to_owned(),
+            }],
+        );
+        planned.edits_by_file.insert(
+            good,
+            vec![TextEdit {
+                file: good,
+                range: TextRange::new(TextSize::from(6), TextSize::from(10)),
+                replacement: "a".to_owned(),
+            }],
+        );
+        let applied = super::apply_to_disk(&mut session, &planned);
+        assert_eq!(applied.files_written, 1, "the good file still writes");
+        assert!(matches!(
+            session.internal_errors.as_slice(),
+            [InternalError::FixUnappliable { file, .. }] if *file == bad,
+        ));
     }
 }

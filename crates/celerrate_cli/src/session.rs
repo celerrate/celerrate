@@ -64,6 +64,14 @@ pub enum InternalError {
     FilePanicked { file: FileId },
     /// The analysis loop itself panicked, outside any file's guard.
     AnalysisPanicked,
+    /// A planned fix could not be applied to its file's text. This is
+    /// Celerrate's bug: the planner admitted an edit set the applier
+    /// refused.
+    FixUnappliable { file: FileId, reason: String },
+    /// The patched text could not be written back to disk. The
+    /// environment's condition, like `FileUnreadable`: named, but no
+    /// bug report invited.
+    FixWriteFailed { path: PathBuf, reason: String },
 }
 
 /// Everything one project needs to be analyzed, and everything `--watch`

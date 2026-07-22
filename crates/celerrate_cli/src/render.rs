@@ -231,6 +231,19 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
                 has_celerrate_bug = true;
                 writeln!(output, "internal error: the analysis loop panicked")?;
             }
+            InternalError::FixUnappliable { file, reason } => {
+                has_celerrate_bug = true;
+                writeln!(
+                    output,
+                    "internal error: the fix for {} could not be applied: {reason}",
+                    display_path(session, *file),
+                )?;
+            }
+            InternalError::FixWriteFailed { path, reason } => writeln!(
+                output,
+                "internal error: {} could not be written: {reason}; the fix was not applied",
+                relative_path(session, path),
+            )?,
         }
     }
     if !has_celerrate_bug {
