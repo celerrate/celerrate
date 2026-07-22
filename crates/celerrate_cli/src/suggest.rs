@@ -6,13 +6,17 @@
 //! candidate search would also wire the global name set into every
 //! file's dependency graph; here it wires into nothing.
 
+use std::collections::{HashMap, HashSet, VecDeque};
+
 use celerrate_db::{parse, source_text};
 use celerrate_diagnostics::{Confidence, Diagnostic, Suggestion};
 use celerrate_semantics::{
-    SymbolSpace, UseTables, collect_references, folded_symbol_key, item_tree, resolve_candidates,
-    source_symbol_table, stub_symbol_table,
+    ClassQuery, MemberKind, SymbolSpace, UseTables, collect_references, folded_member_key,
+    folded_symbol_key, item_tree, linearized_class, resolve_candidates, source_symbol_table,
+    stub_signature_table, stub_symbol_table,
 };
 use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
+use celerrate_stubs::StubMemberKind;
 
 use crate::session::Session;
 
@@ -175,6 +179,38 @@ fn enrich_one(
         "CEL0018" => symbol_did_you_mean(session, pools, file, range, SymbolSpace::ClassLike),
         "CEL0019" => symbol_did_you_mean(session, pools, file, range, SymbolSpace::Function),
         "CEL0020" => symbol_did_you_mean(session, pools, file, range, SymbolSpace::Constant),
+        "CEL0030" => member_did_you_mean(
+            session,
+            pools,
+            file,
+            range,
+            &diagnostic.message,
+            MemberKind::Method,
+        ),
+        "CEL0031" => member_did_you_mean(
+            session,
+            pools,
+            file,
+            range,
+            &diagnostic.message,
+            MemberKind::Property,
+        ),
+        "CEL0032" => member_did_you_mean(
+            session,
+            pools,
+            file,
+            range,
+            &diagnostic.message,
+            MemberKind::ClassConstant,
+        ),
+        "CEL0033" => member_did_you_mean(
+            session,
+            pools,
+            file,
+            range,
+            &diagnostic.message,
+            MemberKind::EnumCase,
+        ),
         _ => None,
     };
     match enrichment {
@@ -207,6 +243,12 @@ struct CandidatePools<'a> {
     classes: Option<Vec<String>>,
     functions: Option<Vec<String>>,
     constants: Option<Vec<String>>,
+    /// The receiver's member names of one kind, keyed by (resolved
+    /// class-like key, kind), built at most once per [`enrich`] call.
+    /// Excludes nothing yet: the written member's own key is filtered
+    /// out per diagnostic afterwards, since two diagnostics can share a
+    /// receiver while writing different unknown members.
+    members: HashMap<(String, MemberKind), Vec<String>>,
 }
 
 impl<'a> CandidatePools<'a> {
@@ -216,6 +258,7 @@ impl<'a> CandidatePools<'a> {
             classes: None,
             functions: None,
             constants: None,
+            members: HashMap::new(),
         }
     }
 
@@ -229,6 +272,18 @@ impl<'a> CandidatePools<'a> {
             SymbolSpace::Constant => &mut self.constants,
         };
         slot.get_or_insert_with(|| declared_pool(session, space))
+    }
+
+    /// The declared member names of `kind` on the class-like named by
+    /// `class_key`, computed on first use per (class_key, kind) pair
+    /// and shared with every later call in the same pass. `class_key`
+    /// must already be the resolved fully qualified key (see
+    /// `receiver_class_key`), not the as-written receiver text.
+    fn member_pool(&mut self, class_key: &str, kind: MemberKind) -> &[String] {
+        let session = self.session;
+        self.members
+            .entry((class_key.to_owned(), kind))
+            .or_insert_with(|| member_candidates(session, class_key, kind))
     }
 }
 
@@ -371,15 +426,267 @@ fn symbol_did_you_mean(
                 Some(Enrichment::Note(format!("did you mean `{candidate}`?")))
             }
         }
-        DidYouMean::Tie(names) => {
-            let listed = names
-                .iter()
-                .map(|name| format!("`{name}`"))
-                .collect::<Vec<_>>()
-                .join(", ");
-            Some(Enrichment::Note(format!("did you mean one of {listed}?")))
+        DidYouMean::Tie(names) => Some(Enrichment::Note(tie_note(&names))),
+    }
+}
+
+/// The note a tied `DidYouMean::Tie` outcome renders as: every tied
+/// name, backtick-wrapped, comma-joined. Shared by every family whose
+/// resolution can tie, so the rendered wording stays byte-identical
+/// wherever it appears.
+fn tie_note(names: &[String]) -> String {
+    let listed = names
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!("did you mean one of {listed}?")
+}
+
+/// Extracts the two backticked operands of the pinned member-message
+/// shapes (`` unknown method `m` on `T` ``). The message is the stored
+/// form of the diagnostic — on a warm run the structured verdict no
+/// longer exists — so the message is the interface, and a test pins
+/// this parser against the emitters' formats.
+fn parse_member_message(message: &str) -> Option<(String, String)> {
+    let mut segments = message.split('`');
+    let _head = segments.next()?;
+    let member = segments.next()?;
+    let _middle = segments.next()?;
+    let receiver = segments.next()?;
+    let member = member.strip_prefix('$').unwrap_or(member);
+    if member.is_empty() || receiver.is_empty() {
+        return None;
+    }
+    Some((member.to_owned(), receiver.to_owned()))
+}
+
+/// The member-name token inside the diagnostic's span: the last
+/// occurrence of the written member that is preceded by `->`, `?->`,
+/// or `::` (whitespace allowed in between) and ends at a word
+/// boundary. `None` skips the applicable edit rather than guessing.
+fn member_token_range(span_text: &str, member: &str, span_start: TextSize) -> Option<TextRange> {
+    let mut search_end = span_text.len();
+    loop {
+        let position = span_text.get(..search_end)?.rfind(member)?;
+        let before = span_text.get(..position)?.trim_end();
+        let after = span_text.get(position + member.len()..)?;
+        let boundary_after = after
+            .chars()
+            .next()
+            .is_none_or(|character| !character.is_alphanumeric() && character != '_');
+        if boundary_after && (before.ends_with("->") || before.ends_with("::")) {
+            let start = span_start + TextSize::from(u32::try_from(position).ok()?);
+            let length = TextSize::from(u32::try_from(member.len()).ok()?);
+            return Some(TextRange::new(start, start + length));
+        }
+        if position == 0 {
+            return None;
+        }
+        search_end = position;
+    }
+}
+
+/// One member-family diagnostic's enrichment: the receiver's as-written
+/// text is resolved to its actual class-like key first (see
+/// `receiver_class_key`), the pool for that key comes from the shared
+/// per-(class_key, kind) cache, the written member's own key is
+/// excluded from it, and a unique winner becomes an applicable edit
+/// only when its token can actually be located in the span — a member
+/// reference has no namespace or alias dimension once the receiver's
+/// class is known, so (unlike the symbol families) no further guard is
+/// needed once the member key matches.
+fn member_did_you_mean(
+    session: &Session,
+    pools: &mut CandidatePools<'_>,
+    file: FileId,
+    range: TextRange,
+    message: &str,
+    kind: MemberKind,
+) -> Option<Enrichment> {
+    let (member, receiver) = parse_member_message(message)?;
+    // A display the folded key cannot round-trip (a union type, an
+    // anonymous class) yields no candidates and therefore no noise.
+    if receiver.contains('|') || receiver.contains('@') {
+        return None;
+    }
+    let class_key = receiver_class_key(session, file, range, &receiver);
+    let written_key = folded_member_key(kind, &member);
+    let pool = pools.member_pool(&class_key, kind);
+    let candidates: Vec<String> = pool
+        .iter()
+        .filter(|candidate| folded_member_key(kind, candidate) != written_key)
+        .cloned()
+        .collect();
+    if candidates.is_empty() {
+        return None;
+    }
+    let text = span_text(session, file, range)?;
+    match did_you_mean(&member, candidates) {
+        DidYouMean::Nothing => None,
+        DidYouMean::Unique(candidate) => match member_token_range(&text, &member, range.start()) {
+            Some(edit_range) => Some(Enrichment::Suggestion(Suggestion {
+                message: format!("did you mean `{candidate}`?"),
+                confidence: Confidence::NeedsReview,
+                edits: vec![TextEdit {
+                    file,
+                    range: edit_range,
+                    replacement: candidate,
+                }],
+            })),
+            // A unique candidate without a locatable token degrades to
+            // a note: an applicable edit is never guessed.
+            None => Some(Enrichment::Note(format!("did you mean `{candidate}`?"))),
+        },
+        DidYouMean::Tie(names) => Some(Enrichment::Note(tie_note(&names))),
+    }
+}
+
+/// The receiver's fully qualified class-like key. Instance access
+/// (`$value->member`) reports the resolved key already
+/// (`receiver_display` in `celerrate_types::checks::receivers`), so
+/// folding it is enough and no syntax tree needs touching. A scoped
+/// access (`Foo::CONST`, `Foo::method()`) instead reports the
+/// as-written subject text verbatim (`written_class_display`, kept for
+/// message legibility): when the folded written text names no known
+/// class, this recomputes the true key from the file's own class-like
+/// reference at this span, exactly like `attempted_keys` does for the
+/// unknown-symbol families. Falling back to the folded written text
+/// when even that fails is safe: an unresolvable key simply yields no
+/// candidates below, which is the same "no enrichment" outcome as
+/// returning `None` here would have produced.
+fn receiver_class_key(session: &Session, file: FileId, range: TextRange, receiver: &str) -> String {
+    let folded = folded_symbol_key(SymbolSpace::ClassLike, receiver);
+    if class_exists(session, &folded) {
+        return folded;
+    }
+    resolved_receiver_key(session, file, range, receiver).unwrap_or(folded)
+}
+
+/// Whether a fully qualified key names a known class-like, source or
+/// stub — the same two lookups `member_candidates` itself walks from,
+/// consulted here only to verify a resolution attempt.
+fn class_exists(session: &Session, class_key: &str) -> bool {
+    let db = &session.database;
+    let class = ClassQuery::new(db, class_key.to_owned());
+    if linearized_class(
+        db,
+        session.files,
+        session.stubs,
+        session.configuration,
+        class,
+    )
+    .as_ref()
+    .is_some()
+    {
+        return true;
+    }
+    stub_signature_table(db, session.stubs)
+        .class(class_key)
+        .is_some()
+}
+
+/// The fully qualified key a written class-like reference resolves to,
+/// recomputed from the file's own syntax tree: the class-like
+/// reference whose written text matches `receiver` and whose range
+/// falls inside the diagnostic's span (the scoped subject is a strict
+/// sub-range of the whole scoped-access expression the diagnostic
+/// anchors to), resolved through its own namespace and `use` tables —
+/// mirrors the walk in `celerrate_types::checks::members::resolve_scoped_class_key`.
+fn resolved_receiver_key(
+    session: &Session,
+    file: FileId,
+    range: TextRange,
+    receiver: &str,
+) -> Option<String> {
+    let source = *session.sources.get(&file)?;
+    let root = parse(&session.database, source).tree();
+    let reference = collect_references(&root).into_iter().find(|reference| {
+        reference.space == SymbolSpace::ClassLike
+            && reference.written == receiver
+            && range.contains_range(reference.range)
+    })?;
+    let tree = item_tree(&session.database, source);
+    let tables = UseTables::for_namespace(tree, &reference.namespace);
+    let attempted = resolve_candidates(
+        &reference.written,
+        SymbolSpace::ClassLike,
+        &reference.namespace,
+        &tables,
+    )
+    .into_iter()
+    .next()?;
+    // `resolve_candidates` answers the fully qualified spelling, not
+    // the folded key `ClassQuery` and the stub table expect.
+    Some(folded_symbol_key(SymbolSpace::ClassLike, &attempted))
+}
+
+/// The class-like's member surface of the queried kind: the linearized
+/// source surface first, then the compiled stub graph behind its stub
+/// edges (or from the key itself when the class is no source class),
+/// breadth-first over parent links exactly like `lookup_member`'s stub
+/// walk. Virtual (annotation-declared) members are deliberately not in
+/// the pool in this sub-project. `class_key` must already be resolved
+/// (see `receiver_class_key`): a display the folded key cannot
+/// round-trip (a union type, an anonymous class) is filtered out
+/// there, never reaching here.
+fn member_candidates(session: &Session, class_key: &str, kind: MemberKind) -> Vec<String> {
+    let db = &session.database;
+    let stub_kind = match kind {
+        MemberKind::Method => StubMemberKind::Method,
+        MemberKind::Property => StubMemberKind::Property,
+        MemberKind::ClassConstant => StubMemberKind::ClassConstant,
+        MemberKind::EnumCase => StubMemberKind::EnumCase,
+    };
+    let mut names: Vec<String> = Vec::new();
+    let mut stub_roots: Vec<String> = Vec::new();
+    let class = ClassQuery::new(db, class_key.to_owned());
+    match linearized_class(
+        db,
+        session.files,
+        session.stubs,
+        session.configuration,
+        class,
+    )
+    .as_ref()
+    {
+        Some(linearized) => {
+            for entry in &linearized.members {
+                if entry.member.kind == kind {
+                    names.push(entry.member.name.clone());
+                }
+            }
+            for edge in &linearized.ancestry {
+                if let Some(stub_key) = &edge.stub {
+                    stub_roots.push(stub_key.clone());
+                }
+            }
+        }
+        None => stub_roots.push(class_key.to_owned()),
+    }
+    let table = stub_signature_table(db, session.stubs);
+    let range = session.configuration.php_version_range(db);
+    let mut queue: VecDeque<String> = stub_roots.into();
+    let mut visited: HashSet<String> = HashSet::new();
+    while let Some(key) = queue.pop_front() {
+        if !visited.insert(key.clone()) {
+            continue;
+        }
+        let Some(surface) = table.class(&key) else {
+            continue;
+        };
+        for member in &surface.members {
+            if member.kind == stub_kind && member.availability.exists_in(range) {
+                names.push(member.name.clone());
+            }
+        }
+        for parent in &surface.parents {
+            queue.push_back(folded_symbol_key(SymbolSpace::ClassLike, parent));
         }
     }
+    names.sort();
+    names.dedup();
+    names
 }
 
 #[cfg(test)]
@@ -679,6 +986,172 @@ mod tests {
         assert_eq!(
             class[0].notes,
             vec!["did you mean `App\\Billing\\PaymentGateway`?"]
+        );
+    }
+
+    #[test]
+    fn an_unknown_method_suggests_the_near_member_and_edits_exactly_its_token() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/User.php",
+                "<?php\nnamespace App;\nclass User { public function save(): void {} }\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nfunction persist(User $user): void { $user->svae(); }\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.id.as_str(), "CEL0030");
+        assert_eq!(diagnostic.suggestions.len(), 1);
+        let suggestion = &diagnostic.suggestions[0];
+        assert_eq!(suggestion.message, "did you mean `save`?");
+        assert_eq!(suggestion.confidence, Confidence::NeedsReview);
+        // The edit covers exactly the member token, not the whole
+        // member expression the diagnostic's span covers.
+        let source = std::fs::read_to_string(_root.path().join("src/Caller.php")).unwrap();
+        let edit = &suggestion.edits[0];
+        let start = usize::from(edit.range.start());
+        let end = usize::from(edit.range.end());
+        assert_eq!(&source[start..end], "svae");
+        assert_eq!(edit.replacement, "save");
+    }
+
+    #[test]
+    fn an_unknown_property_suggests_the_near_property() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/User.php",
+                "<?php\nnamespace App;\nclass User { public string $name = ''; }\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nfunction read(User $user): string { return $user->nmae; }\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id.as_str(), "CEL0031");
+        assert_eq!(
+            diagnostics[0].suggestions[0].message,
+            "did you mean `name`?",
+        );
+        assert_eq!(diagnostics[0].suggestions[0].edits[0].replacement, "name");
+    }
+
+    #[test]
+    fn an_unknown_class_constant_and_enum_case_suggest_their_near_siblings() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Config.php",
+                "<?php\nnamespace App;\nclass Config { public const LIMIT = 10; }\n",
+            ),
+            (
+                "src/Status.php",
+                "<?php\nnamespace App;\nenum Status { case Active; }\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nfunction f(): void { echo Config::LIMTI; $s = Status::Activ; }\n",
+            ),
+        ]);
+        let messages: Vec<(&str, &str)> = diagnostics
+            .iter()
+            .filter_map(|diagnostic| {
+                diagnostic
+                    .suggestions
+                    .first()
+                    .map(|suggestion| (diagnostic.id.as_str(), suggestion.message.as_str()))
+            })
+            .collect();
+        assert_eq!(
+            messages,
+            vec![
+                ("CEL0032", "did you mean `LIMIT`?"),
+                ("CEL0033", "did you mean `Active`?"),
+            ],
+        );
+    }
+
+    #[test]
+    fn a_stub_inherited_member_is_a_candidate() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Caller.php",
+                "<?php\nfunction f(\\ArrayObject $a): void { $a->getArrayCop(); }\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        assert_eq!(diagnostics[0].id.as_str(), "CEL0030");
+        assert_eq!(
+            diagnostics[0].suggestions[0].message,
+            "did you mean `getArrayCopy`?",
+        );
+    }
+
+    #[test]
+    fn a_member_with_no_near_sibling_stays_untouched() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/User.php",
+                "<?php\nnamespace App;\nclass User { public function save(): void {} }\n",
+            ),
+            (
+                "src/Caller.php",
+                "<?php\nnamespace App;\nfunction f(User $user): void { $user->frobnicate(); }\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].suggestions.is_empty());
+        assert!(diagnostics[0].notes.is_empty());
+    }
+
+    #[test]
+    fn the_message_parser_matches_the_emitters_pinned_formats() {
+        // These four literals are the exact formats
+        // `crates/celerrate_rules/src/rules/unknown_members.rs` emits;
+        // if that file changes shape, this test names the coupling.
+        assert_eq!(
+            super::parse_member_message("unknown method `svae` on `User`"),
+            Some(("svae".to_owned(), "User".to_owned())),
+        );
+        assert_eq!(
+            super::parse_member_message("unknown property `$nmae` on `App\\User`"),
+            Some(("nmae".to_owned(), "App\\User".to_owned())),
+        );
+        assert_eq!(
+            super::parse_member_message("unknown class constant `LIMTI` on `Config`"),
+            Some(("LIMTI".to_owned(), "Config".to_owned())),
+        );
+        assert_eq!(
+            super::parse_member_message("unknown enum case `Activ` on `Status`"),
+            Some(("Activ".to_owned(), "Status".to_owned())),
+        );
+        assert_eq!(super::parse_member_message("no backticks here"), None);
+    }
+
+    #[test]
+    fn the_member_token_is_the_operator_prefixed_occurrence() {
+        use celerrate_source::TextSize;
+        // `$svae->svae()`: the receiver spells the same word; the
+        // token after `->` is the one the edit must cover.
+        let range = super::member_token_range("$svae->svae()", "svae", TextSize::from(10)).unwrap();
+        assert_eq!(u32::from(range.start()), 10 + 7);
+        assert_eq!(u32::from(range.end()), 10 + 11);
+        assert_eq!(
+            super::member_token_range("Config::LIMTI", "LIMTI", TextSize::from(0))
+                .map(|range| (u32::from(range.start()), u32::from(range.end())),),
+            Some((8, 13)),
+        );
+        // No operator-prefixed occurrence: no range, never a guess.
+        assert_eq!(
+            super::member_token_range("svae", "svae", TextSize::from(0)),
+            None,
         );
     }
 
