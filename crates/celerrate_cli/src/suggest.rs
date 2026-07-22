@@ -6,6 +6,13 @@
 //! candidate search would also wire the global name set into every
 //! file's dependency graph; here it wires into nothing.
 
+use celerrate_db::source_text;
+use celerrate_diagnostics::{Confidence, Diagnostic, Suggestion};
+use celerrate_semantics::{SymbolSpace, folded_symbol_key, source_symbol_table, stub_symbol_table};
+use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
+
+use crate::session::Session;
+
 /// Optimal string alignment distance (restricted Damerau-Levenshtein)
 /// over lowercased characters, abandoned as soon as it provably
 /// exceeds `bound`. A transposition of two adjacent characters costs 1
@@ -15,8 +22,6 @@
 /// bound. Lowercasing makes a case-only typo distance 0, which is
 /// exactly the fix the case-sensitive spaces (constants, properties,
 /// enum cases) want suggested.
-// Consumed by enrich (task 2); the allow dies with that task.
-#[allow(dead_code)]
 fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usize> {
     let written: Vec<char> = written.to_lowercase().chars().collect();
     let candidate: Vec<char> = candidate.to_lowercase().chars().collect();
@@ -72,8 +77,6 @@ fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usiz
 
 /// The bound the design calls "bounded edit distance": tight for short
 /// names (almost anything is within 2 of a 3-letter name), 2 otherwise.
-// Consumed by enrich (task 2); the allow dies with that task.
-#[allow(dead_code)]
 fn distance_bound(name: &str) -> usize {
     if name.chars().count() <= 4 { 1 } else { 2 }
 }
@@ -82,8 +85,6 @@ fn distance_bound(name: &str) -> usize {
 /// minimal-distance candidate becomes an applicable suggestion; a tie
 /// is listed in a note instead, because bulk `--fix-suggestions` must
 /// never apply a guess the engine itself knows is ambiguous.
-// Consumed by enrich (task 2); the allow dies with that task.
-#[allow(dead_code)]
 #[derive(Debug, PartialEq, Eq)]
 enum DidYouMean {
     Nothing,
@@ -91,8 +92,6 @@ enum DidYouMean {
     Tie(Vec<String>),
 }
 
-// Consumed by enrich (task 2); the allow dies with that task.
-#[allow(dead_code)]
 fn did_you_mean(written: &str, candidates: Vec<String>) -> DidYouMean {
     let bound = distance_bound(written);
     let mut minimum: Option<usize> = None;
@@ -123,10 +122,126 @@ fn did_you_mean(written: &str, candidates: Vec<String>) -> DidYouMean {
 }
 
 /// The last segment of a qualified name: `Lib\Client` -> `Client`.
-// Consumed by enrich (task 2); the allow dies with that task.
-#[allow(dead_code)]
 fn terminal_segment(name: &str) -> &str {
     name.rsplit('\\').next().unwrap_or(name)
+}
+
+/// What one diagnostic gains: an applicable suggestion, or a note when
+/// the engine itself knows the guess is ambiguous.
+enum Enrichment {
+    Suggestion(Suggestion),
+    Note(String),
+}
+
+/// Adds presentation-time did-you-mean suggestions and notes to the
+/// reported diagnostics. Pure presentation: the input's length and
+/// order are preserved, the persisted verdicts never see the result,
+/// and nothing here runs inside a salsa query.
+pub fn enrich(session: &Session, diagnostics: &[Diagnostic]) -> Vec<Diagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| enrich_one(session, diagnostic.clone()))
+        .collect()
+}
+
+fn enrich_one(session: &Session, mut diagnostic: Diagnostic) -> Diagnostic {
+    let Some((file, range)) = diagnostic.span() else {
+        return diagnostic;
+    };
+    // Matching on the code string is deliberate: the identifiers are
+    // the frozen public contract, and the CLI must not depend on which
+    // crate happens to declare each constant.
+    let enrichment = match diagnostic.id.as_str() {
+        "CEL0018" => symbol_did_you_mean(session, file, range, SymbolSpace::ClassLike),
+        "CEL0019" => symbol_did_you_mean(session, file, range, SymbolSpace::Function),
+        "CEL0020" => symbol_did_you_mean(session, file, range, SymbolSpace::Constant),
+        _ => None,
+    };
+    match enrichment {
+        Some(Enrichment::Suggestion(suggestion)) => diagnostic.suggestions.push(suggestion),
+        Some(Enrichment::Note(note)) => diagnostic.notes.push(note),
+        None => {}
+    }
+    diagnostic
+}
+
+/// The source text under a span, from the exact decoded input the
+/// analysis read.
+fn span_text(session: &Session, file: FileId, range: TextRange) -> Option<String> {
+    let source = session.sources.get(&file)?;
+    let text = source_text(&session.database, *source).as_ref().ok()?;
+    text.text()
+        .get(usize::from(range.start())..usize::from(range.end()))
+        .map(str::to_owned)
+}
+
+fn symbol_did_you_mean(
+    session: &Session,
+    file: FileId,
+    range: TextRange,
+    space: SymbolSpace,
+) -> Option<Enrichment> {
+    let written = span_text(session, file, range)?;
+    let terminal = terminal_segment(&written);
+    // The edit replaces the terminal segment only, so an alias or a
+    // qualified spelling keeps its prefix untouched.
+    let prefix_length = u32::try_from(written.len() - terminal.len()).ok()?;
+    let edit_range = TextRange::new(range.start() + TextSize::from(prefix_length), range.end());
+    let written_key = folded_symbol_key(space, terminal);
+    let candidates = symbol_candidates(session, space, &written_key);
+    resolve_enrichment(terminal, candidates, file, edit_range)
+}
+
+/// Every declared terminal segment of the space, source and stub halves
+/// alike, minus anything that folds to the written key (a name that
+/// folds equal would have resolved).
+fn symbol_candidates(session: &Session, space: SymbolSpace, written_key: &str) -> Vec<String> {
+    let db = &session.database;
+    let mut names: Vec<String> = Vec::new();
+    for entry in source_symbol_table(db, session.files).entries() {
+        if entry.space == space {
+            names.push(terminal_segment(&entry.original).to_owned());
+        }
+    }
+    for entry in stub_symbol_table(db, session.stubs, session.configuration).entries() {
+        if entry.space == space {
+            names.push(terminal_segment(&entry.symbol.name).to_owned());
+        }
+    }
+    names.retain(|name| folded_symbol_key(space, name) != written_key);
+    names.sort();
+    names.dedup();
+    names
+}
+
+/// The shared tail of both families: the discipline applied to a
+/// candidate list, shaped into what the diagnostic gains.
+fn resolve_enrichment(
+    written: &str,
+    candidates: Vec<String>,
+    file: FileId,
+    edit_range: TextRange,
+) -> Option<Enrichment> {
+    match did_you_mean(written, candidates) {
+        DidYouMean::Nothing => None,
+        DidYouMean::Unique(candidate) => Some(Enrichment::Suggestion(Suggestion {
+            message: format!("did you mean `{candidate}`?"),
+            confidence: Confidence::NeedsReview,
+            edits: vec![TextEdit {
+                file,
+                range: edit_range,
+                replacement: candidate,
+            }],
+        })),
+        DidYouMean::Tie(names) => {
+            let listed = names
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            Some(Enrichment::Note(format!("did you mean one of {listed}?")))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -211,5 +326,137 @@ mod tests {
         assert_eq!(terminal_segment("Lib\\Client"), "Client");
         assert_eq!(terminal_segment("Client"), "Client");
         assert_eq!(terminal_segment("\\App\\Http\\Kernel"), "Kernel");
+    }
+
+    use celerrate_diagnostics::{Confidence, Diagnostic};
+
+    use crate::analysis;
+    use crate::session::Session;
+
+    fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for (path, contents) in files {
+            let path = root.path().join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, contents).unwrap();
+        }
+        root
+    }
+
+    /// Analyzes a fixture project and enriches its report, exactly as
+    /// the single-pass path will (task 4).
+    fn enriched(files: &[(&str, &str)]) -> (tempfile::TempDir, Vec<Diagnostic>) {
+        let root = project(files);
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let outcome = analysis::analyze(&inputs).unwrap_or_default();
+        let enriched = super::enrich(&session, &outcome.diagnostics);
+        (root, enriched)
+    }
+
+    const MANIFEST: &str =
+        r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
+
+    #[test]
+    fn an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Gateway.php",
+                "<?php\nnamespace App;\nclass PaymentGateway {}\n",
+            ),
+            (
+                "src/Consumer.php",
+                "<?php\nnamespace App;\nnew PaymentGatewya();\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        let diagnostic = &diagnostics[0];
+        assert_eq!(diagnostic.id.as_str(), "CEL0018");
+        assert_eq!(diagnostic.suggestions.len(), 1);
+        let suggestion = &diagnostic.suggestions[0];
+        assert_eq!(suggestion.message, "did you mean `PaymentGateway`?");
+        assert_eq!(suggestion.confidence, Confidence::NeedsReview);
+        assert_eq!(suggestion.edits.len(), 1);
+        // The edit replaces exactly the written name, in the
+        // diagnostic's own file.
+        let (file, range) = diagnostic.span().unwrap();
+        assert_eq!(suggestion.edits[0].file, file);
+        assert_eq!(suggestion.edits[0].range, range);
+        assert_eq!(suggestion.edits[0].replacement, "PaymentGateway");
+    }
+
+    #[test]
+    fn a_qualified_spelling_keeps_its_prefix_and_replaces_the_terminal_segment_only() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Gateway.php",
+                "<?php\nnamespace App\\Billing;\nclass PaymentGateway {}\n",
+            ),
+            (
+                "src/Consumer.php",
+                "<?php\nnamespace App;\nnew Billing\\PaymentGatewya();\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        let suggestion = &diagnostics[0].suggestions[0];
+        // The span covers `Billing\PaymentGatewya`; the edit covers
+        // only `PaymentGatewya`.
+        let (_, span) = diagnostics[0].span().unwrap();
+        assert!(suggestion.edits[0].range.start() > span.start());
+        assert_eq!(suggestion.edits[0].range.end(), span.end());
+        assert_eq!(suggestion.edits[0].replacement, "PaymentGateway");
+    }
+
+    #[test]
+    fn a_case_only_constant_typo_suggests_the_declared_spelling() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/constants.php",
+                "<?php\ndefine('DATABASE_TIMEOUT_LIMIT', 30);\necho database_timeout_limit;\n",
+            ),
+        ]);
+        let constant: Vec<&Diagnostic> = diagnostics
+            .iter()
+            .filter(|diagnostic| diagnostic.id.as_str() == "CEL0020")
+            .collect();
+        assert_eq!(constant.len(), 1);
+        assert_eq!(
+            constant[0].suggestions[0].message,
+            "did you mean `DATABASE_TIMEOUT_LIMIT`?",
+        );
+    }
+
+    #[test]
+    fn a_diagnostic_with_no_near_candidate_is_returned_untouched() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Consumer.php",
+                "<?php\nnamespace App;\nnew CompletelyUnheardOfThing();\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 1);
+        assert!(diagnostics[0].suggestions.is_empty());
+        assert!(diagnostics[0].notes.is_empty());
+    }
+
+    #[test]
+    fn enrichment_preserves_identity_order_and_count() {
+        let (_root, diagnostics) = enriched(&[
+            ("composer.json", MANIFEST),
+            (
+                "src/Consumer.php",
+                "<?php\nnamespace App;\nnew Alpha();\nnew Beta();\n",
+            ),
+        ]);
+        assert_eq!(diagnostics.len(), 2);
+        let mut sorted = diagnostics.clone();
+        sorted.sort();
+        assert_eq!(diagnostics, sorted, "the total order survives enrichment");
     }
 }
