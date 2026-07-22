@@ -101,6 +101,42 @@ fn removing_the_directive_restores_the_finding_on_a_warm_run() {
 }
 
 #[test]
+fn the_pack_stores_the_directive_match_records() {
+    let root = project(&[("a.php", SUPPRESSED_AND_NOT)]);
+    check(root.path());
+
+    let session = Session::start(root.path());
+    let inputs = session.inputs();
+    let &file = session.sources.values().next().unwrap();
+    let VerdictLookup::Hit {
+        verdict: stored, ..
+    } = lookup_verdict(&inputs, file)
+    else {
+        panic!("the persisted verdict must revalidate on an unchanged project");
+    };
+    let content_length = u32::try_from(file.bytes(&inputs.database).len()).unwrap_or(0);
+    let records = stored
+        .directives_convert(content_length)
+        .expect("stored directive records convert");
+    assert_eq!(records.len(), 1);
+    let (directive, matched) = &records[0];
+    assert!(*matched, "the ignore-line directive admitted MissingOne");
+    assert_eq!(
+        records
+            .iter()
+            .map(|(directive, matched)| (directive.clone(), *matched))
+            .collect::<Vec<_>>(),
+        celerrate_semantics::suppression_directives(&inputs.database, file)
+            .iter()
+            .cloned()
+            .map(|fresh| (fresh, true))
+            .collect::<Vec<_>>(),
+        "stored records equal the query plus the match outcome",
+    );
+    let _ = directive;
+}
+
+#[test]
 fn a_warm_run_over_an_unchanged_project_stays_suppressed() {
     let root = project(&[(
         "a.php",

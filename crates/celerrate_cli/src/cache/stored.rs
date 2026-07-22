@@ -5,8 +5,9 @@
 //! re-interned through the registry. Every `to_*` conversion is total
 //! except identifier re-interning, whose failure discards the entry.
 //!
-//! **The stored diagnostic's anatomy (schema 6).** `StoredDiagnostic`
-//! mirrors the domain `Diagnostic` whole: its anchor (`Project` or a
+//! **The stored diagnostic's anatomy (schema 6, unchanged in schema
+//! 7).** `StoredDiagnostic` mirrors the domain `Diagnostic` whole: its
+//! anchor (`Project` or a
 //! bounds-checked `Span`), its labels (a local range or a symbolic
 //! name), its notes, and its suggestions (a confidence plus same-file
 //! text edits — no file identity of their own, since a suggestion's
@@ -27,15 +28,36 @@
 //! suppression is structurally impossible`, `cache_suppression.rs`'s own
 //! module doc). A stale suppression decision can therefore never survive
 //! into a served verdict, typed or not.
+//!
+//! **The directive records (schema 7).** `StoredVerdict.directives`
+//! carries every resolved directive on the file, each with the UNTYPED
+//! half's own `matched` flag; `StoredTypedVerdict.matched_directives`
+//! carries the typed half's own admitting indexes into that same list,
+//! separately, so a recomputed typed half never serves the untyped
+//! half's stale union. `StoredDirective::to_directive` bounds-checks its
+//! ranges exactly like `StoredDiagnostic::to_diagnostic` and re-interns
+//! its filter codes, canonicalizing (sorting and deduplicating) them on
+//! load, since `ResolvedDirective::admits` binary-searches a `Only`
+//! filter's codes and a hand-crafted, checksum-valid pack must not be
+//! able to make that lie. `StoredVerdict::directives_convert` extends
+//! the same validation to `matched_directives`: every index must be in
+//! range and the list strictly increasing, or the whole verdict is
+//! discarded — the checksum proves transport, never honesty. On a
+//! partial hit, the stored untyped records and a freshly recomputed
+//! typed half's indexes are never cross-checked against each other;
+//! their alignment rests on the content hash plus the binary-identity
+//! pack key alone, the same trust every other stored half already
+//! extends.
 
 use celerrate_diagnostics::{
     Anchor, Confidence, Diagnostic, Label, LabelTarget, Severity, Suggestion, find_identifier,
 };
 use celerrate_project::PhpVersion;
 use celerrate_semantics::{
-    AstId, ClassMembers, Declaration, DeclarationKind, FreeFunction, ImportKind, ItemTree, Member,
-    MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature, ResolutionAnswer,
-    ResolutionRecord, SymbolSpace, TraitAdaptation, TraitUse, UseImport, Visibility,
+    AstId, ClassMembers, Declaration, DeclarationKind, DirectiveOrigin, FreeFunction, ImportKind,
+    ItemTree, Member, MemberFlags, MemberKind, MemberSignature, MemberTree, ParameterSignature,
+    ResolutionAnswer, ResolutionRecord, ResolvedDirective, SuppressionFilter, SymbolSpace,
+    TraitAdaptation, TraitUse, UseImport, Visibility,
 };
 use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
 use celerrate_types::{StoredClassDependency, StoredFunctionDependency, StoredInferredEdge};
@@ -896,6 +918,99 @@ impl StoredRecord {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum StoredSuppressionFilter {
+    All,
+    Only(Vec<String>),
+}
+
+/// One resolved directive with its untyped-half match outcome: what
+/// the `Reporting` phase replays on the warm path without re-parsing
+/// (design section 4). The typed half's own outcomes live in
+/// `StoredTypedVerdict.matched_directives`, indexes into this list, so
+/// a recomputed typed half never serves a stale union.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StoredDirective {
+    pub anchor_start: u32,
+    pub anchor_end: u32,
+    pub scope_start: u32,
+    pub scope_end: u32,
+    pub filter: StoredSuppressionFilter,
+    pub identifiers: Vec<String>,
+    pub native: bool,
+    /// Whether the untyped half's filter admitted any diagnostic.
+    pub matched: bool,
+}
+
+impl StoredDirective {
+    pub fn of(directive: &ResolvedDirective, matched: bool) -> Self {
+        Self {
+            anchor_start: directive.anchor.start().into(),
+            anchor_end: directive.anchor.end().into(),
+            scope_start: directive.scope.start().into(),
+            scope_end: directive.scope.end().into(),
+            filter: match &directive.filter {
+                SuppressionFilter::All => StoredSuppressionFilter::All,
+                SuppressionFilter::Only(codes) => StoredSuppressionFilter::Only(
+                    codes.iter().map(|code| code.as_str().to_owned()).collect(),
+                ),
+            },
+            identifiers: directive.identifiers.clone(),
+            native: directive.origin == DirectiveOrigin::Native,
+            matched,
+        }
+    }
+
+    /// `None` when a range is inverted or out of bounds, or a filter
+    /// code no longer interns: another era's record, discarded like a
+    /// failed diagnostic conversion - the checksum proves transport,
+    /// never honesty.
+    pub fn to_directive(&self, content_length: u32) -> Option<(ResolvedDirective, bool)> {
+        let in_bounds = |start: u32, end: u32| start <= end && end <= content_length;
+        if !in_bounds(self.anchor_start, self.anchor_end)
+            || !in_bounds(self.scope_start, self.scope_end)
+        {
+            return None;
+        }
+        let filter = match &self.filter {
+            StoredSuppressionFilter::All => SuppressionFilter::All,
+            StoredSuppressionFilter::Only(codes) => {
+                let mut interned = Vec::with_capacity(codes.len());
+                for code in codes {
+                    interned.push(find_identifier(code)?);
+                }
+                // Canonicalize: `admits` binary-searches this list,
+                // and a hand-crafted, checksum-valid pack must not
+                // smuggle an unsorted list past validation (decision
+                // 8's sharp edge (a)).
+                interned.sort();
+                interned.dedup();
+                SuppressionFilter::Only(interned)
+            }
+        };
+        Some((
+            ResolvedDirective {
+                anchor: TextRange::new(
+                    TextSize::from(self.anchor_start),
+                    TextSize::from(self.anchor_end),
+                ),
+                scope: TextRange::new(
+                    TextSize::from(self.scope_start),
+                    TextSize::from(self.scope_end),
+                ),
+                filter,
+                identifiers: self.identifiers.clone(),
+                origin: if self.native {
+                    DirectiveOrigin::Native
+                } else {
+                    DirectiveOrigin::Foreign
+                },
+            },
+            self.matched,
+        ))
+    }
+}
+
 /// One reported file's typed portion, persisted (plan 9a, task 9): the
 /// CEL0030-CEL0038 families' diagnostics alongside the revalidation
 /// records `crate::cache::verdict`'s layered validation checks before
@@ -912,6 +1027,14 @@ pub struct StoredTypedVerdict {
     pub classes: Vec<StoredClassDependency>,
     pub functions: Vec<StoredFunctionDependency>,
     pub inferred: Vec<StoredInferredEdge>,
+    /// The typed half's own admitting directive indexes, into
+    /// `StoredVerdict.directives` (schema 7, task 7): a directive's
+    /// stored `matched` flag is the UNTYPED half's own outcome, so a
+    /// recomputed typed half never serves it as if it were the typed
+    /// half's own. Indexes here must be strictly increasing on load
+    /// (decision 8's sharp edge (a)): `StoredVerdict::directives_convert`
+    /// discards the whole verdict otherwise.
+    pub matched_directives: Vec<u32>,
 }
 
 /// One reported file's persisted verdict: its composed diagnostics and
@@ -920,11 +1043,58 @@ pub struct StoredTypedVerdict {
 pub struct StoredVerdict {
     pub diagnostics: Vec<StoredDiagnostic>,
     pub records: Vec<StoredRecord>,
+    /// Every resolved directive on this file, with the untyped half's
+    /// own `matched` outcome (schema 7, task 7). The typed half's own
+    /// outcomes live separately, as indexes into this list
+    /// (`StoredTypedVerdict.matched_directives`), so a recomputed typed
+    /// half never serves a stale union of the two.
+    pub directives: Vec<StoredDirective>,
     /// The typed half (plan 9a, task 9): `None` when the persist lever
     /// (`crate::cache::PERSIST_TYPED_ARTIFACTS`) is off, `Some` otherwise
     /// — never a partial `StoredTypedVerdict`, since `composed_verdict`
     /// computes both fields of the option together.
     pub typed: Option<StoredTypedVerdict>,
+}
+
+impl StoredVerdict {
+    /// Every stored directive record converted, in stored order, with
+    /// the typed half's indexes checked against the list's length and
+    /// for strictly increasing order. `None` means the whole verdict
+    /// is untrustworthy.
+    ///
+    /// On a partial hit the stored untyped records and the fresh typed
+    /// indexes computed elsewhere are never cross-checked against each
+    /// other here: their alignment rests on the content hash plus the
+    /// binary-identity pack key, the same trust every other stored half
+    /// already extends (decision 8's sharp edge (b)).
+    pub fn directives_convert(
+        &self,
+        content_length: u32,
+    ) -> Option<Vec<(ResolvedDirective, bool)>> {
+        let records: Option<Vec<_>> = self
+            .directives
+            .iter()
+            .map(|directive| directive.to_directive(content_length))
+            .collect();
+        let records = records?;
+        if let Some(typed) = &self.typed {
+            let in_range = typed
+                .matched_directives
+                .iter()
+                .all(|&index| (index as usize) < records.len());
+            // Strictly increasing: `directive_outcomes` binary-searches
+            // this list; unsorted or duplicated indexes in a
+            // checksum-valid pack must discard, not misattribute
+            // (decision 8's sharp edge (a)).
+            let sorted = typed
+                .matched_directives
+                .is_sorted_by(|left, right| left < right);
+            if !in_range || !sorted {
+                return None;
+            }
+        }
+        Some(records)
+    }
 }
 
 #[cfg(test)]
@@ -935,15 +1105,17 @@ mod tests {
         Confidence, Diagnostic, DiagnosticId, Label, LabelTarget, Severity, Suggestion,
     };
     use celerrate_semantics::{
-        ItemTree, MemberKind, MemberTree, ResolutionAnswer, TraitAdaptation,
+        DirectiveOrigin, ItemTree, MemberKind, MemberTree, ResolutionAnswer, ResolvedDirective,
+        SuppressionFilter, TraitAdaptation,
     };
     use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
     use celerrate_stubs::{StubAvailability, StubDeprecation};
 
     use super::{
-        StoredAnchor, StoredAnswer, StoredConfidence, StoredDiagnostic, StoredItemTree,
-        StoredLabel, StoredLabelTarget, StoredMemberTree, StoredRecord, StoredSeverity,
-        StoredSuggestion, StoredTextEdit,
+        StoredAnchor, StoredAnswer, StoredConfidence, StoredDiagnostic, StoredDirective,
+        StoredItemTree, StoredLabel, StoredLabelTarget, StoredMemberTree, StoredRecord,
+        StoredSeverity, StoredSuggestion, StoredSuppressionFilter, StoredTextEdit,
+        StoredTypedVerdict, StoredVerdict,
     };
 
     fn parsed_tree(file: u32, source: &str) -> ItemTree {
@@ -1270,5 +1442,132 @@ mod tests {
         let stored = StoredDiagnostic::of(&diagnostic);
         let restored = stored.to_diagnostic(FileId::new(0), 0).unwrap();
         assert_eq!(restored, diagnostic);
+    }
+
+    #[test]
+    fn a_directive_record_round_trips() {
+        let directive = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(10), TextSize::from(40)),
+            scope: TextRange::new(TextSize::from(6), TextSize::from(41)),
+            filter: SuppressionFilter::Only(vec![
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+            ]),
+            identifiers: vec!["CEL0018".to_owned()],
+            origin: DirectiveOrigin::Native,
+        };
+        let stored = StoredDirective::of(&directive, true);
+        assert_eq!(stored.to_directive(100), Some((directive, true)));
+    }
+
+    #[test]
+    fn a_directive_record_with_an_out_of_bounds_range_is_discarded() {
+        let directive = ResolvedDirective {
+            anchor: TextRange::new(TextSize::from(10), TextSize::from(40)),
+            scope: TextRange::new(TextSize::from(6), TextSize::from(41)),
+            filter: SuppressionFilter::All,
+            identifiers: Vec::new(),
+            origin: DirectiveOrigin::Foreign,
+        };
+        let stored = StoredDirective::of(&directive, false);
+        assert!(stored.to_directive(20).is_none());
+    }
+
+    #[test]
+    fn a_directive_record_with_an_unknown_filter_code_is_discarded() {
+        let stored = StoredDirective {
+            anchor_start: 0,
+            anchor_end: 5,
+            scope_start: 0,
+            scope_end: 5,
+            filter: StoredSuppressionFilter::Only(vec!["CEL9999".to_owned()]),
+            identifiers: vec!["CEL9999".to_owned()],
+            native: true,
+            matched: false,
+        };
+        assert!(stored.to_directive(100).is_none());
+    }
+
+    #[test]
+    fn a_stored_filter_is_canonicalized_on_load() {
+        // A hand-crafted, checksum-valid pack could store an unsorted or
+        // duplicated list; `admits` binary-searches, so load canonicalizes
+        // (decision 8's sharp edge (a)).
+        let stored = StoredDirective {
+            anchor_start: 0,
+            anchor_end: 5,
+            scope_start: 0,
+            scope_end: 5,
+            filter: StoredSuppressionFilter::Only(vec![
+                "CEL0030".to_owned(),
+                "CEL0018".to_owned(),
+                "CEL0030".to_owned(),
+            ]),
+            identifiers: Vec::new(),
+            native: true,
+            matched: false,
+        };
+        let (directive, _) = stored.to_directive(100).unwrap();
+        assert_eq!(
+            directive.filter,
+            SuppressionFilter::Only(vec![
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+                celerrate_diagnostics::find_identifier("CEL0030").unwrap(),
+            ]),
+        );
+    }
+
+    /// Two convertible directive records, and a typed half whose
+    /// `matched_directives` disagrees with the strictly-increasing rule
+    /// `directive_outcomes` binary-searches against: out of order, and
+    /// (separately) duplicated. Both must discard the whole verdict
+    /// (decision 8's sharp edge (a)); a sorted, in-range control proves
+    /// the rule is actually enforced rather than nothing ever loading.
+    #[test]
+    fn unsorted_typed_match_indexes_discard_the_verdict() {
+        let first = StoredDirective::of(
+            &ResolvedDirective {
+                anchor: TextRange::new(TextSize::from(0), TextSize::from(5)),
+                scope: TextRange::new(TextSize::from(0), TextSize::from(5)),
+                filter: SuppressionFilter::All,
+                identifiers: Vec::new(),
+                origin: DirectiveOrigin::Foreign,
+            },
+            true,
+        );
+        let second = StoredDirective::of(
+            &ResolvedDirective {
+                anchor: TextRange::new(TextSize::from(10), TextSize::from(15)),
+                scope: TextRange::new(TextSize::from(10), TextSize::from(15)),
+                filter: SuppressionFilter::All,
+                identifiers: Vec::new(),
+                origin: DirectiveOrigin::Foreign,
+            },
+            false,
+        );
+
+        let verdict_with = |matched_directives: Vec<u32>| StoredVerdict {
+            diagnostics: Vec::new(),
+            records: Vec::new(),
+            directives: vec![first.clone(), second.clone()],
+            typed: Some(StoredTypedVerdict {
+                diagnostics: Vec::new(),
+                classes: Vec::new(),
+                functions: Vec::new(),
+                inferred: Vec::new(),
+                matched_directives,
+            }),
+        };
+
+        assert!(
+            verdict_with(vec![1, 0]).directives_convert(100).is_none(),
+            "out-of-order indexes must discard the verdict",
+        );
+        assert!(
+            verdict_with(vec![0, 0]).directives_convert(100).is_none(),
+            "duplicated indexes must discard the verdict too: not strictly increasing",
+        );
+        let control = verdict_with(vec![0, 1]).directives_convert(100);
+        assert!(control.is_some(), "a sorted, in-range index list must load",);
+        assert_eq!(control.unwrap().len(), 2);
     }
 }

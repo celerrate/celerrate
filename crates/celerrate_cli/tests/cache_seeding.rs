@@ -282,6 +282,7 @@ fn probe_verdict() -> StoredVerdict {
             namespace: String::new(),
             answer: StoredAnswer::Unknown,
         }],
+        directives: Vec::new(),
         typed: None,
     }
 }

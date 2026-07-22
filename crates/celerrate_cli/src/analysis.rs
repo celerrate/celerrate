@@ -327,11 +327,9 @@ pub fn served_typed_diagnostics(
             .collect::<Option<Vec<_>>>()
     {
         statistics.typed_served.fetch_add(1, Ordering::Relaxed);
-        // The stored typed match indexes arrive with cache schema 7 (the
-        // next task); nothing consumes matched before then.
         return FilteredPortion {
             diagnostics,
-            matched: Vec::new(),
+            matched: typed.matched_directives.clone(),
         };
     }
     statistics.typed_recomputed.fetch_add(1, Ordering::Relaxed);

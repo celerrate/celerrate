@@ -39,7 +39,12 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 ///
 /// 6: `StoredDiagnostic` carries the enriched anatomy — anchor, labels,
 /// notes, and suggestions (design section 3) — rather than a bare span.
-pub const CACHE_SCHEMA_VERSION: u32 = 6;
+///
+/// 7: `StoredVerdict` gains `directives`, and `StoredTypedVerdict` gains
+/// `matched_directives`: the per-directive match records the
+/// `Reporting` phase needs to replay a warm run's suppression report
+/// without re-parsing (this crate's `cache::stored` module doc).
+pub const CACHE_SCHEMA_VERSION: u32 = 7;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, the plugin set, and the PHP version range.
