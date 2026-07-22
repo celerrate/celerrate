@@ -682,10 +682,15 @@ mod tests {
     }
 
     fn native_unused(anchor: (u32, u32), identifiers: &[&str]) -> DirectiveOutcome {
-        let codes = identifiers
+        let mut codes: Vec<_> = identifiers
             .iter()
             .filter_map(|written| celerrate_diagnostics::find_identifier(written))
             .collect();
+        // Mirror production `filter_of`: `ResolvedDirective::admits`
+        // binary-searches `Only`, so the fixture must satisfy the same
+        // sorted-and-deduplicated invariant the consumer assumes.
+        codes.sort();
+        codes.dedup();
         DirectiveOutcome {
             directive: directive(
                 anchor,
@@ -753,6 +758,28 @@ mod tests {
                 (0, 41),
                 SuppressionFilter::All,
                 &["some.unknownIdentifier"],
+                DirectiveOrigin::Foreign,
+            ),
+            matched: false,
+        };
+        assert!(report(&db, &[outcome]).is_empty());
+    }
+
+    #[test]
+    fn a_bare_foreign_directive_is_never_reported() {
+        // A bare foreign directive (for example `// @phpstan-ignore-next-line`)
+        // resolves to `SuppressionFilter::All` with an EMPTY identifier
+        // list, and `all()` over an empty list is vacuously true. The
+        // origin half of CEL0042's guard is what keeps this directive
+        // out of evaluability at all; without it, this directive would
+        // be treated as evaluable and reported unused.
+        let db = reporting_setup();
+        let outcome = DirectiveOutcome {
+            directive: directive(
+                (10, 40),
+                (0, 41),
+                SuppressionFilter::All,
+                &[],
                 DirectiveOrigin::Foreign,
             ),
             matched: false,
@@ -845,6 +872,21 @@ mod tests {
     }
 
     #[test]
+    fn a_resilience_identifier_is_never_treated_as_inactive() {
+        // CEL0002 ("unexpected character") is emitted directly by
+        // `celerrate_syntax`'s lexer; no `RuleRegistration` anywhere -
+        // active or inactive - claims it in its `identifiers` list, so
+        // it can never enter the inactive set the reporting phase
+        // builds from claimed identifiers alone. A directive naming it
+        // must stay evaluable and be reported unused when it matched
+        // nothing.
+        let db = reporting_setup();
+        let diagnostics = report(&db, &[native_unused((10, 40), &["CEL0002"])]);
+        assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
+        assert_eq!(diagnostics[0].id, unused_suppression::UNUSED_SUPPRESSION);
+    }
+
+    #[test]
     fn a_directive_cannot_suppress_its_own_reports() {
         // A trailing directive whose scope covers its own anchor and
         // whose filter admits CEL0042 must not cloak its own unused
@@ -909,5 +951,50 @@ mod tests {
         assert_eq!(diagnostics.len(), 1, "{diagnostics:?}");
         let (_, range) = diagnostics[0].span().unwrap();
         assert_eq!(range.start(), TextSize::from(200));
+    }
+
+    #[test]
+    fn mutual_cross_suppression_drops_both_findings_in_one_pass() {
+        // Two distinct directives, A (index 0, anchor 10..40) and B
+        // (index 1, anchor 50..90), both unused native directives
+        // naming CEL0042, each with a scope (0..100) wide enough to
+        // cover the other's anchor.
+        //
+        // Pass (a): both are unused and evaluable, so the reporting
+        // rule emits one CEL0042 finding per directive: A's finding
+        // (subject 0, at A's anchor) and B's finding (subject 1, at
+        // B's anchor).
+        // Pass (b): for A's finding, the admission loop skips A itself
+        // (self-cloaking is forbidden, decision 10) and checks B; B's
+        // scope covers A's anchor and B's filter admits CEL0042, so
+        // A's finding is dropped and B is marked used. Symmetrically,
+        // B's finding is checked only against A (B is skipped as its
+        // own subject); A's scope covers B's anchor and admits
+        // CEL0042, so B's finding is dropped and A is marked used.
+        // Cross-suppression between distinct directives is legal
+        // (decision 10 forbids only self-admission), so both drops
+        // happen within this single pass.
+        // Pass (c): would drop a surviving CEL0042 finding whose
+        // subject became used, but both findings were already dropped
+        // in pass (b); there is nothing left to drop.
+        //
+        // Net result: the diagnostic set is empty.
+        let db = reporting_setup();
+        let a = DirectiveOutcome {
+            directive: ResolvedDirective {
+                scope: TextRange::new(TextSize::from(0), TextSize::from(100)),
+                ..native_unused((10, 40), &["CEL0042"]).directive
+            },
+            matched: false,
+        };
+        let b = DirectiveOutcome {
+            directive: ResolvedDirective {
+                scope: TextRange::new(TextSize::from(0), TextSize::from(100)),
+                ..native_unused((50, 90), &["CEL0042"]).directive
+            },
+            matched: false,
+        };
+        let diagnostics = report(&db, &[a, b]);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
     }
 }
