@@ -37,6 +37,30 @@ flagging on its own, rather than silently widening). The optional
 parenthesized trailer after the identifiers is a reason for the
 suppression; it is not otherwise interpreted.
 
+All identifiers must sit on the same physical line as the tag: the
+parser reads the identifier list up to the end of the tag's own
+line, so wrapping the list onto a continuation line of a block
+comment or docblock silently drops the identifiers left on that
+continuation line, and the directive still applies, it just protects
+fewer codes than written. For example, in
+
+```text
+/**
+ * @celerrate-ignore CEL0030,
+ * CEL0031 (reason)
+ */
+```
+
+only `CEL0030` is suppressed; `CEL0031` is not. Either keep the
+whole list on the tag's line, or repeat the tag on its own line:
+
+```text
+/**
+ * @celerrate-ignore CEL0030 (reason)
+ * @celerrate-ignore CEL0031 (reason)
+ */
+```
+
 The scope depends on where the directive sits:
 
 - Trailing a line of code (in any of the three comment kinds), it

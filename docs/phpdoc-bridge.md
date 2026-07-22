@@ -93,6 +93,14 @@ suppression the table cannot yet resolve still honors the user's
 intent. `@psalm-suppress all` is explicitly scope-wide, not merely
 unmapped. Lookup is exact-case per dialect.
 
+For `@phpstan-ignore` and `@psalm-suppress`, the identifier list must
+sit on the same physical line as the tag: parsing reads up to the
+end of the tag's own line, so wrapping the list onto a continuation
+line of a block comment or docblock silently drops the identifiers
+left on that continuation line, still parsing the directive but
+honoring fewer identifiers than written. Keep the list on one line,
+or repeat the tag on its own line.
+
 ## The lowering table
 
 Every parsed construct maps to a lattice value or a documented sound

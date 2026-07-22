@@ -88,6 +88,10 @@ fn identifiers_of(after_tag: &str) -> Vec<String> {
         line = before;
     }
     line.split(',')
+        // `trim_matches('*')` strips a docblock's leading `*` (the
+        // per-line decoration before ` * @celerrate-ignore ...`) or a
+        // closing `*/`'s `*` when it ends up adjacent to an
+        // identifier on the tag's line.
         .map(|identifier| identifier.trim().trim_matches('*').trim())
         .filter(|identifier| !identifier.is_empty())
         .map(str::to_owned)
