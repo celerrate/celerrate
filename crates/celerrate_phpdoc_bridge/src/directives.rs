@@ -17,13 +17,23 @@
 //! (design section 5: over-suppression, never under-suppression). A
 //! docblock-attached `@psalm-suppress` maps to the annotated
 //! declaration's whole span — its Psalm scope, not the docblock's own
-//! line where no diagnostic ever fires. Identifiers are carried, never
-//! matched: identifier-level correspondence is the rule framework's.
-//! Malformed content yields fewer identifiers or no directive, never
-//! an error — no docblock diagnostics.
+//! line where no diagnostic ever fires. Identifiers are marked through
+//! the correspondence table (design section 8): the bridge marks each
+//! written identifier as mapped to its Celerrate codes, explicitly
+//! scope-wide, or unmapped; the matcher downstream (`celerrate_semantics`)
+//! is where that mark turns into a filter. Malformed content yields
+//! fewer identifiers or no directive, never an error - no docblock
+//! diagnostics. Only the tag's own line is read for identifiers; a
+//! list that wraps onto a continuation line widens the directive to
+//! its whole scope rather than honoring the prefix that fitted, so
+//! wrapping over-suppresses and never under-suppresses.
 
-use celerrate_plugin::{CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveScope};
+use celerrate_plugin::{
+    CommentDirective, CommentDirectiveProvider, CommentKind, DirectiveOrigin, DirectiveScope,
+    SuppressionIdentifier,
+};
 
+use crate::correspondence::{Dialect, ForeignMapping, foreign_mapping};
 use crate::syntax::PhpdocBridge;
 
 const PHPSTAN_IGNORE: &str = "@phpstan-ignore";
@@ -65,7 +75,7 @@ fn phpstan_directive(after_tag: &str) -> Option<CommentDirective> {
     } else if ends_word(after_tag) {
         Some(suppress(
             DirectiveScope::CurrentAndNextLine,
-            identifiers_of(after_tag),
+            marked_identifiers(Dialect::Phpstan, after_tag),
         ))
     } else {
         None
@@ -84,11 +94,59 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
         // resolution the bare form uses (design section 5).
         _ => DirectiveScope::CurrentAndNextLine,
     };
-    Some(suppress(scope, identifiers_of(after_tag)))
+    Some(suppress(
+        scope,
+        marked_identifiers(Dialect::Psalm, after_tag),
+    ))
 }
 
-fn suppress(scope: DirectiveScope, identifiers: Vec<String>) -> CommentDirective {
-    CommentDirective::suppress(scope, identifiers)
+/// One written identifier, marked through the correspondence table
+/// (design section 8): mapped with its code strings, explicitly
+/// scope-wide, or unmapped. This resolves the long-standing "carried,
+/// never matched" reservation: the bridge marks, the matcher
+/// downstream matches.
+fn foreign_identifier(dialect: Dialect, written: String) -> SuppressionIdentifier {
+    match foreign_mapping(dialect, &written) {
+        ForeignMapping::Codes(codes) => SuppressionIdentifier::mapped(
+            written,
+            codes.iter().map(|code| (*code).to_owned()).collect(),
+        ),
+        ForeignMapping::ScopeWide => SuppressionIdentifier::scope_wide(written),
+        ForeignMapping::Unmapped => SuppressionIdentifier::unmapped(written),
+    }
+}
+
+fn suppress(scope: DirectiveScope, identifiers: Vec<SuppressionIdentifier>) -> CommentDirective {
+    CommentDirective::suppress(scope, DirectiveOrigin::Foreign, identifiers)
+}
+
+/// The written form of the synthetic identifier appended when a foreign
+/// identifier list wraps past the tag's own line. It is deliberately
+/// unspellable as a real identifier of either dialect, and it exists
+/// for one effect: `filter_of` downstream turns any `Unmapped` entry
+/// into a whole-scope filter, so a directive whose list continues out
+/// of the parser's reach widens instead of quietly protecting only the
+/// identifiers that fit on the first line. Widening is the accepted
+/// failure direction; the narrowing it replaces was a silent
+/// regression. If a verbose channel ever echoes a directive's written
+/// identifiers, this reads as the reason the directive widened.
+const WRAPPED_LIST_CONTINUES: &str = "<identifier list continues on the next line>";
+
+/// Every identifier a bare tag carries, marked through the
+/// correspondence table, plus the synthetic widening identifier when
+/// the written list runs past the tag's own line.
+fn marked_identifiers(dialect: Dialect, after_tag: &str) -> Vec<SuppressionIdentifier> {
+    let (written, continues) = identifier_list(after_tag);
+    let mut identifiers: Vec<SuppressionIdentifier> = written
+        .into_iter()
+        .map(|written| foreign_identifier(dialect, written))
+        .collect();
+    if continues {
+        identifiers.push(SuppressionIdentifier::unmapped(
+            WRAPPED_LIST_CONTINUES.to_owned(),
+        ));
+    }
+    identifiers
 }
 
 /// A tag ends at a word boundary: the end of the comment, whitespace,
@@ -99,12 +157,16 @@ fn ends_word(after: &str) -> bool {
         || after.starts_with("*/")
 }
 
-/// The identifier list after a bare tag: the rest of that line, a
-/// parenthesized trailer dropped (`@phpstan-ignore method.notFound
-/// (nullable receiver)`), the closing `*/` dropped, comma-separated,
-/// trimmed of whitespace and docblock decoration. Malformed content
-/// yields fewer identifiers, never a lost directive.
-fn identifiers_of(after_tag: &str) -> Vec<String> {
+/// The identifier list after a bare tag, and whether the written list
+/// continues past the tag's own line. Only that line is read: a
+/// parenthesized trailer is dropped (`@phpstan-ignore method.notFound
+/// (nullable receiver)`), the closing `*/` is dropped, and the rest is
+/// comma-separated and trimmed of whitespace and docblock decoration.
+/// A line left dangling on a comma is the wrapped-list case: the
+/// remaining identifiers sit on a continuation line this function never
+/// sees, so the caller widens rather than honoring only the prefix.
+/// Malformed content yields fewer identifiers, never a lost directive.
+fn identifier_list(after_tag: &str) -> (Vec<String>, bool) {
     let mut line = after_tag.lines().next().unwrap_or("");
     if let Some((before, _)) = line.split_once("*/") {
         line = before;
@@ -112,11 +174,14 @@ fn identifiers_of(after_tag: &str) -> Vec<String> {
     if let Some((before, _)) = line.split_once('(') {
         line = before;
     }
-    line.split(',')
+    let continues = line.trim_end().ends_with(',');
+    let identifiers = line
+        .split(',')
         .map(|identifier| identifier.trim().trim_matches('*').trim())
         .filter(|identifier| !identifier.is_empty())
         .map(str::to_owned)
-        .collect()
+        .collect();
+    (identifiers, continues)
 }
 
 #[cfg(test)]
@@ -125,8 +190,11 @@ mod tests {
 
     use super::*;
 
-    fn suppress(scope: DirectiveScope, identifiers: &[&str]) -> CommentDirective {
-        CommentDirective::suppress(scope, identifiers.iter().map(|s| (*s).to_owned()).collect())
+    fn mapped(written: &str, codes: &[&str]) -> SuppressionIdentifier {
+        SuppressionIdentifier::mapped(
+            written.to_owned(),
+            codes.iter().map(|code| (*code).to_owned()).collect(),
+        )
     }
 
     #[test]
@@ -139,7 +207,7 @@ mod tests {
         ] {
             assert_eq!(
                 comment_directives(kind, text),
-                vec![suppress(DirectiveScope::CurrentLine, &[])],
+                vec![suppress(DirectiveScope::CurrentLine, vec![])],
                 "{text}",
             );
         }
@@ -149,7 +217,7 @@ mod tests {
     fn ignore_next_line_suppresses_the_next_line_and_is_not_read_as_the_bare_form() {
         assert_eq!(
             comment_directives(CommentKind::Line, "// @phpstan-ignore-next-line"),
-            vec![suppress(DirectiveScope::NextLine, &[])],
+            vec![suppress(DirectiveScope::NextLine, vec![])],
         );
     }
 
@@ -162,12 +230,15 @@ mod tests {
             ),
             vec![suppress(
                 DirectiveScope::CurrentAndNextLine,
-                &["method.notFound", "property.notFound"],
+                vec![
+                    mapped("method.notFound", &["CEL0030"]),
+                    mapped("property.notFound", &["CEL0031"]),
+                ],
             )],
         );
         assert_eq!(
             comment_directives(CommentKind::Line, "// @phpstan-ignore"),
-            vec![suppress(DirectiveScope::CurrentAndNextLine, &[])],
+            vec![suppress(DirectiveScope::CurrentAndNextLine, vec![])],
         );
     }
 
@@ -180,7 +251,10 @@ mod tests {
             ),
             vec![suppress(
                 DirectiveScope::AnnotatedDeclaration,
-                &["PossiblyNullReference", "InvalidArgument"],
+                vec![
+                    mapped("PossiblyNullReference", &["CEL0034"]),
+                    mapped("InvalidArgument", &["CEL0035"]),
+                ],
             )],
         );
     }
@@ -191,7 +265,18 @@ mod tests {
             comment_directives(CommentKind::Block, "/* @psalm-suppress InvalidArgument */"),
             vec![suppress(
                 DirectiveScope::CurrentAndNextLine,
-                &["InvalidArgument"],
+                vec![mapped("InvalidArgument", &["CEL0035"])],
+            )],
+        );
+    }
+
+    #[test]
+    fn psalm_suppress_all_marks_the_identifier_scope_wide() {
+        assert_eq!(
+            comment_directives(CommentKind::Block, "/* @psalm-suppress all */"),
+            vec![suppress(
+                DirectiveScope::CurrentAndNextLine,
+                vec![SuppressionIdentifier::scope_wide("all".to_owned())],
             )],
         );
     }
@@ -204,9 +289,70 @@ mod tests {
                 "/**\n * @psalm-suppress UndefinedClass\n * @phpstan-ignore-next-line\n */",
             ),
             vec![
-                suppress(DirectiveScope::AnnotatedDeclaration, &["UndefinedClass"]),
-                suppress(DirectiveScope::NextLine, &[]),
+                suppress(
+                    DirectiveScope::AnnotatedDeclaration,
+                    vec![mapped("UndefinedClass", &["CEL0018", "CEL0021", "CEL0022"])],
+                ),
+                suppress(DirectiveScope::NextLine, vec![]),
             ],
+        );
+    }
+
+    #[test]
+    fn a_wrapped_identifier_list_widens_to_the_whole_scope() {
+        // Only the tag's line is read, so `UndefinedFunction` is never
+        // matched. Honoring `UndefinedClass` alone would protect fewer
+        // codes than written, which is under-suppression; the dangling
+        // comma is the signal that turns the directive scope-wide.
+        assert_eq!(
+            comment_directives(
+                CommentKind::Docblock,
+                "/**\n * @psalm-suppress UndefinedClass,\n * UndefinedFunction\n */",
+            ),
+            vec![suppress(
+                DirectiveScope::AnnotatedDeclaration,
+                vec![
+                    mapped("UndefinedClass", &["CEL0018", "CEL0021", "CEL0022"]),
+                    SuppressionIdentifier::unmapped(WRAPPED_LIST_CONTINUES.to_owned()),
+                ],
+            )],
+        );
+    }
+
+    #[test]
+    fn a_wrapped_list_is_detected_past_the_reason_trailer_and_the_terminator() {
+        for text in [
+            "// @phpstan-ignore class.notFound, (a reason)",
+            "/* @phpstan-ignore class.notFound, */",
+        ] {
+            assert_eq!(
+                comment_directives(CommentKind::Line, text),
+                vec![suppress(
+                    DirectiveScope::CurrentAndNextLine,
+                    vec![
+                        mapped("class.notFound", &["CEL0018", "CEL0021", "CEL0022"]),
+                        SuppressionIdentifier::unmapped(WRAPPED_LIST_CONTINUES.to_owned()),
+                    ],
+                )],
+                "{text}",
+            );
+        }
+    }
+
+    #[test]
+    fn a_complete_list_never_widens() {
+        assert_eq!(
+            comment_directives(
+                CommentKind::Docblock,
+                "/**\n * @psalm-suppress UndefinedClass, UndefinedFunction\n */",
+            ),
+            vec![suppress(
+                DirectiveScope::AnnotatedDeclaration,
+                vec![
+                    mapped("UndefinedClass", &["CEL0018", "CEL0021", "CEL0022"]),
+                    mapped("UndefinedFunction", &["CEL0019", "CEL0021", "CEL0022"]),
+                ],
+            )],
         );
     }
 

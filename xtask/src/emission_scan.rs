@@ -20,15 +20,19 @@
 //! mention of the type immediately followed by a brace, for instance a
 //! function whose return type is `Diagnostic` (`-> Diagnostic {`), or,
 //! in principle, a `match`/`let` pattern that destructures one. None of
-//! those currently occur in a governed crate: the type is not named in
-//! either governed crate's `src/` at all, which is itself the point of
-//! the migration these crates went through. Should one ever appear, it
-//! is a legitimate reason for this gate to ask a human to look, since a
-//! governed crate has no business naming the diagnostic model at all,
-//! constructing or not. Anything this scan cannot see (reflection,
-//! macro-generated construction, a helper crate re-exporting a wrapping
-//! function under another name) is out of scope; it works on source
-//! text, the same technique `registry.rs` uses for declarations.
+//! those currently occur in a governed crate. `celerrate_semantics`
+//! does name `celerrate_diagnostics` now, for identifier vocabulary
+//! (`DiagnosticId`, `find_identifier`) its suppression-filter
+//! resolution needs - the `Diagnostic` value model itself stays
+//! unnamed in both governed crates' `src/`, which is the point of
+//! the migration these crates went through. Should the value model
+//! ever appear, it is a legitimate reason for this gate to ask a human
+//! to look, since a governed crate has no business naming the
+//! diagnostic model at all, constructing or not. Anything this scan
+//! cannot see (reflection, macro-generated construction, a helper
+//! crate re-exporting a wrapping function under another name) is out
+//! of scope; it works on source text, the same technique
+//! `registry.rs` uses for declarations.
 
 use std::path::{Path, PathBuf};
 

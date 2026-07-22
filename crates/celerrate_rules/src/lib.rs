@@ -15,11 +15,12 @@ mod traits;
 // only, so a facade consumer can take everything from one crate.
 pub use celerrate_diagnostics::{DiagnosticId, ExplainPage, Severity};
 
-pub use context::{ReportingContext, SyntaxContext, testing_syntax_context};
+pub use context::{DirectiveOutcome, ReportingContext, SyntaxContext, testing_syntax_context};
 pub use finding::{FindingAnchor, FindingSink};
 pub use metadata::{RuleGroup, RuleIdentifier, RuleMetadata, Tier};
 pub use phases::{
-    semantic_phase_diagnostics, syntax_phase_diagnostics, typed_body_phase_diagnostics,
+    reporting_phase_diagnostics, semantic_phase_diagnostics, syntax_phase_diagnostics,
+    typed_body_phase_diagnostics,
 };
 pub use registry::{
     CORE_IDENTITY_NAME, RuleConflict, RuleImplementation, RuleRegistration, RuleRegistry,

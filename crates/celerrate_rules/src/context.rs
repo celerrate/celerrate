@@ -51,12 +51,52 @@ pub fn testing_syntax_context<'db>(
     SyntaxContext::new(db, file, configuration)
 }
 
-/// The `Reporting` phase context. Part 5 gives it its real surface
-/// (directives and their per-directive match outcomes); it exists now
-/// so the phase trait and the registry see the phase (design section
-/// 4). Core-only: never re-exported by the facade.
-pub struct ReportingContext<'db> {
-    _database: &'db dyn salsa::Database,
+/// One directive with its final match outcome: the union of both
+/// halves', composed by the orchestration layer (stored records on a
+/// warm hit, the resolution query on a miss).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DirectiveOutcome {
+    pub directive: celerrate_semantics::ResolvedDirective,
+    pub matched: bool,
+}
+
+/// The `Reporting` phase context: directives and their match outcomes
+/// (design section 4). Core-only - never re-exported by the facade.
+/// Plain outcome data plus two registry questions; no database handle,
+/// no tree, no parse: the same context serves the warm path.
+pub struct ReportingContext<'run> {
+    outcomes: &'run [DirectiveOutcome],
+    inactive: &'run std::collections::BTreeSet<celerrate_diagnostics::DiagnosticId>,
+}
+
+impl<'run> ReportingContext<'run> {
+    pub(crate) fn new(
+        outcomes: &'run [DirectiveOutcome],
+        inactive: &'run std::collections::BTreeSet<celerrate_diagnostics::DiagnosticId>,
+    ) -> Self {
+        Self { outcomes, inactive }
+    }
+
+    /// Every directive of the file, in resolution order, with its
+    /// final match outcome.
+    pub fn outcomes(&self) -> &'run [DirectiveOutcome] {
+        self.outcomes
+    }
+
+    /// Whether the written form names a registered identifier - the
+    /// CEL0041 knownness question, asked through the single lookup
+    /// seam (`find_identifier`; design section 8's two-tier shape).
+    pub fn is_known(&self, written: &str) -> bool {
+        celerrate_diagnostics::find_identifier(written).is_some()
+    }
+
+    /// Whether the written form names an identifier of a rule outside
+    /// the active set - the CEL0042 exemption question. Resilience
+    /// identifiers are claimed by no rule and are never inactive.
+    pub fn is_inactive(&self, written: &str) -> bool {
+        celerrate_diagnostics::find_identifier(written)
+            .is_some_and(|id| self.inactive.contains(&id))
+    }
 }
 
 #[cfg(test)]

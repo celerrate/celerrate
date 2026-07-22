@@ -14,6 +14,7 @@
 //! diagnostics: malformed annotations are silently ignored, per
 //! construct.
 
+mod correspondence;
 mod dialect;
 mod directives;
 mod expression;
@@ -23,6 +24,7 @@ mod syntax;
 mod tags;
 mod virtual_members;
 
+pub use correspondence::{Dialect, ForeignMapping, correspondence_entries, foreign_mapping};
 pub use directives::comment_directives;
 pub use expression::{
     CallableParameterExpression, ConditionalSubject, ShapeFieldExpression, ShapeKeyExpression,

@@ -57,6 +57,15 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     let mut comment_directives = Vec::new();
     let mut dynamic_providers = Vec::new();
 
+    // The native directive provider: core, registered unconditionally,
+    // under the reserved core identity, outside the admitted set - it
+    // never keys the plugin-set digest; binary identity already keys
+    // the cache for core behavior (design sections 2 and 8).
+    comment_directives.push(celerrate_semantics::CommentDirectiveRegistration {
+        identity: core_identity(),
+        provider: Arc::new(celerrate_semantics::NativeDirectiveProvider),
+    });
+
     // Registration order, declared once: phpdoc-bridge first.
     let descriptor = celerrate_phpdoc_bridge::descriptor();
     match admission(&descriptor) {
@@ -269,15 +278,36 @@ mod tests {
         let comment_directives =
             celerrate_semantics::CommentDirectiveRegistry::try_get(&database).unwrap();
         let comment_directive_registrations = comment_directives.registrations(&database);
-        assert_eq!(comment_directive_registrations.len(), 1);
+        assert_eq!(comment_directive_registrations.len(), 2);
         assert_eq!(
             comment_directive_registrations[0].identity.name,
+            "celerrate-core"
+        );
+        assert_eq!(
+            comment_directive_registrations[1].identity.name,
             "phpdoc-bridge"
         );
         let providers = celerrate_types::DynamicTypeProviderRegistry::try_get(&database).unwrap();
         let provider_registrations = providers.registrations(&database);
         assert_eq!(provider_registrations.len(), 1);
         assert_eq!(provider_registrations[0].identity.name, "stdlib-provider");
+    }
+
+    #[test]
+    fn the_native_directive_provider_never_enters_the_admitted_plugin_set() {
+        let database = AnalysisDatabase::default();
+        let plugins = register_plugins(&database);
+        assert!(
+            plugins
+                .admitted
+                .iter()
+                .all(|identity| identity.name != celerrate_rules::CORE_IDENTITY_NAME)
+        );
+        let registry = celerrate_semantics::CommentDirectiveRegistry::try_get(&database).unwrap();
+        assert_eq!(
+            registry.registrations(&database)[0].identity.name,
+            celerrate_rules::CORE_IDENTITY_NAME,
+        );
     }
 
     #[test]

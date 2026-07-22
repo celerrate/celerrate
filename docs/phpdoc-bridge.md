@@ -83,9 +83,47 @@ posture "over-suppression, never under-suppression":
 | `@psalm-suppress <identifiers>` | docblock | suppress, annotated declaration |
 | `@psalm-suppress <identifiers>` | line, block | suppress, current and next line |
 
-Foreign identifiers are carried but not matched in this preview:
-suppression extinguishes every family on the target scope.
-Identifier-level correspondence arrives with the rule framework.
+Written identifiers now filter through a correspondence table: a
+directive whose identifiers *all* map narrows to the union of their
+mapped Celerrate codes, so suppressing `class.notFound` no longer
+extinguishes an unrelated `function.notFound` on the same line. Any
+identifier the table does not map (including a foreign tool's newer
+identifiers) keeps the pre-correspondence scope-wide fallback, so a
+suppression the table cannot yet resolve still honors the user's
+intent. `@psalm-suppress all` is explicitly scope-wide, not merely
+unmapped. Lookup is exact-case per dialect.
+
+For `@phpstan-ignore` and `@psalm-suppress`, only identifiers on the
+tag's own physical line are matched against the correspondence table:
+parsing reads up to the end of that line. Wrapping the list onto a
+continuation line of a block comment or docblock does not narrow the
+directive to the identifiers that fitted, which would protect fewer
+codes than written; a list left dangling on a comma is read as
+continuing, and the directive widens to its whole scope instead. So
+
+```text
+/**
+ * @psalm-suppress UndefinedClass,
+ * UndefinedFunction
+ */
+```
+
+suppresses every diagnostic on the annotated declaration, not only
+`UndefinedClass`'s codes. That is the over-suppression direction, and
+it matches what the same docblock did before the correspondence table
+narrowed foreign directives at all. To keep a wrapped list precise,
+put the whole list on the tag's line, or repeat the tag:
+
+```text
+/**
+ * @psalm-suppress UndefinedClass
+ * @psalm-suppress UndefinedFunction
+ */
+```
+
+Celerrate's own `@celerrate-ignore` does not widen this way: its
+one-line grammar is documented in
+[Diagnostics](diagnostics.md#suppressing-diagnostics).
 
 ## The lowering table
 

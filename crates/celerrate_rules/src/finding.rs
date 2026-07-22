@@ -22,12 +22,16 @@ pub enum FindingAnchor {
 }
 
 /// One accepted finding, severity already resolved from metadata.
+/// `subject` names the directive a reporting-phase finding reports on,
+/// by its index in the run's outcome list; every other phase leaves it
+/// `None`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Finding {
     pub identifier: DiagnosticId,
     pub severity: Severity,
     pub anchor: FindingAnchor,
     pub message: String,
+    pub subject: Option<u32>,
 }
 
 /// The sink one rule reports into. Severity comes from the rule's own
@@ -59,6 +63,29 @@ impl<'rule> FindingSink<'rule> {
             severity,
             anchor,
             message,
+            subject: None,
+        });
+    }
+
+    /// A reporting-phase emission naming its subject directive, so the
+    /// one-pass suppression can attribute a drop to it (the CEL0042
+    /// discipline). Crate-internal: only core reporting rules exist.
+    pub(crate) fn report_directive(
+        &mut self,
+        identifier: DiagnosticId,
+        subject: u32,
+        anchor: TextRange,
+        message: String,
+    ) {
+        let Some(severity) = self.metadata.severity_of(identifier) else {
+            return;
+        };
+        self.findings.push(Finding {
+            identifier,
+            severity,
+            anchor: FindingAnchor::Range(anchor),
+            message,
+            subject: Some(subject),
         });
     }
 

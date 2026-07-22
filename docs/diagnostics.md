@@ -18,12 +18,61 @@ exits 1 as soon as it reports any diagnostic, **error** and
 (`CEL0025` to `CEL0029`, `CEL0039`, `CEL0040`) are counted separately
 in the summary line and do not affect the exit code.
 
-To silence a single occurrence, use an inline suppression
-(`@phpstan-ignore-line`, `@phpstan-ignore-next-line`,
-`@phpstan-ignore`, or `@psalm-suppress`): see
-[the PHPDoc bridge](phpdoc-bridge.md#suppressions). There is no
-configuration file or baseline yet; inline suppression is the only
-per-site switch in this preview.
+## Suppressing diagnostics
+
+To silence a single occurrence, use an inline suppression comment.
+There is no configuration file or baseline yet; inline suppression is
+the only per-site switch in this preview.
+
+Celerrate's own directive is `@celerrate-ignore`, written in a line
+comment, a block comment, or a docblock:
+
+```text
+// @celerrate-ignore CEL0030, CEL0031 (reason)
+```
+
+Its identifiers are mandatory: there is no blanket form, so a bare
+`@celerrate-ignore` parses but suppresses nothing (a mistake worth
+flagging on its own, rather than silently widening). The optional
+parenthesized trailer after the identifiers is a reason for the
+suppression; it is not otherwise interpreted.
+
+All identifiers must sit on the same physical line as the tag: the
+parser reads the identifier list up to the end of the tag's own
+line, so wrapping the list onto a continuation line of a block
+comment or docblock silently drops the identifiers left on that
+continuation line, and the directive still applies, it just protects
+fewer codes than written. For example, in
+
+```text
+/**
+ * @celerrate-ignore CEL0030,
+ * CEL0031 (reason)
+ */
+```
+
+only `CEL0030` is suppressed; `CEL0031` is not. Either keep the
+whole list on the tag's line, or repeat the tag on its own line:
+
+```text
+/**
+ * @celerrate-ignore CEL0030 (reason)
+ * @celerrate-ignore CEL0031 (reason)
+ */
+```
+
+The scope depends on where the directive sits:
+
+- Trailing a line of code (in any of the three comment kinds), it
+  covers that line.
+- Alone on its own line, it covers the line that follows, or, when
+  there is no next line (the directive sits on the file's last line),
+  the end-of-file position; such a directive is then reported unused.
+- In a docblock, it covers the declaration the docblock annotates.
+
+For the foreign dialects `@phpstan-ignore-line`,
+`@phpstan-ignore-next-line`, `@phpstan-ignore`, and `@psalm-suppress`,
+see [the PHPDoc bridge](phpdoc-bridge.md#suppressions).
 
 ## Syntax (CEL0001 to CEL0017)
 
@@ -137,3 +186,14 @@ is unknown silences arity for that call.
 | CEL0036 | error | too few arguments | a required parameter is bound neither positionally nor by name |
 | CEL0037 | error | too many arguments | more positional arguments than parameters, no variadic |
 | CEL0038 | error | unknown named argument | a named argument matches no declared parameter name |
+
+## Suppression directives (CEL0041, CEL0042)
+
+About Celerrate's own `@celerrate-ignore` directive (never about
+foreign directives, which legitimately target diagnostics Celerrate
+does not emit).
+
+| Identifier | Severity | Meaning |
+| --- | --- | --- |
+| CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know, so a typo cannot silently suppress nothing |
+| CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run, or an unknown identifier - that mistake is already CEL0041's) |

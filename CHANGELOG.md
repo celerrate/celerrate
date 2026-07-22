@@ -25,6 +25,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   resolutions, and an edit never touches trivia it was not aimed at. An
   edit-application fuzz target joins the fuzz suite. Library groundwork
   only: no rule emits edits yet and no output changes.
+- Identifier-level suppression (#58). A foreign directive whose
+  identifiers all map now suppresses only the union of their
+  corresponding `CEL` codes (`@phpstan-ignore class.notFound` no longer
+  silences an unrelated unknown function on the same line); a directive
+  with any unmapped identifier keeps its scope-wide effect, and
+  `@psalm-suppress all` is explicitly scope-wide. The correspondence
+  table triages both dialects' full published catalogues; lookup is
+  exact-case.
+- The native suppression directive: `// @celerrate-ignore CEL0030,
+  CEL0031 (reason)` in line comments, block comments, and docblocks.
+  Identifiers are mandatory (no blanket form); the parenthesized
+  trailer is a reason; placement decides the scope (trailing a line of
+  code: that line; alone: the next line; docblock: the annotated
+  declaration). All identifiers must sit on the tag's own line.
+- Two directive rules riding the new `Reporting` phase: CEL0041
+  (unknown identifier in a native directive) and CEL0042 (unused native
+  suppression, exempt for identifiers of inactive rules and for unknown
+  identifiers, which CEL0041 already reports). Both warnings
+  apply to native directives only, are themselves suppressible in one
+  non-iterated pass, and report identically on warm and cold runs from
+  per-directive match records persisted with the verdict (cache schema
+  7).
 
 ### Changed
 

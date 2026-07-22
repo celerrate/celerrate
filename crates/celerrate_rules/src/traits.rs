@@ -27,10 +27,13 @@ pub trait TypedBodyRule: Send + Sync {
 }
 
 /// A rule of the reporting phase: directives and their match outcomes.
-/// Core-only in this sub-project (design section 4): declared so the
-/// registry model and the ownership gate see the phase; its execution
-/// point and context surface arrive in part 5, and the facade does not
-/// re-export it.
+/// Core-only in this sub-project (design section 4): the registry model
+/// and the ownership gate see the phase, and the facade does not
+/// re-export it. Executed by `phases::reporting_phase_diagnostics`, a
+/// plain function fed by the orchestration layer and never a salsa
+/// query (decision 9 of the part-5 plan): its input is composed above,
+/// from stored per-directive records on a warm cache hit and from the
+/// resolution query on a miss.
 pub trait ReportingRule: Send + Sync {
     fn check(&self, context: &ReportingContext<'_>, sink: &mut FindingSink<'_>);
 }

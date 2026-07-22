@@ -46,8 +46,8 @@ use snapshot::{
     CacheSnapshot, DIAGNOSTICS_PACK, INFERRED_SIGNATURES_PACK, ITEM_TREES_PACK, MEMBER_TREES_PACK,
 };
 use stored::{
-    StoredDiagnostic, StoredItemTree, StoredMemberTree, StoredRecord, StoredTypedVerdict,
-    StoredVerdict,
+    StoredDiagnostic, StoredDirective, StoredItemTree, StoredMemberTree, StoredRecord,
+    StoredTypedVerdict, StoredVerdict,
 };
 
 /// One pack's entries in memory: sorted, deduplicated, one entry per key.
@@ -280,19 +280,19 @@ fn collect_entries(
         // recomputes both halves in that case; every query underneath it
         // is memoized from the pass that already ran, so this costs
         // nothing beyond a salsa cache read.
-        let stored = match verdict::lookup_verdict(inputs, file) {
-            verdict::VerdictLookup::Hit {
-                verdict: stored,
-                typed: verdict::TypedOutcome::Served,
-            } if stored
-                .diagnostics
-                .iter()
-                .all(|diagnostic| diagnostic.to_diagnostic(file_id, content_length).is_some()) =>
-            {
-                stored.clone()
-            }
-            _ => composed_verdict(inputs, file),
-        };
+        let stored =
+            match verdict::lookup_verdict(inputs, file) {
+                verdict::VerdictLookup::Hit {
+                    verdict: stored,
+                    typed: verdict::TypedOutcome::Served,
+                } if stored.diagnostics.iter().all(|diagnostic| {
+                    diagnostic.to_diagnostic(file_id, content_length).is_some()
+                }) && stored.directives_convert(content_length).is_some() =>
+                {
+                    stored.clone()
+                }
+                _ => composed_verdict(inputs, file),
+            };
         verdicts.push((celerrate_db::content_hash(database, file), stored));
     }
     sort_entries(&mut verdicts);
@@ -517,7 +517,7 @@ fn composed_verdict_with_lever(
     persist_typed: bool,
 ) -> StoredVerdict {
     let database = &inputs.database;
-    let diagnostics = crate::analysis::persistable_diagnostics(inputs, file);
+    let portion = crate::analysis::persistable_diagnostics(inputs, file);
     let records = celerrate_semantics::resolution_records(
         database,
         file,
@@ -525,14 +525,29 @@ fn composed_verdict_with_lever(
         inputs.stubs,
         inputs.configuration,
     );
+    let directives = celerrate_semantics::suppression_directives(database, file);
     let typed = if persist_typed {
         Some(composed_typed_verdict(inputs, file))
     } else {
         None
     };
     StoredVerdict {
-        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        diagnostics: portion
+            .diagnostics
+            .iter()
+            .map(StoredDiagnostic::of)
+            .collect(),
         records: records.iter().map(StoredRecord::of).collect(),
+        directives: directives
+            .iter()
+            .enumerate()
+            .map(|(index, directive)| {
+                let matched = u32::try_from(index)
+                    .map(|index| portion.matched.binary_search(&index).is_ok())
+                    .unwrap_or(false);
+                StoredDirective::of(directive, matched)
+            })
+            .collect(),
         typed,
     }
 }
@@ -554,7 +569,7 @@ fn composed_typed_verdict(
     file: celerrate_db::SourceFile,
 ) -> StoredTypedVerdict {
     let database = &inputs.database;
-    let diagnostics = crate::analysis::typed_portion(inputs, file);
+    let portion = crate::analysis::typed_portion(inputs, file);
     let result = celerrate_types::typed_file_verdicts(
         database,
         inputs.files,
@@ -611,10 +626,15 @@ fn composed_typed_verdict(
         ))
         .collect();
     StoredTypedVerdict {
-        diagnostics: diagnostics.iter().map(StoredDiagnostic::of).collect(),
+        diagnostics: portion
+            .diagnostics
+            .iter()
+            .map(StoredDiagnostic::of)
+            .collect(),
         classes,
         functions,
         inferred,
+        matched_directives: portion.matched,
     }
 }
 

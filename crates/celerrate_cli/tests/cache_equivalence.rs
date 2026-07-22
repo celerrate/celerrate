@@ -83,7 +83,20 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
             TypedOutcome::Served => stored.typed.as_ref(),
             TypedOutcome::Recompute => None,
         };
-        served.extend(served_typed_diagnostics(&inputs, file, typed_source));
+        let typed_half = served_typed_diagnostics(&inputs, file, typed_source);
+        served.extend(typed_half.diagnostics.iter().cloned());
+        // The reporting portion is never persisted: both paths
+        // recompute it from the match records, so the served side must
+        // layer it the same way `analyze_one` does: the stored records,
+        // validated first, unioned with the typed half's own admitting
+        // indexes.
+        let records = stored
+            .directives_convert(content_length)
+            .expect("a revalidated verdict's directive records all convert");
+        let outcomes = celerrate_cli::analysis::directive_outcomes(&records, &typed_half.matched);
+        served.extend(celerrate_cli::analysis::reporting_portion(
+            &inputs, file, &outcomes,
+        ));
         served.sort();
         let recomputed = composed_diagnostics(&inputs, file);
         assert_eq!(
@@ -149,6 +162,18 @@ fn cross_file_source_answers_replay_equal() {
         ("src/Consumer.php", "<?php new Widget(); new Gone();"),
         ("src/Widget.php", "<?php class Widget {}"),
     ]);
+}
+
+/// A native directive that suppressed nothing: the served CEL0042
+/// must equal the recomputed one, byte for byte, from the persisted
+/// match records (the design's warm/cold Reporting gate).
+#[test]
+fn directive_diagnostics_replay_equal() {
+    let identifiers = served_equals_recomputed(&[(
+        "a.php",
+        "<?php\n$x = 1; // @celerrate-ignore CEL0018\nnew MissingTwo();\n",
+    )]);
+    assert!(identifiers.contains("CEL0042"), "{identifiers:?}");
 }
 
 /// Task 10's own extension: a typed fixture firing all three of the

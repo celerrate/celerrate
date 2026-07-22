@@ -250,6 +250,7 @@ name = "celerrate_semantics"
 version = "0.0.3"
 dependencies = [
  "celerrate_db",
+ "celerrate_diagnostics",
  "celerrate_project",
  "celerrate_source",
  "celerrate_stubs",
