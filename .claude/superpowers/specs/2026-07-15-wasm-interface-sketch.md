@@ -174,3 +174,43 @@ expression id)`), so findings survive the boundary without host
 resolution; the host reconciles them at the phase query's tail exactly
 as it does for native rules. The context methods added by part 4 must
 land in this table when they land in the traits.
+
+## 11. Amendment 2026-07-22: the reporting phase's projection
+
+Section 10 recorded the `Reporting` phase as core-only, before it
+existed. It now does, and it turns out to be the cheapest phase to
+project, so the shape is worth recording even though nothing projects
+it yet.
+
+`ReportingRule` differs from the other three traits in what it reads.
+It never touches a tree, a symbol index, or a type: its whole input is
+`DirectiveOutcome`, a resolved directive (anchor range, scope range,
+suppression filter, written identifiers, origin) paired with the final
+flag saying whether that directive admitted anything. Every one of
+those fields is already plain data, serializable by construction,
+because the cache persists exactly this shape as `StoredDirective`.
+There is no handle table to build and no lifetime to bound.
+
+| Native trait (owner) | Guest exports | Host families needed |
+|---|---|---|
+| `ReportingRule` (`celerrate_rules` context) | `metadata() -> rule metadata`, `report(outcomes) -> list<finding>` | two registry questions: `is_known(identifier) -> bool`, `is_inactive(identifier) -> bool` |
+
+The two host functions are the whole context surface. `is_known` asks
+whether a written identifier resolves in the diagnostic registry, and
+`is_inactive` whether it is claimed by a registration that is not
+active. Both are pure lookups over data the host already holds, and
+neither depends on the file under analysis.
+
+One property does not project and must stay host-side: the one-pass
+suppression algorithm that drops a directive finding admitted by a
+directive other than its own subject, and then drops an unused-report
+whose subject was marked used. It runs over the findings of every
+reporting rule together, so it belongs to the phase runner, not to any
+one guest. A guest returns findings carrying their subject index; the
+host does the rest.
+
+Because the phase is a plain function rather than a salsa query, and
+because its input is composed by the orchestration layer from either
+stored records or a fresh resolution, a projected reporting rule would
+also be the only one that runs identically on a warm cache hit without
+the host reconstructing anything.
