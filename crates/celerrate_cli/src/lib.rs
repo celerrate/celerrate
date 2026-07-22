@@ -15,6 +15,7 @@ pub mod mixed_rate;
 pub mod plugins;
 pub mod render;
 pub mod session;
+pub mod suggest;
 pub mod watch;
 
 use std::ffi::OsString;
