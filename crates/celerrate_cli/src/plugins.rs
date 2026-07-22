@@ -303,8 +303,7 @@ mod tests {
                 .iter()
                 .all(|identity| identity.name != celerrate_rules::CORE_IDENTITY_NAME)
         );
-        let registry =
-            celerrate_semantics::CommentDirectiveRegistry::try_get(&database).unwrap();
+        let registry = celerrate_semantics::CommentDirectiveRegistry::try_get(&database).unwrap();
         assert_eq!(
             registry.registrations(&database)[0].identity.name,
             celerrate_rules::CORE_IDENTITY_NAME,
