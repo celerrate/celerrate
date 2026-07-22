@@ -76,8 +76,11 @@ pub fn plan(diagnostics: &[Diagnostic], threshold: Confidence) -> PlannedFixes {
                 });
                 continue;
             }
-            let accepted = planned.edits_by_file.entry(file).or_default();
-            let mut trial: Vec<TextEdit> = accepted.clone();
+            let mut trial: Vec<TextEdit> = planned
+                .edits_by_file
+                .get(&file)
+                .cloned()
+                .unwrap_or_default();
             trial.extend(suggestion.edits.iter().cloned());
             trial.sort();
             if find_conflict(&trial).is_some() {
@@ -88,7 +91,7 @@ pub fn plan(diagnostics: &[Diagnostic], threshold: Confidence) -> PlannedFixes {
                 });
                 continue;
             }
-            *accepted = trial;
+            planned.edits_by_file.insert(file, trial);
             planned.accepted += 1;
         }
     }
@@ -221,6 +224,40 @@ mod tests {
         assert_eq!(planned.accepted, 0);
         assert_eq!(planned.skipped.len(), 1);
         assert_eq!(planned.skipped[0].reason, SkipReason::ForeignFile);
+    }
+
+    #[test]
+    fn a_suggestion_whose_own_edits_overlap_leaves_no_spurious_file_entry() {
+        // The first candidate suggestion touched for a file is itself
+        // internally conflicting (its two edits overlap: 0..4 and 2..6).
+        // It must be skipped as a whole, and critically, `plan` must not
+        // have materialized an empty entry for the file along the way:
+        // `entry(file).or_default()` would insert one before the trial is
+        // known to fail, which the fix under test must avoid.
+        let self_overlapping = Suggestion {
+            message: "conflicting rewrite".to_owned(),
+            confidence: Confidence::NeedsReview,
+            edits: vec![
+                TextEdit {
+                    file: FileId::new(0),
+                    range: TextRange::new(TextSize::from(0), TextSize::from(4)),
+                    replacement: "a".to_owned(),
+                },
+                TextEdit {
+                    file: FileId::new(0),
+                    range: TextRange::new(TextSize::from(2), TextSize::from(6)),
+                    replacement: "b".to_owned(),
+                },
+            ],
+        };
+        let planned = plan(
+            &[diagnostic(0, 0, 4, vec![self_overlapping])],
+            Confidence::NeedsReview,
+        );
+        assert_eq!(planned.accepted, 0);
+        assert_eq!(planned.skipped.len(), 1);
+        assert_eq!(planned.skipped[0].reason, SkipReason::Overlap);
+        assert!(planned.edits_by_file.is_empty());
     }
 
     #[test]
