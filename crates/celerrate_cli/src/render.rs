@@ -176,6 +176,38 @@ fn count(total: usize, singular: &str, plural: &str) -> String {
     }
 }
 
+/// The fix trailer: what was applied, what was skipped and why.
+/// Prints only under a fix flag. `applied 0 fixes to 0 files` is the
+/// honest line the design requires: at closure of this sub-project
+/// every shipped fix is `NeedsReview`, so `--fix` alone applies
+/// nothing, visibly.
+pub fn render_fix_summary(
+    output: &mut dyn Write,
+    session: &Session,
+    planned: &crate::fix::PlannedFixes,
+    applied: &crate::fix::AppliedFixes,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "applied {} to {}",
+        count(planned.accepted, "fix", "fixes"),
+        count(applied.files_written, "file", "files"),
+    )?;
+    for skipped in &planned.skipped {
+        let reason = match skipped.reason {
+            crate::fix::SkipReason::Overlap => "overlaps an already-applied fix",
+            crate::fix::SkipReason::ForeignFile => "edits another file",
+        };
+        writeln!(
+            output,
+            "skipped fix in {}: {} ({reason})",
+            display_path(session, skipped.file),
+            skipped.message,
+        )?;
+    }
+    writeln!(output)
+}
+
 /// The internal-error report: what went wrong, which file, and how to
 /// tell us. A panic does not kill the run, so this prints at the end,
 /// after every file that did report.
@@ -456,5 +488,50 @@ mod tests {
         assert!(text.contains("Locked.php"));
         assert!(text.contains("Broken.php"));
         assert!(text.contains("Please report it:"));
+    }
+
+    /// The trailer's synthetic case: the natural pass cannot yet
+    /// produce an overlap (every shipped suggestion is single-edit
+    /// `NeedsReview`), so the skip is driven directly through the
+    /// planner's own types.
+    #[test]
+    fn the_fix_trailer_names_the_skipped_fix_its_file_and_its_reason() {
+        use std::collections::BTreeMap;
+
+        use celerrate_source::{TextEdit, TextRange, TextSize};
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let mut session = Session::start(root.path());
+        let file = *session.sources.keys().next().unwrap();
+        let mut edits_by_file = BTreeMap::new();
+        edits_by_file.insert(
+            file,
+            vec![TextEdit {
+                file,
+                range: TextRange::new(TextSize::from(6), TextSize::from(10)),
+                replacement: "x".to_owned(),
+            }],
+        );
+        let planned = crate::fix::PlannedFixes {
+            accepted: 1,
+            edits_by_file,
+            skipped: vec![crate::fix::SkippedFix {
+                file,
+                message: "did you mean `save`?".to_owned(),
+                reason: crate::fix::SkipReason::Overlap,
+            }],
+        };
+        let applied = crate::fix::apply_to_disk(&mut session, &planned);
+        let mut output = Vec::new();
+        render::render_fix_summary(&mut output, &session, &planned, &applied).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("applied 1 fix to 1 file"), "{text}");
+        assert!(
+            text.contains(
+                "skipped fix in a.php: did you mean `save`? (overlaps an already-applied fix)"
+            ),
+            "{text}",
+        );
     }
 }

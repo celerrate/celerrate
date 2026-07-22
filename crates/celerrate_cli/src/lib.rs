@@ -82,7 +82,12 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
         }
     };
     match arguments.command {
-        Command::Check { path, watch } => {
+        Command::Check {
+            path,
+            watch,
+            fix,
+            fix_suggestions,
+        } => {
             if let Some(message) = unusable_root(&path) {
                 let _ = writeln!(output, "{message}");
                 return Outcome::UsageError;
@@ -112,6 +117,13 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
                 return Outcome::InternalError;
             }
             cache::persist(&mut session, &outcome);
+            if let Some(threshold) = fix::fix_threshold(fix, fix_suggestions) {
+                let planned = fix::plan(&presented.diagnostics, threshold);
+                let applied = fix::apply_to_disk(&mut session, &planned);
+                if render::render_fix_summary(output, &session, &planned, &applied).is_err() {
+                    return Outcome::InternalError;
+                }
+            }
             if render::render_internal_errors(output, &session).is_err() {
                 return Outcome::InternalError;
             }
