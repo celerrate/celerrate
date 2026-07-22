@@ -184,6 +184,21 @@ fn any_unmapped_identifier_falls_back_to_the_whole_scope() {
 }
 
 #[test]
+fn a_wrapped_foreign_identifier_list_widens_to_the_whole_scope() {
+    // Parsing reads only the tag's own line, so `UndefinedFunction` on
+    // the continuation line is never matched. Honoring `UndefinedClass`
+    // alone would let the unknown function reappear, a narrowing where
+    // the whole declaration used to be suppressed; the dangling comma
+    // widens the directive instead.
+    let root = project(&[(
+        "a.php",
+        "<?php\n/**\n * @psalm-suppress UndefinedClass,\n * UndefinedFunction\n */\nfunction f(): void { new MissingOne(); missing_helper(); }\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+}
+
+#[test]
 fn psalm_suppress_all_is_scope_wide() {
     let root = project(&[(
         "a.php",
