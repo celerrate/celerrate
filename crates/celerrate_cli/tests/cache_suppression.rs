@@ -147,3 +147,88 @@ fn a_warm_run_over_an_unchanged_project_stays_suppressed() {
     assert_eq!(warm, Outcome::Clean, "{text}");
     assert!(!text.contains("MissingOne"), "{text}");
 }
+
+#[test]
+fn a_warm_run_reports_the_same_directive_diagnostics_from_the_records() {
+    // Cold: the unused native directive reports CEL0042. Warm: the
+    // verdict serves, the reporting phase replays from the stored
+    // match records, and the report is byte-identical.
+    let root = project(&[("a.php", "<?php\n$x = 1; // @celerrate-ignore CEL0018\n")]);
+    let (cold_outcome, cold_text) = check(root.path());
+    assert_eq!(cold_outcome, Outcome::DiagnosticsReported, "{cold_text}");
+    assert!(cold_text.contains("CEL0042"), "{cold_text}");
+
+    let (warm_outcome, warm_text) = check(root.path());
+    assert_eq!(warm_outcome, Outcome::DiagnosticsReported, "{warm_text}");
+    assert_eq!(
+        cold_text, warm_text,
+        "warm and cold reports must be byte-identical"
+    );
+}
+
+#[test]
+fn the_warm_replay_serves_the_verdict_rather_than_recomputing() {
+    // The parse-free claim, by elimination: the stored diagnostics
+    // never contain CEL0042, yet the warm run reports it - so the
+    // reporting phase ran from the stored match records, not from a
+    // persisted diagnostic.
+    let root = project(&[("a.php", "<?php\n$x = 1; // @celerrate-ignore CEL0018\n")]);
+    check(root.path());
+
+    let session = Session::start(root.path());
+    let inputs = session.inputs();
+    let &file = session.sources.values().next().unwrap();
+    let VerdictLookup::Hit {
+        verdict: stored, ..
+    } = lookup_verdict(&inputs, file)
+    else {
+        panic!("the persisted verdict must revalidate on an unchanged project");
+    };
+    assert!(
+        stored
+            .diagnostics
+            .iter()
+            .all(|diagnostic| diagnostic.id != "CEL0042"),
+        "reporting diagnostics are never persisted; they replay from records",
+    );
+    let (warm_outcome, warm_text) = check(root.path());
+    assert_eq!(warm_outcome, Outcome::DiagnosticsReported, "{warm_text}");
+    assert!(warm_text.contains("CEL0042"), "{warm_text}");
+}
+
+#[test]
+fn editing_a_directive_identifier_is_a_plain_content_miss() {
+    // Narrow the directive on a warm cache: the hash moves, the entry
+    // is recomputed, and the previously suppressed finding returns
+    // while the directive stops being unused.
+    let root = project(&[(
+        "a.php",
+        "<?php\nnew MissingOne(); // @celerrate-ignore CEL0018\n",
+    )]);
+    let (cold, _) = check(root.path());
+    assert_eq!(cold, Outcome::Clean);
+
+    std::fs::write(
+        root.path().join("a.php"),
+        "<?php\nnew MissingOne(); // @celerrate-ignore CEL0019\n",
+    )
+    .unwrap();
+    let (warm, text) = check(root.path());
+    assert_eq!(warm, Outcome::DiagnosticsReported, "{text}");
+    assert!(text.contains("CEL0018"), "{text}");
+    assert!(text.contains("CEL0042"), "{text}");
+}
+
+#[test]
+fn a_typed_suppression_keeps_its_directive_used_on_the_warm_path() {
+    // The directive's only client is a typed-family finding (CEL0030,
+    // inside a checked body - top-level code is not a body): the
+    // matched attribution comes from the typed half's own records,
+    // warm and cold alike - no CEL0042 on either run.
+    let source = "<?php\nclass Service { public function boot(): void {} }\nfunction caller(): void {\n    $service = new Service();\n    $service->bot(); // @celerrate-ignore CEL0030\n}\n";
+    let root = project(&[("a.php", source)]);
+    let (cold, cold_text) = check(root.path());
+    assert_eq!(cold, Outcome::Clean, "{cold_text}");
+    let (warm, warm_text) = check(root.path());
+    assert_eq!(warm, Outcome::Clean, "{warm_text}");
+}
