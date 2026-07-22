@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod arguments;
 pub mod cache;
 pub mod database;
+pub mod fix;
 pub mod ground_truth;
 pub mod mixed_rate;
 pub mod plugins;

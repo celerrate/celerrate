@@ -13,4 +13,4 @@ mod conflict;
 
 pub use apply::{ApplyError, apply};
 pub use builder::{EditBuilder, EditError};
-pub use conflict::EditConflict;
+pub use conflict::{EditConflict, find_conflict};

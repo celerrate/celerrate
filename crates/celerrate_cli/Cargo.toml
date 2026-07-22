@@ -18,6 +18,7 @@ path = "src/main.rs"
 blake3 = { workspace = true }
 celerrate_db = { path = "../celerrate_db" }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_edit = { path = "../celerrate_edit" }
 celerrate_phpdoc_bridge = { path = "../celerrate_phpdoc_bridge" }
 celerrate_plugin = { path = "../celerrate_plugin" }
 celerrate_project = { path = "../celerrate_project" }
