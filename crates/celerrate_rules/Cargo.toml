@@ -9,6 +9,7 @@ repository.workspace = true
 
 [dependencies]
 salsa = { workspace = true }
+annotate-snippets = { workspace = true, optional = true }
 celerrate_db = { path = "../celerrate_db" }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_project = { path = "../celerrate_project" }
@@ -21,7 +22,7 @@ celerrate_types = { path = "../celerrate_types" }
 # The rustc-style renderer. Behind a feature so plugin crates and the
 # future structured-diagnostics consumers (LSP) do not compile the
 # rendering dependency (design section 9).
-render = []
+render = ["dep:annotate-snippets"]
 
 [dev-dependencies]
 insta = { workspace = true }

@@ -8,8 +8,10 @@
 //! business: this module receives a [`ColorMode`] and never reads the
 //! environment.
 
-use celerrate_diagnostics::{Anchor, Diagnostic};
-use celerrate_source::{FileId, LineIndex};
+use celerrate_diagnostics::{Anchor, Diagnostic, DiagnosticId};
+use celerrate_source::{FileId, LineIndex, TextRange};
+
+mod adapter;
 
 /// Read access to the sources a rendered report excerpts. The CLI
 /// implements this over its session; tests implement it over fixtures.
@@ -47,6 +49,108 @@ pub fn render_minimal(diagnostic: &Diagnostic, sources: &dyn SourceAccess) -> St
             )
         }
     }
+}
+
+/// Whether the rendered text carries ANSI styling. Decided by the CLI
+/// (TTY detection, `NO_COLOR`) outside queries; snapshots pin `Plain`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ColorMode {
+    Plain,
+    Styled,
+}
+
+/// A symbolic label resolved at render time (design section 3): a
+/// concrete location when the declaration is VFS-backed and locatable,
+/// or a degraded form rendered as a note naming the declaration.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ResolvedLabel {
+    Concrete { file: FileId, range: TextRange },
+    Degraded,
+}
+
+/// Resolves a symbolic label's declaration path to a location. The
+/// database-backed implementation lives in [`resolve`]; tests and
+/// database-free callers use [`DegradeEverything`].
+pub trait SymbolResolver {
+    fn resolve(&self, symbol: &str) -> ResolvedLabel;
+}
+
+/// The resolver for contexts with no database at hand: every symbolic
+/// label degrades to its note form.
+pub struct DegradeEverything;
+
+impl SymbolResolver for DegradeEverything {
+    fn resolve(&self, _symbol: &str) -> ResolvedLabel {
+        ResolvedLabel::Degraded
+    }
+}
+
+/// Forces the rich path of matching diagnostics to fail, so the
+/// fallback path is snapshot-tested rather than merely asserted
+/// (design section 9). Always [`FaultInjection::None`] in production.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FaultInjection {
+    None,
+    ForIdentifier(DiagnosticId),
+}
+
+/// One diagnostic whose rich rendering failed and fell back to the
+/// minimal line. The CLI reports each as an internal error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderFailure {
+    pub id: DiagnosticId,
+    pub location: String,
+}
+
+/// The rendered report: one text block per diagnostic, in input
+/// order, plus the rich-rendering failures the caller must surface.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedReport {
+    pub blocks: Vec<String>,
+    pub failures: Vec<RenderFailure>,
+}
+
+/// Renders every diagnostic to its block: the notice line for a
+/// project-anchored finding, the rustc-style block for a span-anchored
+/// one, the minimal line when rich rendering fails.
+pub fn render_report(
+    diagnostics: &[Diagnostic],
+    sources: &dyn SourceAccess,
+    resolver: &dyn SymbolResolver,
+    color: ColorMode,
+    fault: &FaultInjection,
+) -> RenderedReport {
+    let mut blocks = Vec::new();
+    let mut failures = Vec::new();
+    for diagnostic in diagnostics {
+        match diagnostic.anchor {
+            Anchor::Project => blocks.push(render_minimal(diagnostic, sources)),
+            Anchor::Span { file, .. } => {
+                let rich = sources.display_path(file).and_then(|path| {
+                    let text = sources.text(file)?;
+                    adapter::rich_block(
+                        diagnostic, &path, text, file, sources, resolver, color, fault,
+                    )
+                });
+                match rich {
+                    Some(block) => blocks.push(block),
+                    None => {
+                        let line = render_minimal(diagnostic, sources);
+                        failures.push(RenderFailure {
+                            id: diagnostic.id,
+                            location: line
+                                .split_whitespace()
+                                .next()
+                                .unwrap_or("<unknown>")
+                                .to_owned(),
+                        });
+                        blocks.push(line);
+                    }
+                }
+            }
+        }
+    }
+    RenderedReport { blocks, failures }
 }
 
 #[cfg(test)]
