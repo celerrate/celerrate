@@ -1,4 +1,4 @@
-use text_size::TextSize;
+use text_size::{TextRange, TextSize};
 
 /// A zero-based line/column position. `column` is a byte offset within the
 /// line, not a character count: multi-byte UTF-8 characters advance it by
@@ -69,5 +69,46 @@ impl LineIndex {
         let candidate = line_start.checked_add(TextSize::from(line_column.column))?;
         let line_end = self.line_starts.get(line + 1).copied().unwrap_or(self.len);
         (candidate <= line_end).then_some(candidate)
+    }
+
+    /// The range of one zero-based line, including its terminator; the
+    /// last line runs to the end of the text. `None` when the line does
+    /// not exist.
+    pub fn line_range(&self, line: u32) -> Option<TextRange> {
+        let start = *self.line_starts.get(line as usize)?;
+        let end = match self.line_starts.get(line as usize + 1) {
+            Some(next) => *next,
+            None => self.len,
+        };
+        Some(TextRange::new(start, end))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used)]
+
+    use super::*;
+
+    #[test]
+    fn line_range_covers_a_middle_line_including_its_terminator() {
+        let index = LineIndex::new("<?php\nclass A\n{\n}\n");
+        let range = index.line_range(1).unwrap();
+        assert_eq!(u32::from(range.start()), 6);
+        assert_eq!(u32::from(range.end()), 14); // "class A\n"
+    }
+
+    #[test]
+    fn line_range_of_the_last_line_runs_to_the_end_of_the_text() {
+        let index = LineIndex::new("a\nb");
+        let range = index.line_range(1).unwrap();
+        assert_eq!(u32::from(range.start()), 2);
+        assert_eq!(u32::from(range.end()), 3);
+    }
+
+    #[test]
+    fn line_range_of_a_missing_line_is_none() {
+        let index = LineIndex::new("a\nb");
+        assert_eq!(index.line_range(2), None);
     }
 }
