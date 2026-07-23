@@ -11,9 +11,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use celerrate_db::{parse, source_text};
 use celerrate_diagnostics::{Confidence, Diagnostic, Suggestion};
 use celerrate_semantics::{
-    ClassQuery, MemberKind, SymbolSpace, UseTables, collect_references, folded_member_key,
-    folded_symbol_key, item_tree, linearized_class, resolve_candidates, source_symbol_table,
-    stub_signature_table, stub_symbol_table,
+    ClassQuery, MemberKind, Reference, SymbolSpace, UseTables, collect_references,
+    folded_member_key, folded_symbol_key, item_tree, linearized_class, resolve_candidates,
+    source_symbol_table, stub_signature_table, stub_symbol_table,
 };
 use celerrate_source::{FileId, TextEdit, TextRange, TextSize};
 use celerrate_stubs::StubMemberKind;
@@ -249,6 +249,15 @@ struct CandidatePools<'a> {
     /// out per diagnostic afterwards, since two diagnostics can share a
     /// receiver while writing different unknown members.
     members: HashMap<(String, MemberKind), Vec<String>>,
+    /// One file's statically named references, parsed and collected on
+    /// first use per file and shared with every later call in the same
+    /// pass. `attempted_keys` and `resolved_receiver_key` both used to
+    /// call `collect_references` themselves, once per diagnostic: a
+    /// misconfigured autoload can carry thousands of unknown-symbol or
+    /// unknown-member diagnostics against one file, which turned into
+    /// thousands of tree walks over that file. Caching here turns it
+    /// into at most one walk per file for the whole pass.
+    reference_cache: HashMap<FileId, Vec<Reference>>,
 }
 
 impl<'a> CandidatePools<'a> {
@@ -259,7 +268,27 @@ impl<'a> CandidatePools<'a> {
             functions: None,
             constants: None,
             members: HashMap::new(),
+            reference_cache: HashMap::new(),
         }
+    }
+
+    /// The file's statically named references, computed on first use
+    /// per file and shared with every later call in the same pass. An
+    /// unparseable or no-longer-tracked file yields an empty list, the
+    /// same "nothing found" outcome a failed lookup would have produced
+    /// before this cache existed.
+    fn references(&mut self, file: FileId) -> &[Reference] {
+        let session = self.session;
+        self.reference_cache
+            .entry(file)
+            .or_insert_with(|| match session.sources.get(&file) {
+                Some(&source) => {
+                    let root = parse(&session.database, source).tree();
+                    collect_references(&root)
+                }
+                None => Vec::new(),
+            })
+            .as_slice()
     }
 
     /// The declared qualified names of `space`, computed on first use
@@ -316,18 +345,23 @@ fn declared_pool(session: &Session, space: SymbolSpace) -> Vec<String> {
 /// file's item tree, the namespace covering the diagnostic's span (as
 /// `collect_references` walks it), the `use` tables of that namespace,
 /// and `resolve_candidates`. Mirrors the walk in
-/// `celerrate_semantics::reference_checks`.
+/// `celerrate_semantics::reference_checks`. The reference itself comes
+/// from `pools`' per-file cache rather than a fresh `collect_references`
+/// call, so a file carrying many of these diagnostics pays the walk at
+/// most once.
 fn attempted_keys(
     session: &Session,
+    pools: &mut CandidatePools<'_>,
     file: FileId,
     range: TextRange,
     space: SymbolSpace,
 ) -> Option<Vec<String>> {
     let source = *session.sources.get(&file)?;
-    let root = parse(&session.database, source).tree();
-    let reference = collect_references(&root)
-        .into_iter()
-        .find(|reference| reference.range == range && reference.space == space)?;
+    let reference = pools
+        .references(file)
+        .iter()
+        .find(|reference| reference.range == range && reference.space == space)?
+        .clone();
     let tree = item_tree(&session.database, source);
     let tables = UseTables::for_namespace(tree, &reference.namespace);
     Some(resolve_candidates(
@@ -390,7 +424,7 @@ fn symbol_did_you_mean(
     space: SymbolSpace,
 ) -> Option<Enrichment> {
     let written = span_text(session, file, range)?;
-    let attempted = attempted_keys(session, file, range, space)?;
+    let attempted = attempted_keys(session, pools, file, range, space)?;
     let pool = pools.get(space);
     let (winning_key, outcome) = did_you_mean_across_keys(attempted, pool, space)?;
     match outcome {
@@ -511,7 +545,7 @@ fn member_did_you_mean(
     if receiver.contains('|') || receiver.contains('&') || receiver.contains('@') {
         return None;
     }
-    let class_key = receiver_class_key(session, file, range, &receiver);
+    let class_key = receiver_class_key(session, pools, file, range, &receiver);
     let written_key = folded_member_key(kind, &member);
     let pool = pools.member_pool(&class_key, kind);
     let candidates: Vec<String> = pool
@@ -566,15 +600,25 @@ fn member_did_you_mean(
 /// written that way sits inside the diagnostic's span, so
 /// `resolved_receiver_key` always answers `None` there and the fold --
 /// already correct in that case -- is what actually gets used; the
-/// instance path pays for a syntax-tree walk it always loses, in
-/// exchange for one escalation order that is correct for both access
-/// shapes rather than two paths that could drift apart. Falling back
+/// instance path still looks through `pools`' per-file reference cache
+/// on the way to that `None`, but since the cache is shared and built
+/// at most once per file, it no longer pays a fresh syntax-tree walk
+/// for every instance-access diagnostic, only the one shared walk the
+/// first diagnostic in that file paid for anyone. One escalation order
+/// stays correct for both access shapes rather than two paths that
+/// could drift apart. Falling back
 /// to the folded written text when resolution fails is safe either
 /// way: an unresolvable key simply yields no candidates below, which
 /// is the same "no enrichment" outcome as returning `None` here would
 /// have produced.
-fn receiver_class_key(session: &Session, file: FileId, range: TextRange, receiver: &str) -> String {
-    resolved_receiver_key(session, file, range, receiver)
+fn receiver_class_key(
+    session: &Session,
+    pools: &mut CandidatePools<'_>,
+    file: FileId,
+    range: TextRange,
+    receiver: &str,
+) -> String {
+    resolved_receiver_key(session, pools, file, range, receiver)
         .unwrap_or_else(|| folded_symbol_key(SymbolSpace::ClassLike, receiver))
 }
 
@@ -587,17 +631,21 @@ fn receiver_class_key(session: &Session, file: FileId, range: TextRange, receive
 /// mirrors the walk in `celerrate_types::checks::members::resolve_scoped_class_key`.
 fn resolved_receiver_key(
     session: &Session,
+    pools: &mut CandidatePools<'_>,
     file: FileId,
     range: TextRange,
     receiver: &str,
 ) -> Option<String> {
     let source = *session.sources.get(&file)?;
-    let root = parse(&session.database, source).tree();
-    let reference = collect_references(&root).into_iter().find(|reference| {
-        reference.space == SymbolSpace::ClassLike
-            && reference.written == receiver
-            && range.contains_range(reference.range)
-    })?;
+    let reference = pools
+        .references(file)
+        .iter()
+        .find(|reference| {
+            reference.space == SymbolSpace::ClassLike
+                && reference.written == receiver
+                && range.contains_range(reference.range)
+        })?
+        .clone();
     let tree = item_tree(&session.database, source);
     let tables = UseTables::for_namespace(tree, &reference.namespace);
     let attempted = resolve_candidates(
