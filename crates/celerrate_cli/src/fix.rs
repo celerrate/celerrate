@@ -6,7 +6,7 @@
 //! fixpoint: re-running `check` after application shows what remains.
 
 use std::collections::BTreeMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use celerrate_diagnostics::{Confidence, Diagnostic};
 use celerrate_edit::find_conflict;
@@ -107,11 +107,39 @@ pub struct AppliedFixes {
     pub files_written: usize,
 }
 
+/// The sibling temporary path a patched file is written to before the
+/// atomic rename onto `path`: the target file name with a fixed
+/// `.celerrate-fix.tmp` suffix, in the same parent directory as `path`.
+/// Staying in the same directory keeps the later rename on the same
+/// filesystem, which is what makes it atomic; a fixed suffix is safe
+/// because one run applies its plan single-threaded, one file at a
+/// time, so nothing else in this run can collide with it. `None` only
+/// when `path` has no file name component (for example the filesystem
+/// root), which never happens for a file the analysis actually read.
+fn sibling_temp_path(path: &Path) -> Option<PathBuf> {
+    let file_name = path.file_name()?;
+    let mut temp_name = file_name.to_os_string();
+    temp_name.push(".celerrate-fix.tmp");
+    Some(path.with_file_name(temp_name))
+}
+
 /// Applies the planned edits: per file, one splice of all accepted
-/// edits against the exact decoded text the analysis read, written to
-/// disk and echoed into the `Vfs` so the session's effective state
-/// stays true. Every failure is an internal error the run reports and
-/// survives; nothing panics, and no file is ever partially written.
+/// edits against the exact decoded text the analysis read, then
+/// written to disk and echoed into the `Vfs` so the session's
+/// effective state stays true. Every failure is an internal error the
+/// run reports and survives; nothing panics, and no file is ever
+/// partially written.
+///
+/// The disk write itself is a temp-file-plus-rename: the patched text
+/// is written whole to a sibling temporary file first, and only once
+/// that succeeds is the temporary file renamed onto the target with
+/// `std::fs::rename`, which is atomic on the same filesystem. If the
+/// temporary write fails partway (disk full, IO error, quota), the
+/// original file was never opened for writing and survives intact; if
+/// the rename itself fails, the original likewise still holds its
+/// original bytes, since a rename either fully happens or not at all.
+/// Either failure is reported as `FixWriteFailed` naming the original
+/// target path, with a best-effort cleanup of the temporary file.
 pub fn apply_to_disk(session: &mut Session, planned: &PlannedFixes) -> AppliedFixes {
     let mut applied = AppliedFixes::default();
     for (&file, edits) in &planned.edits_by_file {
@@ -149,11 +177,27 @@ pub fn apply_to_disk(session: &mut Session, planned: &PlannedFixes) -> AppliedFi
             });
             continue;
         };
-        if let Err(reason) = std::fs::write(&path, patched.as_bytes()) {
+        let Some(temp_path) = sibling_temp_path(&path) else {
+            session.internal_errors.push(InternalError::FixWriteFailed {
+                path,
+                reason: "the file has no file name to derive a temporary path from".to_owned(),
+            });
+            continue;
+        };
+        if let Err(reason) = std::fs::write(&temp_path, patched.as_bytes()) {
             session.internal_errors.push(InternalError::FixWriteFailed {
                 path,
                 reason: reason.to_string(),
             });
+            let _ = std::fs::remove_file(&temp_path);
+            continue;
+        }
+        if let Err(reason) = std::fs::rename(&temp_path, &path) {
+            session.internal_errors.push(InternalError::FixWriteFailed {
+                path,
+                reason: reason.to_string(),
+            });
+            let _ = std::fs::remove_file(&temp_path);
             continue;
         }
         session
@@ -409,6 +453,45 @@ mod tests {
             session.vfs.contents(file),
             Some("<?php a(); bb();".as_bytes()),
         );
+    }
+
+    #[test]
+    fn a_target_replaced_by_a_directory_fails_the_atomic_rename_and_leaves_it_untouched() {
+        // A portable, deterministic way to force the rename step to fail:
+        // swap the analyzed file for a directory of the same name after
+        // analysis but before `apply_to_disk` runs. The sibling temp
+        // write still succeeds (it is a different file name), but
+        // `std::fs::rename` onto an existing directory fails (`EISDIR`
+        // on Unix), which is exactly the failure this test exists to
+        // prove is safe: the directory that now sits at the target path
+        // is never touched, and no data is lost.
+        let root = project(&[("src/Bad.php", "<?php aaaa();")]);
+        let mut session = Session::start(root.path());
+        let file = *session.sources.keys().next().unwrap();
+        let path = root.path().join("src/Bad.php");
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        let mut planned = super::PlannedFixes::default();
+        planned.edits_by_file.insert(
+            file,
+            vec![TextEdit {
+                file,
+                range: TextRange::new(TextSize::from(6), TextSize::from(10)),
+                replacement: "a".to_owned(),
+            }],
+        );
+        let applied = super::apply_to_disk(&mut session, &planned);
+        assert_eq!(applied.files_written, 0);
+        assert!(matches!(
+            session.internal_errors.as_slice(),
+            [InternalError::FixWriteFailed { path: failed_path, .. }] if *failed_path == path,
+        ));
+        // The directory that now occupies the target path survives
+        // intact: the rename never happened.
+        assert!(path.is_dir());
+        // The sibling temporary file was cleaned up, not left behind.
+        let temp_path = path.with_file_name("Bad.php.celerrate-fix.tmp");
+        assert!(!temp_path.exists());
     }
 
     #[test]
