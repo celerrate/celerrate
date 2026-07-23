@@ -8,6 +8,8 @@ mod finding;
 mod metadata;
 mod phases;
 mod registry;
+#[cfg(feature = "render")]
+pub mod render;
 pub mod rules;
 mod traits;
 

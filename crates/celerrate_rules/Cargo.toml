@@ -17,5 +17,14 @@ celerrate_source = { path = "../celerrate_source" }
 celerrate_stubs = { path = "../celerrate_stubs" }
 celerrate_types = { path = "../celerrate_types" }
 
+[features]
+# The rustc-style renderer. Behind a feature so plugin crates and the
+# future structured-diagnostics consumers (LSP) do not compile the
+# rendering dependency (design section 9).
+render = []
+
+[dev-dependencies]
+insta = { workspace = true }
+
 [lints]
 workspace = true
