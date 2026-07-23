@@ -555,6 +555,11 @@ mod tests {
             Outcome::InternalError,
             "a render fallback exits 2, like every other internal error",
         );
+        // Display paths carry the OS-native separator (a backslash on
+        // Windows); normalize it so the snapshot is stable across
+        // platforms, as the integration tests do. The fallback text has
+        // no source excerpt, so every separator here is a path separator.
+        let text = text.replace(std::path::MAIN_SEPARATOR, "/");
         insta::assert_snapshot!("fault_fallback", text);
     }
 
