@@ -31,7 +31,13 @@ pub struct ExampleExemption {
 /// The declared exemption list, in identifier order. Grown only by
 /// the page tasks that justify each entry; the closing spec amendment
 /// records the final contents.
-pub const EXECUTABLE_EXAMPLE_EXEMPTIONS: &[ExampleExemption] = &[];
+pub const EXECUTABLE_EXAMPLE_EXEMPTIONS: &[ExampleExemption] = &[ExampleExemption {
+    id: DiagnosticId::new("CEL0022"),
+    reason: "the shipped stub blob carries no symbol whose removal falls \
+             inside the supported 8.1 to 8.5 window; the framework-path \
+             fixture in celerrate_rules covers recall (same waiver as the \
+             seeded-defect suite)",
+}];
 
 #[cfg(test)]
 mod tests {
