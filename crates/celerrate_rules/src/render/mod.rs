@@ -154,6 +154,23 @@ pub fn render_report(
     RenderedReport { blocks, failures }
 }
 
+/// The report trailer that makes `celerrate explain` discoverable from
+/// the primary output (design section 9): one pointer per distinct
+/// identifier reported, in identifier order.
+pub fn explain_pointers(identifiers: impl IntoIterator<Item = DiagnosticId>) -> String {
+    let mut seen: Vec<DiagnosticId> = identifiers.into_iter().collect();
+    seen.sort();
+    seen.dedup();
+    seen.iter()
+        .map(|id| {
+            format!(
+                "for more information, run `celerrate explain {}`\n",
+                id.as_str()
+            )
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(
@@ -238,5 +255,26 @@ mod tests {
             render_minimal(&diagnostic, &sources),
             "<unknown>:1:1 CEL0018 unknown class `Missing`",
         );
+    }
+
+    #[test]
+    fn explain_pointers_are_sorted_deduplicated_and_newline_terminated() {
+        use super::explain_pointers;
+        let identifiers = [
+            find_identifier("CEL0030").unwrap(),
+            find_identifier("CEL0018").unwrap(),
+            find_identifier("CEL0030").unwrap(),
+        ];
+        assert_eq!(
+            explain_pointers(identifiers),
+            "for more information, run `celerrate explain CEL0018`\n\
+             for more information, run `celerrate explain CEL0030`\n",
+        );
+    }
+
+    #[test]
+    fn no_identifiers_produce_no_pointer_text() {
+        use super::explain_pointers;
+        assert_eq!(explain_pointers([]), "");
     }
 }
