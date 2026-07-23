@@ -649,6 +649,37 @@ mod tests {
         );
     }
 
+    /// A render fallback is a verdict about the picture the pass produced,
+    /// not about the loaded session, so it goes with the pass: otherwise
+    /// `--watch` would add a line to the internal-error block on every
+    /// cycle a diagnostic keeps failing to render, exactly the stale log
+    /// the function exists to prevent.
+    #[test]
+    fn forgetting_a_passs_render_failures_leaves_the_sessions_own_errors_alone() {
+        let root = project(&[("a.php", "<?php echo 1;")]);
+        let mut session = Session::start(root.path());
+        session
+            .internal_errors
+            .push(super::InternalError::StubBlobUndecodable(
+                celerrate_stubs::StubBlobError::BadMagic,
+            ));
+        session
+            .internal_errors
+            .push(InternalError::DiagnosticRenderFailed {
+                identifier: "CEL0018".to_owned(),
+                location: "src/Kernel.php:4:22".to_owned(),
+            });
+
+        session.forget_analysis_errors();
+
+        assert_eq!(
+            session.internal_errors.len(),
+            1,
+            "the pass's render failure goes, the session's own errors stay: {:?}",
+            session.internal_errors,
+        );
+    }
+
     #[test]
     fn absorbing_a_new_file_grows_the_analyzed_set() {
         let root = project(&[("a.php", "<?php class A {}")]);

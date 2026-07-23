@@ -44,6 +44,10 @@ fn check(root: &Path) -> (Outcome, String) {
 /// leading `path:line:column` token of a minimal line, and the
 /// ` --> path:line:column` origin line of a rich block. PHP source
 /// excerpts keep their backslashes (namespaces are not paths).
+///
+/// A trailing newline in `text` is preserved in the result: `lines()`
+/// drops it while splitting, so it is restored deliberately rather than
+/// silently lost.
 fn normalize_location_separators(text: &str) -> String {
     let mut lines: Vec<String> = Vec::new();
     for line in text.lines() {

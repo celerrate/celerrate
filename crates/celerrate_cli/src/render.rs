@@ -402,6 +402,11 @@ mod tests {
             text.contains("This is a bug in Celerrate"),
             "the invitation follows: {text}",
         );
+        assert_eq!(
+            Outcome::of(outcome.diagnostics.len(), session.internal_errors.len()),
+            Outcome::InternalError,
+            "a render fallback exits 2, like every other internal error",
+        );
         insta::assert_snapshot!("fault_fallback", text);
     }
 
