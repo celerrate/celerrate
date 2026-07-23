@@ -11,6 +11,7 @@
 
 use crate::explain::ExplainPage;
 use crate::identifier::DiagnosticId;
+use crate::pages;
 
 /// One allocated identifier: what it means, and who produces it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -33,6 +34,23 @@ const fn registered(
         family,
         owner,
         explain: None,
+    }
+}
+
+/// The interim constructor while pages land family by family; Task 6
+/// of part 8 deletes `registered`, makes the field mandatory, and
+/// renames this back to `registered`.
+const fn documented(
+    id: &'static str,
+    family: &'static str,
+    owner: &'static str,
+    explain: &'static ExplainPage,
+) -> RegisteredDiagnostic {
+    RegisteredDiagnostic {
+        id: DiagnosticId::new(id),
+        family,
+        owner,
+        explain: Some(explain),
     }
 }
 
@@ -59,7 +77,12 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
     registered("CEL0015", "expected a statement", "celerrate_syntax"),
     registered("CEL0016", "expected a type", "celerrate_syntax"),
     registered("CEL0017", "expected a declaration", "celerrate_syntax"),
-    registered("CEL0018", "unknown class", "celerrate_rules"),
+    documented(
+        "CEL0018",
+        "unknown class",
+        "celerrate_rules",
+        &pages::semantic::CEL0018,
+    ),
     registered("CEL0019", "unknown function", "celerrate_rules"),
     registered("CEL0020", "unknown constant", "celerrate_rules"),
     registered("CEL0021", "symbol not available", "celerrate_rules"),

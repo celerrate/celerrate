@@ -10,12 +10,13 @@ mod diagnostic;
 mod explain;
 mod identifier;
 mod label;
+mod pages;
 mod registry;
 mod severity;
 mod suggestion;
 
 pub use diagnostic::{Anchor, Diagnostic};
-pub use explain::ExplainPage;
+pub use explain::{EXECUTABLE_EXAMPLE_EXEMPTIONS, ExampleExemption, ExplainPage};
 pub use identifier::DiagnosticId;
 pub use label::{Label, LabelTarget};
 pub use registry::{REGISTRY, RegisteredDiagnostic, find_identifier, find_page};
