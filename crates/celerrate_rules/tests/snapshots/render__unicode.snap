@@ -1,0 +1,10 @@
+---
+source: crates/celerrate_rules/tests/render.rs
+assertion_line: 140
+expression: "report.blocks.join(\"\\n\\n\")"
+---
+error[CEL0019]: unknown function `strlen_typo`
+ --> src/unicode.php:3:9
+  |
+3 | $noël = strlen_typo("été");
+  |         ^^^^^^^^^^^
