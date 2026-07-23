@@ -6,10 +6,18 @@ keeps its meaning forever, a retired one is never reused, and a new
 diagnostic takes the next free number. This page is the identifier
 reference until the rule framework ships `celerrate explain` pages.
 
-A report line looks like:
+A reported diagnostic looks like:
 
 ```text
-src/Controller/PostController.php:42:19 CEL0018 unknown class `App\Service\Mailer`
+error[CEL0018]: unknown class `App\Service\Mailer`
+ --> src/PostController.php:7:41
+  |
+7 |     public function __construct(private App\Service\Mailer $mailer)
+  |                                         ^^^^^^^^^^^^^^^^^^
+
+0 notices, 1 diagnostic
+
+for more information, run `celerrate explain CEL0018`
 ```
 
 Severity is reporting weight, not exit behavior: `celerrate check`

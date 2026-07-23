@@ -31,11 +31,29 @@ There is nothing to configure. Composer discovery finds your code, your
 dependencies, and your PHP version range on its own:
 
 ```text
-src/Service/Search.php:27:16 CEL0021 `array_find` requires PHP 8.4, but the project's minimum PHP version is 8.1
-src/Controller/PostController.php:42:19 CEL0018 unknown class `App\Service\Mailer`
-src/Notification/Mailer.php:31:9 CEL0034 accessing `format` on a possibly null `DateTimeImmutable|null`
+error[CEL0018]: unknown class `App\Service\Mailer`
+ --> src/Controller/PostController.php:7:41
+  |
+7 |     public function __construct(private App\Service\Mailer $mailer)
+  |                                         ^^^^^^^^^^^^^^^^^^
+
+error[CEL0034]: accessing `format` on a possibly null `DateTimeImmutable|null`
+  --> src/Notification/Mailer.php:11:16
+   |
+11 |         return $sentAt->format('c');
+   |                ^^^^^^^^^^^^^^^
+
+error[CEL0021]: `array_find` requires PHP 8.4, but the project's minimum PHP version is 8.1
+ --> src/Service/Search.php:9:16
+  |
+9 |         return array_find($items, fn ($item) => $item !== null);
+  |                ^^^^^^^^^^
 
 0 notices, 3 diagnostics
+
+for more information, run `celerrate explain CEL0018`
+for more information, run `celerrate explain CEL0021`
+for more information, run `celerrate explain CEL0034`
 ```
 
 ## Performance
