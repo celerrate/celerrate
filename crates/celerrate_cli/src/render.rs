@@ -25,15 +25,18 @@ use crate::session::{InternalError, Session};
 /// should not have to compose anything.
 const ISSUE_INVITATION: &str = "https://github.com/celerrate/celerrate/issues/new?labels=internal-error&title=internal+error+while+checking";
 
-/// The complete check screen: the report, then the internal errors.
-/// The watch cycle uses this whole; the single-pass path calls the two
-/// halves itself so the fix trailer can sit between them.
+/// Test helper: composes the report and the internal-error report the
+/// way the single-pass production path does, minus the fix trailer that
+/// path prints between the two halves. Used by this module's own
+/// rendering tests and by the `lib.rs` and `watch.rs` test modules that
+/// exercise the same report-plus-internal-errors composition.
 ///
 /// The body is buffered so the immutable borrow the renderer needs ends
 /// before the failures are absorbed: a rich-rendering failure becomes an
 /// internal error, and the internal errors print under the report it
 /// fell back inside.
-pub fn render_check(
+#[cfg(test)]
+pub(crate) fn render_check(
     output: &mut dyn Write,
     session: &mut Session,
     outcome: &AnalysisOutcome,
@@ -243,10 +246,10 @@ fn internal_error_rows(session: &Session, new_failures: usize) -> usize {
 /// and a terminal size that could not be read) never caps.
 ///
 /// The frame is assembled off-screen, capped, then written after the
-/// clear so a slow render never shows a half frame. Unlike
-/// [`render_check`], it does not print the `celerrate explain` trailer:
-/// the frame is transient and the cap needs its rows for diagnostics
-/// instead.
+/// clear so a slow render never shows a half frame. Unlike the
+/// single-pass check path, it does not print the `celerrate explain`
+/// trailer: the frame is transient and the cap needs its rows for
+/// diagnostics instead.
 ///
 /// The budget the blocks are capped against also reserves rows for
 /// [`render_internal_errors`], which this function calls below and
