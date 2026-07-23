@@ -1,0 +1,12 @@
+---
+source: crates/celerrate_rules/tests/render.rs
+assertion_line: 292
+expression: "report.blocks.join(\"\\n\\n\")"
+---
+error[CEL0030]: unknown method `svae` on `App\User`
+ --> src/Caller.php:6:12
+  |
+6 |     $user->svae();
+  |            ^^^^
+  |
+  = note: `App\User::save`: declared in a stub with no source

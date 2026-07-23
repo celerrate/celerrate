@@ -1,0 +1,13 @@
+---
+source: crates/celerrate_rules/tests/render.rs
+assertion_line: 208
+expression: "report.blocks.join(\"\\n\\n\")"
+---
+error[CEL0030]: unknown method `svae` on `App\User`
+ --> src/Caller.php:6:12
+  |
+4 | function render(User $user): void
+  |                 ---- the receiver is typed `App\User` here
+5 | {
+6 |     $user->svae();
+  |            ^^^^
