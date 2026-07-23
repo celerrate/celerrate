@@ -130,6 +130,12 @@ fn completed_cycle(
     // respawned it, and the picture must describe the watch the next
     // burst will come from, not the one this cycle started with.
     watcher.report_unwatchable_paths(session);
+    // Read fresh every cycle, outside every query, so the analysis stays
+    // a pure function of its inputs (determinism): the terminal can be
+    // resized between cycles, and a stale height would cap against a
+    // frame the user no longer has.
+    let height =
+        terminal_size::terminal_size().map(|(_, terminal_size::Height(rows))| rows as usize);
     if render::render_cycle(
         output,
         session,
@@ -137,6 +143,7 @@ fn completed_cycle(
         reanalyzed,
         started.elapsed(),
         color,
+        height,
     )
     .is_err()
     {

@@ -145,9 +145,41 @@ pub(crate) fn render_report_with(
     Ok(report.failures)
 }
 
+/// How many leading blocks fit a line budget, and how many diagnostics
+/// that hides. Each block costs its lines plus one separator line. At
+/// least one block always shows: a frame that hides every diagnostic
+/// while reporting a nonzero count would read as broken.
+fn capped_blocks(blocks: &[String], budget: usize) -> (usize, usize) {
+    let mut used = 0usize;
+    let mut shown = 0usize;
+    for block in blocks {
+        let cost = block.lines().count() + 1;
+        if shown > 0 && used + cost > budget {
+            break;
+        }
+        used += cost;
+        shown += 1;
+    }
+    (shown, blocks.len().saturating_sub(shown))
+}
+
 /// One watch cycle: the screen cleared, the complete current state
 /// reprinted, then the cost. The picture is always complete, never a
 /// stale log of past edits.
+///
+/// `height` is the terminal's row count for this cycle, read by the
+/// caller outside every query so the analysis stays a pure function of
+/// its inputs. When it is `Some`, the diagnostic blocks are capped so
+/// the frame never scrolls itself away, and the capped list ends with an
+/// "and N more diagnostics" line; the summary line below still counts
+/// every diagnostic, shown or not. `None` (the one-shot report's case,
+/// and a terminal size that could not be read) never caps.
+///
+/// The frame is assembled off-screen, capped, then written after the
+/// clear so a slow render never shows a half frame. Unlike
+/// [`render_check`], it does not print the `celerrate explain` trailer:
+/// the frame is transient and the cap needs its rows for diagnostics
+/// instead.
 pub fn render_cycle(
     output: &mut dyn Write,
     session: &mut Session,
@@ -155,12 +187,69 @@ pub fn render_cycle(
     reanalyzed: usize,
     elapsed: std::time::Duration,
     color: ColorMode,
+    height: Option<usize>,
 ) -> io::Result<()> {
+    let sources = SessionSources { session: &*session };
+    let resolver = DatabaseResolver::new(&session.database, session.files);
+    let report = render_blocks(
+        &outcome.diagnostics,
+        &sources,
+        &resolver,
+        color,
+        &FaultInjection::None,
+    );
+
+    let notices = session.notices();
+    // Overhead: the notice lines plus their blank separator, the summary
+    // line, one blank line, the status line, the watching line, and one
+    // spare row for the cursor.
+    let overhead = if notices.is_empty() {
+        0
+    } else {
+        notices.len() + 1
+    } + 6;
+    let (shown, hidden) = match height {
+        Some(rows) => capped_blocks(&report.blocks, rows.saturating_sub(overhead)),
+        None => (report.blocks.len(), 0),
+    };
+
     // The two ANSI codes a plain format is allowed: clear, and home.
     // Everything else the frame is styled with comes from the renderer's
     // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
-    render_check(output, session, outcome, color)?;
+    if !notices.is_empty() {
+        for notice in notices {
+            writeln!(
+                output,
+                "notice {}: {}",
+                notice.identifier().as_str(),
+                notice.message(),
+            )?;
+        }
+        writeln!(output)?;
+    }
+    for block in report.blocks.iter().take(shown) {
+        writeln!(output, "{block}")?;
+        writeln!(output)?;
+    }
+    if hidden > 0 {
+        writeln!(
+            output,
+            "and {}",
+            count(hidden, "more diagnostic", "more diagnostics"),
+        )?;
+        writeln!(output)?;
+    }
+    writeln!(
+        output,
+        "{}, {}",
+        count(notices.len(), "notice", "notices"),
+        count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
+    )?;
+
+    session.absorb_render_failures(report.failures);
+    render_internal_errors(output, session)?;
+
     writeln!(output)?;
     writeln!(
         output,
@@ -596,6 +685,7 @@ mod tests {
             1,
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
+            None,
         )
         .unwrap();
         let text = String::from_utf8(output).unwrap();
@@ -606,6 +696,88 @@ mod tests {
         );
         assert!(text.contains("0 diagnostics  |  1 file re-analyzed  |  4ms"));
         assert!(text.trim_end().ends_with("watching for changes..."));
+    }
+
+    /// A project with several independent unknown-class diagnostics, so
+    /// the watch-mode height cap has more than one block to work with.
+    /// Every file stands alone (nothing extends another file's class),
+    /// so the diagnostic count does not depend on analysis order.
+    fn fixture_with_many_diagnostics() -> (tempfile::TempDir, Session, AnalysisOutcome) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        for index in 0..5 {
+            std::fs::write(
+                root.path().join("src").join(format!("Kernel{index}.php")),
+                format!(
+                    "<?php\nnamespace App;\n\nclass Kernel{index} extends Missing{index}\n{{\n}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let outcome = crate::analysis::analyze(&inputs).unwrap();
+        (root, session, outcome)
+    }
+
+    #[test]
+    fn capped_blocks_stops_before_the_budget_and_counts_the_hidden() {
+        let blocks: Vec<String> = (0..5)
+            .map(|index| format!("block {index}\nline\nline\nline"))
+            .collect();
+        // Each block is 4 lines + 1 separator = 5; a budget of 12 fits 2.
+        assert_eq!(render::capped_blocks(&blocks, 12), (2, 3));
+        // A huge budget fits everything.
+        assert_eq!(render::capped_blocks(&blocks, 1000), (5, 0));
+        // A tiny budget still shows the first block: a frame that hides
+        // every diagnostic while reporting a nonzero count reads broken.
+        assert_eq!(render::capped_blocks(&blocks, 1), (1, 4));
+    }
+
+    #[test]
+    fn a_capped_cycle_ends_with_the_more_diagnostics_line() {
+        let (_root, mut session, outcome) = fixture_with_many_diagnostics();
+        let mut body: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut body,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(20),
+        )
+        .unwrap();
+        let text = String::from_utf8(body).unwrap();
+        assert!(
+            text.contains("more diagnostic"),
+            "the cap announces what it hid: {text}",
+        );
+        assert!(
+            text.contains("watching for changes..."),
+            "the status trailer survives the cap: {text}",
+        );
+    }
+
+    #[test]
+    fn an_uncapped_cycle_renders_everything() {
+        let (_root, mut session, outcome) = fixture_with_many_diagnostics();
+        let mut body: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut body,
+            &mut session,
+            &outcome,
+            0,
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            None,
+        )
+        .unwrap();
+        let text = String::from_utf8(body).unwrap();
+        assert!(
+            !text.contains("more diagnostic"),
+            "no cap without a height: {text}"
+        );
     }
 
     /// When an unreadable file sits alongside a genuine Celerrate bug,

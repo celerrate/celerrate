@@ -37,6 +37,7 @@ rayon = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }
 tempfile = { workspace = true }
+terminal_size = { workspace = true }
 
 [dev-dependencies]
 blake3 = { workspace = true }
