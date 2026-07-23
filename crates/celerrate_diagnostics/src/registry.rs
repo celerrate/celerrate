@@ -24,6 +24,12 @@ pub struct RegisteredDiagnostic {
     pub explain: Option<&'static ExplainPage>,
 }
 
+/// Every allocated identifier is `documented` as of part 8 task 5; this
+/// constructor has no remaining call site until a new identifier is
+/// allocated ahead of its page. Kept (not deleted) because task 6 of
+/// part 8 owns removing it, making `explain` mandatory, and renaming
+/// `documented` back to `registered`.
+#[allow(dead_code, reason = "removed by part 8 task 6, not this task")]
 const fn registered(
     id: &'static str,
     family: &'static str,
@@ -56,27 +62,108 @@ const fn documented(
 
 /// Every identifier, in identifier order.
 pub const REGISTRY: &[RegisteredDiagnostic] = &[
-    registered("CEL0001", "source too large", "celerrate_db"),
-    registered("CEL0002", "unexpected character", "celerrate_syntax"),
-    registered("CEL0003", "unterminated block comment", "celerrate_syntax"),
-    registered("CEL0004", "unterminated string", "celerrate_syntax"),
-    registered("CEL0005", "unterminated heredoc", "celerrate_syntax"),
-    registered("CEL0006", "unterminated interpolation", "celerrate_syntax"),
-    registered("CEL0007", "expected an expression", "celerrate_syntax"),
-    registered("CEL0008", "expected a semicolon", "celerrate_syntax"),
-    registered("CEL0009", "expected a specific token", "celerrate_syntax"),
-    registered("CEL0010", "unexpected token", "celerrate_syntax"),
-    registered("CEL0011", "nesting too deep", "celerrate_syntax"),
-    registered(
+    documented(
+        "CEL0001",
+        "source too large",
+        "celerrate_db",
+        &pages::source::CEL0001,
+    ),
+    documented(
+        "CEL0002",
+        "unexpected character",
+        "celerrate_syntax",
+        &pages::syntax::CEL0002,
+    ),
+    documented(
+        "CEL0003",
+        "unterminated block comment",
+        "celerrate_syntax",
+        &pages::syntax::CEL0003,
+    ),
+    documented(
+        "CEL0004",
+        "unterminated string",
+        "celerrate_syntax",
+        &pages::syntax::CEL0004,
+    ),
+    documented(
+        "CEL0005",
+        "unterminated heredoc",
+        "celerrate_syntax",
+        &pages::syntax::CEL0005,
+    ),
+    documented(
+        "CEL0006",
+        "unterminated interpolation",
+        "celerrate_syntax",
+        &pages::syntax::CEL0006,
+    ),
+    documented(
+        "CEL0007",
+        "expected an expression",
+        "celerrate_syntax",
+        &pages::syntax::CEL0007,
+    ),
+    documented(
+        "CEL0008",
+        "expected a semicolon",
+        "celerrate_syntax",
+        &pages::syntax::CEL0008,
+    ),
+    documented(
+        "CEL0009",
+        "expected a specific token",
+        "celerrate_syntax",
+        &pages::syntax::CEL0009,
+    ),
+    documented(
+        "CEL0010",
+        "unexpected token",
+        "celerrate_syntax",
+        &pages::syntax::CEL0010,
+    ),
+    documented(
+        "CEL0011",
+        "nesting too deep",
+        "celerrate_syntax",
+        &pages::syntax::CEL0011,
+    ),
+    documented(
         "CEL0012",
         "non-associative operator chained",
         "celerrate_syntax",
+        &pages::syntax::CEL0012,
     ),
-    registered("CEL0013", "no progress", "celerrate_syntax"),
-    registered("CEL0014", "expected a member name", "celerrate_syntax"),
-    registered("CEL0015", "expected a statement", "celerrate_syntax"),
-    registered("CEL0016", "expected a type", "celerrate_syntax"),
-    registered("CEL0017", "expected a declaration", "celerrate_syntax"),
+    documented(
+        "CEL0013",
+        "no progress",
+        "celerrate_syntax",
+        &pages::syntax::CEL0013,
+    ),
+    documented(
+        "CEL0014",
+        "expected a member name",
+        "celerrate_syntax",
+        &pages::syntax::CEL0014,
+    ),
+    documented(
+        "CEL0015",
+        "expected a statement",
+        "celerrate_syntax",
+        &pages::syntax::CEL0015,
+    ),
+    documented(
+        "CEL0016",
+        "expected a type",
+        "celerrate_syntax",
+        &pages::syntax::CEL0016,
+    ),
+    documented(
+        "CEL0017",
+        "expected a declaration",
+        "celerrate_syntax",
+        &pages::syntax::CEL0017,
+    ),
     documented(
         "CEL0018",
         "unknown class",

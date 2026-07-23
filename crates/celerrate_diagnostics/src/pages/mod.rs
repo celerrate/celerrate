@@ -6,4 +6,6 @@
 pub(crate) mod project;
 pub(crate) mod reporting;
 pub(crate) mod semantic;
+pub(crate) mod source;
+pub(crate) mod syntax;
 pub(crate) mod typed;

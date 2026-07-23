@@ -33,6 +33,18 @@ pub struct ExampleExemption {
 /// records the final contents.
 pub const EXECUTABLE_EXAMPLE_EXEMPTIONS: &[ExampleExemption] = &[
     ExampleExemption {
+        id: DiagnosticId::new("CEL0001"),
+        reason: "fires only on a file whose decoded size exceeds 4 GiB, \
+                 which cannot be committed as a fixture (spec section \
+                 10's environment class)",
+    },
+    ExampleExemption {
+        id: DiagnosticId::new("CEL0013"),
+        reason: "the parser's no-progress guard is a defensive backstop \
+                 that no grammar-admitted source reaches; the day a \
+                 reproduction exists it becomes this page's example",
+    },
+    ExampleExemption {
         id: DiagnosticId::new("CEL0022"),
         reason: "the shipped stub blob carries no symbol whose removal falls \
                  inside the supported 8.1 to 8.5 window; the framework-path \
