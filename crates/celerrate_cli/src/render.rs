@@ -11,8 +11,9 @@
 use std::io::{self, Write};
 
 use celerrate_diagnostics::DiagnosticId;
+use celerrate_project::ProjectNotice;
 use celerrate_rules::render::{
-    ColorMode, FaultInjection, RenderFailure, SourceAccess, explain_pointers,
+    ColorMode, FaultInjection, RenderFailure, RenderedReport, SourceAccess, explain_pointers,
     render_report as render_blocks, resolve::DatabaseResolver,
 };
 use celerrate_source::FileId;
@@ -106,32 +107,15 @@ pub(crate) fn render_report_with(
     fault: &FaultInjection,
 ) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
-    if !notices.is_empty() {
-        for notice in notices {
-            writeln!(
-                output,
-                "notice {}: {}",
-                notice.identifier().as_str(),
-                notice.message(),
-            )?;
-        }
-        writeln!(output)?;
-    }
+    write_notices(output, notices)?;
 
-    let sources = SessionSources { session };
-    let resolver = DatabaseResolver::new(&session.database, session.files);
-    let report = render_blocks(&outcome.diagnostics, &sources, &resolver, color, fault);
+    let report = build_report(session, outcome, color, fault);
     for block in &report.blocks {
         writeln!(output, "{block}")?;
         writeln!(output)?;
     }
 
-    writeln!(
-        output,
-        "{}, {}",
-        count(notices.len(), "notice", "notices"),
-        count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
-    )?;
+    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
 
     let mut identifiers: Vec<DiagnosticId> =
         notices.iter().map(|notice| notice.identifier()).collect();
@@ -143,6 +127,56 @@ pub(crate) fn render_report_with(
     }
 
     Ok(report.failures)
+}
+
+/// The notice block: one line per notice, then a blank separator when
+/// there is at least one. Shared by the one-shot report and the watch
+/// frame, which both open the screen with it in exactly the same shape.
+fn write_notices(output: &mut dyn Write, notices: &[ProjectNotice]) -> io::Result<()> {
+    if notices.is_empty() {
+        return Ok(());
+    }
+    for notice in notices {
+        writeln!(
+            output,
+            "notice {}: {}",
+            notice.identifier().as_str(),
+            notice.message(),
+        )?;
+    }
+    writeln!(output)
+}
+
+/// The rustc-style blocks for every diagnostic, and the rich-rendering
+/// failures that fell back to the minimal line. The one piece of report
+/// assembly shared by the one-shot report and the watch frame: `session`
+/// is the renderer's source of text and display paths, and its database
+/// the render-time symbol resolver.
+fn build_report(
+    session: &Session,
+    outcome: &AnalysisOutcome,
+    color: ColorMode,
+    fault: &FaultInjection,
+) -> RenderedReport {
+    let sources = SessionSources { session };
+    let resolver = DatabaseResolver::new(&session.database, session.files);
+    render_blocks(&outcome.diagnostics, &sources, &resolver, color, fault)
+}
+
+/// The summary line: how many notices, how many diagnostics. Its exact
+/// wording is a contract the plan holds constant across both assemblies,
+/// so there is exactly one place that writes it.
+fn write_summary_line(
+    output: &mut dyn Write,
+    notice_count: usize,
+    diagnostic_count: usize,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "{}, {}",
+        count(notice_count, "notice", "notices"),
+        count(diagnostic_count, "diagnostic", "diagnostics"),
+    )
 }
 
 /// How many leading blocks fit a line budget, and how many diagnostics
@@ -229,15 +263,7 @@ pub fn render_cycle(
     color: ColorMode,
     height: Option<usize>,
 ) -> io::Result<()> {
-    let sources = SessionSources { session: &*session };
-    let resolver = DatabaseResolver::new(&session.database, session.files);
-    let report = render_blocks(
-        &outcome.diagnostics,
-        &sources,
-        &resolver,
-        color,
-        &FaultInjection::None,
-    );
+    let report = build_report(session, outcome, color, &FaultInjection::None);
 
     let notices = session.notices();
     // Overhead: the notice lines plus their blank separator, the summary
@@ -262,17 +288,7 @@ pub fn render_cycle(
     // Everything else the frame is styled with comes from the renderer's
     // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
-    if !notices.is_empty() {
-        for notice in notices {
-            writeln!(
-                output,
-                "notice {}: {}",
-                notice.identifier().as_str(),
-                notice.message(),
-            )?;
-        }
-        writeln!(output)?;
-    }
+    write_notices(output, notices)?;
     for block in report.blocks.iter().take(shown) {
         writeln!(output, "{block}")?;
         writeln!(output)?;
@@ -285,12 +301,7 @@ pub fn render_cycle(
         )?;
         writeln!(output)?;
     }
-    writeln!(
-        output,
-        "{}, {}",
-        count(notices.len(), "notice", "notices"),
-        count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
-    )?;
+    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
 
     session.absorb_render_failures(report.failures);
     render_internal_errors(output, session)?;
@@ -851,18 +862,9 @@ mod tests {
         // Measure a real block's cost exactly the way `capped_blocks`
         // does, and the overhead exactly the way `render_cycle` does
         // before it reserves anything for internal errors, so the chosen
-        // height is derived from the real content, not guessed. Built
-        // from the same trio `render_cycle` itself builds the report
-        // from, since there is not yet a shared helper for it.
-        let sources = render::SessionSources { session: &session };
-        let resolver = render::DatabaseResolver::new(&session.database, session.files);
-        let report = render::render_blocks(
-            &outcome.diagnostics,
-            &sources,
-            &resolver,
-            ColorMode::Plain,
-            &FaultInjection::None,
-        );
+        // height is derived from the real content, not guessed.
+        let report =
+            render::build_report(&session, &outcome, ColorMode::Plain, &FaultInjection::None);
         let block_cost = report.blocks[0].lines().count() + 1;
         let notices = session.notices();
         let base_overhead = if notices.is_empty() {
