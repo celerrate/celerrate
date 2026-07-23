@@ -163,6 +163,39 @@ fn capped_blocks(blocks: &[String], budget: usize) -> (usize, usize) {
     (shown, blocks.len().saturating_sub(shown))
 }
 
+/// How many rows [`render_internal_errors`] will actually write for
+/// `session`'s already-accumulated internal errors plus `new_failures`
+/// more (the render failures this cycle produced, about to be absorbed
+/// into that same list right before it runs). Derived from that
+/// function's own shape, not a guess: a blank separator line, exactly
+/// one line per error — every `InternalError` variant's match arm is a
+/// single `writeln!`, so the count is uniform across variants even
+/// though their messages are not — and the three-line "please report
+/// it" trailer, written exactly when at least one error is a genuine
+/// Celerrate bug rather than the environment's condition. A render
+/// failure always becomes [`InternalError::DiagnosticRenderFailed`],
+/// which is always a bug, so `new_failures` alone can settle that
+/// question for the errors not yet absorbed.
+fn internal_error_rows(session: &Session, new_failures: usize) -> usize {
+    let total = session.internal_errors.len() + new_failures;
+    if total == 0 {
+        return 0;
+    }
+    let has_celerrate_bug = new_failures > 0
+        || session.internal_errors.iter().any(|error| {
+            matches!(
+                error,
+                InternalError::StubBlobUndecodable(_)
+                    | InternalError::FilePanicked { .. }
+                    | InternalError::AnalysisPanicked
+                    | InternalError::FixUnappliable { .. }
+                    | InternalError::DiagnosticRenderFailed { .. }
+            )
+        });
+    let trailer = if has_celerrate_bug { 3 } else { 0 };
+    1 + total + trailer
+}
+
 /// One watch cycle: the screen cleared, the complete current state
 /// reprinted, then the cost. The picture is always complete, never a
 /// stale log of past edits.
@@ -180,6 +213,13 @@ fn capped_blocks(blocks: &[String], budget: usize) -> (usize, usize) {
 /// [`render_check`], it does not print the `celerrate explain` trailer:
 /// the frame is transient and the cap needs its rows for diagnostics
 /// instead.
+///
+/// The budget the blocks are capped against also reserves rows for
+/// [`render_internal_errors`], which this function calls below and
+/// which can itself emit an unbounded number of lines: see
+/// [`internal_error_rows`] for exactly how many are reserved and why.
+/// Without that reservation a cycle carrying internal errors could
+/// still overrun the terminal height it was supposedly capped against.
 pub fn render_cycle(
     output: &mut dyn Write,
     session: &mut Session,
@@ -201,13 +241,18 @@ pub fn render_cycle(
 
     let notices = session.notices();
     // Overhead: the notice lines plus their blank separator, the summary
-    // line, one blank line, the status line, the watching line, and one
-    // spare row for the cursor.
+    // line, one blank line, the status line, the watching line, one spare
+    // row for the cursor, and the rows `render_internal_errors` will
+    // actually write below for the internal errors this cycle carries
+    // (the session's already-accumulated ones plus the render failures
+    // this cycle produced, which is exactly what gets absorbed into the
+    // same list right before that function runs).
     let overhead = if notices.is_empty() {
         0
     } else {
         notices.len() + 1
-    } + 6;
+    } + 6
+        + internal_error_rows(session, report.failures.len());
     let (shown, hidden) = match height {
         Some(rows) => capped_blocks(&report.blocks, rows.saturating_sub(overhead)),
         None => (report.blocks.len(), 0),
@@ -777,6 +822,110 @@ mod tests {
         assert!(
             !text.contains("more diagnostic"),
             "no cap without a height: {text}"
+        );
+    }
+
+    /// Parses the "and N more diagnostic(s)" line a capped cycle ends
+    /// with, or `0` when nothing was hidden.
+    fn hidden_diagnostic_count(text: &str) -> usize {
+        text.lines()
+            .find_map(|line| line.strip_prefix("and ")?.split_whitespace().next())
+            .and_then(|token| token.parse().ok())
+            .unwrap_or(0)
+    }
+
+    /// Review finding 1 (task 10): `render_internal_errors` can emit an
+    /// unbounded number of rows -- one per internal error, plus its own
+    /// fixed surrounding lines -- and the pre-fix overhead never budgeted
+    /// for them, so a cycle carrying internal errors could still overrun
+    /// the terminal height it was supposedly capped against. Reserving
+    /// those rows shrinks the block budget by exactly as much: the same
+    /// height, chosen to fit exactly three of the five blocks with
+    /// nothing to spare, must cap to fewer blocks once the session also
+    /// carries an internal error worth the three-line bug-report trailer,
+    /// and the whole frame must still respect the height.
+    #[test]
+    fn internal_errors_reserve_rows_and_shrink_the_capped_block_count() {
+        let (_root, mut session, outcome) = fixture_with_many_diagnostics();
+
+        // Measure a real block's cost exactly the way `capped_blocks`
+        // does, and the overhead exactly the way `render_cycle` does
+        // before it reserves anything for internal errors, so the chosen
+        // height is derived from the real content, not guessed. Built
+        // from the same trio `render_cycle` itself builds the report
+        // from, since there is not yet a shared helper for it.
+        let sources = render::SessionSources { session: &session };
+        let resolver = render::DatabaseResolver::new(&session.database, session.files);
+        let report = render::render_blocks(
+            &outcome.diagnostics,
+            &sources,
+            &resolver,
+            ColorMode::Plain,
+            &FaultInjection::None,
+        );
+        let block_cost = report.blocks[0].lines().count() + 1;
+        let notices = session.notices();
+        let base_overhead = if notices.is_empty() {
+            0
+        } else {
+            notices.len() + 1
+        } + 6;
+        let height = base_overhead + 3 * block_cost;
+
+        let mut without_errors: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut without_errors,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+        )
+        .unwrap();
+        let text_without = String::from_utf8(without_errors).unwrap();
+        let hidden_without = hidden_diagnostic_count(&text_without);
+        assert_eq!(
+            hidden_without, 2,
+            "the height was chosen to fit exactly three of the five blocks: {text_without}",
+        );
+
+        // A genuine Celerrate bug: `render_internal_errors` prints it,
+        // then the three-line "please report it" trailer -- five rows
+        // the pre-fix overhead never budgeted for.
+        let file = *session.sources.keys().next().unwrap();
+        session
+            .internal_errors
+            .push(InternalError::FilePanicked { file });
+
+        let mut with_errors: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut with_errors,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+        )
+        .unwrap();
+        let text_with = String::from_utf8(with_errors).unwrap();
+        let hidden_with = hidden_diagnostic_count(&text_with);
+
+        assert!(
+            hidden_with > hidden_without,
+            "reserving the internal-error rows must shrink how many blocks fit: \
+             {hidden_without} hidden before, {hidden_with} after: {text_with}",
+        );
+        assert!(
+            text_with.contains("panicked"),
+            "the internal error itself still prints in the capped frame: {text_with}",
+        );
+        assert!(
+            text_with.lines().count() <= height,
+            "the frame must still respect the height budget: {} lines against a height of \
+             {height}: {text_with}",
+            text_with.lines().count(),
         );
     }
 
