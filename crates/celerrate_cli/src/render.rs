@@ -1,16 +1,21 @@
-//! The preview text format, and only it.
+//! The check screen: the report, and the internal errors under it.
 //!
-//! Temporary by design. The umbrella design fixes this shape for the
-//! preview and nothing more: no color, no terminal styling, no
-//! `celerrate.toml`, no JSON, SARIF or GitHub output, no baseline. A
-//! diagnostic's rich anatomy (annotated spans, notes, suggestions) and
-//! the richer model that can carry a spanless finding honestly both
-//! belong to sub-project 4, which owns diagnostic anatomy.
+//! The report body itself is the rules crate's rustc-style renderer
+//! (design section 9). This module owns only what the CLI owns: the
+//! notice block, the block separators, the summary line, the
+//! `celerrate explain` trailer, and the internal-error report. The
+//! session is the renderer's source of text and display paths, and the
+//! database its render-time symbol resolver; both are read here, at
+//! presentation time, outside every query.
 
 use std::io::{self, Write};
 
-use celerrate_diagnostics::{Anchor, Diagnostic};
-use celerrate_source::{FileId, TextSize};
+use celerrate_diagnostics::DiagnosticId;
+use celerrate_rules::render::{
+    ColorMode, FaultInjection, RenderFailure, SourceAccess, explain_pointers,
+    render_report as render_blocks, resolve::DatabaseResolver,
+};
+use celerrate_source::FileId;
 
 use crate::analysis::AnalysisOutcome;
 use crate::session::{InternalError, Session};
@@ -22,18 +27,51 @@ const ISSUE_INVITATION: &str = "https://github.com/celerrate/celerrate/issues/ne
 /// The complete check screen: the report, then the internal errors.
 /// The watch cycle uses this whole; the single-pass path calls the two
 /// halves itself so the fix trailer can sit between them.
+///
+/// The body is buffered so the immutable borrow the renderer needs ends
+/// before the failures are absorbed: a rich-rendering failure becomes an
+/// internal error, and the internal errors print under the report it
+/// fell back inside.
 pub fn render_check(
     output: &mut dyn Write,
-    session: &Session,
+    session: &mut Session,
     outcome: &AnalysisOutcome,
+    color: ColorMode,
 ) -> io::Result<()> {
-    render_report(output, session, outcome)?;
+    let failures = {
+        let mut body: Vec<u8> = Vec::new();
+        let failures = render_report(&mut body, session, outcome, color)?;
+        output.write_all(&body)?;
+        failures
+    };
+    session.absorb_render_failures(failures);
     render_internal_errors(output, session)
 }
 
-/// Notices, then diagnostics with their note and help sub-lines, then
-/// the summary. No internal errors: the single-pass path prints those
-/// last, after the fix trailer, through `render_internal_errors`.
+/// The CLI's view of its sources, for the renderer: display paths from
+/// the VFS, text from the decode query. Both borrow the session.
+struct SessionSources<'a> {
+    session: &'a Session,
+}
+
+impl SourceAccess for SessionSources<'_> {
+    fn display_path(&self, file: FileId) -> Option<String> {
+        Some(display_path(self.session, file))
+    }
+
+    fn text(&self, file: FileId) -> Option<&str> {
+        let source = self.session.sources.get(&file)?;
+        celerrate_db::source_text(&self.session.database, *source)
+            .as_ref()
+            .ok()
+            .map(|text| text.text())
+    }
+}
+
+/// Notices, then one rustc-style block per diagnostic, then the
+/// summary, then the `celerrate explain` trailer. No internal errors:
+/// the single-pass path prints those last, after the fix trailer,
+/// through `render_internal_errors`.
 ///
 /// Notices come first and in their own shape because a project-level
 /// finding has no span: `MISSING_COMPOSER_MANIFEST` describes a file
@@ -45,11 +83,28 @@ pub fn render_check(
 /// so the other word would contradict the same screen twice: a warning
 /// diagnostic exits 1, and every notice announces a fallback already
 /// taken.
+///
+/// Answers the diagnostics whose rich rendering failed, so the caller
+/// can absorb them: the report itself stays intact, because each one
+/// fell back to the minimal one-line format.
 pub fn render_report(
     output: &mut dyn Write,
     session: &Session,
     outcome: &AnalysisOutcome,
-) -> io::Result<()> {
+    color: ColorMode,
+) -> io::Result<Vec<RenderFailure>> {
+    render_report_with(output, session, outcome, color, &FaultInjection::None)
+}
+
+/// The seam the fault-injection tests use; production always passes
+/// [`FaultInjection::None`] through [`render_report`].
+pub(crate) fn render_report_with(
+    output: &mut dyn Write,
+    session: &Session,
+    outcome: &AnalysisOutcome,
+    color: ColorMode,
+    fault: &FaultInjection,
+) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
     if !notices.is_empty() {
         for notice in notices {
@@ -63,16 +118,11 @@ pub fn render_report(
         writeln!(output)?;
     }
 
-    if !outcome.diagnostics.is_empty() {
-        for diagnostic in &outcome.diagnostics {
-            writeln!(output, "{}", render_diagnostic(session, diagnostic))?;
-            for note in &diagnostic.notes {
-                writeln!(output, "  note: {note}")?;
-            }
-            for suggestion in &diagnostic.suggestions {
-                writeln!(output, "  help: {}", suggestion.message)?;
-            }
-        }
+    let sources = SessionSources { session };
+    let resolver = DatabaseResolver::new(&session.database, session.files);
+    let report = render_blocks(&outcome.diagnostics, &sources, &resolver, color, fault);
+    for block in &report.blocks {
+        writeln!(output, "{block}")?;
         writeln!(output)?;
     }
 
@@ -81,7 +131,18 @@ pub fn render_report(
         "{}, {}",
         count(notices.len(), "notice", "notices"),
         count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
-    )
+    )?;
+
+    let mut identifiers: Vec<DiagnosticId> =
+        notices.iter().map(|notice| notice.identifier()).collect();
+    identifiers.extend(outcome.diagnostics.iter().map(|diagnostic| diagnostic.id));
+    let pointers = explain_pointers(identifiers);
+    if !pointers.is_empty() {
+        writeln!(output)?;
+        write!(output, "{pointers}")?;
+    }
+
+    Ok(report.failures)
 }
 
 /// One watch cycle: the screen cleared, the complete current state
@@ -89,15 +150,17 @@ pub fn render_report(
 /// stale log of past edits.
 pub fn render_cycle(
     output: &mut dyn Write,
-    session: &Session,
+    session: &mut Session,
     outcome: &AnalysisOutcome,
     reanalyzed: usize,
     elapsed: std::time::Duration,
+    color: ColorMode,
 ) -> io::Result<()> {
-    // The two ANSI codes a plain format is allowed: clear, and home. No
-    // color, no styling, no terminal crate.
+    // The two ANSI codes a plain format is allowed: clear, and home.
+    // Everything else the frame is styled with comes from the renderer's
+    // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
-    render_check(output, session, outcome)?;
+    render_check(output, session, outcome, color)?;
     writeln!(output)?;
     writeln!(
         output,
@@ -108,33 +171,6 @@ pub fn render_cycle(
     )?;
     writeln!(output, "watching for changes...")?;
     output.flush()
-}
-
-/// `path:line:column identifier message`, one-based, relative to the
-/// project root.
-fn render_diagnostic(session: &Session, diagnostic: &Diagnostic) -> String {
-    match diagnostic.anchor {
-        Anchor::Span { file, range } => {
-            let (line, column) = position(session, file, range.start());
-            format!(
-                "{}:{line}:{column} {} {}",
-                display_path(session, file),
-                diagnostic.id.as_str(),
-                diagnostic.message,
-            )
-        }
-        Anchor::Project => format!("notice {}: {}", diagnostic.id.as_str(), diagnostic.message),
-    }
-}
-
-/// The line index is zero-based, and its column is a byte offset within
-/// the line. Editors are one-based, so the renderer converts here, once.
-fn position(session: &Session, file: FileId, offset: TextSize) -> (u32, u32) {
-    let Some(&source) = session.sources.get(&file) else {
-        return (1, 1);
-    };
-    let zero_based = celerrate_db::line_index(&session.database, source).line_column(offset);
-    (zero_based.line + 1, zero_based.column + 1)
 }
 
 fn display_path(session: &Session, file: FileId) -> String {
@@ -276,6 +312,17 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
                 "internal error: {} could not be written: {reason}; the fix was not applied",
                 relative_path(session, path),
             )?,
+            InternalError::DiagnosticRenderFailed {
+                identifier,
+                location,
+            } => {
+                has_celerrate_bug = true;
+                writeln!(
+                    output,
+                    "internal error: rendering {identifier} at {location} failed; \
+                     the diagnostic was shown in the minimal format",
+                )?;
+            }
         }
     }
     if !has_celerrate_bug {
@@ -293,9 +340,70 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
+    use celerrate_rules::render::{ColorMode, FaultInjection};
+
     use crate::analysis::AnalysisOutcome;
+    use crate::render::render_report_with;
     use crate::session::{InternalError, Session};
     use crate::{Outcome, render};
+
+    /// A real project with exactly one CEL0018, analyzed exactly as
+    /// `run` analyzes it, so the fault seam is driven against a
+    /// diagnostic the product itself produced. The temporary directory
+    /// is answered too: the session reads it for as long as it lives.
+    fn fixture_with_one_unknown_class() -> (tempfile::TempDir, Session, AnalysisOutcome) {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(
+            root.path().join("src").join("Kernel.php"),
+            "<?php\nnamespace App;\n\nclass Kernel extends Missing\n{\n}\n",
+        )
+        .unwrap();
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let outcome = crate::analysis::analyze(&inputs).unwrap();
+        (root, session, outcome)
+    }
+
+    /// The fallback, end to end: the faulted diagnostic still reports,
+    /// in the minimal one-line format, and the failure it fell back
+    /// from is named as the Celerrate bug it is.
+    #[test]
+    fn a_render_failure_falls_back_and_reports_an_internal_error() {
+        let (_root, mut session, outcome) = fixture_with_one_unknown_class();
+        let mut body: Vec<u8> = Vec::new();
+        let failures = render_report_with(
+            &mut body,
+            &session,
+            &outcome,
+            ColorMode::Plain,
+            &FaultInjection::ForIdentifier(
+                celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
+            ),
+        )
+        .unwrap();
+        session.absorb_render_failures(failures);
+        render::render_internal_errors(&mut body, &session).unwrap();
+        let text = String::from_utf8(body).unwrap();
+
+        assert!(
+            text.contains(" CEL0018 "),
+            "the fallback line renders: {text}"
+        );
+        assert!(
+            !text.contains("error[CEL0018]"),
+            "no rich block for the faulted one: {text}",
+        );
+        assert!(
+            text.contains("internal error: rendering CEL0018 at "),
+            "the failure is reported: {text}",
+        );
+        assert!(
+            text.contains("This is a bug in Celerrate"),
+            "the invitation follows: {text}",
+        );
+        insta::assert_snapshot!("fault_fallback", text);
+    }
 
     #[test]
     fn a_panicked_file_is_named_and_invites_a_report() {
@@ -308,7 +416,13 @@ mod tests {
             .push(InternalError::FilePanicked { file });
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(text.contains("internal error: analyzing Broken.php panicked"));
@@ -337,7 +451,13 @@ mod tests {
             ));
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(text.contains("internal error: the embedded stub index could not be decoded"));
@@ -359,7 +479,13 @@ mod tests {
         });
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(text.contains("Locked.php"));
@@ -393,7 +519,13 @@ mod tests {
             });
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(
@@ -424,7 +556,13 @@ mod tests {
             });
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(
@@ -443,15 +581,16 @@ mod tests {
         // claim: the user sees that number on every save.
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
-        let session = Session::start(root.path());
+        let mut session = Session::start(root.path());
 
         let mut output = Vec::new();
         render::render_cycle(
             &mut output,
-            &session,
+            &mut session,
             &AnalysisOutcome::default(),
             1,
             std::time::Duration::from_millis(4),
+            ColorMode::Plain,
         )
         .unwrap();
         let text = String::from_utf8(output).unwrap();
@@ -482,7 +621,13 @@ mod tests {
             .push(InternalError::FilePanicked { file });
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
 
         assert!(text.contains("Locked.php"));

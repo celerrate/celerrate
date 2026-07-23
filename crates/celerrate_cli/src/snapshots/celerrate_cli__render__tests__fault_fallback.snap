@@ -1,0 +1,17 @@
+---
+source: crates/celerrate_cli/src/render.rs
+expression: text
+---
+notice CEL0025: no composer.json found; analyzing the whole project root
+
+src/Kernel.php:4:22 CEL0018 unknown class `Missing`
+
+1 notice, 1 diagnostic
+
+for more information, run `celerrate explain CEL0018`
+for more information, run `celerrate explain CEL0025`
+
+internal error: rendering CEL0018 at src/Kernel.php:4:22 failed; the diagnostic was shown in the minimal format
+
+This is a bug in Celerrate, and it should never happen. Please report it:
+  https://github.com/celerrate/celerrate/issues/new?labels=internal-error&title=internal+error+while+checking

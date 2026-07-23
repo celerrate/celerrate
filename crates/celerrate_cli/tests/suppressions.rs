@@ -239,7 +239,14 @@ fn a_trailing_native_directive_suppresses_exactly_its_codes_on_its_line() {
     )]);
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");
-    assert!(!text.contains("CEL0018"), "{text}");
+    // The directive spells the suppressed identifier, and the rich
+    // block excerpts the very line it sits on, so "is CEL0018
+    // reported?" is asked of the two places that answer it: the block
+    // header and the explain trailer.
+    assert!(
+        !text.contains("error[CEL0018]") && !text.contains("explain CEL0018"),
+        "{text}",
+    );
     assert!(text.contains("CEL0019"), "{text}");
 }
 

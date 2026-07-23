@@ -72,6 +72,13 @@ pub enum InternalError {
     /// environment's condition, like `FileUnreadable`: named, but no
     /// bug report invited.
     FixWriteFailed { path: PathBuf, reason: String },
+    /// Rich rendering of one diagnostic failed; it was shown in the
+    /// minimal one-line format instead. Always a Celerrate bug: the
+    /// fallback keeps the report intact, the report invites the issue.
+    DiagnosticRenderFailed {
+        identifier: String,
+        location: String,
+    },
 }
 
 /// Everything one project needs to be analyzed, and everything `--watch`
@@ -264,6 +271,21 @@ impl Session {
         }
     }
 
+    /// Absorbs the rich-rendering failures of one report, after the
+    /// report is written and before the internal errors render.
+    pub fn absorb_render_failures(
+        &mut self,
+        failures: Vec<celerrate_rules::render::RenderFailure>,
+    ) {
+        for failure in failures {
+            self.internal_errors
+                .push(InternalError::DiagnosticRenderFailed {
+                    identifier: failure.id.as_str().to_owned(),
+                    location: failure.location,
+                });
+        }
+    }
+
     /// Drops what the last analysis pass, and only it, concluded.
     ///
     /// A single `check` never needs this: it analyzes once. `--watch`
@@ -275,12 +297,16 @@ impl Session {
     /// Only the pass's own verdicts go. An undecodable stub blob and an
     /// unreadable file describe the loaded session, not the pass, and they
     /// do not stop being true because a file was saved: `load` is what
-    /// recomputes those.
+    /// recomputes those. A rich-rendering failure is a verdict about the
+    /// picture the pass produced, and every cycle renders its picture
+    /// afresh, so it goes with the pass that produced it.
     pub fn forget_analysis_errors(&mut self) {
         self.internal_errors.retain(|error| {
             !matches!(
                 error,
-                InternalError::FilePanicked { .. } | InternalError::AnalysisPanicked
+                InternalError::FilePanicked { .. }
+                    | InternalError::AnalysisPanicked
+                    | InternalError::DiagnosticRenderFailed { .. }
             )
         });
     }

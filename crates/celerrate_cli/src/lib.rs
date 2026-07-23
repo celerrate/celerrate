@@ -81,10 +81,7 @@ impl Outcome {
 }
 
 /// The whole product, as a function.
-///
-/// `_color` is threaded through but not yet consumed: Task 9 wires it
-/// into the renderer and the parameter loses its underscore then.
-pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, _color: ColorMode) -> Outcome {
+pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -> Outcome {
     let arguments = match Arguments::try_parse_from(arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -119,7 +116,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, _color: ColorMode) 
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
             if watch {
-                return watch::watch(&mut session, output);
+                return watch::watch(&mut session, output, color);
             }
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
@@ -130,9 +127,11 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, _color: ColorMode) 
                 diagnostics: suggest::enrich(&session, &outcome.diagnostics),
                 panicked: outcome.panicked.clone(),
             };
-            if render::render_report(output, &session, &presented).is_err() {
-                return Outcome::InternalError;
-            }
+            let failures = match render::render_report(output, &session, &presented, color) {
+                Ok(failures) => failures,
+                Err(_) => return Outcome::InternalError,
+            };
+            session.absorb_render_failures(failures);
             cache::persist(&mut session, &outcome);
             if let Some(threshold) = fix::fix_threshold(fix, fix_suggestions) {
                 let planned = fix::plan(&presented.diagnostics, threshold);
@@ -337,7 +336,7 @@ mod tests {
         );
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &outcome).unwrap();
+        render::render_check(&mut output, &mut session, &outcome, ColorMode::Plain).unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(
             text.contains("internal error: the analysis loop panicked"),

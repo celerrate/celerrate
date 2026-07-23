@@ -39,30 +39,93 @@ fn check(root: &Path) -> (Outcome, String) {
 /// before comparing. The rest of the line stays untouched: PHP namespace
 /// separators are backslashes too, and `App\Missing` in a message is not
 /// a path.
+///
+/// Path separators normalize in the two places a path can appear: the
+/// leading `path:line:column` token of a minimal line, and the
+/// ` --> path:line:column` origin line of a rich block. PHP source
+/// excerpts keep their backslashes (namespaces are not paths).
 fn normalize_location_separators(text: &str) -> String {
-    text.lines()
-        .map(|line| match line.split_once(' ') {
-            Some((location, rest)) if location.contains(':') => {
-                format!("{} {rest}", location.replace('\\', "/"))
-            }
-            _ => line.to_owned(),
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+    let mut lines: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if let Some(rest) = trimmed.strip_prefix("--> ") {
+            let indent = &line[..line.len() - trimmed.len()];
+            lines.push(format!("{indent}--> {}", rest.replace('\\', "/")));
+        } else {
+            lines.push(normalize_leading_token(line));
+        }
+    }
+    let mut result = lines.join("\n");
+    if text.ends_with('\n') {
+        result.push('\n');
+    }
+    result
 }
 
-#[test]
-fn a_clean_project_reports_nothing_and_exits_zero() {
-    let root = project(&[
+/// The minimal line's own rule: its leading `path:line:column` token,
+/// and only that token, is rewritten to forward slashes.
+fn normalize_leading_token(line: &str) -> String {
+    match line.split_once(' ') {
+        Some((location, rest)) if location.contains(':') => {
+            format!("{} {rest}", location.replace('\\', "/"))
+        }
+        _ => line.to_owned(),
+    }
+}
+
+/// The fixture that is TRULY clean: a manifest is present, so the
+/// zero-configuration notice does not fire either.
+fn clean_project() -> tempfile::TempDir {
+    project(&[
         (
             "composer.json",
             r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
         ),
         ("src/Kernel.php", "<?php\nnamespace App;\nclass Kernel {}\n"),
-    ]);
+    ])
+}
+
+#[test]
+fn a_clean_project_reports_nothing_and_exits_zero() {
+    let root = clean_project();
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::Clean);
     insta::assert_snapshot!("clean", text);
+}
+
+#[test]
+fn the_report_points_at_celerrate_explain_for_each_reported_identifier() {
+    let root = project(&[(
+        "src/Kernel.php",
+        "<?php\nnamespace App;\n\nclass Kernel extends Missing\n{\n}\n",
+    )]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported);
+    assert!(
+        text.contains("for more information, run `celerrate explain CEL0018`"),
+        "the trailer names the reported identifier: {text}",
+    );
+    assert!(
+        text.contains("for more information, run `celerrate explain CEL0025`"),
+        "the trailer also names the notice identifier: {text}",
+    );
+}
+
+/// The corpus gate depends on this byte for byte: a clean run prints the
+/// bare summary line and nothing else, trailer included.
+#[test]
+fn a_clean_run_prints_exactly_the_summary_line() {
+    let root = clean_project();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean);
+    assert!(
+        text.ends_with("0 notices, 0 diagnostics\n"),
+        "clean output ends with the bare summary: {text}",
+    );
+    assert!(
+        !text.contains("for more information"),
+        "no identifiers reported, no trailer: {text}",
+    );
 }
 
 #[test]
@@ -453,9 +516,9 @@ class Service
     );
 }
 
-/// The presentation-time did-you-mean surfaces in the plain report: a
-/// `help:` line under the diagnostic that owns the suggestion. This is
-/// the minimal pre-part-7 rendering; the rich renderer replaces it.
+/// The presentation-time did-you-mean surfaces in the report: a
+/// `help:` line inside the block of the diagnostic that owns the
+/// suggestion, followed by the replacement the edit would make.
 #[test]
 fn a_near_typo_renders_a_help_line_under_its_diagnostic() {
     let root = project(&[
