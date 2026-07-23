@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `celerrate check --fix` and `--fix-suggestions`: a single application
+  pass in the total diagnostic order, expressed against original
+  snapshot coordinates, applied atomically per file through the VFS;
+  overlapping fixes are skipped and reported, first wins. Did-you-mean
+  suggestions on unknown symbols (`CEL0018` to `CEL0020`) and unknown
+  members (`CEL0030` to `CEL0033`), computed at presentation time from
+  the symbol index and the receiver's member surface, never persisted.
+  The symbol families compare fully qualified keys, not bare terminal
+  segments, so a near candidate is only offered as an applicable edit
+  when its namespace prefix already matches the written reference; a
+  cross-namespace or aliased near miss degrades to a note naming the
+  fully qualified candidate rather than proposing an edit that would not
+  resolve. A unique near candidate becomes an applicable `NeedsReview`
+  suggestion, a tie is listed in a note and never applied, and a
+  candidate whose token cannot be located degrades to a note rather than
+  a guessed edit. All natural fixes are `NeedsReview`, so `--fix` alone
+  applies nothing yet: its first real client is the style group. Either
+  fix flag with `--watch` is a usage error, and the distance policy is a
+  bounded restricted Damerau-Levenshtein so an adjacent transposition
+  (the dominant typo) reads as a single edit.
 - Project discovery distinguishes a missing Composer manifest from an
   unreadable one. A `composer.json` or `vendor/composer/installed.json`
   that exists but cannot be read (permission denied, a directory in its
