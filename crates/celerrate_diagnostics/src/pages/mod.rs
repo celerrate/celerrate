@@ -3,5 +3,7 @@
 //! harness at the composition root (`celerrate_cli/tests/
 //! explain_pages.rs`) keeps every non-exempt example honest.
 
+pub(crate) mod project;
+pub(crate) mod reporting;
 pub(crate) mod semantic;
 pub(crate) mod typed;

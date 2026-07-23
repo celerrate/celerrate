@@ -119,15 +119,36 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "celerrate_rules",
         &pages::semantic::CEL0024,
     ),
-    registered("CEL0025", "missing Composer manifest", "celerrate_project"),
-    registered("CEL0026", "invalid Composer manifest", "celerrate_project"),
-    registered("CEL0027", "PHP version fallback", "celerrate_project"),
-    registered(
+    documented(
+        "CEL0025",
+        "missing Composer manifest",
+        "celerrate_project",
+        &pages::project::CEL0025,
+    ),
+    documented(
+        "CEL0026",
+        "invalid Composer manifest",
+        "celerrate_project",
+        &pages::project::CEL0026,
+    ),
+    documented(
+        "CEL0027",
+        "PHP version fallback",
+        "celerrate_project",
+        &pages::project::CEL0027,
+    ),
+    documented(
         "CEL0028",
         "invalid PHP version constraint",
         "celerrate_project",
+        &pages::project::CEL0028,
     ),
-    registered("CEL0029", "invalid installed packages", "celerrate_project"),
+    documented(
+        "CEL0029",
+        "invalid installed packages",
+        "celerrate_project",
+        &pages::project::CEL0029,
+    ),
     documented(
         "CEL0030",
         "unknown method",
@@ -182,22 +203,30 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "celerrate_rules",
         &pages::typed::CEL0038,
     ),
-    registered(
+    documented(
         "CEL0039",
         "unreadable Composer manifest",
         "celerrate_project",
+        &pages::project::CEL0039,
     ),
-    registered(
+    documented(
         "CEL0040",
         "unreadable installed packages",
         "celerrate_project",
+        &pages::project::CEL0040,
     ),
-    registered(
+    documented(
         "CEL0041",
         "unknown suppression identifier",
         "celerrate_rules",
+        &pages::reporting::CEL0041,
     ),
-    registered("CEL0042", "unused suppression", "celerrate_rules"),
+    documented(
+        "CEL0042",
+        "unused suppression",
+        "celerrate_rules",
+        &pages::reporting::CEL0042,
+    ),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its

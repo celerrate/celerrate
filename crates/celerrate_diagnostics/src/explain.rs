@@ -31,13 +31,27 @@ pub struct ExampleExemption {
 /// The declared exemption list, in identifier order. Grown only by
 /// the page tasks that justify each entry; the closing spec amendment
 /// records the final contents.
-pub const EXECUTABLE_EXAMPLE_EXEMPTIONS: &[ExampleExemption] = &[ExampleExemption {
-    id: DiagnosticId::new("CEL0022"),
-    reason: "the shipped stub blob carries no symbol whose removal falls \
-             inside the supported 8.1 to 8.5 window; the framework-path \
-             fixture in celerrate_rules covers recall (same waiver as the \
-             seeded-defect suite)",
-}];
+pub const EXECUTABLE_EXAMPLE_EXEMPTIONS: &[ExampleExemption] = &[
+    ExampleExemption {
+        id: DiagnosticId::new("CEL0022"),
+        reason: "the shipped stub blob carries no symbol whose removal falls \
+                 inside the supported 8.1 to 8.5 window; the framework-path \
+                 fixture in celerrate_rules covers recall (same waiver as the \
+                 seeded-defect suite)",
+    },
+    ExampleExemption {
+        id: DiagnosticId::new("CEL0039"),
+        reason: "fires on a permission-based IO error, which cannot be \
+                 committed as a fixture and does not reproduce under root \
+                 or on Windows CI (spec section 10's environment class)",
+    },
+    ExampleExemption {
+        id: DiagnosticId::new("CEL0040"),
+        reason: "fires on a permission-based IO error, which cannot be \
+                 committed as a fixture and does not reproduce under root \
+                 or on Windows CI (spec section 10's environment class)",
+    },
+];
 
 #[cfg(test)]
 mod tests {
