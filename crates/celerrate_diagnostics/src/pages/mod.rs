@@ -4,3 +4,4 @@
 //! explain_pages.rs`) keeps every non-exempt example honest.
 
 pub(crate) mod semantic;
+pub(crate) mod typed;
