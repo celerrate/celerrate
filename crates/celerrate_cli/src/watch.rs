@@ -24,7 +24,7 @@ use notify::{RecommendedWatcher, RecursiveMode, Watcher as _};
 
 use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
 use crate::session::{InternalError, Session};
-use crate::{Outcome, render};
+use crate::{ColorMode, Outcome, render};
 
 /// How long a burst of events is collected before a cycle starts. Editors
 /// write in bursts: a save is often a truncate, a write, and a rename.
@@ -111,6 +111,7 @@ fn completed_cycle(
     watcher: &mut Watch,
     output: &mut dyn Write,
     reanalyzed: usize,
+    color: ColorMode,
 ) -> Result<(AnalysisOutcome, Option<WatchEvent>, bool), Outcome> {
     let started = Instant::now();
     // Every cycle re-analyzes, so every cycle also recomputes what the
@@ -129,7 +130,23 @@ fn completed_cycle(
     // respawned it, and the picture must describe the watch the next
     // burst will come from, not the one this cycle started with.
     watcher.report_unwatchable_paths(session);
-    if render::render_cycle(output, session, &outcome, reanalyzed, started.elapsed()).is_err() {
+    // Read fresh every cycle, outside every query, so the analysis stays
+    // a pure function of its inputs (determinism): the terminal can be
+    // resized between cycles, and a stale height would cap against a
+    // frame the user no longer has.
+    let height =
+        terminal_size::terminal_size().map(|(_, terminal_size::Height(rows))| rows as usize);
+    if render::render_cycle(
+        output,
+        session,
+        &outcome,
+        reanalyzed,
+        started.elapsed(),
+        color,
+        height,
+    )
+    .is_err()
+    {
         return Err(Outcome::InternalError);
     }
     let pending = persist_unless_a_burst_is_already_waiting(session, watcher, &outcome);
@@ -199,7 +216,7 @@ fn persist_unless_a_burst_is_already_waiting(
 /// Watches, analyzes, reprints, forever. Returns only when the watch
 /// itself cannot be established or re-established, or when the output
 /// stream is gone.
-pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
+pub fn watch(session: &mut Session, output: &mut dyn Write, color: ColorMode) -> Outcome {
     let mut watcher = match Watch::spawn(session) {
         Ok(watcher) => watcher,
         Err(error) => return unwatchable(output, &error),
@@ -213,7 +230,7 @@ pub fn watch(session: &mut Session, output: &mut dyn Write) -> Outcome {
 
     let mut reanalyzed = session.sources.len();
     loop {
-        match iteration(session, &mut watcher, output, reanalyzed) {
+        match iteration(session, &mut watcher, output, reanalyzed, color) {
             ControlFlow::Continue(next) => reanalyzed = next,
             ControlFlow::Break(outcome) => return outcome,
         }
@@ -269,11 +286,13 @@ fn iteration(
     watcher: &mut Watch,
     output: &mut dyn Write,
     reanalyzed: usize,
+    color: ColorMode,
 ) -> ControlFlow<Outcome, usize> {
-    let (outcome, pending, shutdown) = match completed_cycle(session, watcher, output, reanalyzed) {
-        Ok(result) => result,
-        Err(ended) => return ControlFlow::Break(ended),
-    };
+    let (outcome, pending, shutdown) =
+        match completed_cycle(session, watcher, output, reanalyzed, color) {
+            Ok(result) => result,
+            Err(ended) => return ControlFlow::Break(ended),
+        };
 
     // Issue #52: no new work starts after a shutdown is observed. A
     // shutdown seen mid-cycle (the flag `cycle` threads back through
@@ -968,10 +987,10 @@ mod tests {
         WatchedRoot, as_the_project_names_it, changes_content, reconcile, wait_for_a_burst,
         watched_roots,
     };
-    use crate::Outcome;
     use crate::analysis::{AnalysisOutcome, Cancelled, analyze};
     use crate::render;
     use crate::session::{InternalError, Session};
+    use crate::{ColorMode, Outcome};
 
     /// A `Watch` over a channel the test itself controls, with the
     /// sender kept alive so it can inject `WatchEvent`s (issue #52's
@@ -1494,7 +1513,13 @@ mod tests {
         );
 
         let mut output = Vec::new();
-        render::render_check(&mut output, &session, &AnalysisOutcome::default()).unwrap();
+        render::render_check(
+            &mut output,
+            &mut session,
+            &AnalysisOutcome::default(),
+            ColorMode::Plain,
+        )
+        .unwrap();
         let text = String::from_utf8(output).unwrap();
         assert!(
             text.contains("tests could not be watched"),
@@ -1921,7 +1946,8 @@ mod tests {
         let mut output = Vec::new();
 
         let (first, pending, shutdown) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
+                .unwrap();
         assert!(
             first.diagnostics.is_empty(),
             "sanity: the initial state is clean"
@@ -1938,7 +1964,8 @@ mod tests {
         std::fs::write(&edited, edited_source).unwrap();
         session.absorb(std::slice::from_ref(&edited));
         let (second, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
+                .unwrap();
         assert_eq!(second.diagnostics.len(), 1, "the cycle sees the edit");
 
         let after_second = std::fs::read(&diagnostics_pack).unwrap();
@@ -2084,8 +2111,14 @@ mod tests {
         // One completed cycle: the packs exist, and this is the "prior
         // completed cycle's" state the cancelled attempt below must
         // leave untouched.
-        let (first, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, total).unwrap();
+        let (first, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            total,
+            ColorMode::Plain,
+        )
+        .unwrap();
         assert!(
             first.diagnostics.is_empty(),
             "sanity: the initial circular-inheritance fixture is clean"
@@ -2157,7 +2190,8 @@ mod tests {
         // comparison above was not vacuous, since the packs on disk CAN
         // and DO change once a cycle actually completes.
         let (second, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1).unwrap();
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
+                .unwrap();
         assert!(
             second
                 .diagnostics
@@ -2307,12 +2341,13 @@ mod tests {
         assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
 
         sender.send(WatchEvent::Shutdown).unwrap();
-        let outcome = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
-            ControlFlow::Break(outcome) => outcome,
-            ControlFlow::Continue(next) => {
-                panic!("a shutdown must break the loop, not continue with {next}")
-            }
-        };
+        let outcome =
+            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
+                ControlFlow::Break(outcome) => outcome,
+                ControlFlow::Continue(next) => {
+                    panic!("a shutdown must break the loop, not continue with {next}")
+                }
+            };
         assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
         assert!(
             diagnostics_pack.exists(),
@@ -2347,19 +2382,26 @@ mod tests {
             sender.send(WatchEvent::Changed(sent)).unwrap();
         });
 
-        let next = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
-            ControlFlow::Continue(next) => next,
-            ControlFlow::Break(outcome) => {
-                panic!("a plain change must not break the loop: {outcome:?}")
-            }
-        };
+        let next =
+            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
+                ControlFlow::Continue(next) => next,
+                ControlFlow::Break(outcome) => {
+                    panic!("a plain change must not break the loop: {outcome:?}")
+                }
+            };
         assert_eq!(
             next, 1,
             "one path changed, so the next cycle reports one reanalyzed file",
         );
 
-        let (outcome, _, shutdown) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, next).unwrap();
+        let (outcome, _, shutdown) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            next,
+            ColorMode::Plain,
+        )
+        .unwrap();
         assert!(!shutdown, "no shutdown was ever sent");
         assert_eq!(
             outcome.diagnostics.len(),
@@ -2395,12 +2437,13 @@ mod tests {
         let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
         assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
 
-        let outcome = match super::iteration(&mut session, &mut watcher, &mut output, 1) {
-            ControlFlow::Break(outcome) => outcome,
-            ControlFlow::Continue(next) => {
-                panic!("a disconnected channel must break the loop, not continue with {next}")
-            }
-        };
+        let outcome =
+            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
+                ControlFlow::Break(outcome) => outcome,
+                ControlFlow::Continue(next) => {
+                    panic!("a disconnected channel must break the loop, not continue with {next}")
+                }
+            };
         assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
         assert!(
             diagnostics_pack.exists(),

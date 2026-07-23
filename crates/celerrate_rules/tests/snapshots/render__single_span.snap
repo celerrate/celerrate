@@ -1,0 +1,9 @@
+---
+source: crates/celerrate_rules/tests/render.rs
+expression: "report.blocks.join(\"\\n\\n\")"
+---
+error[CEL0018]: unknown class `Missing`
+ --> src/Kernel.php:4:22
+  |
+4 | class Kernel extends Missing
+  |                      ^^^^^^^

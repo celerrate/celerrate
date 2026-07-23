@@ -5,7 +5,7 @@
 
 use std::path::Path;
 
-use celerrate_cli::{Outcome, run};
+use celerrate_cli::{ColorMode, Outcome, run};
 
 const MANIFEST: &str = r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
 
@@ -26,7 +26,7 @@ fn check_with(root: &Path, extra: &[&str]) -> (Outcome, String) {
         vec!["celerrate".into(), "check".into(), root.as_os_str().into()];
     arguments.extend(extra.iter().map(Into::into));
     let mut output = Vec::new();
-    let outcome = run(arguments, &mut output);
+    let outcome = run(arguments, &mut output, ColorMode::Plain);
     (outcome, String::from_utf8(output).unwrap())
 }
 

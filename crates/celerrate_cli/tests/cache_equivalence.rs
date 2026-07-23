@@ -14,8 +14,8 @@ use std::path::Path;
 
 use celerrate_cli::analysis::{composed_diagnostics, served_typed_diagnostics};
 use celerrate_cli::cache::verdict::{TypedOutcome, VerdictLookup, lookup_verdict};
-use celerrate_cli::run;
 use celerrate_cli::session::Session;
+use celerrate_cli::{ColorMode, run};
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
@@ -38,6 +38,7 @@ fn run_check(root: &Path) {
             root.as_os_str().to_owned(),
         ],
         &mut output,
+        ColorMode::Plain,
     );
 }
 

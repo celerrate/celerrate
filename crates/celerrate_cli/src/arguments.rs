@@ -147,7 +147,11 @@ mod tests {
     #[test]
     fn mixed_rate_is_hidden_from_help() {
         let mut output = Vec::new();
-        let outcome = crate::run(vec!["celerrate".into(), "--help".into()], &mut output);
+        let outcome = crate::run(
+            vec!["celerrate".into(), "--help".into()],
+            &mut output,
+            crate::ColorMode::Plain,
+        );
         assert_eq!(outcome, crate::Outcome::Clean);
         assert!(
             !String::from_utf8(output).unwrap().contains("mixed-rate"),

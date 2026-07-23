@@ -1,9 +1,16 @@
 ---
 source: crates/celerrate_cli/tests/check.rs
-expression: text
+expression: normalize_location_separators(&text)
 ---
 notice CEL0025: no composer.json found; analyzing the whole project root
 
-src/Kernel.php:4:22 CEL0018 unknown class `Missing`
+error[CEL0018]: unknown class `Missing`
+ --> src/Kernel.php:4:22
+  |
+4 | class Kernel extends Missing
+  |                      ^^^^^^^
 
 1 notice, 1 diagnostic
+
+for more information, run `celerrate explain CEL0018`
+for more information, run `celerrate explain CEL0025`

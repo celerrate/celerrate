@@ -1,0 +1,12 @@
+---
+source: crates/celerrate_rules/tests/render.rs
+assertion_line: 388
+expression: "report.blocks.join(\"\\n\\n\")"
+---
+src/Kernel.php:4:22 CEL0018 unknown class `Missing`
+
+error[CEL0019]: unknown function `Missing`
+ --> src/Kernel.php:4:22
+  |
+4 | class Kernel extends Missing
+  |                      ^^^^^^^

@@ -67,6 +67,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   non-iterated pass, and report identically on warm and cold runs from
   per-directive match records persisted with the verdict (cache schema
   7).
+- Rustc-style diagnostic rendering: `celerrate check` now reports each
+  diagnostic as an annotated source block (header with the identifier,
+  excerpt, labeled underlines, `note:` and `help:` lines with rendered
+  replacements), with color on terminals (`NO_COLOR` honored), a
+  `celerrate explain` pointer per reported identifier, a per-diagnostic
+  fallback to the minimal line if rich rendering ever fails, and a
+  watch-mode frame capped at the terminal height.
 
 ### Changed
 

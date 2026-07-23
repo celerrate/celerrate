@@ -9,7 +9,7 @@
 
 use std::path::Path;
 
-use celerrate_cli::run;
+use celerrate_cli::{ColorMode, run};
 
 fn run_check(root: &Path) -> String {
     let mut output = Vec::new();
@@ -20,6 +20,7 @@ fn run_check(root: &Path) -> String {
             root.as_os_str().to_owned(),
         ],
         &mut output,
+        ColorMode::Plain,
     );
     String::from_utf8(output).unwrap()
 }

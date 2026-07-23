@@ -505,7 +505,7 @@ fn a_crafted_typed_match_index_never_reaches_the_reporting_phase() {
     }
 }
 
-use celerrate_cli::run;
+use celerrate_cli::{ColorMode, run};
 
 fn run_check(root: &Path) -> (celerrate_cli::Outcome, String) {
     let mut output = Vec::new();
@@ -516,6 +516,7 @@ fn run_check(root: &Path) -> (celerrate_cli::Outcome, String) {
             root.as_os_str().to_owned(),
         ],
         &mut output,
+        ColorMode::Plain,
     );
     (outcome, String::from_utf8(output).unwrap())
 }
