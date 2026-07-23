@@ -436,3 +436,25 @@ fn a_panicking_resolver_is_caught_and_falls_back_to_the_minimal_line() {
         vec!["src/Kernel.php:4:22 CEL0018 unknown class `Missing`".to_owned()],
     );
 }
+
+#[test]
+fn a_symbolic_label_with_no_source_degrades_to_a_note_naming_the_declaration() {
+    use celerrate_diagnostics::{Label, LabelTarget};
+
+    let mut diagnostic = kernel_diagnostic();
+    diagnostic.labels.push(Label {
+        target: LabelTarget::Symbolic {
+            symbol: "App\\User::save".to_owned(),
+        },
+        message: "the method is declared here".to_owned(),
+    });
+    let report = render_report(
+        &[diagnostic],
+        &sources(),
+        &DegradeEverything,
+        ColorMode::Plain,
+        &FaultInjection::None,
+    );
+    assert!(report.failures.is_empty());
+    insta::assert_snapshot!("degraded_symbolic", report.blocks.join("\n\n"));
+}

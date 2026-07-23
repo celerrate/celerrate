@@ -12,6 +12,7 @@ use celerrate_diagnostics::{Anchor, Diagnostic, DiagnosticId};
 use celerrate_source::{FileId, LineIndex, TextRange};
 
 mod adapter;
+pub mod resolve;
 
 /// Read access to the sources a rendered report excerpts. The CLI
 /// implements this over its session; tests implement it over fixtures.
