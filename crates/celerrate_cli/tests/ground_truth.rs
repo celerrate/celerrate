@@ -33,6 +33,7 @@ class Holder {
             project.path().as_os_str().to_owned(),
         ],
         &mut output,
+        celerrate_cli::ColorMode::Plain,
     );
     let printed = String::from_utf8(output).unwrap();
     let lines: Vec<&str> = printed.lines().collect();
@@ -71,6 +72,7 @@ function unannotated() { return 1; }
             project.path().as_os_str().to_owned(),
         ],
         &mut output,
+        celerrate_cli::ColorMode::Plain,
     );
     let printed = String::from_utf8(output).unwrap();
     assert_eq!(printed.lines().last(), Some("checked 0, divergences 0"));
@@ -107,6 +109,7 @@ class Box {
             project.path().as_os_str().to_owned(),
         ],
         &mut output,
+        celerrate_cli::ColorMode::Plain,
     );
     let printed = String::from_utf8(output).unwrap();
     assert_eq!(
@@ -146,6 +149,7 @@ fn a_literal_containing_a_tab_and_a_newline_stays_one_record_one_line() {
             project.path().as_os_str().to_owned(),
         ],
         &mut output,
+        celerrate_cli::ColorMode::Plain,
     );
     let printed = String::from_utf8(output).unwrap();
     let lines: Vec<&str> = printed.lines().collect();
@@ -164,7 +168,11 @@ fn a_literal_containing_a_tab_and_a_newline_stays_one_record_one_line() {
 #[test]
 fn the_subcommand_is_hidden_from_help() {
     let mut output = Vec::new();
-    let _ = celerrate_cli::run(vec!["celerrate".into(), "--help".into()], &mut output);
+    let _ = celerrate_cli::run(
+        vec!["celerrate".into(), "--help".into()],
+        &mut output,
+        celerrate_cli::ColorMode::Plain,
+    );
     let printed = String::from_utf8(output).unwrap();
     assert!(
         !printed.contains("ground-truth"),

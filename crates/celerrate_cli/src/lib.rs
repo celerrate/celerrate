@@ -29,6 +29,20 @@ use crate::analysis::{AnalysisOutcome, Cancelled, Panicked};
 use crate::arguments::{Arguments, Command};
 use crate::session::{InternalError, Session};
 
+pub use celerrate_rules::render::ColorMode;
+
+/// The color decision, pure so it is testable: styled only on a
+/// terminal with `NO_COLOR` unset or empty (the no-color.org
+/// convention). Read once in `main`, outside queries.
+pub fn color_mode(stdout_is_terminal: bool, no_color: Option<&std::ffi::OsStr>) -> ColorMode {
+    let disabled = no_color.is_some_and(|value| !value.is_empty());
+    if stdout_is_terminal && !disabled {
+        ColorMode::Styled
+    } else {
+        ColorMode::Plain
+    }
+}
+
 /// How the run ended, and therefore what the shell is told.
 ///
 /// The umbrella design fixes the codes: 0 clean, 1 any diagnostic
@@ -67,7 +81,10 @@ impl Outcome {
 }
 
 /// The whole product, as a function.
-pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
+///
+/// `_color` is threaded through but not yet consumed: Task 9 wires it
+/// into the renderer and the parameter loses its underscore then.
+pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, _color: ColorMode) -> Outcome {
     let arguments = match Arguments::try_parse_from(arguments) {
         Ok(arguments) => arguments,
         Err(error) => {
@@ -292,7 +309,7 @@ fn single_pass(
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
 
-    use super::{InternalError, Outcome, Session, render, run, single_pass};
+    use super::{ColorMode, InternalError, Outcome, Session, color_mode, render, run, single_pass};
 
     /// The single-pass path had no way to produce
     /// `InternalError::AnalysisPanicked`: `analyze` re-raises a panic that
@@ -352,6 +369,7 @@ mod tests {
         let outcome = run(
             vec!["celerrate".into(), "check".into(), "--nope".into()],
             &mut output,
+            ColorMode::Plain,
         );
         assert_eq!(outcome, Outcome::UsageError);
         assert!(String::from_utf8(output).unwrap().contains("--nope"));
@@ -360,8 +378,22 @@ mod tests {
     #[test]
     fn help_is_not_a_failure() {
         let mut output = Vec::new();
-        let outcome = run(vec!["celerrate".into(), "--help".into()], &mut output);
+        let outcome = run(
+            vec!["celerrate".into(), "--help".into()],
+            &mut output,
+            ColorMode::Plain,
+        );
         assert_eq!(outcome, Outcome::Clean);
         assert!(String::from_utf8(output).unwrap().contains("check"));
+    }
+
+    #[test]
+    fn color_is_styled_only_on_a_terminal_without_no_color() {
+        use std::ffi::OsStr;
+        assert_eq!(color_mode(true, None), ColorMode::Styled);
+        assert_eq!(color_mode(false, None), ColorMode::Plain);
+        assert_eq!(color_mode(true, Some(OsStr::new("1"))), ColorMode::Plain);
+        // The NO_COLOR convention: an empty value does not disable color.
+        assert_eq!(color_mode(true, Some(OsStr::new(""))), ColorMode::Styled);
     }
 }

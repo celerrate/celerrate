@@ -6,7 +6,7 @@
 
 use std::path::Path;
 
-use celerrate_cli::{Outcome, run};
+use celerrate_cli::{ColorMode, Outcome, run};
 
 fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
@@ -25,6 +25,7 @@ fn check(root: &Path) -> (Outcome, String) {
     let outcome = run(
         vec!["celerrate".into(), "check".into(), root.as_os_str().into()],
         &mut output,
+        ColorMode::Plain,
     );
     (outcome, String::from_utf8(output).unwrap())
 }
@@ -92,6 +93,7 @@ fn a_root_that_does_not_exist_is_a_usage_error_that_names_it() {
             "/nonexistent/path/xyz".into(),
         ],
         &mut output,
+        ColorMode::Plain,
     );
     let text = String::from_utf8(output).unwrap();
 
@@ -114,6 +116,7 @@ fn a_root_that_is_a_file_rather_than_a_directory_is_a_usage_error() {
     let outcome = run(
         vec!["celerrate".into(), "check".into(), file.as_os_str().into()],
         &mut output,
+        ColorMode::Plain,
     );
     let text = String::from_utf8(output).unwrap();
 
@@ -177,6 +180,7 @@ fn a_root_that_cannot_be_read_is_a_usage_error() {
             unreadable.as_os_str().into(),
         ],
         &mut output,
+        ColorMode::Plain,
     );
     let text = String::from_utf8(output).unwrap();
 
