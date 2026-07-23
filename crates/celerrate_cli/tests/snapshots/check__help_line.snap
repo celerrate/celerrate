@@ -1,0 +1,8 @@
+---
+source: crates/celerrate_cli/tests/check.rs
+expression: normalize_location_separators(&text)
+---
+src/Caller.php:3:38 CEL0030 unknown method `svae` on `App\User`
+  help: did you mean `save`?
+
+0 notices, 1 diagnostic

@@ -1,0 +1,8 @@
+---
+source: crates/celerrate_cli/tests/fix.rs
+assertion_line: 59
+expression: patched
+---
+<?php
+namespace App;
+function persist(User $user): void { $user->save(); }

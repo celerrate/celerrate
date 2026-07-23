@@ -16,7 +16,9 @@ pub struct EditConflict {
 /// conflict: an insertion at the start of a replaced range
 /// deterministically lands before the replacement. Sorting groups
 /// intersecting ranges next to each other, so adjacent pairs suffice.
-pub(crate) fn find_conflict(sorted: &[TextEdit]) -> Option<EditConflict> {
+/// Public so an application layer can ask the conflict question before
+/// deciding what to apply.
+pub fn find_conflict(sorted: &[TextEdit]) -> Option<EditConflict> {
     sorted.windows(2).find_map(|pair| {
         let [first, second] = pair else {
             return None;

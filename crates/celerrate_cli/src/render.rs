@@ -19,17 +19,33 @@ use crate::session::{InternalError, Session};
 /// should not have to compose anything.
 const ISSUE_INVITATION: &str = "https://github.com/celerrate/celerrate/issues/new?labels=internal-error&title=internal+error+while+checking";
 
-/// Notices, then diagnostics, then the summary. Notices come first and in
-/// their own shape because a project-level finding has no span:
-/// `MISSING_COMPOSER_MANIFEST` describes a file that by definition does
-/// not exist, and anchoring it to `composer.json:1:1` would be a fiction.
+/// The complete check screen: the report, then the internal errors.
+/// The watch cycle uses this whole; the single-pass path calls the two
+/// halves itself so the fix trailer can sit between them.
+pub fn render_check(
+    output: &mut dyn Write,
+    session: &Session,
+    outcome: &AnalysisOutcome,
+) -> io::Result<()> {
+    render_report(output, session, outcome)?;
+    render_internal_errors(output, session)
+}
+
+/// Notices, then diagnostics with their note and help sub-lines, then
+/// the summary. No internal errors: the single-pass path prints those
+/// last, after the fix trailer, through `render_internal_errors`.
+///
+/// Notices come first and in their own shape because a project-level
+/// finding has no span: `MISSING_COMPOSER_MANIFEST` describes a file
+/// that by definition does not exist, and anchoring it to
+/// `composer.json:1:1` would be a fiction.
 ///
 /// A notice announces itself as a notice, never as a warning. It is
 /// counted as a notice in the summary and it never touches the exit code,
 /// so the other word would contradict the same screen twice: a warning
 /// diagnostic exits 1, and every notice announces a fallback already
 /// taken.
-pub fn render_check(
+pub fn render_report(
     output: &mut dyn Write,
     session: &Session,
     outcome: &AnalysisOutcome,
@@ -50,6 +66,12 @@ pub fn render_check(
     if !outcome.diagnostics.is_empty() {
         for diagnostic in &outcome.diagnostics {
             writeln!(output, "{}", render_diagnostic(session, diagnostic))?;
+            for note in &diagnostic.notes {
+                writeln!(output, "  note: {note}")?;
+            }
+            for suggestion in &diagnostic.suggestions {
+                writeln!(output, "  help: {}", suggestion.message)?;
+            }
         }
         writeln!(output)?;
     }
@@ -59,9 +81,7 @@ pub fn render_check(
         "{}, {}",
         count(notices.len(), "notice", "notices"),
         count(outcome.diagnostics.len(), "diagnostic", "diagnostics"),
-    )?;
-
-    render_internal_errors(output, session)
+    )
 }
 
 /// One watch cycle: the screen cleared, the complete current state
@@ -156,6 +176,38 @@ fn count(total: usize, singular: &str, plural: &str) -> String {
     }
 }
 
+/// The fix trailer: what was applied, what was skipped and why.
+/// Prints only under a fix flag. `applied 0 fixes to 0 files` is the
+/// honest line the design requires: at closure of this sub-project
+/// every shipped fix is `NeedsReview`, so `--fix` alone applies
+/// nothing, visibly.
+pub fn render_fix_summary(
+    output: &mut dyn Write,
+    session: &Session,
+    planned: &crate::fix::PlannedFixes,
+    applied: &crate::fix::AppliedFixes,
+) -> io::Result<()> {
+    writeln!(
+        output,
+        "applied {} to {}",
+        count(planned.accepted, "fix", "fixes"),
+        count(applied.files_written, "file", "files"),
+    )?;
+    for skipped in &planned.skipped {
+        let reason = match skipped.reason {
+            crate::fix::SkipReason::Overlap => "overlaps an already-applied fix",
+            crate::fix::SkipReason::ForeignFile => "edits another file",
+        };
+        writeln!(
+            output,
+            "skipped fix in {}: {} ({reason})",
+            display_path(session, skipped.file),
+            skipped.message,
+        )?;
+    }
+    writeln!(output)
+}
+
 /// The internal-error report: what went wrong, which file, and how to
 /// tell us. A panic does not kill the run, so this prints at the end,
 /// after every file that did report.
@@ -211,6 +263,19 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
                 has_celerrate_bug = true;
                 writeln!(output, "internal error: the analysis loop panicked")?;
             }
+            InternalError::FixUnappliable { file, reason } => {
+                has_celerrate_bug = true;
+                writeln!(
+                    output,
+                    "internal error: the fix for {} could not be applied: {reason}",
+                    display_path(session, *file),
+                )?;
+            }
+            InternalError::FixWriteFailed { path, reason } => writeln!(
+                output,
+                "internal error: {} could not be written: {reason}; the fix was not applied",
+                relative_path(session, path),
+            )?,
         }
     }
     if !has_celerrate_bug {
@@ -423,5 +488,50 @@ mod tests {
         assert!(text.contains("Locked.php"));
         assert!(text.contains("Broken.php"));
         assert!(text.contains("Please report it:"));
+    }
+
+    /// The trailer's synthetic case: the natural pass cannot yet
+    /// produce an overlap (every shipped suggestion is single-edit
+    /// `NeedsReview`), so the skip is driven directly through the
+    /// planner's own types.
+    #[test]
+    fn the_fix_trailer_names_the_skipped_fix_its_file_and_its_reason() {
+        use std::collections::BTreeMap;
+
+        use celerrate_source::{TextEdit, TextRange, TextSize};
+
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
+        let mut session = Session::start(root.path());
+        let file = *session.sources.keys().next().unwrap();
+        let mut edits_by_file = BTreeMap::new();
+        edits_by_file.insert(
+            file,
+            vec![TextEdit {
+                file,
+                range: TextRange::new(TextSize::from(6), TextSize::from(10)),
+                replacement: "x".to_owned(),
+            }],
+        );
+        let planned = crate::fix::PlannedFixes {
+            accepted: 1,
+            edits_by_file,
+            skipped: vec![crate::fix::SkippedFix {
+                file,
+                message: "did you mean `save`?".to_owned(),
+                reason: crate::fix::SkipReason::Overlap,
+            }],
+        };
+        let applied = crate::fix::apply_to_disk(&mut session, &planned);
+        let mut output = Vec::new();
+        render::render_fix_summary(&mut output, &session, &planned, &applied).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        assert!(text.contains("applied 1 fix to 1 file"), "{text}");
+        assert!(
+            text.contains(
+                "skipped fix in a.php: did you mean `save`? (overlaps an already-applied fix)"
+            ),
+            "{text}",
+        );
     }
 }

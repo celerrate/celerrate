@@ -10,11 +10,13 @@ pub mod analysis;
 pub mod arguments;
 pub mod cache;
 pub mod database;
+pub mod fix;
 pub mod ground_truth;
 pub mod mixed_rate;
 pub mod plugins;
 pub mod render;
 pub mod session;
+pub mod suggest;
 pub mod watch;
 
 use std::ffi::OsString;
@@ -80,7 +82,12 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
         }
     };
     match arguments.command {
-        Command::Check { path, watch } => {
+        Command::Check {
+            path,
+            watch,
+            fix,
+            fix_suggestions,
+        } => {
             if let Some(message) = unusable_root(&path) {
                 let _ = writeln!(output, "{message}");
                 return Outcome::UsageError;
@@ -100,10 +107,26 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write) -> Outcome {
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
             session.absorb_outcome(&outcome);
-            if render::render_check(output, &session, &outcome).is_err() {
+            // Presentation only: the persisted verdicts and the exit
+            // code both read `outcome`, never the enriched copy.
+            let presented = analysis::AnalysisOutcome {
+                diagnostics: suggest::enrich(&session, &outcome.diagnostics),
+                panicked: outcome.panicked.clone(),
+            };
+            if render::render_report(output, &session, &presented).is_err() {
                 return Outcome::InternalError;
             }
             cache::persist(&mut session, &outcome);
+            if let Some(threshold) = fix::fix_threshold(fix, fix_suggestions) {
+                let planned = fix::plan(&presented.diagnostics, threshold);
+                let applied = fix::apply_to_disk(&mut session, &planned);
+                if render::render_fix_summary(output, &session, &planned, &applied).is_err() {
+                    return Outcome::InternalError;
+                }
+            }
+            if render::render_internal_errors(output, &session).is_err() {
+                return Outcome::InternalError;
+            }
             session.statistics.report();
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
         }

@@ -448,3 +448,27 @@ class Service
         "the pack serves untyped verdicts; typed recompute must agree",
     );
 }
+
+/// The presentation-time did-you-mean surfaces in the plain report: a
+/// `help:` line under the diagnostic that owns the suggestion. This is
+/// the minimal pre-part-7 rendering; the rich renderer replaces it.
+#[test]
+fn a_near_typo_renders_a_help_line_under_its_diagnostic() {
+    let root = project(&[
+        (
+            "composer.json",
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        ),
+        (
+            "src/User.php",
+            "<?php\nnamespace App;\nclass User { public function save(): void {} }\n",
+        ),
+        (
+            "src/Caller.php",
+            "<?php\nnamespace App;\nfunction persist(User $user): void { $user->svae(); }\n",
+        ),
+    ]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported);
+    insta::assert_snapshot!("help_line", normalize_location_separators(&text));
+}

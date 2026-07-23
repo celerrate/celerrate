@@ -147,6 +147,7 @@ dependencies = [
  "blake3",
  "celerrate_db",
  "celerrate_diagnostics",
+ "celerrate_edit",
  "celerrate_phpdoc_bridge",
  "celerrate_plugin",
  "celerrate_project",
