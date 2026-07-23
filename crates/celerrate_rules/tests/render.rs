@@ -360,3 +360,79 @@ fn a_project_diagnostic_keeps_the_notice_vocabulary_without_an_excerpt() {
         vec!["notice CEL0025: no composer.json found; analyzing the whole project root".to_owned()],
     );
 }
+
+#[test]
+fn an_injected_fault_falls_back_to_the_minimal_line_for_that_diagnostic_only() {
+    use celerrate_diagnostics::DiagnosticId;
+
+    let faulted: DiagnosticId = find_identifier("CEL0018").unwrap();
+    let second = Diagnostic::spanned(
+        find_identifier("CEL0019").unwrap(),
+        Severity::Error,
+        FileId::new(0),
+        range(43, 50),
+        "unknown function `Missing`".to_owned(),
+    );
+    let report = render_report(
+        &[kernel_diagnostic(), second],
+        &sources(),
+        &DegradeEverything,
+        ColorMode::Plain,
+        &FaultInjection::ForIdentifier(faulted),
+    );
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].id, faulted);
+    assert_eq!(report.failures[0].location, "src/Kernel.php:4:22");
+    // Mixed output: the faulted diagnostic is one minimal line, the
+    // other keeps its rich block.
+    insta::assert_snapshot!("mixed_fallback", report.blocks.join("\n\n"));
+}
+
+/// A [`SymbolResolver`] that panics when asked to resolve one scripted
+/// symbol, so a real panic runs inside `rich_block`'s `catch_unwind`
+/// scope (`plan_labels` calls `resolver.resolve` from within `build`).
+struct PanickingResolver;
+
+impl SymbolResolver for PanickingResolver {
+    fn resolve(&self, symbol: &str) -> ResolvedLabel {
+        if symbol == "App\\Boom" {
+            panic!("scripted panic for the catch_unwind coverage test");
+        }
+        ResolvedLabel::Degraded
+    }
+}
+
+/// The `catch_unwind` belt itself, not just the fault-injection seam:
+/// a resolver panic inside `build` must be caught, degrade to the
+/// minimal line, and record exactly one failure, without aborting the
+/// process or affecting other diagnostics (there are none here, but
+/// the report must still complete and return normally).
+#[test]
+fn a_panicking_resolver_is_caught_and_falls_back_to_the_minimal_line() {
+    use celerrate_diagnostics::{DiagnosticId, Label, LabelTarget};
+
+    let mut diagnostic = kernel_diagnostic();
+    diagnostic.labels.push(Label {
+        target: LabelTarget::Symbolic {
+            symbol: "App\\Boom".to_owned(),
+        },
+        message: "this label's resolution panics".to_owned(),
+    });
+
+    let report = render_report(
+        &[diagnostic],
+        &sources(),
+        &PanickingResolver,
+        ColorMode::Plain,
+        &FaultInjection::None,
+    );
+
+    let expected_id: DiagnosticId = find_identifier("CEL0018").unwrap();
+    assert_eq!(report.failures.len(), 1);
+    assert_eq!(report.failures[0].id, expected_id);
+    assert_eq!(report.failures[0].location, "src/Kernel.php:4:22");
+    assert_eq!(
+        report.blocks,
+        vec!["src/Kernel.php:4:22 CEL0018 unknown class `Missing`".to_owned()],
+    );
+}

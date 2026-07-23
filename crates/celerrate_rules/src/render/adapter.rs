@@ -2,6 +2,8 @@
 //! `annotate-snippets` input types. Keeping the mapping here keeps the
 //! library replaceable: nothing else references it (design section 9).
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use annotate_snippets::{AnnotationKind, Level, Patch, Renderer, Snippet};
 use celerrate_diagnostics::{Anchor, Diagnostic, LabelTarget, Severity};
 use celerrate_source::{FileId, TextRange};
@@ -22,12 +24,18 @@ pub(crate) fn rich_block(
     color: ColorMode,
     fault: &FaultInjection,
 ) -> Option<String> {
-    // `fault` feeds the fault-injection seam Task 4 adds around this
-    // call.
-    let _ = fault;
-    Some(build(
-        diagnostic, path, text, file, sources, resolver, color,
-    ))
+    if let FaultInjection::ForIdentifier(id) = fault
+        && *id == diagnostic.id
+    {
+        return None;
+    }
+    // `annotate-snippets` is not under the workspace zero-panic lints,
+    // so one diagnostic's rendering panic must not take the report
+    // down: it falls back to the minimal line (design section 9).
+    catch_unwind(AssertUnwindSafe(|| {
+        build(diagnostic, path, text, file, sources, resolver, color)
+    }))
+    .ok()
 }
 
 fn level_of(severity: Severity) -> Level<'static> {
