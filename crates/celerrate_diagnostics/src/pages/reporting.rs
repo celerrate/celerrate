@@ -61,9 +61,9 @@ function f(User $u): void {
 ",
     configuration: "\
 Reported by the `unused-suppression` rule (correctness group, default
-tier) as a warning. Two exemptions the rule itself carries: a
-directive naming an identifier of an inactive rule is not evaluable
-(a demoted rule must not turn every directive that names it into a
-finding), and suppressing CEL0042 itself counts as use, so a
-deliberately unused directive can be silenced without paradox.",
+tier) as a warning, on native `@celerrate-ignore` directives only. A
+directive is exempt (not evaluable) when any identifier it names
+belongs to an inactive rule (a demoted rule must not turn every
+directive that names it into a finding), or is unknown, since CEL0041
+already reports that mistake.",
 };
