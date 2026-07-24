@@ -11,6 +11,7 @@
 mod identifiers;
 mod model;
 mod parse;
+mod validate;
 
 pub use identifiers::{
     INVALID_CONFIGURATION, INVALID_CONFIGURATION_VALUE, RESILIENCE_SEVERITY_REMAP,
@@ -18,3 +19,4 @@ pub use identifiers::{
 };
 pub use model::{Configuration, RuleEntry, SeverityEntry, Spanned};
 pub use parse::parse;
+pub use validate::{KnownSets, validate};
