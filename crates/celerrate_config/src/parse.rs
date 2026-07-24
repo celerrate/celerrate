@@ -7,8 +7,9 @@ use celerrate_source::{FileId, TextRange, TextSize};
 
 use crate::identifiers::{
     INVALID_CONFIGURATION, INVALID_CONFIGURATION_VALUE, UNKNOWN_CONFIGURATION_KEY,
+    UNSUPPORTED_RULE_OPTION,
 };
-use crate::model::{Configuration, Spanned};
+use crate::model::{Configuration, RuleEntry, SeverityEntry, Spanned};
 
 /// A byte span from `toml_edit` as a `TextRange`. Configuration files
 /// are far below `u32` size; a hypothetical overflow saturates rather
@@ -104,9 +105,9 @@ fn version_point(text: &str) -> Option<(u8, u8)> {
     Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
-/// The root walk grows in the next tasks: the `[rules]`, `[severity]`
-/// and `[plugins]` arms are Task 4, so those root keys fall through to
-/// "unknown configuration key" until then.
+/// The structural walk of the root table: `[project]`, the
+/// `[rules.<name>]` tables, `[severity]`, and `[plugins]`. Anything else
+/// is an unknown root key.
 fn walk_root(
     file: FileId,
     table: &toml_edit::Table,
@@ -133,7 +134,144 @@ fn walk_root(
                     "expected a table",
                 )),
             },
+            "rules" => match item.as_table() {
+                Some(rules) => {
+                    walk_rules(file, rules, configuration, diagnostics, unspanned_anchor);
+                }
+                None => diagnostics.push(invalid_value(
+                    file,
+                    item_range(table, key, item, unspanned_anchor),
+                    key,
+                    "expected a table of [rules.<name>] tables",
+                )),
+            },
+            "severity" => match item.as_table() {
+                Some(severity) => {
+                    walk_severity(file, severity, configuration, diagnostics, unspanned_anchor);
+                }
+                None => diagnostics.push(invalid_value(
+                    file,
+                    item_range(table, key, item, unspanned_anchor),
+                    key,
+                    "expected a table",
+                )),
+            },
+            "plugins" => match item.as_table() {
+                Some(plugins) => {
+                    for (plugin_key, _) in plugins.iter() {
+                        diagnostics.push(unknown_key(
+                            file,
+                            key_range(plugins, plugin_key, unspanned_anchor),
+                            &format!("plugins.{plugin_key}"),
+                        ));
+                    }
+                }
+                None => diagnostics.push(invalid_value(
+                    file,
+                    item_range(table, key, item, unspanned_anchor),
+                    key,
+                    "expected a table",
+                )),
+            },
             _ => diagnostics.push(unknown_key(file, range, key)),
+        }
+    }
+}
+
+/// The `[rules.<name>]` tables: each is a table with at most one key,
+/// `enabled`. Any other key has nowhere to go, since no rule takes
+/// options yet.
+fn walk_rules(
+    file: FileId,
+    rules: &toml_edit::Table,
+    configuration: &mut Configuration,
+    diagnostics: &mut Vec<Diagnostic>,
+    fallback: TextRange,
+) {
+    for (name, item) in rules.iter() {
+        let name_range = key_range(rules, name, fallback);
+        let Some(rule) = item.as_table() else {
+            diagnostics.push(invalid_value(
+                file,
+                item_range(rules, name, item, fallback),
+                &format!("rules.{name}"),
+                &format!("expected a table like [rules.{name}]"),
+            ));
+            continue;
+        };
+        let mut enabled = None;
+        for (key, value) in rule.iter() {
+            let value_range = item_range(rule, key, value, fallback);
+            if key == "enabled" {
+                match value.as_bool() {
+                    Some(flag) => {
+                        enabled = Some(Spanned {
+                            value: flag,
+                            range: value_range,
+                        });
+                    }
+                    None => diagnostics.push(invalid_value(
+                        file,
+                        value_range,
+                        "enabled",
+                        "expected a boolean",
+                    )),
+                }
+            } else {
+                diagnostics.push(Diagnostic::spanned(
+                    UNSUPPORTED_RULE_OPTION,
+                    Severity::Error,
+                    file,
+                    key_range(rule, key, fallback),
+                    format!("rule `{name}` has no configurable options; `{key}` is not recognized"),
+                ));
+            }
+        }
+        configuration.rules.push(RuleEntry {
+            name: Spanned {
+                value: name.to_owned(),
+                range: name_range,
+            },
+            enabled,
+        });
+    }
+}
+
+/// The `[severity]` table: identifier keys mapped to `"error"` or
+/// `"warning"`. Whether the identifier is known is a semantic check
+/// left to `validate`.
+fn walk_severity(
+    file: FileId,
+    severity: &toml_edit::Table,
+    configuration: &mut Configuration,
+    diagnostics: &mut Vec<Diagnostic>,
+    fallback: TextRange,
+) {
+    for (identifier, item) in severity.iter() {
+        let identifier_range = key_range(severity, identifier, fallback);
+        let value_range = item_range(severity, identifier, item, fallback);
+        let parsed = match item.as_str() {
+            Some("error") => Some(Severity::Error),
+            Some("warning") => Some(Severity::Warning),
+            _ => None,
+        };
+        match parsed {
+            Some(value) => configuration.severity.push(SeverityEntry {
+                identifier: Spanned {
+                    value: identifier.to_owned(),
+                    range: identifier_range,
+                },
+                severity: Spanned {
+                    value,
+                    range: value_range,
+                },
+            }),
+            None => diagnostics.push(invalid_value(
+                file,
+                value_range,
+                &format!("severity.{identifier}"),
+                "expected \"error\" or \"warning\"",
+            )),
         }
     }
 }
@@ -253,6 +391,7 @@ mod tests {
 
     use crate::identifiers::{
         INVALID_CONFIGURATION, INVALID_CONFIGURATION_VALUE, UNKNOWN_CONFIGURATION_KEY,
+        UNSUPPORTED_RULE_OPTION,
     };
     use crate::parse::parse;
 
@@ -418,5 +557,99 @@ mod tests {
             .map(|entry| entry.value.as_str())
             .collect();
         assert_eq!(include, ["src"]);
+    }
+
+    #[test]
+    fn a_rule_table_parses_its_enabled_flag() {
+        let text = "[rules.null-dereference]\nenabled = false\n\n[rules.some-nursery-rule]\nenabled = true\n";
+        let (configuration, diagnostics) = parse(file(), text);
+        assert!(diagnostics.is_empty());
+        let rules: Vec<(&str, Option<bool>)> = configuration
+            .rules
+            .iter()
+            .map(|rule| {
+                (
+                    rule.name.value.as_str(),
+                    rule.enabled.as_ref().map(|flag| flag.value),
+                )
+            })
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                ("null-dereference", Some(false)),
+                ("some-nursery-rule", Some(true))
+            ],
+        );
+    }
+
+    #[test]
+    fn an_empty_rule_table_is_a_valid_no_op() {
+        let (configuration, diagnostics) = parse(file(), "[rules.null-dereference]\n");
+        assert!(diagnostics.is_empty());
+        assert_eq!(configuration.rules.first().unwrap().enabled, None);
+    }
+
+    #[test]
+    fn a_rule_option_other_than_enabled_reports_cel0047() {
+        let (_, diagnostics) = parse(file(), "[rules.null-dereference]\nmax = 3\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, UNSUPPORTED_RULE_OPTION);
+        assert_eq!(
+            diagnostic.message,
+            "rule `null-dereference` has no configurable options; `max` is not recognized",
+        );
+    }
+
+    #[test]
+    fn a_non_boolean_enabled_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "[rules.null-dereference]\nenabled = \"yes\"\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `enabled`: expected a boolean"
+        );
+    }
+
+    #[test]
+    fn a_rules_entry_that_is_not_a_table_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "[rules]\ndisable = [\"null-dereference\"]\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `rules.disable`: expected a table like [rules.disable]",
+        );
+    }
+
+    #[test]
+    fn severity_entries_parse_and_reject_other_words() {
+        let text = "[severity]\n\"CEL0034\" = \"warning\"\n\"CEL0035\" = \"info\"\n";
+        let (configuration, diagnostics) = parse(file(), text);
+        assert_eq!(configuration.severity.len(), 1);
+        let entry = configuration.severity.first().unwrap();
+        assert_eq!(entry.identifier.value, "CEL0034");
+        assert_eq!(
+            entry.severity.value,
+            celerrate_diagnostics::Severity::Warning
+        );
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `severity.CEL0035`: expected \"error\" or \"warning\"",
+        );
+    }
+
+    #[test]
+    fn a_plugins_key_reports_cel0044() {
+        let (_, diagnostics) = parse(file(), "[plugins]\nphpdoc-bridge = true\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, UNKNOWN_CONFIGURATION_KEY);
+        assert_eq!(
+            diagnostic.message,
+            "unknown configuration key `plugins.phpdoc-bridge`"
+        );
     }
 }
