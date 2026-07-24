@@ -210,7 +210,17 @@ impl Session {
         // After the walk, deliberately: the VFS then already holds every
         // PHP file the project declares, so interning `celerrate.toml`
         // leaves their identifiers exactly where they were.
-        session.loaded_configuration = crate::configuration::load(root, &mut session.vfs);
+        //
+        // The normalized root, not the raw CLI argument: `discovery.root`
+        // is what `render::relative_path` strips off every other path in
+        // the report, and interning against anything else (an
+        // unnormalized `..`-bearing root, for instance) would print this
+        // one file's path unrelativized next to every PHP file's clean
+        // one. Cloned because `discovery` is borrowed immutably here
+        // while `session.vfs` is borrowed mutably in the same call.
+        let configuration_root = session.discovery.root.clone();
+        session.loaded_configuration =
+            crate::configuration::load(&configuration_root, &mut session.vfs);
         session
     }
 
