@@ -9,6 +9,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `celerrate explain CEL####`: a full-word subcommand printing the
+  embedded page for any registered identifier: why it fires, a failing
+  example, a fixed example, and configuration notes. Lookup is
+  case-insensitive; an unknown identifier is a usage error (exit 2).
+- An embedded explain page for every registered identifier (`CEL0001` to
+  `CEL0042`). The registry field is mandatory (an identifier cannot be
+  allocated without a page), and an executable-page harness runs every
+  failing and fixed example through the full product pipeline. The
+  declared exemption list (with reasons) covers the five identifiers
+  whose trigger cannot be committed as a fixture: an environment
+  condition (`CEL0001`, a file above the 4 GiB engine cap; `CEL0039` and
+  `CEL0040`, permission-based IO errors), an unreachable parser backstop
+  (`CEL0013`), or a symbol removal outside the shipped stubs' 8.1 to 8.5
+  window (`CEL0022`). Every exempt identifier still carries a full page.
 - `celerrate check --fix` and `--fix-suggestions`: a single application
   pass in the total diagnostic order, expressed against original
   snapshot coordinates, applied atomically per file through the VFS;
