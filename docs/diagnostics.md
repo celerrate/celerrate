@@ -31,8 +31,11 @@ in the summary line and do not affect the exit code.
 ## Suppressing diagnostics
 
 To silence a single occurrence, use an inline suppression comment.
-There is no configuration file or baseline yet; inline suppression is
-the only per-site switch in this preview.
+`celerrate.toml` is read and validated (see
+[Configuration](#configuration-cel0043-to-cel0049) below), but its rule
+activation and severity settings are not applied yet, and there is no
+baseline; inline suppression is the only per-site switch in this
+preview.
 
 Celerrate's own directive is `@celerrate-ignore`, written in a line
 comment, a block comment, or a docblock:
@@ -207,3 +210,28 @@ does not emit).
 | --- | --- | --- |
 | CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know, so a typo cannot silently suppress nothing |
 | CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run, or an unknown identifier - that mistake is already CEL0041's) |
+
+## Configuration (CEL0043 to CEL0049)
+
+About `celerrate.toml` itself, read from the project root next to
+`composer.json`. A missing file is not an event: zero configuration is
+the contract. Anything else the file gets wrong is reported, because a
+configuration that half-applies silently is worse than no
+configuration at all. Each of these is span-anchored in
+`celerrate.toml`, is an error, and counts toward the exit code, so a
+typoed configuration fails CI rather than analyzing with a rule set
+nobody asked for. None of them is disableable or remappable: that
+switch is exactly what the file could not be trusted to express.
+CEL0043 drops the whole file and falls back to the default
+configuration; every other one skips the malformed part alone, and the
+well-formed rest of the file still applies.
+
+| Identifier | Severity | Meaning |
+| --- | --- | --- |
+| CEL0043 | error | `celerrate.toml` exists but cannot be read as TOML (a syntax error, an encoding problem, or an IO error); the default configuration is used |
+| CEL0044 | error | a key outside the schema, anywhere in the file |
+| CEL0045 | error | a known key whose value has the wrong type or shape |
+| CEL0046 | error | a `[rules.<name>]` table naming a rule that does not exist |
+| CEL0047 | error | a `[rules.<name>]` key other than `enabled`: no shipped rule takes options yet |
+| CEL0048 | error | a `[severity]` key naming an identifier the registry does not know |
+| CEL0049 | error | a `[severity]` key naming a resilience diagnostic, whose severity is not the user's to move |

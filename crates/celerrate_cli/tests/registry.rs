@@ -19,6 +19,7 @@ use celerrate_diagnostics::{DiagnosticId, REGISTRY};
 /// checks this list against the dependency graph.
 fn producers() -> Vec<(&'static str, &'static [DiagnosticId])> {
     vec![
+        ("celerrate_config", celerrate_config::ALLOCATED_IDENTIFIERS),
         ("celerrate_db", celerrate_db::ALLOCATED_IDENTIFIERS),
         ("celerrate_syntax", celerrate_syntax::ALLOCATED_IDENTIFIERS),
         (

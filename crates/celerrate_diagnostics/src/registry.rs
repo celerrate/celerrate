@@ -293,6 +293,48 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "celerrate_rules",
         &pages::reporting::CEL0042,
     ),
+    registered(
+        "CEL0043",
+        "invalid configuration",
+        "celerrate_config",
+        &pages::configuration::CEL0043,
+    ),
+    registered(
+        "CEL0044",
+        "unknown configuration key",
+        "celerrate_config",
+        &pages::configuration::CEL0044,
+    ),
+    registered(
+        "CEL0045",
+        "invalid configuration value",
+        "celerrate_config",
+        &pages::configuration::CEL0045,
+    ),
+    registered(
+        "CEL0046",
+        "unknown rule",
+        "celerrate_config",
+        &pages::configuration::CEL0046,
+    ),
+    registered(
+        "CEL0047",
+        "unsupported rule option",
+        "celerrate_config",
+        &pages::configuration::CEL0047,
+    ),
+    registered(
+        "CEL0048",
+        "unknown severity identifier",
+        "celerrate_config",
+        &pages::configuration::CEL0048,
+    ),
+    registered(
+        "CEL0049",
+        "resilience severity remap",
+        "celerrate_config",
+        &pages::configuration::CEL0049,
+    ),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its
@@ -338,7 +380,7 @@ mod tests {
             );
             previous = number;
         }
-        assert_eq!(previous, 42, "forty-two identifiers allocated so far");
+        assert_eq!(previous, 49, "forty-nine identifiers allocated so far");
     }
 
     #[test]

@@ -85,6 +85,13 @@ const UNMAPPED_BY_DESIGN: &[&str] = &[
     // themselves and fire on native directives only, so a foreign
     // identifier mapping to either would be meaningless.
     "CEL0041", "CEL0042",
+    // CEL0043 to CEL0049 are anchored in `celerrate.toml` from
+    // `celerrate_config`: they speak about Celerrate's own configuration
+    // file, not about a line of PHP. Both dialects suppress through
+    // inline PHP comments, and a TOML file has none, so no foreign
+    // directive could ever sit on their anchor; neither tool has an
+    // identifier for a competitor's configuration either.
+    "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
 ];
 
 /// Every Celerrate code some `Codes` entry of either dialect names.
