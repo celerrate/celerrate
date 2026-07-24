@@ -1,5 +1,6 @@
 [package]
 name = "celerrate_config"
+description = "The celerrate.toml configuration model, parsing, and validation for the Celerrate toolchain"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

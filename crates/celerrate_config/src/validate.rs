@@ -62,7 +62,9 @@ pub fn validate(
             ));
         }
     }
-    diagnostics.sort();
+    // Deliberately unsorted: every caller concatenates this with the
+    // structural diagnostics and sorts the whole, so sorting here would
+    // be work whose result is immediately discarded.
     diagnostics
 }
 

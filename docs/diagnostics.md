@@ -214,17 +214,12 @@ does not emit).
 ## Configuration (CEL0043 to CEL0049)
 
 About `celerrate.toml` itself, read from the project root next to
-`composer.json`. A missing file is not an event: zero configuration is
-the contract. Anything else the file gets wrong is reported, because a
-configuration that half-applies silently is worse than no
-configuration at all. Each of these is span-anchored in
-`celerrate.toml`, is an error, and counts toward the exit code, so a
-typoed configuration fails CI rather than analyzing with a rule set
-nobody asked for. None of them is disableable or remappable: that
-switch is exactly what the file could not be trusted to express.
-CEL0043 drops the whole file and falls back to the default
-configuration; every other one skips the malformed part alone, and the
-well-formed rest of the file still applies.
+`composer.json`; a missing file is not an event, because zero
+configuration is the contract. Each is span-anchored, is an error,
+counts toward the exit code, and is neither disableable nor remappable.
+The file is validated but not applied yet, so a typoed configuration
+fails CI while that same run analyzes with the default configuration.
+CEL0043 drops the whole file; the others skip only the malformed part.
 
 | Identifier | Severity | Meaning |
 | --- | --- | --- |

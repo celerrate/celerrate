@@ -20,11 +20,17 @@ fn text_range(span: core::ops::Range<usize>) -> TextRange {
     TextRange::new(TextSize::from(start), TextSize::from(end.max(start)))
 }
 
-/// The whole-file fallback anchor for findings the parser gives no
-/// span for: the first byte, or an empty range on an empty file.
-fn fallback_range(text: &str) -> TextRange {
-    let end = u32::from(!text.is_empty());
-    TextRange::new(TextSize::from(0), TextSize::from(end))
+/// The anchor of last resort, for a finding `toml_edit` gives no span
+/// for: a zero-width range at the start of the file.
+///
+/// The width is deliberately zero rather than one byte. These offsets
+/// index the file text when the finding is rendered, and a one-byte
+/// range on a file whose first character is multi-byte would land
+/// inside that character instead of on a boundary. A zero-width range
+/// at offset 0 cannot split anything, and it is the honest width for an
+/// anchor that points at no text in particular.
+fn unspanned_anchor() -> TextRange {
+    TextRange::new(TextSize::from(0), TextSize::from(0))
 }
 
 /// Parses `celerrate.toml` text. Never fails: what does not parse is a
@@ -33,9 +39,7 @@ pub fn parse(file: FileId, text: &str) -> (Configuration, Vec<Diagnostic>) {
     let document = match toml_edit::Document::parse(text) {
         Ok(document) => document,
         Err(error) => {
-            let range = error
-                .span()
-                .map_or_else(|| fallback_range(text), text_range);
+            let range = error.span().map_or_else(unspanned_anchor, text_range);
             let diagnostic = Diagnostic::spanned(
                 INVALID_CONFIGURATION,
                 Severity::Error,
@@ -54,7 +58,9 @@ pub fn parse(file: FileId, text: &str) -> (Configuration, Vec<Diagnostic>) {
         &mut configuration,
         &mut diagnostics,
     );
-    diagnostics.sort();
+    // Deliberately unsorted: every caller concatenates this with the
+    // semantic diagnostics from `validate` and sorts the whole, so
+    // sorting here would be work whose result is immediately discarded.
     (configuration, diagnostics)
 }
 
@@ -135,20 +141,18 @@ fn walk_root(
     configuration: &mut Configuration,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
-    // The whole-file anchor of last resort: used only when `toml_edit`
-    // gives no span for a key or item, which does not happen on the
-    // well-formed spans `Document::parse` produces but is guarded
-    // against regardless. Identical to `fallback_range` on non-empty
-    // text; a non-empty root table implies non-empty text.
-    let unspanned_anchor = TextRange::new(TextSize::from(0), TextSize::from(1));
+    // Used only when `toml_edit` gives no span for a key or item, which
+    // does not happen on the well-formed spans `Document::parse`
+    // produces but is guarded against regardless.
+    let anchor = unspanned_anchor();
     for (key, item) in table.iter() {
-        let range = item_range(table, key, item, unspanned_anchor);
+        let range = item_range(table, key, item, anchor);
         match key {
             "project" => {
                 if let Some(project) =
                     table_or_report(file, item, range, key, "expected a table", diagnostics)
                 {
-                    walk_project(file, project, configuration, diagnostics, unspanned_anchor);
+                    walk_project(file, project, configuration, diagnostics, anchor);
                 }
             }
             "rules" => {
@@ -156,28 +160,24 @@ fn walk_root(
                 if let Some(rules) =
                     table_or_report(file, item, range, key, expectation, diagnostics)
                 {
-                    walk_rules(file, rules, configuration, diagnostics, unspanned_anchor);
+                    walk_rules(file, rules, configuration, diagnostics, anchor);
                 }
             }
             "severity" => {
                 if let Some(severity) =
                     table_or_report(file, item, range, key, "expected a table", diagnostics)
                 {
-                    walk_severity(file, severity, configuration, diagnostics, unspanned_anchor);
+                    walk_severity(file, severity, configuration, diagnostics, anchor);
                 }
             }
             "plugins" => {
                 if let Some(plugins) =
                     table_or_report(file, item, range, key, "expected a table", diagnostics)
                 {
-                    walk_plugins(file, plugins, diagnostics, unspanned_anchor);
+                    walk_plugins(file, plugins, diagnostics, anchor);
                 }
             }
-            _ => diagnostics.push(unknown_key(
-                file,
-                key_range(table, key, unspanned_anchor),
-                key,
-            )),
+            _ => diagnostics.push(unknown_key(file, key_range(table, key, anchor), key)),
         }
     }
 }
