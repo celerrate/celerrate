@@ -66,10 +66,12 @@ Amendment history:
     (6) natural fixes wired through `--fix-suggestions` — the part 6 suite;
     (7) warm/cold equivalence extended to the `Reporting` phase — the
     part 5 harness; (8) the mixed-rate baseline unchanged — `cargo xtask
-    mixed-rate`. All nine mechanical gates (the eight above plus `cargo
-    test --workspace`, `cargo clippy --workspace --all-targets -D
-    warnings`, `cargo fmt --all`, `cargo deny check`, and `cargo xtask
-    dependency-shape`) were green at closure. No version tagged.
+    mixed-rate`. All eight closure gates were verified green at closure,
+    together with the full mechanical suite that guards every change:
+    `cargo test --workspace`, `cargo clippy --workspace --all-targets -D
+    warnings`, `cargo fmt --all`, `cargo deny check`, and the `cargo
+    xtask` gates (`dependency-shape`, `emission-scan`, `corpus`,
+    `mixed-rate`). No version tagged.
 
 Inputs this design binds to:
 
