@@ -150,8 +150,9 @@ A configuration diagnostic from `celerrate_config`. `[rules.<name>]`
 validates the name now; a later version applies it to activate the
 rule, while per-identifier severity lives under `[severity]`. Rule
 names are the stable kebab-case names published in the rule-name table
-of the identifier reference:
-https://github.com/celerrate/celerrate/blob/main/docs/diagnostics.md",
+of the identifier reference (`docs/diagnostics.md`), in the project
+repository at the tag matching this binary:
+https://github.com/celerrate/celerrate",
 };
 
 pub(crate) const CEL0047: ExplainPage = ExplainPage {
