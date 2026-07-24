@@ -9,6 +9,7 @@
 pub mod analysis;
 pub mod arguments;
 pub mod cache;
+pub mod configuration;
 pub mod database;
 mod explain;
 pub mod fix;
@@ -122,11 +123,24 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
             session.absorb_outcome(&outcome);
-            // Presentation only: the persisted verdicts and the exit
-            // code both read `outcome`, never the enriched copy.
-            let presented = analysis::AnalysisOutcome {
+            // Presentation only: the persisted verdicts read `outcome`,
+            // never the enriched copy.
+            let mut presented = analysis::AnalysisOutcome {
                 diagnostics: suggest::enrich(&session, &outcome.diagnostics),
                 panicked: outcome.panicked.clone(),
+            };
+            // Configuration diagnostics are presentation and exit-code
+            // input, never cache input: `outcome` stays untouched, so
+            // the persisted verdicts cannot absorb them.
+            let configuration_diagnostics = match &session.loaded_configuration {
+                Some(loaded) => {
+                    presented
+                        .diagnostics
+                        .extend(loaded.diagnostics.iter().cloned());
+                    presented.diagnostics.sort();
+                    loaded.diagnostics.len()
+                }
+                None => 0,
             };
             let failures = match render::render_report(output, &session, &presented, color) {
                 Ok(failures) => failures,
@@ -145,7 +159,10 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 return Outcome::InternalError;
             }
             session.statistics.report();
-            Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
+            Outcome::of(
+                outcome.diagnostics.len() + configuration_diagnostics,
+                session.internal_errors.len(),
+            )
         }
         Command::Explain { identifier } => {
             let normalized = identifier.to_ascii_uppercase();

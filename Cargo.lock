@@ -156,6 +156,7 @@ name = "celerrate_cli"
 version = "0.0.3"
 dependencies = [
  "blake3",
+ "celerrate_config",
  "celerrate_db",
  "celerrate_diagnostics",
  "celerrate_edit",

@@ -16,6 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 blake3 = { workspace = true }
+celerrate_config = { path = "../celerrate_config" }
 celerrate_db = { path = "../celerrate_db" }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_edit = { path = "../celerrate_edit" }

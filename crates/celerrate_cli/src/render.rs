@@ -64,6 +64,15 @@ impl SourceAccess for SessionSources<'_> {
     }
 
     fn text(&self, file: FileId) -> Option<&str> {
+        // `celerrate.toml` is interned in the VFS but never entered the
+        // analyzed set, so the decode query below knows nothing about
+        // it: its text travels on the session instead, and this is the
+        // one place a configuration diagnostic can be excerpted from.
+        if let Some(loaded) = &self.session.loaded_configuration
+            && loaded.file == file
+        {
+            return Some(&loaded.text);
+        }
         let source = self.session.sources.get(&file)?;
         celerrate_db::source_text(&self.session.database, *source)
             .as_ref()

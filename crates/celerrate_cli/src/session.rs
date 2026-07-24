@@ -117,6 +117,11 @@ pub struct Session {
     /// call this session makes: load and persist must key packs on the
     /// same value, never recompute it independently.
     pub plugin_set_digest: [u8; 32],
+    /// The loaded `celerrate.toml`, `None` when the project has none.
+    /// Part 1 reports its diagnostics and counts them toward the exit
+    /// code; part 2 consumes its content. `--watch` does not reload or
+    /// report it yet (part 2, with the behavioral wiring).
+    pub loaded_configuration: Option<crate::configuration::LoadedConfiguration>,
 }
 
 impl Session {
@@ -198,9 +203,14 @@ impl Session {
             statistics,
             plugins,
             plugin_set_digest,
+            loaded_configuration: None,
         };
         let walk = enumerate_php_files(&session.discovery.walk_roots());
         session.load(&walk);
+        // After the walk, deliberately: the VFS then already holds every
+        // PHP file the project declares, so interning `celerrate.toml`
+        // leaves their identifiers exactly where they were.
+        session.loaded_configuration = crate::configuration::load(root, &mut session.vfs);
         session
     }
 
