@@ -121,8 +121,10 @@ the exit code** (exit 1). Stance: a typoed configuration silently
 half-applying is a #58-class hole; CI must fail loudly rather than analyze
 with the wrong configuration. Analysis still continues with the valid
 parts (resilience: never crash, never stop). New identifiers are
-allocated from CEL0043 onward, owner `celerrate_config`, each with an
-explain page and a fixture; the exact allocation happens at plan time
+allocated from CEL0043 onward, each with an explain page and a fixture:
+the configuration diagnostics are owned by `celerrate_config`, and the
+baseline obsolescence notice (section 4) by `celerrate_cli`, where the
+baseline mechanics live. The exact allocation happens at plan time
 through the registry ledger.
 
 **Force-activation gets built here, with its first consumer.** Enabling a
