@@ -60,7 +60,7 @@ pub fn parse(file: FileId, text: &str) -> (Configuration, Vec<Diagnostic>) {
 
 /// The span of `key` in `table`, with the whole-table fallback that
 /// keeps every diagnostic anchored even if `toml_edit` yields no span.
-fn key_range(table: &toml_edit::Table, key: &str, fallback: TextRange) -> TextRange {
+fn key_range(table: &dyn toml_edit::TableLike, key: &str, fallback: TextRange) -> TextRange {
     table
         .key(key)
         .and_then(toml_edit::Key::span)
@@ -69,7 +69,7 @@ fn key_range(table: &toml_edit::Table, key: &str, fallback: TextRange) -> TextRa
 
 /// The span of a value item, falling back to its key's span.
 fn item_range(
-    table: &toml_edit::Table,
+    table: &dyn toml_edit::TableLike,
     key: &str,
     item: &toml_edit::Item,
     fallback: TextRange,
@@ -105,12 +105,33 @@ fn version_point(text: &str) -> Option<(u8, u8)> {
     Some((major.parse().ok()?, minor.parse().ok()?))
 }
 
+/// The table `path` holds, in either spelling: `[path]` on its own line
+/// or `path = { ... }` inline. `as_table_like` is what makes the two
+/// equivalent; `as_table` matches only the first and would reject TOML
+/// the user is entitled to write. `None` means the value is genuinely
+/// not a table, which this reports as CEL0045 before returning, so the
+/// cast and its diagnostic live in exactly one place.
+fn table_or_report<'item>(
+    file: FileId,
+    item: &'item toml_edit::Item,
+    range: TextRange,
+    path: &str,
+    expectation: &str,
+    diagnostics: &mut Vec<Diagnostic>,
+) -> Option<&'item dyn toml_edit::TableLike> {
+    let nested = item.as_table_like();
+    if nested.is_none() {
+        diagnostics.push(invalid_value(file, range, path, expectation));
+    }
+    nested
+}
+
 /// The structural walk of the root table: `[project]`, the
 /// `[rules.<name>]` tables, `[severity]`, and `[plugins]`. Anything else
 /// is an unknown root key.
 fn walk_root(
     file: FileId,
-    table: &toml_edit::Table,
+    table: &dyn toml_edit::TableLike,
     configuration: &mut Configuration,
     diagnostics: &mut Vec<Diagnostic>,
 ) {
@@ -121,60 +142,61 @@ fn walk_root(
     // text; a non-empty root table implies non-empty text.
     let unspanned_anchor = TextRange::new(TextSize::from(0), TextSize::from(1));
     for (key, item) in table.iter() {
-        let range = key_range(table, key, unspanned_anchor);
+        let range = item_range(table, key, item, unspanned_anchor);
         match key {
-            "project" => match item.as_table() {
-                Some(project) => {
+            "project" => {
+                if let Some(project) =
+                    table_or_report(file, item, range, key, "expected a table", diagnostics)
+                {
                     walk_project(file, project, configuration, diagnostics, unspanned_anchor);
                 }
-                None => diagnostics.push(invalid_value(
-                    file,
-                    item_range(table, key, item, unspanned_anchor),
-                    key,
-                    "expected a table",
-                )),
-            },
-            "rules" => match item.as_table() {
-                Some(rules) => {
+            }
+            "rules" => {
+                let expectation = "expected a table of [rules.<name>] tables";
+                if let Some(rules) =
+                    table_or_report(file, item, range, key, expectation, diagnostics)
+                {
                     walk_rules(file, rules, configuration, diagnostics, unspanned_anchor);
                 }
-                None => diagnostics.push(invalid_value(
-                    file,
-                    item_range(table, key, item, unspanned_anchor),
-                    key,
-                    "expected a table of [rules.<name>] tables",
-                )),
-            },
-            "severity" => match item.as_table() {
-                Some(severity) => {
+            }
+            "severity" => {
+                if let Some(severity) =
+                    table_or_report(file, item, range, key, "expected a table", diagnostics)
+                {
                     walk_severity(file, severity, configuration, diagnostics, unspanned_anchor);
                 }
-                None => diagnostics.push(invalid_value(
-                    file,
-                    item_range(table, key, item, unspanned_anchor),
-                    key,
-                    "expected a table",
-                )),
-            },
-            "plugins" => match item.as_table() {
-                Some(plugins) => {
-                    for (plugin_key, _) in plugins.iter() {
-                        diagnostics.push(unknown_key(
-                            file,
-                            key_range(plugins, plugin_key, unspanned_anchor),
-                            &format!("plugins.{plugin_key}"),
-                        ));
-                    }
+            }
+            "plugins" => {
+                if let Some(plugins) =
+                    table_or_report(file, item, range, key, "expected a table", diagnostics)
+                {
+                    walk_plugins(file, plugins, diagnostics, unspanned_anchor);
                 }
-                None => diagnostics.push(invalid_value(
-                    file,
-                    item_range(table, key, item, unspanned_anchor),
-                    key,
-                    "expected a table",
-                )),
-            },
-            _ => diagnostics.push(unknown_key(file, range, key)),
+            }
+            _ => diagnostics.push(unknown_key(
+                file,
+                key_range(table, key, unspanned_anchor),
+                key,
+            )),
         }
+    }
+}
+
+/// The `[plugins]` table: no plugin can be loaded yet, so every key it
+/// holds is an unknown configuration key. The table itself is accepted
+/// so that the diagnostic names the plugin, not the section.
+fn walk_plugins(
+    file: FileId,
+    plugins: &dyn toml_edit::TableLike,
+    diagnostics: &mut Vec<Diagnostic>,
+    fallback: TextRange,
+) {
+    for (key, _) in plugins.iter() {
+        diagnostics.push(unknown_key(
+            file,
+            key_range(plugins, key, fallback),
+            &format!("plugins.{key}"),
+        ));
     }
 }
 
@@ -183,20 +205,21 @@ fn walk_root(
 /// options yet.
 fn walk_rules(
     file: FileId,
-    rules: &toml_edit::Table,
+    rules: &dyn toml_edit::TableLike,
     configuration: &mut Configuration,
     diagnostics: &mut Vec<Diagnostic>,
     fallback: TextRange,
 ) {
     for (name, item) in rules.iter() {
         let name_range = key_range(rules, name, fallback);
-        let Some(rule) = item.as_table() else {
-            diagnostics.push(invalid_value(
-                file,
-                item_range(rules, name, item, fallback),
-                &format!("rules.{name}"),
-                &format!("expected a table like [rules.{name}]"),
-            ));
+        let Some(rule) = table_or_report(
+            file,
+            item,
+            item_range(rules, name, item, fallback),
+            &format!("rules.{name}"),
+            &format!("expected a table like [rules.{name}]"),
+            diagnostics,
+        ) else {
             continue;
         };
         let mut enabled = None;
@@ -242,7 +265,7 @@ fn walk_rules(
 /// left to `validate`.
 fn walk_severity(
     file: FileId,
-    severity: &toml_edit::Table,
+    severity: &dyn toml_edit::TableLike,
     configuration: &mut Configuration,
     diagnostics: &mut Vec<Diagnostic>,
     fallback: TextRange,
@@ -282,7 +305,7 @@ fn walk_severity(
 
 fn walk_project(
     file: FileId,
-    project: &toml_edit::Table,
+    project: &dyn toml_edit::TableLike,
     configuration: &mut Configuration,
     diagnostics: &mut Vec<Diagnostic>,
     fallback: TextRange,
@@ -646,6 +669,186 @@ mod tests {
         assert_eq!(
             diagnostic.message,
             "invalid value for `severity.CEL0035`: expected \"error\" or \"warning\"",
+        );
+    }
+
+    /// The same `Configuration` with every span collapsed to the same
+    /// range. Two spellings of the same configuration hold the same
+    /// values at different byte offsets; this compares everything but
+    /// the offsets, which is what "the same configuration" means here.
+    fn without_spans(configuration: crate::Configuration) -> crate::Configuration {
+        use celerrate_source::{TextRange, TextSize};
+
+        let zero = TextRange::new(TextSize::from(0), TextSize::from(0));
+        fn flatten<T>(
+            spanned: crate::model::Spanned<T>,
+            zero: celerrate_source::TextRange,
+        ) -> crate::model::Spanned<T> {
+            crate::model::Spanned {
+                value: spanned.value,
+                range: zero,
+            }
+        }
+        crate::Configuration {
+            php: configuration.php.map(|php| flatten(php, zero)),
+            include: configuration
+                .include
+                .into_iter()
+                .map(|entry| flatten(entry, zero))
+                .collect(),
+            exclude: configuration
+                .exclude
+                .into_iter()
+                .map(|entry| flatten(entry, zero))
+                .collect(),
+            rules: configuration
+                .rules
+                .into_iter()
+                .map(|rule| crate::model::RuleEntry {
+                    name: flatten(rule.name, zero),
+                    enabled: rule.enabled.map(|enabled| flatten(enabled, zero)),
+                })
+                .collect(),
+            severity: configuration
+                .severity
+                .into_iter()
+                .map(|entry| crate::model::SeverityEntry {
+                    identifier: flatten(entry.identifier, zero),
+                    severity: entry.severity.map(|severity| flatten(severity, zero)),
+                })
+                .collect(),
+        }
+    }
+
+    /// Both spellings parse to the same configuration and say nothing.
+    fn assert_same_configuration(header: &str, inline: &str) {
+        let (from_header, header_diagnostics) = parse(file(), header);
+        let (from_inline, inline_diagnostics) = parse(file(), inline);
+        assert!(
+            header_diagnostics.is_empty(),
+            "the header spelling is silent: {header_diagnostics:?}",
+        );
+        assert!(
+            inline_diagnostics.is_empty(),
+            "the inline spelling is silent: {inline_diagnostics:?}",
+        );
+        assert_eq!(
+            without_spans(from_inline),
+            without_spans(from_header),
+            "the inline spelling parses to the same configuration",
+        );
+    }
+
+    #[test]
+    fn an_inline_project_table_parses_like_the_header_spelling() {
+        assert_same_configuration(
+            "[project]\nphp = \"8.2\"\ninclude = [\"src\"]\n",
+            "project = { php = \"8.2\", include = [\"src\"] }\n",
+        );
+    }
+
+    #[test]
+    fn an_inline_rule_entry_parses_like_the_header_spelling() {
+        let text = "[rules]\nnull-dereference = { enabled = false }\n";
+        assert_same_configuration("[rules.null-dereference]\nenabled = false\n", text);
+        let (configuration, diagnostics) = parse(file(), text);
+        assert!(diagnostics.is_empty(), "{diagnostics:?}");
+        assert_eq!(configuration.rules.len(), 1);
+        let rule = configuration.rules.first().unwrap();
+        assert_eq!(rule.name.value, "null-dereference");
+        assert_eq!(rule.enabled.as_ref().map(|flag| flag.value), Some(false));
+    }
+
+    #[test]
+    fn a_fully_inline_rules_table_parses_like_the_header_spelling() {
+        assert_same_configuration(
+            "[rules.null-dereference]\nenabled = false\n\n[rules.unknown-members]\nenabled = false\n",
+            "rules = { null-dereference = { enabled = false }, unknown-members = { enabled = false } }\n",
+        );
+    }
+
+    #[test]
+    fn an_inline_severity_table_parses_like_the_header_spelling() {
+        assert_same_configuration(
+            "[severity]\n\"CEL0034\" = \"warning\"\n",
+            "severity = { \"CEL0034\" = \"warning\" }\n",
+        );
+    }
+
+    /// `Key::span` must survive inside an inline table: the CEL0047
+    /// anchor comes from `TableLike::key`, and a silent loss of the span
+    /// would degrade every inline diagnostic to the whole-file anchor.
+    #[test]
+    fn a_diagnostic_from_inside_an_inline_table_keeps_its_span() {
+        let text = "[rules]\nnull-dereference = { max = 3 }\n";
+        let (_, diagnostics) = parse(file(), text);
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, UNSUPPORTED_RULE_OPTION);
+        let (_, range) = diagnostic.span().expect("inline diagnostics are anchored");
+        let start = usize::from(range.start());
+        let end = usize::from(range.end());
+        assert_eq!(
+            &text[start..end],
+            "max",
+            "the span points at the key inside the inline table",
+        );
+    }
+
+    /// The value span inside an inline table, which comes from
+    /// `Item::span` rather than `Key::span`.
+    #[test]
+    fn a_value_diagnostic_from_inside_an_inline_table_keeps_its_span() {
+        let text = "severity = { \"CEL0035\" = \"info\" }\n";
+        let (_, diagnostics) = parse(file(), text);
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        let (_, range) = diagnostic.span().expect("inline diagnostics are anchored");
+        let start = usize::from(range.start());
+        let end = usize::from(range.end());
+        assert_eq!(&text[start..end], "\"info\"");
+    }
+
+    #[test]
+    fn a_project_value_that_is_not_a_table_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "project = 1\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `project`: expected a table",
+        );
+    }
+
+    #[test]
+    fn a_rules_value_that_is_not_a_table_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "rules = \"oops\"\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `rules`: expected a table of [rules.<name>] tables",
+        );
+    }
+
+    #[test]
+    fn a_severity_value_that_is_not_a_table_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "severity = 5\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `severity`: expected a table",
+        );
+    }
+
+    #[test]
+    fn a_plugins_value_that_is_not_a_table_reports_cel0045() {
+        let (_, diagnostics) = parse(file(), "plugins = [1]\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `plugins`: expected a table",
         );
     }
 
