@@ -10,9 +10,11 @@
 
 mod identifiers;
 mod model;
+mod parse;
 
 pub use identifiers::{
     INVALID_CONFIGURATION, INVALID_CONFIGURATION_VALUE, RESILIENCE_SEVERITY_REMAP,
     UNKNOWN_CONFIGURATION_KEY, UNKNOWN_RULE, UNKNOWN_SEVERITY_IDENTIFIER, UNSUPPORTED_RULE_OPTION,
 };
 pub use model::{Configuration, RuleEntry, SeverityEntry, Spanned};
+pub use parse::parse;
