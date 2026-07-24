@@ -38,7 +38,7 @@ function example(): void {}
     configuration: "\
 A configuration diagnostic from `celerrate_config`, not a rule: it is
 neither disableable nor remappable, and it affects the exit code so CI
-never analyzes with a configuration it could not read.",
+never reports success after failing to read its configuration.",
 };
 
 pub(crate) const CEL0044: ExplainPage = ExplainPage {
@@ -111,8 +111,9 @@ function example(): void {}
     configuration: "\
 A configuration diagnostic from `celerrate_config`. In `celerrate.toml`
 the `php` key is a version point (`\"8.2\"`), not a Composer-style
-constraint: the constraint belongs to `composer.json`, and the
-configuration key collapses the detected range to one version.",
+constraint: the constraint belongs to `composer.json`. The key is
+validated now; a later version applies it to collapse the detected
+range to one version.",
 };
 
 pub(crate) const CEL0046: ExplainPage = ExplainPage {
@@ -146,8 +147,9 @@ function example(): void {}
 ",
     configuration: "\
 A configuration diagnostic from `celerrate_config`. Rule names are the
-stable kebab-case names of `celerrate explain`'s owning-rule lines;
-activation is per rule, while per-identifier severity lives under
+stable kebab-case names published in `docs/diagnostics.md`'s rule-name
+table. `[rules.<name>]` validates the name now; a later version applies
+it to activate the rule, while per-identifier severity lives under
 `[severity]`.",
 };
 

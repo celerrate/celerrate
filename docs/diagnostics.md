@@ -235,3 +235,19 @@ well-formed rest of the file still applies.
 | CEL0047 | error | a `[rules.<name>]` key other than `enabled`: no shipped rule takes options yet |
 | CEL0048 | error | a `[severity]` key naming an identifier the registry does not know |
 | CEL0049 | error | a `[severity]` key naming a resilience diagnostic, whose severity is not the user's to move |
+
+### Rule names
+
+These are the names `[rules.<name>]` accepts in `celerrate.toml`. A
+`[rules.<name>]` table naming anything else is CEL0046.
+
+| Rule name |
+| --- |
+| argument-checks |
+| null-dereference |
+| symbol-version-gating |
+| syntax-version-gating |
+| unknown-members |
+| unknown-suppression-identifier |
+| unknown-symbols |
+| unused-suppression |

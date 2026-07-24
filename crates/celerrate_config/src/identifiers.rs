@@ -35,7 +35,7 @@ pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] = &[
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
+    #![allow(clippy::indexing_slicing)]
 
     use std::collections::BTreeSet;
 
