@@ -4,7 +4,9 @@ Every diagnostic Celerrate emits carries a `CEL####` identifier.
 Identifiers are permanent: once published in a release an identifier
 keeps its meaning forever, a retired one is never reused, and a new
 diagnostic takes the next free number. This page is the identifier
-reference until the rule framework ships `celerrate explain` pages.
+reference. Every identifier below also ships an embedded page:
+`celerrate explain CEL0030` prints why it fires, a failing and a fixed
+example, and its configuration notes.
 
 A reported diagnostic looks like:
 

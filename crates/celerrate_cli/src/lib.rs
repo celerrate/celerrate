@@ -10,6 +10,7 @@ pub mod analysis;
 pub mod arguments;
 pub mod cache;
 pub mod database;
+mod explain;
 pub mod fix;
 pub mod ground_truth;
 pub mod mixed_rate;
@@ -145,6 +146,31 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             }
             session.statistics.report();
             Outcome::of(outcome.diagnostics.len(), session.internal_errors.len())
+        }
+        Command::Explain { identifier } => {
+            let normalized = identifier.to_ascii_uppercase();
+            match celerrate_diagnostics::REGISTRY
+                .iter()
+                .find(|entry| entry.id.as_str() == normalized)
+            {
+                Some(entry) => {
+                    if explain::render_page(entry, output).is_err() {
+                        return Outcome::InternalError;
+                    }
+                    Outcome::Clean
+                }
+                None => {
+                    let _ = writeln!(
+                        output,
+                        "error: unknown diagnostic identifier `{identifier}`",
+                    );
+                    let _ = writeln!(
+                        output,
+                        "identifiers look like CEL0030; a report names the ones it uses",
+                    );
+                    Outcome::UsageError
+                }
+            }
         }
         Command::GroundTruth { path } => {
             if let Some(message) = unusable_root(&path) {

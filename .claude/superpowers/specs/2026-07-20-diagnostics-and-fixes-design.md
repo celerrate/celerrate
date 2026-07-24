@@ -1,7 +1,7 @@
 # Celerrate: Diagnostics and Fixes (Sub-project 4) Design
 
 Date: 2026-07-20
-Status: Approved (brainstorming output; plans follow)
+Status: Closed (2026-07-23; all eight parts landed, closure gates verified; no release — the next public event is v0.1, sub-project 5)
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 6
 and 11)
 
@@ -26,6 +26,52 @@ Amendment history:
   facade change; `TextEdit` moves to `celerrate_source`; project-anchored
   findings keep the notice contract (exit-code-neutral); plugin identifier
   allocation is explicitly deferred with its shape pinned.
+- 2026-07-23 — sub-project closed after part 8 (`celerrate explain` and
+  closure). Recorded facts:
+  - Part 4 (the autofix engine) landed without a committed plan document
+    (PR #95); every other part carries its plan under
+    `.claude/superpowers/plans/`.
+  - The executable-example exemption list is final at five identifiers,
+    each with a mandatory reason in
+    `celerrate_diagnostics::EXECUTABLE_EXAMPLE_EXEMPTIONS`: `CEL0001` (a
+    file above the 4 GiB decoded-size engine cap cannot be committed as a
+    fixture), `CEL0013` (the parser's no-progress backstop is a defensive
+    guard no grammar-admitted source reaches; the reachability probe found
+    only white-box no-bump loops, never a source trigger), `CEL0022` (the
+    shipped stub blob carries no symbol whose removal falls inside the
+    supported 8.1 to 8.5 window), and `CEL0039`/`CEL0040` (permission-based
+    IO errors that cannot be committed as a fixture and do not reproduce
+    under root or on Windows CI). Every exempt identifier still carries a
+    full page; only the harness execution is waived.
+  - The spec's forced-active provision shipped as a guard test, not
+    machinery: no nursery rule exists, so building force-activation would
+    be untested code. `crates/celerrate_cli/tests/explain_pages.rs` carries
+    `every_core_rule_is_default_tier_so_the_default_active_set_covers_all_pages`,
+    which fails the moment the first nursery rule lands and names the
+    force-activation work then required. The pages-cannot-lie property
+    survives: a nursery rule cannot land without tripping the guard.
+  - The eight closure gates of section 1, and where each is enforced:
+    (1) behavior preservation per migrated family —
+    `crates/celerrate_cli/tests/seeded_defects.rs` and the byte-identical
+    corpus snapshot (`cargo xtask corpus`, `0 notices, 0 diagnostics`);
+    (2) an explain page for every identifier with the declared exemption
+    class — the mandatory `RegisteredDiagnostic.explain` field, the
+    `every_identifier_has_a_page_with_all_four_sections` content gate, the
+    executable harness, and `EXECUTABLE_EXAMPLE_EXEMPTIONS` with reasons;
+    (3) no check family outside the framework —
+    `crates/celerrate_cli/tests/registry.rs` and `cargo xtask
+    emission-scan`; (4) correspondence-table triage — the part 5 triage
+    suite in `celerrate_phpdoc_bridge`; (5) the rendering snapshot suite
+    including the fault-injected fallback — the part 7 snapshots;
+    (6) natural fixes wired through `--fix-suggestions` — the part 6 suite;
+    (7) warm/cold equivalence extended to the `Reporting` phase — the
+    part 5 harness; (8) the mixed-rate baseline unchanged — `cargo xtask
+    mixed-rate`. All eight closure gates were verified green at closure,
+    together with the full mechanical suite that guards every change:
+    `cargo test --workspace`, `cargo clippy --workspace --all-targets -D
+    warnings`, `cargo fmt --all`, `cargo deny check`, and the `cargo
+    xtask` gates (`dependency-shape`, `emission-scan`, `corpus`,
+    `mixed-rate`). No version tagged.
 
 Inputs this design binds to:
 

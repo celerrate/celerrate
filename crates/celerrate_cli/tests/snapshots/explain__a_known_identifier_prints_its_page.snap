@@ -1,0 +1,31 @@
+---
+source: crates/celerrate_cli/tests/explain.rs
+expression: output
+---
+CEL0018: unknown class
+
+The referenced class does not exist under any name the project can
+resolve: it is neither declared in the project, nor autoloadable
+through Composer, nor part of the PHP distribution for the supported
+version range. At runtime the reference throws an `Error` (class not
+found), so the code path cannot execute at all.
+
+failing example:
+
+    <?php
+    namespace App;
+
+    function f(): void { $x = new MissingService(); }
+
+fixed example:
+
+    <?php
+    namespace App;
+
+    class MissingService {}
+
+    function f(): void { $x = new MissingService(); }
+
+Reported by the `unknown-symbols` rule (correctness group, default
+tier) as an error. Suppress one occurrence with
+`// @celerrate-ignore CEL0018 (reason)` on or above the line.

@@ -56,6 +56,16 @@ for more information, run `celerrate explain CEL0021`
 for more information, run `celerrate explain CEL0034`
 ```
 
+Every identifier ships its page in the binary:
+
+```console
+$ celerrate explain CEL0018
+CEL0018: unknown class
+
+The referenced class does not exist under any name the project can
+resolve: …
+```
+
 ## Performance
 
 <picture>

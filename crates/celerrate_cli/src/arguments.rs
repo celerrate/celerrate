@@ -36,6 +36,13 @@ pub enum Command {
         fix_suggestions: bool,
     },
 
+    /// Explain a diagnostic identifier: why it fires, a failing and a
+    /// fixed example, and its configuration notes.
+    Explain {
+        /// The identifier to explain, for example CEL0030.
+        identifier: String,
+    },
+
     /// Internal: the annotation ground-truth records (design section
     /// 10, harness 1). Consumed by `cargo xtask ground-truth`; hidden
     /// from help — the product surface is plan 9c's.
@@ -120,6 +127,15 @@ mod tests {
     #[test]
     fn a_bad_flag_is_a_usage_error_not_a_panic() {
         assert!(Arguments::try_parse_from(["celerrate", "check", "--nope"]).is_err());
+    }
+
+    #[test]
+    fn explain_takes_an_identifier() {
+        let arguments = Arguments::try_parse_from(["celerrate", "explain", "CEL0030"]).unwrap();
+        match arguments.command {
+            Command::Explain { identifier } => assert_eq!(identifier, "CEL0030"),
+            other => panic!("expected explain, parsed {other:?}"),
+        }
     }
 
     #[test]
