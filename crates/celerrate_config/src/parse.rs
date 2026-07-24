@@ -179,6 +179,33 @@ fn walk_project(
     }
 }
 
+/// Whether `path` looks like an absolute path, judged from the string's
+/// own syntax rather than the host platform's rules.
+///
+/// This deliberately does not delegate to `std::path::Path::is_absolute`:
+/// that method's semantics are platform-dependent, and `celerrate.toml`
+/// is a file users commit to a repository that may be analysed on any
+/// of Linux, macOS, or Windows. On Unix, `Path::new("/etc").is_absolute()`
+/// is `true` but `Path::new("C:/Windows").is_absolute()` is `false`; on
+/// Windows it is the other way around (`is_absolute` there requires a
+/// drive or UNC prefix, so a bare `"/etc"` does not count). Delegating
+/// would make the same committed configuration produce different
+/// diagnostics depending on which OS runs the tool. This predicate
+/// instead treats a leading `/` or `\`, or a Windows drive prefix
+/// (a single ASCII letter, `:`, then nothing or a slash), as absolute on
+/// every platform. Do not "simplify" this back to `Path::is_absolute`.
+fn looks_absolute(path: &str) -> bool {
+    let mut chars = path.chars();
+    match chars.next() {
+        Some('/' | '\\') => true,
+        Some(letter) if letter.is_ascii_alphabetic() => match chars.next() {
+            Some(':') => matches!(chars.next(), None | Some('/' | '\\')),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 /// An `include`/`exclude` array: non-empty relative path strings. A
 /// malformed entry is reported and skipped; the well-formed ones stay.
 fn path_array(
@@ -201,7 +228,7 @@ fn path_array(
     for value in array.iter() {
         let entry_range = value.span().map_or(value_range, text_range);
         match value.as_str() {
-            Some(path) if !path.is_empty() && !std::path::Path::new(path).is_absolute() => {
+            Some(path) if !path.is_empty() && !looks_absolute(path) => {
                 entries.push(Spanned {
                     value: path.to_owned(),
                     range: entry_range,
@@ -335,5 +362,61 @@ mod tests {
                 "invalid value for `include`: expected a non-empty relative path",
             );
         }
+    }
+
+    #[test]
+    fn a_windows_drive_qualified_include_entry_reports_cel0045() {
+        let (configuration, diagnostics) = parse(file(), "[project]\ninclude = [\"C:/Windows\"]\n");
+        assert!(configuration.include.is_empty());
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `include`: expected a non-empty relative path",
+        );
+    }
+
+    #[test]
+    fn a_backslash_rooted_include_entry_reports_cel0045() {
+        let (configuration, diagnostics) =
+            parse(file(), "[project]\ninclude = [\"\\\\Windows\"]\n");
+        assert!(configuration.include.is_empty());
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `include`: expected a non-empty relative path",
+        );
+    }
+
+    #[test]
+    fn an_ordinary_relative_include_entry_is_still_accepted() {
+        let (configuration, diagnostics) =
+            parse(file(), "[project]\ninclude = [\"src/Generated\"]\n");
+        assert!(diagnostics.is_empty());
+        let include: Vec<&str> = configuration
+            .include
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect();
+        assert_eq!(include, ["src/Generated"]);
+    }
+
+    #[test]
+    fn a_mixed_include_array_skips_only_the_malformed_entry() {
+        let (configuration, diagnostics) =
+            parse(file(), "[project]\ninclude = [\"/etc\", \"src\"]\n");
+        let diagnostic = single(&diagnostics);
+        assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
+        assert_eq!(
+            diagnostic.message,
+            "invalid value for `include`: expected a non-empty relative path",
+        );
+        let include: Vec<&str> = configuration
+            .include
+            .iter()
+            .map(|entry| entry.value.as_str())
+            .collect();
+        assert_eq!(include, ["src"]);
     }
 }
