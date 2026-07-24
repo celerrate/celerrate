@@ -255,24 +255,28 @@ fn walk_severity(
             Some("warning") => Some(Severity::Warning),
             _ => None,
         };
-        match parsed {
-            Some(value) => configuration.severity.push(SeverityEntry {
-                identifier: Spanned {
-                    value: identifier.to_owned(),
-                    range: identifier_range,
-                },
-                severity: Spanned {
-                    value,
-                    range: value_range,
-                },
+        let severity = match parsed {
+            Some(value) => Some(Spanned {
+                value,
+                range: value_range,
             }),
-            None => diagnostics.push(invalid_value(
-                file,
-                value_range,
-                &format!("severity.{identifier}"),
-                "expected \"error\" or \"warning\"",
-            )),
-        }
+            None => {
+                diagnostics.push(invalid_value(
+                    file,
+                    value_range,
+                    &format!("severity.{identifier}"),
+                    "expected \"error\" or \"warning\"",
+                ));
+                None
+            }
+        };
+        configuration.severity.push(SeverityEntry {
+            identifier: Spanned {
+                value: identifier.to_owned(),
+                range: identifier_range,
+            },
+            severity,
+        });
     }
 }
 
@@ -627,13 +631,16 @@ mod tests {
     fn severity_entries_parse_and_reject_other_words() {
         let text = "[severity]\n\"CEL0034\" = \"warning\"\n\"CEL0035\" = \"info\"\n";
         let (configuration, diagnostics) = parse(file(), text);
-        assert_eq!(configuration.severity.len(), 1);
-        let entry = configuration.severity.first().unwrap();
-        assert_eq!(entry.identifier.value, "CEL0034");
+        assert_eq!(configuration.severity.len(), 2);
+        let valid_entry = &configuration.severity[0];
+        assert_eq!(valid_entry.identifier.value, "CEL0034");
         assert_eq!(
-            entry.severity.value,
-            celerrate_diagnostics::Severity::Warning
+            valid_entry.severity.as_ref().map(|spanned| spanned.value),
+            Some(celerrate_diagnostics::Severity::Warning)
         );
+        let invalid_entry = &configuration.severity[1];
+        assert_eq!(invalid_entry.identifier.value, "CEL0035");
+        assert!(invalid_entry.severity.is_none());
         let diagnostic = single(&diagnostics);
         assert_eq!(diagnostic.id, INVALID_CONFIGURATION_VALUE);
         assert_eq!(

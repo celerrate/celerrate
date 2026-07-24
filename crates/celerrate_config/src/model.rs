@@ -32,7 +32,10 @@ pub struct SeverityEntry {
     /// The identifier as written (existence is checked by `validate`,
     /// not at parse time).
     pub identifier: Spanned<String>,
-    pub severity: Spanned<Severity>,
+    /// The severity, absent when the file's value was not a recognized
+    /// severity word, which `parse` has already reported: the
+    /// identifier is kept so `validate` can still check it.
+    pub severity: Option<Spanned<Severity>>,
 }
 
 /// A parsed `celerrate.toml`. Every field is optional or empty by
