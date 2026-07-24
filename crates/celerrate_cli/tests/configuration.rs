@@ -20,13 +20,7 @@ const CLEAN_SOURCE: &str = "<?php\nnamespace App;\n\nfunction example(): void {}
 
 fn check(files: &[(&str, &str)]) -> (Outcome, String) {
     let directory = tempfile::tempdir().unwrap();
-    for (path, contents) in files {
-        let full = directory.path().join(path);
-        if let Some(parent) = full.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(full, contents).unwrap();
-    }
+    write_files(directory.path(), files);
     run_check(directory.path())
 }
 
@@ -37,15 +31,22 @@ fn check_with_invalid_utf8_configuration(
     invalid_utf8: &[u8],
 ) -> (Outcome, String) {
     let directory = tempfile::tempdir().unwrap();
+    write_files(directory.path(), files);
+    fs::write(directory.path().join("celerrate.toml"), invalid_utf8).unwrap();
+    run_check(directory.path())
+}
+
+/// Writes each `(path, contents)` pair under `root`, creating parent
+/// directories as needed. Shared by `check` and
+/// `check_with_invalid_utf8_configuration`.
+fn write_files(root: &std::path::Path, files: &[(&str, &str)]) {
     for (path, contents) in files {
-        let full = directory.path().join(path);
+        let full = root.join(path);
         if let Some(parent) = full.parent() {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(full, contents).unwrap();
     }
-    fs::write(directory.path().join("celerrate.toml"), invalid_utf8).unwrap();
-    run_check(directory.path())
 }
 
 fn run_check(root: &std::path::Path) -> (Outcome, String) {

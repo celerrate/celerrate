@@ -216,11 +216,9 @@ impl Session {
         // the report, and interning against anything else (an
         // unnormalized `..`-bearing root, for instance) would print this
         // one file's path unrelativized next to every PHP file's clean
-        // one. Cloned because `discovery` is borrowed immutably here
-        // while `session.vfs` is borrowed mutably in the same call.
-        let configuration_root = session.discovery.root.clone();
+        // one.
         session.loaded_configuration =
-            crate::configuration::load(&configuration_root, &mut session.vfs);
+            crate::configuration::load(&session.discovery.root, &mut session.vfs);
         session
     }
 
