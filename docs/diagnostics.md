@@ -31,8 +31,11 @@ in the summary line and do not affect the exit code.
 ## Suppressing diagnostics
 
 To silence a single occurrence, use an inline suppression comment.
-There is no configuration file or baseline yet; inline suppression is
-the only per-site switch in this preview.
+`celerrate.toml` is read and validated (see
+[Configuration](#configuration-cel0043-to-cel0049) below), but its rule
+activation and severity settings are not applied yet, and there is no
+baseline; inline suppression is the only per-site switch in this
+preview.
 
 Celerrate's own directive is `@celerrate-ignore`, written in a line
 comment, a block comment, or a docblock:
@@ -207,3 +210,39 @@ does not emit).
 | --- | --- | --- |
 | CEL0041 | warning | a `@celerrate-ignore` directive names an identifier Celerrate does not know, so a typo cannot silently suppress nothing |
 | CEL0042 | warning | a `@celerrate-ignore` directive suppressed nothing (exempt when it names an identifier of a rule not active in this run, or an unknown identifier - that mistake is already CEL0041's) |
+
+## Configuration (CEL0043 to CEL0049)
+
+About `celerrate.toml` itself, read from the project root next to
+`composer.json`; a missing file is not an event, because zero
+configuration is the contract. Each is span-anchored, is an error,
+counts toward the exit code, and is neither disableable nor remappable.
+The file is validated but not applied yet, so a typoed configuration
+fails CI while that same run analyzes with the default configuration.
+CEL0043 drops the whole file; the others skip only the malformed part.
+
+| Identifier | Severity | Meaning |
+| --- | --- | --- |
+| CEL0043 | error | `celerrate.toml` exists but cannot be read as TOML (a syntax error, an encoding problem, or an IO error); the default configuration is used |
+| CEL0044 | error | a key outside the schema, anywhere in the file |
+| CEL0045 | error | a known key whose value has the wrong type or shape |
+| CEL0046 | error | a `[rules.<name>]` table naming a rule that does not exist |
+| CEL0047 | error | a `[rules.<name>]` key other than `enabled`: no shipped rule takes options yet |
+| CEL0048 | error | a `[severity]` key naming an identifier the registry does not know |
+| CEL0049 | error | a `[severity]` key naming a resilience diagnostic, whose severity is not the user's to move |
+
+### Rule names
+
+These are the names `[rules.<name>]` accepts in `celerrate.toml`. A
+`[rules.<name>]` table naming anything else is CEL0046.
+
+| Rule name |
+| --- |
+| argument-checks |
+| null-dereference |
+| symbol-version-gating |
+| syntax-version-gating |
+| unknown-members |
+| unknown-suppression-identifier |
+| unknown-symbols |
+| unused-suppression |

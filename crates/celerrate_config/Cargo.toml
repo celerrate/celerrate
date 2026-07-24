@@ -1,0 +1,17 @@
+[package]
+name = "celerrate_config"
+description = "The celerrate.toml configuration model, parsing, and validation for the Celerrate toolchain"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+celerrate_diagnostics = { path = "../celerrate_diagnostics" }
+celerrate_source = { path = "../celerrate_source" }
+toml_edit = { workspace = true }
+
+[lints]
+workspace = true

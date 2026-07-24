@@ -5,9 +5,9 @@
 //! to `celerrate_rules` must not construct `Diagnostic` values
 //! anywhere under `src/`, so a check family cannot quietly grow back
 //! below the framework. Resilience producers (`celerrate_db`,
-//! `celerrate_syntax`, `celerrate_project`) are not governed: their
-//! diagnostics are neither disableable nor configurable by nature and
-//! stay produced by their crates.
+//! `celerrate_syntax`, `celerrate_project`, `celerrate_config`) are not
+//! governed: their diagnostics are neither disableable nor configurable
+//! by nature and stay produced by their crates.
 //!
 //! This is a literal string scan over file contents, not a parser: it
 //! catches the spellings named in `FORBIDDEN_CALLS` and nothing else.

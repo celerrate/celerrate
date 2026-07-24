@@ -26,6 +26,7 @@ serde_json = "1"
 tempfile = "3"
 terminal_size = "0.4"
 text-size = "1"
+toml_edit = "0.23"
 trybuild = "1"
 ungrammar = "1"
 
