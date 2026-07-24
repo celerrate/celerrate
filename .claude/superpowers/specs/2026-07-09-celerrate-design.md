@@ -1,6 +1,6 @@
 # Celerrate — Vision and Engine Architecture Design
 
-Date: 2026-07-09 (amended 2026-07-19)
+Date: 2026-07-09 (amended 2026-07-23)
 Status: Approved (brainstorming output; each sub-project gets its own detailed spec)
 
 Amendment history:
@@ -37,6 +37,13 @@ Amendment history:
   dependency-inverted in the domain crates, and the persistence
   orchestration stays at the composition root until a second binary
   needs it. Section 3 now carries the clarification.
+- 2026-07-23 — sub-project 4 (diagnostics and fixes) closed: the rule
+  framework with four phase traits and sealed contexts, the
+  structured-edit library, identifier-level suppression with the
+  native directive, the autofix engine, rustc-style rendering, and
+  `celerrate explain` with an executable page per identifier. No
+  version tagged; the next public event is v0.1 at the end of
+  sub-project 5.
 
 ## 1. Vision
 
