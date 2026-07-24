@@ -19,34 +19,13 @@ pub struct RegisteredDiagnostic {
     pub id: DiagnosticId,
     pub family: &'static str,
     pub owner: &'static str,
-    /// The long-form explanation. `Option` only until part 8 writes
-    /// the pages and makes the field mandatory.
-    pub explain: Option<&'static ExplainPage>,
+    /// The long-form explanation served by `celerrate explain`.
+    pub explain: &'static ExplainPage,
 }
 
-/// Every allocated identifier is `documented` as of part 8 task 5; this
-/// constructor has no remaining call site until a new identifier is
-/// allocated ahead of its page. Kept (not deleted) because task 6 of
-/// part 8 owns removing it, making `explain` mandatory, and renaming
-/// `documented` back to `registered`.
-#[allow(dead_code, reason = "removed by part 8 task 6, not this task")]
+/// The constructor for every registry entry: an identifier is never
+/// allocated without the page that explains it.
 const fn registered(
-    id: &'static str,
-    family: &'static str,
-    owner: &'static str,
-) -> RegisteredDiagnostic {
-    RegisteredDiagnostic {
-        id: DiagnosticId::new(id),
-        family,
-        owner,
-        explain: None,
-    }
-}
-
-/// The interim constructor while pages land family by family; Task 6
-/// of part 8 deletes `registered`, makes the field mandatory, and
-/// renames this back to `registered`.
-const fn documented(
     id: &'static str,
     family: &'static str,
     owner: &'static str,
@@ -56,259 +35,259 @@ const fn documented(
         id: DiagnosticId::new(id),
         family,
         owner,
-        explain: Some(explain),
+        explain,
     }
 }
 
 /// Every identifier, in identifier order.
 pub const REGISTRY: &[RegisteredDiagnostic] = &[
-    documented(
+    registered(
         "CEL0001",
         "source too large",
         "celerrate_db",
         &pages::source::CEL0001,
     ),
-    documented(
+    registered(
         "CEL0002",
         "unexpected character",
         "celerrate_syntax",
         &pages::syntax::CEL0002,
     ),
-    documented(
+    registered(
         "CEL0003",
         "unterminated block comment",
         "celerrate_syntax",
         &pages::syntax::CEL0003,
     ),
-    documented(
+    registered(
         "CEL0004",
         "unterminated string",
         "celerrate_syntax",
         &pages::syntax::CEL0004,
     ),
-    documented(
+    registered(
         "CEL0005",
         "unterminated heredoc",
         "celerrate_syntax",
         &pages::syntax::CEL0005,
     ),
-    documented(
+    registered(
         "CEL0006",
         "unterminated interpolation",
         "celerrate_syntax",
         &pages::syntax::CEL0006,
     ),
-    documented(
+    registered(
         "CEL0007",
         "expected an expression",
         "celerrate_syntax",
         &pages::syntax::CEL0007,
     ),
-    documented(
+    registered(
         "CEL0008",
         "expected a semicolon",
         "celerrate_syntax",
         &pages::syntax::CEL0008,
     ),
-    documented(
+    registered(
         "CEL0009",
         "expected a specific token",
         "celerrate_syntax",
         &pages::syntax::CEL0009,
     ),
-    documented(
+    registered(
         "CEL0010",
         "unexpected token",
         "celerrate_syntax",
         &pages::syntax::CEL0010,
     ),
-    documented(
+    registered(
         "CEL0011",
         "nesting too deep",
         "celerrate_syntax",
         &pages::syntax::CEL0011,
     ),
-    documented(
+    registered(
         "CEL0012",
         "non-associative operator chained",
         "celerrate_syntax",
         &pages::syntax::CEL0012,
     ),
-    documented(
+    registered(
         "CEL0013",
         "no progress",
         "celerrate_syntax",
         &pages::syntax::CEL0013,
     ),
-    documented(
+    registered(
         "CEL0014",
         "expected a member name",
         "celerrate_syntax",
         &pages::syntax::CEL0014,
     ),
-    documented(
+    registered(
         "CEL0015",
         "expected a statement",
         "celerrate_syntax",
         &pages::syntax::CEL0015,
     ),
-    documented(
+    registered(
         "CEL0016",
         "expected a type",
         "celerrate_syntax",
         &pages::syntax::CEL0016,
     ),
-    documented(
+    registered(
         "CEL0017",
         "expected a declaration",
         "celerrate_syntax",
         &pages::syntax::CEL0017,
     ),
-    documented(
+    registered(
         "CEL0018",
         "unknown class",
         "celerrate_rules",
         &pages::semantic::CEL0018,
     ),
-    documented(
+    registered(
         "CEL0019",
         "unknown function",
         "celerrate_rules",
         &pages::semantic::CEL0019,
     ),
-    documented(
+    registered(
         "CEL0020",
         "unknown constant",
         "celerrate_rules",
         &pages::semantic::CEL0020,
     ),
-    documented(
+    registered(
         "CEL0021",
         "symbol not available",
         "celerrate_rules",
         &pages::semantic::CEL0021,
     ),
-    documented(
+    registered(
         "CEL0022",
         "symbol removed",
         "celerrate_rules",
         &pages::semantic::CEL0022,
     ),
-    documented(
+    registered(
         "CEL0023",
         "symbol deprecated",
         "celerrate_rules",
         &pages::semantic::CEL0023,
     ),
-    documented(
+    registered(
         "CEL0024",
         "syntax construct not available",
         "celerrate_rules",
         &pages::semantic::CEL0024,
     ),
-    documented(
+    registered(
         "CEL0025",
         "missing Composer manifest",
         "celerrate_project",
         &pages::project::CEL0025,
     ),
-    documented(
+    registered(
         "CEL0026",
         "invalid Composer manifest",
         "celerrate_project",
         &pages::project::CEL0026,
     ),
-    documented(
+    registered(
         "CEL0027",
         "PHP version fallback",
         "celerrate_project",
         &pages::project::CEL0027,
     ),
-    documented(
+    registered(
         "CEL0028",
         "invalid PHP version constraint",
         "celerrate_project",
         &pages::project::CEL0028,
     ),
-    documented(
+    registered(
         "CEL0029",
         "invalid installed packages",
         "celerrate_project",
         &pages::project::CEL0029,
     ),
-    documented(
+    registered(
         "CEL0030",
         "unknown method",
         "celerrate_rules",
         &pages::typed::CEL0030,
     ),
-    documented(
+    registered(
         "CEL0031",
         "unknown property",
         "celerrate_rules",
         &pages::typed::CEL0031,
     ),
-    documented(
+    registered(
         "CEL0032",
         "unknown class constant",
         "celerrate_rules",
         &pages::typed::CEL0032,
     ),
-    documented(
+    registered(
         "CEL0033",
         "unknown enum case",
         "celerrate_rules",
         &pages::typed::CEL0033,
     ),
-    documented(
+    registered(
         "CEL0034",
         "possibly null dereference",
         "celerrate_rules",
         &pages::typed::CEL0034,
     ),
-    documented(
+    registered(
         "CEL0035",
         "argument type mismatch",
         "celerrate_rules",
         &pages::typed::CEL0035,
     ),
-    documented(
+    registered(
         "CEL0036",
         "too few arguments",
         "celerrate_rules",
         &pages::typed::CEL0036,
     ),
-    documented(
+    registered(
         "CEL0037",
         "too many arguments",
         "celerrate_rules",
         &pages::typed::CEL0037,
     ),
-    documented(
+    registered(
         "CEL0038",
         "unknown named argument",
         "celerrate_rules",
         &pages::typed::CEL0038,
     ),
-    documented(
+    registered(
         "CEL0039",
         "unreadable Composer manifest",
         "celerrate_project",
         &pages::project::CEL0039,
     ),
-    documented(
+    registered(
         "CEL0040",
         "unreadable installed packages",
         "celerrate_project",
         &pages::project::CEL0040,
     ),
-    documented(
+    registered(
         "CEL0041",
         "unknown suppression identifier",
         "celerrate_rules",
         &pages::reporting::CEL0041,
     ),
-    documented(
+    registered(
         "CEL0042",
         "unused suppression",
         "celerrate_rules",
@@ -327,12 +306,13 @@ pub fn find_identifier(text: &str) -> Option<DiagnosticId> {
         .map(|entry| entry.id)
 }
 
-/// The explain page registered for `id`, if any is written yet.
+/// The explain page registered for `id`. `None` now only means an
+/// unknown identifier.
 pub fn find_page(id: DiagnosticId) -> Option<&'static ExplainPage> {
     REGISTRY
         .iter()
         .find(|entry| entry.id == id)
-        .and_then(|entry| entry.explain)
+        .map(|entry| entry.explain)
 }
 
 #[cfg(test)]
@@ -383,5 +363,24 @@ mod tests {
         assert_eq!(found.as_str(), "CEL0018");
         assert!(find_identifier("CEL9999").is_none());
         assert!(find_identifier("").is_none());
+    }
+
+    #[test]
+    fn every_identifier_has_a_page_with_all_four_sections() {
+        for entry in REGISTRY {
+            let page = entry.explain;
+            for (section, text) in [
+                ("why", page.why),
+                ("failing example", page.failing_example),
+                ("fixed example", page.fixed_example),
+                ("configuration", page.configuration),
+            ] {
+                assert!(
+                    !text.trim().is_empty(),
+                    "{} has an empty {section} section",
+                    entry.id.as_str(),
+                );
+            }
+        }
     }
 }

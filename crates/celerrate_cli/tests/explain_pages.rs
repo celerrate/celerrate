@@ -70,9 +70,7 @@ fn report_for(example: &str) -> String {
 fn every_written_page_example_is_honest() {
     let mut failures = Vec::new();
     for entry in REGISTRY {
-        // Task 6 of part 8 makes the field mandatory; this binding
-        // then becomes `let page = entry.explain;`.
-        let Some(page) = entry.explain else { continue };
+        let page = entry.explain;
         if EXECUTABLE_EXAMPLE_EXEMPTIONS
             .iter()
             .any(|exemption| exemption.id == entry.id)

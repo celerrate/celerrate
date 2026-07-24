@@ -1,16 +1,18 @@
 use crate::identifier::DiagnosticId;
 
 /// One identifier's long-form explanation, embedded in the binary and
-/// served by `celerrate explain`. Every section is mandatory content-wise
-/// at sub-project closure (the composition-root test enforces presence);
-/// in this part the store exists and no page is written yet.
+/// served by `celerrate explain`. Every registry entry carries one: the
+/// store is total, enforced both by `RegisteredDiagnostic.explain` being
+/// mandatory (no `Option`) and by the content gate in `registry.rs`'s
+/// tests that every section is non-empty.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ExplainPage {
     /// Why the reported pattern is a problem.
     pub why: &'static str,
-    /// A minimal example that fires the identifier (executable by the
-    /// part 8 harness, unless the identifier is on the declared
-    /// environment-condition exemption list; spec section 10).
+    /// A minimal example that fires the identifier, executed by the
+    /// harness in `celerrate_cli/tests/explain_pages.rs`, unless the
+    /// identifier is on the declared environment-condition exemption
+    /// list below (spec section 10).
     pub failing_example: &'static str,
     /// The same example, corrected; must not fire the identifier.
     pub fixed_example: &'static str,
