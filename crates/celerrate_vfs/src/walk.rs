@@ -47,15 +47,30 @@ pub struct Walk {
 /// directory that has not been created yet is ordinary. A directory that
 /// exists and cannot be read is not, and it is reported. Enumeration never
 /// fails either way.
-pub fn enumerate_php_files(roots: &[PathBuf]) -> Walk {
+///
+/// `excluded` lists the prefixes the configuration's `exclude` list
+/// resolves to. A root or a directory found while walking is pruned the
+/// moment it is reached, before it is ever opened: an excluded
+/// `src/Generated` holding ten thousand files costs nothing, because
+/// `read_dir` is never called on it.
+pub fn enumerate_php_files(roots: &[PathBuf], excluded: &[PathBuf]) -> Walk {
     let mut files = BTreeSet::new();
     let mut unreadable = BTreeSet::new();
     let mut visited_directories = BTreeSet::new();
     for root in roots {
+        if is_excluded(root, excluded) {
+            continue;
+        }
         if root.is_file() {
             files.insert(root.clone());
         } else if root.is_dir() {
-            walk_directory(root, &mut files, &mut unreadable, &mut visited_directories);
+            walk_directory(
+                root,
+                excluded,
+                &mut files,
+                &mut unreadable,
+                &mut visited_directories,
+            );
         }
     }
     Walk {
@@ -64,8 +79,14 @@ pub fn enumerate_php_files(roots: &[PathBuf]) -> Walk {
     }
 }
 
+/// Whether `path` falls under one of the excluded prefixes.
+fn is_excluded(path: &Path, excluded: &[PathBuf]) -> bool {
+    excluded.iter().any(|root| path.starts_with(root))
+}
+
 fn walk_directory(
     directory: &Path,
+    excluded: &[PathBuf],
     files: &mut BTreeSet<PathBuf>,
     unreadable: &mut BTreeSet<UnreadableDirectory>,
     visited: &mut BTreeSet<PathBuf>,
@@ -100,8 +121,11 @@ fn walk_directory(
     };
     for entry in entries.flatten() {
         let path = entry.path();
+        if is_excluded(&path, excluded) {
+            continue;
+        }
         if path.is_dir() {
-            walk_directory(&path, files, unreadable, visited);
+            walk_directory(&path, excluded, files, unreadable, visited);
         } else if has_php_extension(&path) && path.is_file() {
             files.insert(path);
         }
@@ -147,7 +171,7 @@ mod tests {
         write(&root.join("src/notes.txt"), "not code");
         write(&root.join("outside/C.php"), "<?php");
         assert_eq!(
-            enumerate_php_files(&[root.join("src")]).files,
+            enumerate_php_files(&[root.join("src")], &[]).files,
             vec![root.join("src/A.php"), root.join("src/nested/B.php")],
         );
     }
@@ -158,7 +182,7 @@ mod tests {
         let root = temporary.path();
         write(&root.join("src/Legacy.PHP"), "<?php");
         assert_eq!(
-            enumerate_php_files(&[root.join("src")]).files,
+            enumerate_php_files(&[root.join("src")], &[]).files,
             vec![root.join("src/Legacy.PHP")],
         );
     }
@@ -169,7 +193,7 @@ mod tests {
         let root = temporary.path();
         write(&root.join("bootstrap.inc"), "<?php");
         assert_eq!(
-            enumerate_php_files(&[root.join("bootstrap.inc")]).files,
+            enumerate_php_files(&[root.join("bootstrap.inc")], &[]).files,
             vec![root.join("bootstrap.inc")],
         );
     }
@@ -186,7 +210,7 @@ mod tests {
             root.join("src/B.php"),
         ];
         assert_eq!(
-            enumerate_php_files(&roots).files,
+            enumerate_php_files(&roots, &[]).files,
             vec![root.join("src/B.php"), root.join("src/nested/A.php")],
         );
     }
@@ -198,9 +222,43 @@ mod tests {
         // separates it from a directory that exists and cannot be read.
         let temporary = tempfile::tempdir().unwrap();
         let root = temporary.path();
-        let walk = enumerate_php_files(&[root.join("does-not-exist")]);
+        let walk = enumerate_php_files(&[root.join("does-not-exist")], &[]);
         assert_eq!(walk.files, Vec::<PathBuf>::new());
         assert_eq!(walk.unreadable_directories, Vec::new());
+    }
+
+    #[test]
+    fn an_excluded_directory_is_pruned_from_the_walk() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src/Generated")).unwrap();
+        std::fs::write(root.path().join("src/Kept.php"), "<?php").unwrap();
+        std::fs::write(root.path().join("src/Generated/Machine.php"), "<?php").unwrap();
+
+        let walk = enumerate_php_files(
+            &[root.path().join("src")],
+            &[root.path().join("src/Generated")],
+        );
+        assert_eq!(walk.files, vec![root.path().join("src/Kept.php")]);
+    }
+
+    #[test]
+    fn an_excluded_root_yields_nothing_at_all() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/File.php"), "<?php").unwrap();
+
+        let walk = enumerate_php_files(&[root.path().join("src")], &[root.path().join("src")]);
+        assert!(walk.files.is_empty());
+    }
+
+    #[test]
+    fn no_exclusions_is_the_walk_as_before() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(root.path().join("src/File.php"), "<?php").unwrap();
+
+        let walk = enumerate_php_files(&[root.path().join("src")], &[]);
+        assert_eq!(walk.files, vec![root.path().join("src/File.php")]);
     }
 
     /// Permissions are the only portable way to make a directory
@@ -221,7 +279,7 @@ mod tests {
         let locked = root.join("src/locked");
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let walk = enumerate_php_files(&[root.join("src")]);
+        let walk = enumerate_php_files(&[root.join("src")], &[]);
 
         // Restore before asserting: a failed assertion must not leave the
         // temporary directory undeletable.
@@ -249,7 +307,7 @@ mod tests {
         let locked = root.join("src");
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
 
-        let walk = enumerate_php_files(std::slice::from_ref(&locked));
+        let walk = enumerate_php_files(std::slice::from_ref(&locked), &[]);
 
         fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
 
@@ -265,7 +323,7 @@ mod tests {
         let root = temporary.path();
         write(&root.join("src/A.php"), "<?php");
         std::os::unix::fs::symlink(root.join("src"), root.join("src/loop")).unwrap();
-        let walk = enumerate_php_files(&[root.join("src")]);
+        let walk = enumerate_php_files(&[root.join("src")], &[]);
         assert_eq!(walk.files.first(), Some(&root.join("src/A.php")));
         assert_eq!(
             walk.unreadable_directories,

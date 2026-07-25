@@ -132,16 +132,8 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             // Configuration diagnostics are presentation and exit-code
             // input, never cache input: `outcome` stays untouched, so
             // the persisted verdicts cannot absorb them.
-            let configuration_diagnostics = match &session.loaded_configuration {
-                Some(loaded) => {
-                    presented
-                        .diagnostics
-                        .extend(loaded.diagnostics.iter().cloned());
-                    presented.diagnostics.sort();
-                    loaded.diagnostics.len()
-                }
-                None => 0,
-            };
+            let configuration_diagnostics =
+                configuration::merge_diagnostics(&session, &mut presented);
             let failures = match render::render_report(output, &session, &presented, color) {
                 Ok(failures) => failures,
                 Err(_) => return Outcome::InternalError,

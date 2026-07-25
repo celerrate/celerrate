@@ -246,8 +246,10 @@ dependencies = [
 name = "celerrate_project"
 version = "0.0.3"
 dependencies = [
+ "celerrate_config",
  "celerrate_db",
  "celerrate_diagnostics",
+ "celerrate_source",
  "celerrate_vfs",
  "salsa",
  "serde_json",

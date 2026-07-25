@@ -9,14 +9,21 @@
 //! dependency DAG. This module is the one place that sees both, which
 //! is the whole reason it exists here and not there.
 //!
-//! Part 1 boundary: the parsed configuration is carried but not yet
-//! consumed. `include`/`exclude` filter nothing, `php` narrows no
-//! version range, no active rule set is built, the severity remap is
-//! not applied, and the cache digest does not see it. All of that is
-//! part 2 of the sub-project. What part 1 does is report the file's
-//! diagnostics and count them toward the exit code.
+//! The parsed configuration is carried and reports its own diagnostics,
+//! counting them toward the exit code. This module loads, validates,
+//! and derives: `include`/`exclude` and the `php` override are consumed
+//! by discovery and the walk, `configuration_digest` keys the
+//! persistent cache on the `[rules]` and `[severity]` sections,
+//! `rule_overrides` feeds `celerrate_cli::plugins::core_registrations`
+//! the `[rules]` activation overrides, and `severity_remap` is what the
+//! per-file composition in `celerrate_cli::analysis` applies before
+//! persistence. `merge_diagnostics` and `diagnostic_count` are the
+//! presentation side: both `check` and `--watch` merge the loaded
+//! file's own diagnostics into a presentation copy of the outcome and
+//! into the exit code, never into the outcome the persisted verdicts
+//! read.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use celerrate_config::KnownSets;
@@ -26,7 +33,7 @@ use celerrate_source::FileId;
 use celerrate_vfs::Vfs;
 
 /// The loaded `celerrate.toml`: its identity, its text (for the
-/// renderer), the parsed model (for part 2), and its diagnostics.
+/// renderer), the parsed model (for rule configuration), and its diagnostics.
 pub struct LoadedConfiguration {
     pub file: FileId,
     pub text: String,
@@ -136,13 +143,150 @@ fn known_sets(metadata: &[RuleMetadata]) -> KnownSets<'_> {
     }
 }
 
+/// blake3 over the normalized `[rules]` and `[severity]` sections: the
+/// active-set-and-severity cache key the sub-project 4 spec reserved a
+/// header field for (CLI product spec section 2). The whole sections
+/// are digested, not the derived active set, so future rule options
+/// join the key with no header change. Normalization: entries sorted,
+/// text length-prefixed, sections count-prefixed, spans dropped.
+pub fn configuration_digest(configuration: &celerrate_config::Configuration) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    let mut rules: Vec<(&str, u8)> = configuration
+        .rules
+        .iter()
+        .map(|rule| {
+            let enabled = match &rule.enabled {
+                None => 0u8,
+                Some(enabled) if !enabled.value => 1,
+                Some(_) => 2,
+            };
+            (rule.name.value.as_str(), enabled)
+        })
+        .collect();
+    rules.sort_unstable();
+    hash_count(&mut hasher, rules.len());
+    for (name, enabled) in rules {
+        hash_text(&mut hasher, name);
+        hasher.update(&[enabled]);
+    }
+    let mut severity: Vec<(&str, u8)> = configuration
+        .severity
+        .iter()
+        .map(|entry| {
+            let level = match &entry.severity {
+                None => 0u8,
+                Some(severity) => match severity.value {
+                    celerrate_diagnostics::Severity::Warning => 1,
+                    celerrate_diagnostics::Severity::Error => 2,
+                },
+            };
+            (entry.identifier.value.as_str(), level)
+        })
+        .collect();
+    severity.sort_unstable();
+    hash_count(&mut hasher, severity.len());
+    for (identifier, level) in severity {
+        hash_text(&mut hasher, identifier);
+        hasher.update(&[level]);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+/// The `[rules]` activation overrides: every table that sets `enabled`,
+/// by rule name. Unknown names ride along inert (no registration
+/// matches them; CEL0046 already reported the typo), and a table
+/// without `enabled` configures nothing, both per spec section 3.
+pub fn rule_overrides(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, bool> {
+    let Some(loaded) = loaded else {
+        return BTreeMap::new();
+    };
+    loaded
+        .configuration
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            rule.enabled
+                .as_ref()
+                .map(|enabled| (rule.name.value.clone(), enabled.value))
+        })
+        .collect()
+}
+
+/// The `[severity]` remap that actually applies: entries naming a
+/// remappable identifier, keyed by identifier text. Resilience and
+/// unknown entries were already reported (CEL0048/CEL0049) and must
+/// not half-apply; an entry whose value failed to parse carries no
+/// severity to apply.
+pub fn severity_remap(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, Severity> {
+    let Some(loaded) = loaded else {
+        return BTreeMap::new();
+    };
+    let metadata: Vec<RuleMetadata> = celerrate_rules::core_rules()
+        .into_iter()
+        .map(|(metadata, _)| metadata)
+        .collect();
+    let known = known_sets(&metadata);
+    loaded
+        .configuration
+        .severity
+        .iter()
+        .filter(|entry| {
+            known
+                .remappable_identifiers
+                .contains(entry.identifier.value.as_str())
+        })
+        .filter_map(|entry| {
+            entry
+                .severity
+                .as_ref()
+                .map(|severity| (entry.identifier.value.clone(), severity.value))
+        })
+        .collect()
+}
+
+/// Merges the configuration diagnostics into a presentation outcome and
+/// answers how many were merged. Presentation and exit-code input only,
+/// never cache input: callers keep the analysis outcome pure and merge
+/// into a copy.
+pub fn merge_diagnostics(
+    session: &crate::session::Session,
+    outcome: &mut crate::analysis::AnalysisOutcome,
+) -> usize {
+    let Some(loaded) = &session.loaded_configuration else {
+        return 0;
+    };
+    outcome
+        .diagnostics
+        .extend(loaded.diagnostics.iter().cloned());
+    outcome.diagnostics.sort();
+    loaded.diagnostics.len()
+}
+
+/// The configuration diagnostics' contribution to the exit code.
+pub fn diagnostic_count(session: &crate::session::Session) -> usize {
+    session
+        .loaded_configuration
+        .as_ref()
+        .map(|loaded| loaded.diagnostics.len())
+        .unwrap_or(0)
+}
+
+fn hash_count(hasher: &mut blake3::Hasher, count: usize) {
+    hasher.update(&u64::try_from(count).unwrap_or(u64::MAX).to_le_bytes());
+}
+
+fn hash_text(hasher: &mut blake3::Hasher, text: &str) {
+    hash_count(hasher, text.len());
+    hasher.update(text.as_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use celerrate_vfs::Vfs;
 
-    use super::{known_sets, load};
+    use super::{configuration_digest, known_sets, load, rule_overrides, severity_remap};
 
     /// A project root on disk, written into a temporary directory.
     fn root(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -243,5 +387,84 @@ mod tests {
                 && !known.remappable_identifiers.contains("CEL0026"),
             "a resilience identifier is registered and not remappable",
         );
+    }
+
+    /// Parses a `celerrate.toml` text into its model, for digest tests.
+    fn model_of(text: &str) -> celerrate_config::Configuration {
+        let (configuration, _) = celerrate_config::parse(celerrate_source::FileId::new(0), text);
+        configuration
+    }
+
+    #[test]
+    fn the_digest_ignores_span_and_order_but_not_content() {
+        let ordered =
+            model_of("[rules.a-rule]\nenabled = true\n\n[rules.b-rule]\nenabled = false\n");
+        let reversed =
+            model_of("[rules.b-rule]\nenabled = false\n\n[rules.a-rule]\nenabled = true\n");
+        assert_eq!(
+            configuration_digest(&ordered),
+            configuration_digest(&reversed),
+            "normalization sorts the entries",
+        );
+        let changed =
+            model_of("[rules.a-rule]\nenabled = false\n\n[rules.b-rule]\nenabled = false\n");
+        assert_ne!(
+            configuration_digest(&ordered),
+            configuration_digest(&changed)
+        );
+    }
+
+    #[test]
+    fn a_severity_entry_moves_the_digest() {
+        let without = model_of("");
+        let with = model_of("[severity]\n\"CEL0034\" = \"warning\"\n");
+        assert_ne!(configuration_digest(&without), configuration_digest(&with));
+    }
+
+    #[test]
+    fn no_file_and_an_empty_file_share_the_digest() {
+        assert_eq!(
+            configuration_digest(&celerrate_config::Configuration::default()),
+            configuration_digest(&model_of("")),
+        );
+    }
+
+    #[test]
+    fn rule_overrides_carry_every_enabled_key_and_nothing_else() {
+        let root = root(&[(
+            "celerrate.toml",
+            "[rules.null-dereference]\nenabled = false\n\n[rules.unknown-members]\n",
+        )]);
+        let mut vfs = Vfs::default();
+        let loaded = load(root.path(), &mut vfs);
+        let overrides = rule_overrides(loaded.as_ref());
+        assert_eq!(overrides.len(), 1, "a table without `enabled` is a no-op");
+        assert_eq!(overrides.get("null-dereference"), Some(&false));
+    }
+
+    #[test]
+    fn the_remap_keeps_remappable_entries_and_drops_the_reported_ones() {
+        let root = root(&[(
+            "celerrate.toml",
+            "[severity]\n\"CEL0034\" = \"warning\"\n\"CEL0026\" = \"warning\"\n\"CEL9999\" = \"warning\"\n",
+        )]);
+        let mut vfs = Vfs::default();
+        let loaded = load(root.path(), &mut vfs);
+        let remap = severity_remap(loaded.as_ref());
+        assert_eq!(remap.len(), 1, "resilience and unknown entries never apply");
+        assert_eq!(
+            remap.get("CEL0034"),
+            Some(&celerrate_diagnostics::Severity::Warning),
+        );
+    }
+
+    #[test]
+    fn the_project_table_does_not_move_the_digest() {
+        // include/exclude change file membership (per-entry keys) and the
+        // php override moves the header's own range fields: neither
+        // belongs in this digest, per the spec's normalized-sections rule.
+        let without = model_of("");
+        let with = model_of("[project]\nphp = \"8.2\"\ninclude = [\"src\"]\n");
+        assert_eq!(configuration_digest(&without), configuration_digest(&with));
     }
 }

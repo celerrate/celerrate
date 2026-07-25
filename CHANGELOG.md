@@ -9,6 +9,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `celerrate.toml`, a per-project configuration file, parsed with the
+  span of every user-written value and consumed by the engine. Its
+  `[project]` table shapes what is analyzed: `include` replaces the
+  Composer-derived walk roots, `exclude` subtracts directories (pruned
+  before they are read, so an excluded tree of ten thousand files costs
+  nothing), and `php = "8.2"` collapses the detected version range to a
+  clamped point, winning over `config.platform.php` and `require.php`
+  without reporting the manifest constraint it never used. Its `[rules]`
+  tables compute the active rule set as the default tier minus what is
+  disabled, in union with the nursery rules explicitly enabled, so an
+  override that restates a rule's own tier is a valid no-op and rule
+  promotions never break an existing file. Its `[severity]` table remaps
+  a diagnostic's severity by identifier, applied in the per-file
+  composition beside the suppression filter, so the printed report, the
+  exit-code count, and the persisted verdict always carry the same
+  severity; a remapped warning still exits 1. Seven identifiers report
+  the file's own problems (`CEL0043` to `CEL0049`), span-anchored and
+  exit-affecting, each with an explain page. Without a `celerrate.toml`
+  behavior is byte-identical to before, proven over the pinned corpus.
+- `celerrate check --watch` reloads `celerrate.toml` on save and
+  reconfigures the next cycle: the version range, the walk, the active
+  rule set, and the severity remap all follow the file, and the file's
+  own diagnostics join every picture, exactly as in a single check.
+  Deleting the file returns the session to the defaults.
+- The persistent verdict cache is keyed on a digest of the normalized
+  `[rules]` and `[severity]` sections, so a pack written under one
+  configuration is never served under another. A configuration change
+  discards the packs wholesale rather than resurrecting a disabled rule
+  or an old severity on a warm run.
 - `celerrate explain CEL####`: a full-word subcommand printing the
   embedded page for any registered identifier: why it fires, a failing
   example, a fixed example, and configuration notes. Lookup is

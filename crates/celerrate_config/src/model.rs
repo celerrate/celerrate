@@ -3,8 +3,8 @@
 //! (here and at the composition root) can anchor precise diagnostics.
 //!
 //! This model is data, not behavior: nothing here reads a file, knows
-//! salsa, or sees the rule registry. Part 2 of the sub-project wires
-//! its consumption.
+//! salsa, or sees the rule registry. Discovery and the composition root
+//! consume it to derive the walk roots, rule overrides, and cache keys.
 
 use celerrate_diagnostics::Severity;
 use celerrate_source::TextRange;
@@ -44,7 +44,7 @@ pub struct SeverityEntry {
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Configuration {
     /// `[project] php = "8.2"`: the version point that collapses the
-    /// detected range (consumed in part 2).
+    /// detected range (consulted by discovery).
     pub php: Option<Spanned<(u8, u8)>>,
     /// `[project] include = [...]`, relative paths.
     pub include: Vec<Spanned<String>>,

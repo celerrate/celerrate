@@ -126,7 +126,11 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     let inputs = session.inputs();
     let database = &inputs.database;
     let current_range = session.configuration.php_version_range(database);
-    let header = PackHeader::current(current_range, session.plugin_set_digest);
+    let header = PackHeader::current(
+        current_range,
+        session.plugin_set_digest,
+        session.configuration_digest,
+    );
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
     let Ok((trees, member_trees, verdicts)) =
@@ -154,8 +158,10 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     // range-independent) must not skip the write in that case, or the
     // disk keeps a stale header that no later cycle ever revisits. The
     // schema, binary, and stub hash cannot move mid-process, so comparing
-    // the range alone is exactly comparing the header.
-    let header_moved = current_range != session.cache_loaded_range;
+    // the range and the configuration digest is exactly comparing the
+    // header.
+    let header_moved = current_range != session.cache_loaded_range
+        || session.configuration_digest != session.cache_loaded_configuration_digest;
     let trees_written = write_when_changed(
         &session.cache_directory.join(ITEM_TREES_PACK),
         &header,
@@ -219,6 +225,7 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
             signatures: signatures.into_iter().collect(),
         });
         session.cache_loaded_range = current_range;
+        session.cache_loaded_configuration_digest = session.configuration_digest;
     }
 }
 
@@ -941,8 +948,11 @@ mod tests {
         };
         super::persist(&mut session, &outcome);
         let original_range = session.cache_loaded_range;
-        let original_header =
-            super::pack::PackHeader::current(original_range, session.plugin_set_digest);
+        let original_header = super::pack::PackHeader::current(
+            original_range,
+            session.plugin_set_digest,
+            session.configuration_digest,
+        );
 
         let item_trees_path = session
             .cache_directory
@@ -965,13 +975,27 @@ mod tests {
             .configuration
             .set_php_version_range(&mut session.database)
             .to(moved_range);
+        // Simulate a `celerrate.toml` edit moving the configuration
+        // digest in the same cycle: without the sync below, a mid-watch
+        // configuration edit would disable the cache for the rest of the
+        // process, comparing against the stale digest forever.
+        let moved_digest = [0xab; 32];
+        session.configuration_digest = moved_digest;
         super::persist(&mut session, &outcome);
 
         assert_eq!(
             session.cache_loaded_range, moved_range,
             "persist adopts the new range once the rewrite is confirmed",
         );
-        let moved_header = super::pack::PackHeader::current(moved_range, session.plugin_set_digest);
+        assert_eq!(
+            session.cache_loaded_configuration_digest, moved_digest,
+            "persist adopts the new configuration digest once the rewrite is confirmed",
+        );
+        let moved_header = super::pack::PackHeader::current(
+            moved_range,
+            session.plugin_set_digest,
+            session.configuration_digest,
+        );
         let rewritten = std::fs::read(&item_trees_path).unwrap();
         assert!(
             super::pack::decode::<Vec<(celerrate_db::ContentHash, super::stored::StoredItemTree)>>(

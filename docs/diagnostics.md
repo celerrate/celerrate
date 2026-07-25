@@ -31,10 +31,9 @@ in the summary line and do not affect the exit code.
 ## Suppressing diagnostics
 
 To silence a single occurrence, use an inline suppression comment.
-`celerrate.toml` is read and validated (see
-[Configuration](#configuration-cel0043-to-cel0049) below), but its rule
-activation and severity settings are not applied yet, and there is no
-baseline; inline suppression is the only per-site switch in this
+`celerrate.toml` is read, validated, and applied (see
+[Configuration](#configuration-cel0043-to-cel0049) below), but there is
+no baseline yet; inline suppression is the only per-site switch in this
 preview.
 
 Celerrate's own directive is `@celerrate-ignore`, written in a line
@@ -217,9 +216,9 @@ About `celerrate.toml` itself, read from the project root next to
 `composer.json`; a missing file is not an event, because zero
 configuration is the contract. Each is span-anchored, is an error,
 counts toward the exit code, and is neither disableable nor remappable.
-The file is validated but not applied yet, so a typoed configuration
-fails CI while that same run analyzes with the default configuration.
-CEL0043 drops the whole file; the others skip only the malformed part.
+A typoed configuration fails CI while that same run analyzes with the
+default configuration. CEL0043 drops the whole file; the others skip
+only the malformed part.
 
 | Identifier | Severity | Meaning |
 | --- | --- | --- |

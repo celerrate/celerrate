@@ -42,16 +42,40 @@ fn fixture_files(example: &str) -> Vec<(String, String)> {
     files
 }
 
+/// Forces every core rule active through the product's own channel
+/// (`[rules.<name>] enabled = true`): a valid no-op for `Default`-tier
+/// rules today, and the force-activation the spec requires the day the
+/// first nursery rule lands, with no harness change. Skipped when the
+/// example declares its own `celerrate.toml`.
+fn force_activation_configuration() -> String {
+    let mut text = String::new();
+    for (metadata, _) in celerrate_rules::core_rules() {
+        text.push_str("[rules.");
+        text.push_str(&metadata.name);
+        text.push_str("]\nenabled = true\n\n");
+    }
+    text
+}
+
 /// Runs `celerrate check` over the example's fixture and returns the
 /// full plain-color report.
 fn report_for(example: &str) -> String {
     let root = tempfile::tempdir().unwrap();
-    for (path, contents) in fixture_files(example) {
+    let files = fixture_files(example);
+    let declares_configuration = files.iter().any(|(path, _)| path == "celerrate.toml");
+    for (path, contents) in files {
         let path = root.path().join(path);
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).unwrap();
         }
         std::fs::write(path, contents).unwrap();
+    }
+    if !declares_configuration {
+        std::fs::write(
+            root.path().join("celerrate.toml"),
+            force_activation_configuration(),
+        )
+        .unwrap();
     }
     let mut output = Vec::new();
     run(
@@ -94,20 +118,31 @@ fn every_written_page_example_is_honest() {
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
-/// The spec's harness forces nursery rules active before running
-/// their pages; no nursery rule exists, so that machinery does not
-/// either. This guard fails the moment the first nursery rule lands,
-/// naming the extension required.
+/// The spec's harness requirement (section 2): explain pages stay
+/// executable for every tier, because the harness forces each rule
+/// active through the same `[rules]` mechanism a user would. This
+/// pins that the generated configuration names every core rule and is
+/// itself silent, so no page's report can be polluted by it.
 #[test]
-fn every_core_rule_is_default_tier_so_the_default_active_set_covers_all_pages() {
+fn the_forced_activation_names_every_core_rule_and_stays_silent() {
+    let configuration = force_activation_configuration();
     for (metadata, _) in celerrate_rules::core_rules() {
-        assert_eq!(
-            metadata.tier,
-            celerrate_rules::Tier::Default,
-            "rule `{}` is outside the default active set; teach \
-             explain_pages.rs to force it active before its \
-             identifiers' pages can stay executable",
+        assert!(
+            configuration.contains(&format!("[rules.{}]", metadata.name)),
+            "rule `{}` is missing from the forced activation",
             metadata.name,
+        );
+    }
+    let report = report_for("<?php\n\nfunction example(): void {}\n");
+    // Named rather than prefix-matched: a bare "CEL004" prefix also
+    // catches CEL0041 and CEL0042, which are legitimate reporting-phase
+    // rule output, not configuration diagnostics.
+    for identifier in [
+        "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
+    ] {
+        assert!(
+            !report.contains(identifier),
+            "the forced activation must not report configuration diagnostics:\n{report}",
         );
     }
 }

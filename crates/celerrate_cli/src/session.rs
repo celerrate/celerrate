@@ -117,11 +117,23 @@ pub struct Session {
     /// call this session makes: load and persist must key packs on the
     /// same value, never recompute it independently.
     pub plugin_set_digest: [u8; 32],
+    /// The configuration digest packs are keyed on this session
+    /// (`configuration::configuration_digest` over the loaded model).
+    pub configuration_digest: [u8; 32],
+    /// The digest the snapshot was loaded under: `--watch` can move the
+    /// live digest at runtime (a `celerrate.toml` edit), and verdicts
+    /// persisted under the old configuration must not be served past it.
+    pub cache_loaded_configuration_digest: [u8; 32],
     /// The loaded `celerrate.toml`, `None` when the project has none.
-    /// Part 1 reports its diagnostics and counts them toward the exit
-    /// code; part 2 consumes its content. `--watch` does not reload or
-    /// report it yet (part 2, with the behavioral wiring).
+    /// Its diagnostics are reported and count toward the exit code, and
+    /// `configuration_model` is what every consumer of its parsed content
+    /// reads. `rediscover` reloads it whenever a save of it, `composer.json`,
+    /// or `composer.lock` is absorbed under `--watch`.
     pub loaded_configuration: Option<crate::configuration::LoadedConfiguration>,
+    /// The `[severity]` remap the per-file composition applies
+    /// (`configuration::severity_remap`): identifier text to severity.
+    /// Empty without a file; shared with every `AnalysisInputs` clone.
+    pub severity_remap: Arc<BTreeMap<String, celerrate_diagnostics::Severity>>,
 }
 
 impl Session {
@@ -129,9 +141,31 @@ impl Session {
     /// missing manifest is a notice, an undecodable stub blob is an
     /// internal error, and neither stops the run.
     pub fn start(root: &Path) -> Self {
+        // The same normalized form discovery would produce: paths are
+        // interned and relativized against this exact value.
+        let root = celerrate_vfs::normalize_path(root, root);
         let mut internal_errors = Vec::new();
         let database = AnalysisDatabase::default();
-        let discovery = discover(root);
+        let mut vfs = Vfs::default();
+        // Loaded before discovery, deliberately: include/exclude and the
+        // `php` override are discovery inputs now (spec section 2).
+        // `celerrate.toml` therefore takes the first file identifier;
+        // nothing reads the interning order, and rendering resolves
+        // display paths through the VFS by identity.
+        let loaded_configuration = crate::configuration::load(&root, &mut vfs);
+        let configuration_model = loaded_configuration
+            .as_ref()
+            .map(|loaded| loaded.configuration.clone())
+            .unwrap_or_default();
+        let discovery = discover(&root, &configuration_model);
+        // Computed right after the model exists and before the cache
+        // loads: load and persist must key packs on the same digest,
+        // never recompute it independently (mirrors `plugin_set_digest`
+        // below).
+        let configuration_digest = crate::configuration::configuration_digest(&configuration_model);
+        let severity_remap = Arc::new(crate::configuration::severity_remap(
+            loaded_configuration.as_ref(),
+        ));
 
         let index = match embedded_stub_index() {
             Ok(index) => index,
@@ -162,14 +196,19 @@ impl Session {
         let plugins = register_plugins(&database);
         // The core rules register under their reserved identity, outside
         // the admitted plugin set the digest keys on: core behavior is
-        // keyed by binary identity, not by the plugin-set digest.
-        register_core_rules(&database);
+        // keyed by binary identity, not by the plugin-set digest. The
+        // `[rules]` activation overrides ride along so the active set
+        // reflects the loaded configuration from the first registration.
+        register_core_rules(
+            &database,
+            &crate::configuration::rule_overrides(loaded_configuration.as_ref()),
+        );
         // Computed once and threaded through: load and persist must key
         // packs on the same digest, never recompute it independently.
         let plugin_set_digest = plugin_set_digest(&plugins);
         let cache = Arc::new(CacheSnapshot::load(
             &cache_directory,
-            &PackHeader::current(cache_loaded_range, plugin_set_digest),
+            &PackHeader::current(cache_loaded_range, plugin_set_digest, configuration_digest),
         ));
         let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache {
             snapshot: cache.clone(),
@@ -190,7 +229,7 @@ impl Session {
 
         let mut session = Self {
             database,
-            vfs: Vfs::default(),
+            vfs,
             discovery,
             configuration,
             stubs,
@@ -203,23 +242,26 @@ impl Session {
             statistics,
             plugins,
             plugin_set_digest,
-            loaded_configuration: None,
+            configuration_digest,
+            cache_loaded_configuration_digest: configuration_digest,
+            loaded_configuration,
+            severity_remap,
         };
-        let walk = enumerate_php_files(&session.discovery.walk_roots());
+        let walk = enumerate_php_files(
+            &session.discovery.walk_roots(),
+            &session.discovery.excluded_roots,
+        );
         session.load(&walk);
-        // After the walk, deliberately: the VFS then already holds every
-        // PHP file the project declares, so interning `celerrate.toml`
-        // leaves their identifiers exactly where they were.
-        //
-        // The normalized root, not the raw CLI argument: `discovery.root`
-        // is what `render::relative_path` strips off every other path in
-        // the report, and interning against anything else (an
-        // unnormalized `..`-bearing root, for instance) would print this
-        // one file's path unrelativized next to every PHP file's clean
-        // one.
-        session.loaded_configuration =
-            crate::configuration::load(&session.discovery.root, &mut session.vfs);
         session
+    }
+
+    /// The parsed configuration model, or the default when the project
+    /// has no file: what every consumer of configuration data reads.
+    pub(crate) fn configuration_model(&self) -> celerrate_config::Configuration {
+        self.loaded_configuration
+            .as_ref()
+            .map(|loaded| loaded.configuration.clone())
+            .unwrap_or_default()
     }
 
     /// The discovery notices, rendered as their own spanless block: a
@@ -241,12 +283,15 @@ impl Session {
             stubs: self.stubs,
             configuration: self.configuration,
             reported: self.reported_files(),
-            cache: if current_range == self.cache_loaded_range {
+            cache: if current_range == self.cache_loaded_range
+                && self.configuration_digest == self.cache_loaded_configuration_digest
+            {
                 self.cache.clone()
             } else {
                 Arc::new(CacheSnapshot::default())
             },
             statistics: self.statistics.clone(),
+            severity_remap: self.severity_remap.clone(),
         }
     }
 
@@ -444,7 +489,7 @@ impl Session {
             return;
         }
         for path in changed {
-            if !is_php(path) {
+            if !is_php(path) || self.discovery.is_excluded(path) {
                 continue;
             }
             let contents = std::fs::read(path).ok();
@@ -458,24 +503,62 @@ impl Session {
 
     fn is_project_manifest(&self, path: &Path) -> bool {
         let root = &self.discovery.root;
-        path == root.join("composer.json") || path == root.join("composer.lock")
+        path == root.join("composer.json")
+            || path == root.join("composer.lock")
+            || path == root.join("celerrate.toml")
     }
 
-    /// A changed lockfile re-runs discovery and rebuilds the
-    /// configuration. The vendor tree is never watched: thousands of files
-    /// that only move when the lockfile does, and this is what a lockfile
-    /// change triggers anyway.
+    /// A changed manifest, lockfile, or `celerrate.toml` re-runs discovery
+    /// under the freshly reloaded configuration and rebuilds everything
+    /// derived from it: the walk, the version range, the active set, the
+    /// severity remap, and the cache digest. Configuration changes are
+    /// rare; whole invalidation is the accepted cost (spec, rejected
+    /// approach C).
     fn rediscover(&mut self) {
         let root = self.discovery.root.clone();
-        let discovery = discover(&root);
+        self.loaded_configuration = crate::configuration::load(&root, &mut self.vfs);
+        let model = self.configuration_model();
+        let discovery = discover(&root, &model);
         if discovery.php_version_range != self.discovery.php_version_range {
             self.configuration
                 .set_php_version_range(&mut self.database)
                 .to(discovery.php_version_range);
         }
         self.discovery = discovery;
-        let walk = enumerate_php_files(&self.discovery.walk_roots());
+        self.refresh_configuration(&model);
+        let walk =
+            enumerate_php_files(&self.discovery.walk_roots(), &self.discovery.excluded_roots);
         self.load(&walk);
+    }
+
+    /// Refreshes the registration-time consumers of the configuration: the
+    /// active set (through the registry setter, only when it actually
+    /// moved, because setting a HIGH-durability input invalidates the
+    /// world), the severity remap, and the digest packs are keyed on.
+    fn refresh_configuration(&mut self, model: &celerrate_config::Configuration) {
+        let overrides = crate::configuration::rule_overrides(self.loaded_configuration.as_ref());
+        let desired = crate::plugins::core_registrations(&overrides);
+        let desired_shape: Vec<(String, bool)> = desired
+            .iter()
+            .map(|registration| (registration.metadata.name.clone(), registration.active))
+            .collect();
+        let current_shape: Option<Vec<(String, bool)>> =
+            celerrate_rules::RuleRegistry::try_get(&self.database).map(|registry| {
+                registry
+                    .registrations(&self.database)
+                    .iter()
+                    .map(|registration| (registration.metadata.name.clone(), registration.active))
+                    .collect()
+            });
+        if current_shape.as_deref() != Some(desired_shape.as_slice())
+            && let Some(registry) = celerrate_rules::RuleRegistry::try_get(&self.database)
+        {
+            registry.set_registrations(&mut self.database).to(desired);
+        }
+        self.severity_remap = Arc::new(crate::configuration::severity_remap(
+            self.loaded_configuration.as_ref(),
+        ));
+        self.configuration_digest = crate::configuration::configuration_digest(model);
     }
 }
 
@@ -491,9 +574,14 @@ fn is_php(path: &Path) -> bool {
 
 #[cfg(test)]
 mod tests {
-    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+    #![allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::indexing_slicing,
+        clippy::panic
+    )]
 
-    use celerrate_project::{PhpVersion, ProjectNotice};
+    use celerrate_project::{PhpVersion, PhpVersionRange, ProjectNotice};
 
     use super::{InternalError, Session};
 
@@ -726,6 +814,53 @@ mod tests {
         assert_eq!(session.files.files(&session.database).len(), 1);
     }
 
+    /// A change under an excluded root must not re-enter the analyzed
+    /// set: the exclusion `celerrate.toml` declared is not a fact only
+    /// the initial walk honors, it is a standing fact about what the
+    /// project is. The sibling path proves the test isn't passing for
+    /// the wrong reason — a session that absorbed nothing at all would
+    /// also show the excluded path missing.
+    #[test]
+    fn absorbing_a_path_under_an_excluded_root_does_not_enter_the_analyzed_set() {
+        let root = project(&[
+            ("src/Kept.php", "<?php class Kept {}"),
+            (
+                "celerrate.toml",
+                "[project]\nexclude = [\"src/Generated\"]\n",
+            ),
+        ]);
+        let mut session = Session::start(root.path());
+        assert_eq!(session.sources.len(), 1);
+
+        let generated = root.path().join("src/Generated");
+        std::fs::create_dir_all(&generated).unwrap();
+        let excluded = generated.join("Machine.php");
+        std::fs::write(&excluded, "<?php class Machine {}").unwrap();
+        let sibling = root.path().join("src/Sibling.php");
+        std::fs::write(&sibling, "<?php class Sibling {}").unwrap();
+
+        session.absorb(&[excluded.clone(), sibling.clone()]);
+
+        assert_eq!(
+            session.sources.len(),
+            2,
+            "only the sibling path joins; the excluded path does not",
+        );
+        let analyzed_paths: Vec<_> = session
+            .sources
+            .keys()
+            .filter_map(|&file| session.vfs.path(file).map(|path| path.to_path_buf()))
+            .collect();
+        assert!(
+            analyzed_paths.contains(&sibling),
+            "the sibling path must be in the analyzed set: {analyzed_paths:?}",
+        );
+        assert!(
+            !analyzed_paths.contains(&excluded),
+            "the excluded path must never be in the analyzed set: {analyzed_paths:?}",
+        );
+    }
+
     #[test]
     fn absorbing_a_lockfile_change_reruns_discovery() {
         let root = project(&[
@@ -758,6 +893,129 @@ mod tests {
                 .php_version_range(&session.database)
                 .minimum,
             PhpVersion::new(8, 4),
+        );
+    }
+
+    /// The part 2 wiring promise, at the session level: a `celerrate.toml`
+    /// saved mid-watch is a manifest event like `composer.json` and
+    /// `composer.lock`, and `absorb` reconfigures the session from it,
+    /// reaching both the salsa PHP-version input and the rule registry.
+    #[test]
+    fn absorbing_a_configuration_change_reconfigures_the_session() {
+        let root = project(&[
+            (
+                "composer.json",
+                r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+            ),
+            ("src/Kernel.php", "<?php namespace App; class Kernel {}"),
+        ]);
+        let mut session = Session::start(root.path());
+        let original_digest = session.configuration_digest;
+
+        let configuration = root.path().join("celerrate.toml");
+        std::fs::write(
+            &configuration,
+            "[project]\nphp = \"8.3\"\n\n[rules.null-dereference]\nenabled = false\n",
+        )
+        .unwrap();
+        session.absorb(&[configuration]);
+
+        assert_eq!(
+            session.configuration.php_version_range(&session.database),
+            PhpVersionRange::point(PhpVersion::new(8, 3)),
+            "the php override reached the salsa input",
+        );
+        // The digest normalizes over `[rules]` and `[severity]` only (spec
+        // section 2), so it does move here, but only because of the
+        // `[rules]` table riding alongside the `[project]` override: it
+        // lands on exactly the digest that same `[rules]` table alone
+        // would produce, proving the `[project]` table contributed
+        // nothing to it.
+        assert_ne!(
+            session.configuration_digest, original_digest,
+            "the [rules] table riding alongside the [project] override does move the digest",
+        );
+        let (rules_only, _) = celerrate_config::parse(
+            celerrate_source::FileId::new(0),
+            "[rules.null-dereference]\nenabled = false\n",
+        );
+        assert_eq!(
+            session.configuration_digest,
+            crate::configuration::configuration_digest(&rules_only),
+            "the [project] table contributes nothing of its own to the digest",
+        );
+        let registry = celerrate_rules::RuleRegistry::try_get(&session.database)
+            .expect("the registry is set at startup");
+        let null_dereference = registry
+            .registrations(&session.database)
+            .iter()
+            .find(|registration| registration.metadata.name == "null-dereference")
+            .expect("the rule is registered");
+        assert!(!null_dereference.active, "the disable reached the registry");
+    }
+
+    /// A `[rules]` change moves the configuration digest, and the digest
+    /// the loaded snapshot was seeded under stays put: `inputs()` compares
+    /// the two and must serve nothing stale rather than the pack a now
+    /// stale configuration produced.
+    #[test]
+    fn absorbing_a_rules_change_moves_the_digest_and_gates_the_cache() {
+        let root = project(&[
+            (
+                "composer.json",
+                r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+            ),
+            ("src/Kernel.php", "<?php namespace App; class Kernel {}"),
+        ]);
+        let mut session = Session::start(root.path());
+        let original_digest = session.configuration_digest;
+
+        let configuration = root.path().join("celerrate.toml");
+        std::fs::write(
+            &configuration,
+            "[rules.null-dereference]\nenabled = false\n",
+        )
+        .unwrap();
+        session.absorb(&[configuration]);
+
+        assert_ne!(session.configuration_digest, original_digest);
+        assert_eq!(
+            session.cache_loaded_configuration_digest, original_digest,
+            "the loaded snapshot keeps its own digest, so inputs() serves nothing stale",
+        );
+    }
+
+    /// Deleting `celerrate.toml` mid-watch returns the session to zero
+    /// configuration: `loaded_configuration` goes back to `None`, and every
+    /// `Default`-tier rule the file had disabled is active again.
+    #[test]
+    fn a_deleted_configuration_file_returns_the_session_to_defaults() {
+        let root = project(&[
+            (
+                "composer.json",
+                r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+            ),
+            (
+                "celerrate.toml",
+                "[rules.null-dereference]\nenabled = false\n",
+            ),
+            ("src/Kernel.php", "<?php namespace App; class Kernel {}"),
+        ]);
+        let mut session = Session::start(root.path());
+        assert!(session.loaded_configuration.is_some());
+
+        let configuration = root.path().join("celerrate.toml");
+        std::fs::remove_file(&configuration).unwrap();
+        session.absorb(&[configuration]);
+
+        assert!(session.loaded_configuration.is_none());
+        let registry = celerrate_rules::RuleRegistry::try_get(&session.database).unwrap();
+        assert!(
+            registry
+                .registrations(&session.database)
+                .iter()
+                .all(|registration| registration.active),
+            "every Default-tier rule is active again",
         );
     }
 }

@@ -3,13 +3,14 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use celerrate_config::Configuration;
 use celerrate_vfs::normalize_path;
 
 use crate::constraint::{php_version_from_text, version_range_for_constraint};
 use crate::installed::parse_installed_packages;
 use crate::manifest::{ComposerManifest, parse_manifest};
 use crate::notice::ProjectNotice;
-use crate::version::PhpVersionRange;
+use crate::version::{PhpVersion, PhpVersionRange};
 
 /// Whether a file belongs to the project or to an installed
 /// dependency. Vendor is the high-durability tier: at the composition
@@ -32,6 +33,10 @@ pub struct ProjectDiscovery {
     pub php_version_range: PhpVersionRange,
     pub project_walk_roots: Vec<PathBuf>,
     pub vendor_walk_roots: Vec<PathBuf>,
+    /// The configuration's `exclude` entries, normalized against the
+    /// root: subtracted from the walk (spec section 3). Empty without a
+    /// configuration file.
+    pub excluded_roots: Vec<PathBuf>,
     pub notices: Vec<ProjectNotice>,
 }
 
@@ -51,6 +56,14 @@ impl ProjectDiscovery {
         } else {
             FileOrigin::Project
         }
+    }
+
+    /// Whether `path` falls under an excluded root. Lexical prefix
+    /// matching over normalized paths, like `classify`.
+    pub fn is_excluded(&self, path: &Path) -> bool {
+        self.excluded_roots
+            .iter()
+            .any(|root| path.starts_with(root))
     }
 }
 
@@ -93,7 +106,7 @@ fn read_source(path: &Path) -> FileSource {
 /// `composer.json` and `<vendor>/composer/installed.json` from disk.
 /// This is push-time work for the composition root, never called
 /// during a query.
-pub fn discover(root: &Path) -> ProjectDiscovery {
+pub fn discover(root: &Path, configuration: &Configuration) -> ProjectDiscovery {
     let manifest = read_source(&root.join("composer.json"));
     // The manifest decides where the vendor directory lives, so it is
     // parsed once here just to locate `installed.json`; the pure core
@@ -104,15 +117,17 @@ pub fn discover(root: &Path) -> ProjectDiscovery {
     };
     let vendor = vendor_root(root, parsed.as_ref());
     let installed = read_source(&vendor.join("composer/installed.json"));
-    discover_from_sources(root, manifest, installed)
+    discover_from_sources(root, manifest, installed, configuration)
 }
 
 /// The pure core of [`discover`]: derives the configuration from the
-/// two file sources. `root` must be absolute.
+/// two file sources and the loaded `celerrate.toml`. `root` must be
+/// absolute.
 pub fn discover_from_sources(
     root: &Path,
     manifest_source: FileSource,
     installed_source: FileSource,
+    configuration: &Configuration,
 ) -> ProjectDiscovery {
     let mut notices = Vec::new();
     let manifest = match manifest_source {
@@ -133,20 +148,38 @@ pub fn discover_from_sources(
         },
     };
     let vendor_root = vendor_root(root, manifest.as_ref());
-    // A missing or invalid manifest already carries its own notice;
-    // the version fallback it implies is not separately reported.
-    let php_version_range = match &manifest {
-        None => PhpVersionRange::fallback(),
-        Some(manifest) => resolve_version_range(manifest, &mut notices),
+    // The parent's detection precedence regains its first stage: the
+    // `celerrate.toml` override. It collapses the range to a clamped
+    // point and decides alone; the manifest stages, and the notices
+    // that report their failures, only speak when no override exists,
+    // because a constraint the resolution never used is not news.
+    let php_version_range = match &configuration.php {
+        Some(overridden) => {
+            let (major, minor) = overridden.value;
+            PhpVersionRange::point(PhpVersion::new(major, minor).clamped_to_supported())
+        }
+        None => match &manifest {
+            None => PhpVersionRange::fallback(),
+            Some(manifest) => resolve_version_range(manifest, &mut notices),
+        },
     };
     // Zero-configuration never blocks: when no autoload is declared,
     // or the declared rules resolve to no walkable root (for example
     // every directory value was mistyped), the whole root is analyzed.
-    let project_walk_roots = manifest
-        .as_ref()
-        .map(|manifest| manifest.autoload.walk_roots(root))
-        .filter(|walk_roots| !walk_roots.is_empty())
-        .unwrap_or_else(|| vec![normalize_path(root, root)]);
+    // A non-empty `include` replaces the Composer-derived roots
+    // (spec section 3: "default: Composer autoload roots"). The paths
+    // are lexical, exactly like autoload walk roots: nothing stats
+    // them, so a declared-but-absent directory is ordinary.
+    let project_walk_roots = if configuration.include.is_empty() {
+        manifest
+            .as_ref()
+            .map(|manifest| manifest.autoload.walk_roots(root))
+            .filter(|walk_roots| !walk_roots.is_empty())
+            .unwrap_or_else(|| vec![normalize_path(root, root)])
+    } else {
+        normalized_configuration_paths(&configuration.include, root)
+    };
+    let excluded_roots = normalized_configuration_paths(&configuration.exclude, root);
     let vendor_walk_roots = match installed_source {
         FileSource::Absent => Vec::new(),
         FileSource::Unreadable(error) => {
@@ -175,8 +208,25 @@ pub fn discover_from_sources(
         php_version_range,
         project_walk_roots,
         vendor_walk_roots,
+        excluded_roots,
         notices,
     }
+}
+
+/// Root-joined, normalized, deduplicated, in declaration order: the
+/// shape both `include` and `exclude` share.
+fn normalized_configuration_paths(
+    paths: &[celerrate_config::Spanned<String>],
+    root: &Path,
+) -> Vec<PathBuf> {
+    let mut normalized = Vec::new();
+    for path in paths {
+        let candidate = normalize_path(Path::new(&path.value), root);
+        if !normalized.contains(&candidate) {
+            normalized.push(candidate);
+        }
+    }
+    normalized
 }
 
 fn vendor_root(root: &Path, manifest: Option<&ComposerManifest>) -> PathBuf {
@@ -226,16 +276,32 @@ mod tests {
 
     use std::path::{Path, PathBuf};
 
+    use celerrate_config::{Configuration, Spanned};
+
     use super::{FileOrigin, FileSource, discover_from_sources};
     use crate::notice::ProjectNotice;
     use crate::version::{PhpVersion, PhpVersionRange};
 
     const ROOT: &str = "/project";
 
+    fn spanned<T>(value: T) -> Spanned<T> {
+        Spanned {
+            value,
+            range: celerrate_source::TextRange::new(
+                celerrate_source::TextSize::from(0),
+                celerrate_source::TextSize::from(0),
+            ),
+        }
+    }
+
     #[test]
     fn without_a_manifest_the_root_is_analyzed_with_defaults_and_one_notice() {
-        let discovery =
-            discover_from_sources(Path::new(ROOT), FileSource::Absent, FileSource::Absent);
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::Absent,
+            FileSource::Absent,
+            &Configuration::default(),
+        );
         assert_eq!(
             discovery.notices,
             vec![ProjectNotice::MissingComposerManifest]
@@ -252,6 +318,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from("not json"),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.notices,
@@ -272,6 +339,7 @@ mod tests {
                 }"#,
             ),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.php_version_range,
@@ -286,6 +354,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "config": { "platform": { "php": "7.4.33" } } }"#),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.php_version_range,
@@ -304,6 +373,7 @@ mod tests {
                 }"#,
             ),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.php_version_range,
@@ -323,6 +393,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(discovery.notices, vec![ProjectNotice::PhpVersionFallback]);
@@ -334,6 +405,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "require": { "php": "7.4.*" } }"#),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -355,6 +427,7 @@ mod tests {
                 }"#,
             ),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -376,6 +449,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "config": { "platform": { "php": "eight" } } }"#),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.php_version_range, PhpVersionRange::fallback());
         assert_eq!(
@@ -408,6 +482,7 @@ mod tests {
                     ]
                 }"#,
             ),
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.project_walk_roots,
@@ -436,6 +511,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
     }
@@ -448,6 +524,7 @@ mod tests {
                 r#"{ "require": { "php": "^8.1" }, "autoload": { "psr-4": { "App\\": 42 } } }"#,
             ),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.project_walk_roots, vec![PathBuf::from(ROOT)]);
     }
@@ -460,6 +537,7 @@ mod tests {
                 r#"{ "require": { "php": "^8.1" }, "config": { "vendor-dir": "third-party" } }"#,
             ),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(discovery.vendor_root, PathBuf::from("/project/third-party"));
         assert_eq!(
@@ -478,6 +556,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
             FileSource::from("not json"),
+            &Configuration::default(),
         );
         assert_eq!(discovery.vendor_walk_roots, Vec::<PathBuf>::new());
         assert_eq!(
@@ -495,6 +574,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::Unreadable("permission denied (os error 13)".to_owned()),
             FileSource::Absent,
+            &Configuration::default(),
         );
         assert_eq!(
             discovery.notices,
@@ -516,6 +596,7 @@ mod tests {
             Path::new(ROOT),
             FileSource::from(r#"{ "require": { "php": "^8.1" } }"#),
             FileSource::Unreadable("permission denied (os error 13)".to_owned()),
+            &Configuration::default(),
         );
         assert_eq!(discovery.vendor_walk_roots, Vec::<PathBuf>::new());
         assert_eq!(
@@ -524,5 +605,135 @@ mod tests {
                 error: "permission denied (os error 13)".to_owned(),
             }],
         );
+    }
+
+    #[test]
+    fn the_php_override_collapses_the_range_and_wins_over_the_manifest() {
+        let configuration = Configuration {
+            php: Some(spanned((8, 2))),
+            ..Configuration::default()
+        };
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(
+                r#"{
+                "require": { "php": "^8.1" },
+                "config": { "platform": { "php": "8.4.0" } }
+            }"#,
+            ),
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            discovery.php_version_range,
+            PhpVersionRange::point(PhpVersion::new(8, 2)),
+        );
+        assert_eq!(discovery.notices, Vec::<ProjectNotice>::new());
+    }
+
+    #[test]
+    fn the_php_override_applies_without_a_manifest_and_is_clamped() {
+        let configuration = Configuration {
+            php: Some(spanned((7, 0))),
+            ..Configuration::default()
+        };
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::Absent,
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            discovery.php_version_range,
+            PhpVersionRange::point(PhpVersion::new(8, 1)),
+            "an unsupported override is clamped, exactly like config.platform.php",
+        );
+        assert_eq!(
+            discovery.notices,
+            vec![ProjectNotice::MissingComposerManifest],
+            "the manifest notice stays; no version notice fires when the override decides",
+        );
+    }
+
+    #[test]
+    fn the_override_skips_the_detection_stages_and_their_notices() {
+        let configuration = Configuration {
+            php: Some(spanned((8, 3))),
+            ..Configuration::default()
+        };
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(r#"{ "require": { "php": "7.4.*" } }"#),
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            discovery.php_version_range,
+            PhpVersionRange::point(PhpVersion::new(8, 3)),
+        );
+        assert_eq!(
+            discovery.notices,
+            Vec::<ProjectNotice>::new(),
+            "the user pinned the version; the unused manifest constraint is not reported",
+        );
+    }
+
+    #[test]
+    fn include_replaces_the_autoload_walk_roots_in_declaration_order() {
+        let configuration = Configuration {
+            include: vec![spanned("app".to_owned()), spanned("scripts".to_owned())],
+            ..Configuration::default()
+        };
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(
+                r#"{ "require": { "php": "^8.1" }, "autoload": { "psr-4": { "App\\": "src/" } } }"#,
+            ),
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            discovery.project_walk_roots,
+            vec![
+                PathBuf::from("/project/app"),
+                PathBuf::from("/project/scripts")
+            ],
+            "include replaces the Composer-derived roots",
+        );
+    }
+
+    #[test]
+    fn an_empty_include_behaves_like_an_absent_one() {
+        let configuration = Configuration::default();
+        let with_empty = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#),
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            with_empty.project_walk_roots,
+            vec![PathBuf::from("/project/src")]
+        );
+    }
+
+    #[test]
+    fn exclude_populates_the_excluded_roots_and_the_predicate() {
+        let configuration = Configuration {
+            exclude: vec![spanned("src/Generated".to_owned())],
+            ..Configuration::default()
+        };
+        let discovery = discover_from_sources(
+            Path::new(ROOT),
+            FileSource::from(r#"{ "autoload": { "psr-4": { "App\\": "src/" } } }"#),
+            FileSource::Absent,
+            &configuration,
+        );
+        assert_eq!(
+            discovery.excluded_roots,
+            vec![PathBuf::from("/project/src/Generated")],
+        );
+        assert!(discovery.is_excluded(Path::new("/project/src/Generated/Machine.php")));
+        assert!(!discovery.is_excluded(Path::new("/project/src/Kernel.php")));
     }
 }
