@@ -189,8 +189,13 @@ impl Session {
         let plugins = register_plugins(&database);
         // The core rules register under their reserved identity, outside
         // the admitted plugin set the digest keys on: core behavior is
-        // keyed by binary identity, not by the plugin-set digest.
-        register_core_rules(&database);
+        // keyed by binary identity, not by the plugin-set digest. The
+        // `[rules]` activation overrides ride along so the active set
+        // reflects the loaded configuration from the first registration.
+        register_core_rules(
+            &database,
+            &crate::configuration::rule_overrides(loaded_configuration.as_ref()),
+        );
         // Computed once and threaded through: load and persist must key
         // packs on the same digest, never recompute it independently.
         let plugin_set_digest = plugin_set_digest(&plugins);

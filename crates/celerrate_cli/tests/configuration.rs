@@ -220,3 +220,40 @@ fn the_php_override_collapses_the_range_and_gates_availability() {
         "at a fixed 8.3 the symbol exists: {report}",
     );
 }
+
+const NULLABLE_MANIFEST: &str =
+    r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#;
+const NULLABLE_SOURCE: &str = "<?php\nnamespace App;\n\nclass User { public function save(): void {} }\n\nclass Consumer\n{\n    public function run(?User $maybe): void\n    {\n        $maybe->save();\n    }\n}\n";
+
+#[test]
+fn disabling_a_default_rule_removes_its_diagnostics() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", NULLABLE_MANIFEST),
+        ("src/Consumer.php", NULLABLE_SOURCE),
+    ];
+    let (outcome, report) = check(files);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("CEL0034"), "{report}");
+
+    let mut disabled = files.to_vec();
+    disabled.push((
+        "celerrate.toml",
+        "[rules.null-dereference]\nenabled = false\n",
+    ));
+    let (outcome, report) = check(&disabled);
+    assert!(matches!(outcome, Outcome::Clean), "{report}");
+}
+
+#[test]
+fn enabling_a_default_rule_is_a_silent_no_op() {
+    let (outcome, report) = check(&[
+        ("composer.json", NULLABLE_MANIFEST),
+        ("src/Consumer.php", NULLABLE_SOURCE),
+        (
+            "celerrate.toml",
+            "[rules.null-dereference]\nenabled = true\n",
+        ),
+    ]);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("CEL0034"), "{report}");
+}

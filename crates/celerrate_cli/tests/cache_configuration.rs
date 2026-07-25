@@ -107,3 +107,29 @@ fn a_severity_section_change_discards_the_packs() {
     .unwrap();
     assert!(!all_verdicts_hit(root.path()));
 }
+
+#[test]
+fn a_rule_disabled_after_a_warm_run_stops_speaking() {
+    // The first run persists verdicts carrying CEL0034; disabling the
+    // rule moves the digest, so the second run must not serve them.
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        (
+            "src/Consumer.php",
+            "<?php\nnamespace App;\n\nclass User { public function save(): void {} }\n\nclass Consumer\n{\n    public function run(?User $maybe): void\n    {\n        $maybe->save();\n    }\n}\n",
+        ),
+    ]);
+    let first = run_check(root.path());
+    assert!(first.contains("CEL0034"), "{first}");
+
+    std::fs::write(
+        root.path().join("celerrate.toml"),
+        "[rules.null-dereference]\nenabled = false\n",
+    )
+    .unwrap();
+    let second = run_check(root.path());
+    assert!(
+        !second.contains("CEL0034"),
+        "a stale pack must not resurrect a disabled rule: {second}",
+    );
+}

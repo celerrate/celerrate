@@ -4,6 +4,7 @@
 //! registries sit in the high-durability tier next to stubs and
 //! configuration, set once per process, never mutated.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use celerrate_plugin::{PLUGIN_API_VERSION, PluginDescriptor};
@@ -147,23 +148,44 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
 /// unset, `celerrate_rules` treats the registry as empty rather than
 /// producing an error, so core-rule diagnostic families (for example
 /// CEL0024) go silently missing, with no compile error to catch the
-/// omission.
-pub fn register_core_rules(database: &AnalysisDatabase) {
+/// omission. `overrides` carries the configuration's `[rules]`
+/// activation table (`configuration::rule_overrides`); an empty map
+/// reproduces the tier-only default.
+pub fn register_core_rules(database: &AnalysisDatabase, overrides: &BTreeMap<String, bool>) {
+    let _ = celerrate_rules::RuleRegistry::builder(core_registrations(overrides))
+        .durability(salsa::Durability::HIGH)
+        .new(database);
+}
+
+/// The spec's active-set formula (section 2): (`Default`-tier rules
+/// minus disabled) union (nursery rules enabled). An override on the
+/// tier's own default is a valid no-op, so promotions and demotions
+/// never break existing configurations.
+pub fn rule_is_active(tier: celerrate_rules::Tier, override_enabled: Option<bool>) -> bool {
+    override_enabled.unwrap_or(tier == celerrate_rules::Tier::Default)
+}
+
+/// The core registrations under the configured active set. Split from
+/// `register_core_rules` so the `--watch` reload can rebuild the same
+/// list for the registry setter.
+pub fn core_registrations(
+    overrides: &BTreeMap<String, bool>,
+) -> Vec<celerrate_rules::RuleRegistration> {
     let identity = core_identity();
-    let registrations: Vec<celerrate_rules::RuleRegistration> = celerrate_rules::core_rules()
+    celerrate_rules::core_rules()
         .into_iter()
         .map(
             |(metadata, implementation)| celerrate_rules::RuleRegistration {
                 identity: identity.clone(),
-                active: metadata.tier == celerrate_rules::Tier::Default,
+                active: rule_is_active(
+                    metadata.tier,
+                    overrides.get(metadata.name.as_str()).copied(),
+                ),
                 metadata,
                 implementation,
             },
         )
-        .collect();
-    let _ = celerrate_rules::RuleRegistry::builder(registrations)
-        .durability(salsa::Durability::HIGH)
-        .new(database);
+        .collect()
 }
 
 fn core_identity() -> PluginIdentity {
@@ -257,10 +279,40 @@ mod tests {
     )]
 
     use super::{
-        ExcludedPlugin, RegisteredPlugins, admission, plugin_set_digest, register_core_rules,
-        register_plugins,
+        ExcludedPlugin, RegisteredPlugins, admission, core_registrations, plugin_set_digest,
+        register_core_rules, register_plugins, rule_is_active,
     };
     use crate::database::AnalysisDatabase;
+
+    #[test]
+    fn the_active_computation_is_the_specs_formula() {
+        use celerrate_rules::Tier;
+        // (`Default`-tier rules minus disabled) union (nursery enabled).
+        assert!(rule_is_active(Tier::Default, None));
+        assert!(!rule_is_active(Tier::Default, Some(false)));
+        assert!(rule_is_active(Tier::Default, Some(true)), "a valid no-op");
+        assert!(!rule_is_active(Tier::Nursery, None));
+        assert!(
+            rule_is_active(Tier::Nursery, Some(true)),
+            "force-activation"
+        );
+        assert!(!rule_is_active(Tier::Nursery, Some(false)), "a valid no-op");
+    }
+
+    #[test]
+    fn an_override_reaches_the_registration_it_names_and_no_other() {
+        let mut overrides = std::collections::BTreeMap::new();
+        overrides.insert("null-dereference".to_owned(), false);
+        let registrations = core_registrations(&overrides);
+        for registration in &registrations {
+            let expected = registration.metadata.name != "null-dereference";
+            assert_eq!(
+                registration.active, expected,
+                "{}",
+                registration.metadata.name
+            );
+        }
+    }
 
     #[test]
     fn the_composition_root_registers_the_bridge_in_every_registry_it_serves() {
@@ -393,7 +445,7 @@ mod tests {
     #[test]
     fn core_rules_register_under_the_reserved_identity_and_validate() {
         let db = AnalysisDatabase::default();
-        register_core_rules(&db);
+        register_core_rules(&db, &std::collections::BTreeMap::new());
         let registry =
             celerrate_rules::RuleRegistry::try_get(&db).expect("core rules are always registered");
         let registrations = registry.registrations(&db);
@@ -408,7 +460,7 @@ mod tests {
     fn core_rules_never_enter_the_admitted_plugin_set() {
         let db = AnalysisDatabase::default();
         let registered = register_plugins(&db);
-        register_core_rules(&db);
+        register_core_rules(&db, &std::collections::BTreeMap::new());
         assert!(
             registered
                 .admitted

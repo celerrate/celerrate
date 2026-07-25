@@ -12,12 +12,13 @@
 //! Part 1 boundary: the parsed configuration is carried and reports its
 //! own diagnostics, counting them toward the exit code. As of the
 //! composition root's wiring, `include`/`exclude` and the `php` override
-//! are consumed by discovery and the walk, and `configuration_digest`
-//! keys the persistent cache on the `[rules]` and `[severity]` sections.
-//! No active rule set is built yet and the severity remap is not
-//! applied: those remain later tasks of this sub-project.
+//! are consumed by discovery and the walk, `configuration_digest` keys
+//! the persistent cache on the `[rules]` and `[severity]` sections, and
+//! `rule_overrides` feeds `celerrate_cli::plugins::core_registrations`
+//! the `[rules]` activation overrides. The severity remap is not
+//! applied yet: that remains a later task of this sub-project.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use celerrate_config::KnownSets;
@@ -184,6 +185,26 @@ pub fn configuration_digest(configuration: &celerrate_config::Configuration) -> 
     *hasher.finalize().as_bytes()
 }
 
+/// The `[rules]` activation overrides: every table that sets `enabled`,
+/// by rule name. Unknown names ride along inert (no registration
+/// matches them; CEL0046 already reported the typo), and a table
+/// without `enabled` configures nothing, both per spec section 3.
+pub fn rule_overrides(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, bool> {
+    let Some(loaded) = loaded else {
+        return BTreeMap::new();
+    };
+    loaded
+        .configuration
+        .rules
+        .iter()
+        .filter_map(|rule| {
+            rule.enabled
+                .as_ref()
+                .map(|enabled| (rule.name.value.clone(), enabled.value))
+        })
+        .collect()
+}
+
 fn hash_count(hasher: &mut blake3::Hasher, count: usize) {
     hasher.update(&u64::try_from(count).unwrap_or(u64::MAX).to_le_bytes());
 }
@@ -199,7 +220,7 @@ mod tests {
 
     use celerrate_vfs::Vfs;
 
-    use super::{configuration_digest, known_sets, load};
+    use super::{configuration_digest, known_sets, load, rule_overrides};
 
     /// A project root on disk, written into a temporary directory.
     fn root(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -340,6 +361,19 @@ mod tests {
             configuration_digest(&celerrate_config::Configuration::default()),
             configuration_digest(&model_of("")),
         );
+    }
+
+    #[test]
+    fn rule_overrides_carry_every_enabled_key_and_nothing_else() {
+        let root = root(&[(
+            "celerrate.toml",
+            "[rules.null-dereference]\nenabled = false\n\n[rules.unknown-members]\n",
+        )]);
+        let mut vfs = Vfs::default();
+        let loaded = load(root.path(), &mut vfs);
+        let overrides = rule_overrides(loaded.as_ref());
+        assert_eq!(overrides.len(), 1, "a table without `enabled` is a no-op");
+        assert_eq!(overrides.get("null-dereference"), Some(&false));
     }
 
     #[test]
