@@ -742,6 +742,53 @@ mod tests {
         assert_eq!(session.files.files(&session.database).len(), 1);
     }
 
+    /// A change under an excluded root must not re-enter the analyzed
+    /// set: the exclusion `celerrate.toml` declared is not a fact only
+    /// the initial walk honors, it is a standing fact about what the
+    /// project is. The sibling path proves the test isn't passing for
+    /// the wrong reason — a session that absorbed nothing at all would
+    /// also show the excluded path missing.
+    #[test]
+    fn absorbing_a_path_under_an_excluded_root_does_not_enter_the_analyzed_set() {
+        let root = project(&[
+            ("src/Kept.php", "<?php class Kept {}"),
+            (
+                "celerrate.toml",
+                "[project]\nexclude = [\"src/Generated\"]\n",
+            ),
+        ]);
+        let mut session = Session::start(root.path());
+        assert_eq!(session.sources.len(), 1);
+
+        let generated = root.path().join("src/Generated");
+        std::fs::create_dir_all(&generated).unwrap();
+        let excluded = generated.join("Machine.php");
+        std::fs::write(&excluded, "<?php class Machine {}").unwrap();
+        let sibling = root.path().join("src/Sibling.php");
+        std::fs::write(&sibling, "<?php class Sibling {}").unwrap();
+
+        session.absorb(&[excluded.clone(), sibling.clone()]);
+
+        assert_eq!(
+            session.sources.len(),
+            2,
+            "only the sibling path joins; the excluded path does not",
+        );
+        let analyzed_paths: Vec<_> = session
+            .sources
+            .keys()
+            .filter_map(|&file| session.vfs.path(file).map(|path| path.to_path_buf()))
+            .collect();
+        assert!(
+            analyzed_paths.contains(&sibling),
+            "the sibling path must be in the analyzed set: {analyzed_paths:?}",
+        );
+        assert!(
+            !analyzed_paths.contains(&excluded),
+            "the excluded path must never be in the analyzed set: {analyzed_paths:?}",
+        );
+    }
+
     #[test]
     fn absorbing_a_lockfile_change_reruns_discovery() {
         let root = project(&[
