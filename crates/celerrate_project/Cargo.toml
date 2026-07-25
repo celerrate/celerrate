@@ -8,6 +8,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
+celerrate_config = { path = "../celerrate_config" }
 celerrate_diagnostics = { path = "../celerrate_diagnostics" }
 celerrate_vfs = { path = "../celerrate_vfs" }
 salsa = { workspace = true }
@@ -15,6 +16,7 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 celerrate_db = { path = "../celerrate_db" }
+celerrate_source = { path = "../celerrate_source" }
 tempfile = { workspace = true }
 
 [lints]

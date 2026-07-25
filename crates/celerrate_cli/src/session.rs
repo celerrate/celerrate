@@ -131,7 +131,8 @@ impl Session {
     pub fn start(root: &Path) -> Self {
         let mut internal_errors = Vec::new();
         let database = AnalysisDatabase::default();
-        let discovery = discover(root);
+        // Task 3 threads the loaded configuration here.
+        let discovery = discover(root, &celerrate_config::Configuration::default());
 
         let index = match embedded_stub_index() {
             Ok(index) => index,
@@ -467,7 +468,8 @@ impl Session {
     /// change triggers anyway.
     fn rediscover(&mut self) {
         let root = self.discovery.root.clone();
-        let discovery = discover(&root);
+        // Task 3 threads the loaded configuration here.
+        let discovery = discover(&root, &celerrate_config::Configuration::default());
         if discovery.php_version_range != self.discovery.php_version_range {
             self.configuration
                 .set_php_version_range(&mut self.database)

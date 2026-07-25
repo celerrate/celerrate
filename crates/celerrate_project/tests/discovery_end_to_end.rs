@@ -20,7 +20,7 @@ fn write(path: &Path, contents: &str) {
 /// One analyzed file, reduced to comparable facts: its root-relative
 /// path, its origin, and its diagnostic count.
 fn analyze(root: &Path) -> Vec<(String, FileOrigin, usize)> {
-    let discovery = discover(root);
+    let discovery = discover(root, &celerrate_config::Configuration::default());
     assert_eq!(
         discovery.php_version_range,
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
@@ -124,7 +124,7 @@ fn a_manifest_that_cannot_be_read_is_reported_unreadable_not_missing() {
     let root = temporary.path();
     fs::create_dir_all(root.join("composer.json")).unwrap();
 
-    let discovery = discover(root);
+    let discovery = discover(root, &celerrate_config::Configuration::default());
 
     assert!(
         discovery
