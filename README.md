@@ -131,8 +131,8 @@ Around them:
 
 ### What it does not do yet
 
-No lint rules, no formatter, no language server, no configuration
-file, no baseline, and no output formats beyond the terminal report.
+No lint rules, no formatter, no language server, no baseline, and no
+output formats beyond the terminal report.
 Generic mismatches are not reported (generics serve precision only),
 and unannotated parameters are treated as `mixed`. Those are the next
 sub-projects, in the [roadmap](#roadmap)'s order.

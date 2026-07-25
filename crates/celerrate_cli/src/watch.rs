@@ -1449,8 +1449,13 @@ mod tests {
     /// The lockfile and `celerrate.toml` are both written so that the only
     /// refusal these tests see is the one they are about. A project
     /// without a lockfile (or without `celerrate.toml`) records a refusal
-    /// for it too (which is what lets one created mid-session be picked
-    /// up), and each has its own test.
+    /// for it too, which is what lets one created mid-session be picked
+    /// up; the lockfile case has its own test at this registration-retry
+    /// level. `celerrate.toml`'s mid-session appearance is instead
+    /// covered at the higher reconfiguration level, by
+    /// `a_configuration_saved_mid_watch_reconfigures_the_next_cycle`,
+    /// which drives injected watch events rather than the registration
+    /// retry mechanism itself.
     fn project_declaring_a_directory_that_does_not_exist() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
