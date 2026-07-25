@@ -257,3 +257,27 @@ fn enabling_a_default_rule_is_a_silent_no_op() {
     assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
     assert!(report.contains("CEL0034"), "{report}");
 }
+
+#[test]
+fn a_severity_remap_changes_the_printed_severity_but_not_the_exit_code() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", MANIFEST),
+        (
+            "src/Example.php",
+            "<?php\nnamespace App;\n\nnew \\MissingDependency();\n",
+        ),
+    ];
+    let (outcome, report) = check(files);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("error[CEL0018]"), "{report}");
+
+    let mut remapped = files.to_vec();
+    remapped.push(("celerrate.toml", "[severity]\n\"CEL0018\" = \"warning\"\n"));
+    let (outcome, report) = check(&remapped);
+    assert!(
+        matches!(outcome, Outcome::DiagnosticsReported),
+        "a warning still exits 1: {report}",
+    );
+    assert!(report.contains("warning[CEL0018]"), "{report}");
+    assert!(!report.contains("error[CEL0018]"), "{report}");
+}

@@ -130,6 +130,10 @@ pub struct Session {
     /// reads. `--watch` does not reload or report it yet on a manifest
     /// change (a later task).
     pub loaded_configuration: Option<crate::configuration::LoadedConfiguration>,
+    /// The `[severity]` remap the per-file composition applies
+    /// (`configuration::severity_remap`): identifier text to severity.
+    /// Empty without a file; shared with every `AnalysisInputs` clone.
+    pub severity_remap: Arc<BTreeMap<String, celerrate_diagnostics::Severity>>,
 }
 
 impl Session {
@@ -159,6 +163,9 @@ impl Session {
         // never recompute it independently (mirrors `plugin_set_digest`
         // below).
         let configuration_digest = crate::configuration::configuration_digest(&configuration_model);
+        let severity_remap = Arc::new(crate::configuration::severity_remap(
+            loaded_configuration.as_ref(),
+        ));
 
         let index = match embedded_stub_index() {
             Ok(index) => index,
@@ -238,6 +245,7 @@ impl Session {
             configuration_digest,
             cache_loaded_configuration_digest: configuration_digest,
             loaded_configuration,
+            severity_remap,
         };
         let walk = enumerate_php_files(
             &session.discovery.walk_roots(),
@@ -283,6 +291,7 @@ impl Session {
                 Arc::new(CacheSnapshot::default())
             },
             statistics: self.statistics.clone(),
+            severity_remap: self.severity_remap.clone(),
         }
     }
 

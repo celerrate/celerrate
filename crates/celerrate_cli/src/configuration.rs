@@ -9,14 +9,15 @@
 //! dependency DAG. This module is the one place that sees both, which
 //! is the whole reason it exists here and not there.
 //!
-//! Part 1 boundary: the parsed configuration is carried and reports its
-//! own diagnostics, counting them toward the exit code. As of the
-//! composition root's wiring, `include`/`exclude` and the `php` override
-//! are consumed by discovery and the walk, `configuration_digest` keys
-//! the persistent cache on the `[rules]` and `[severity]` sections, and
+//! The parsed configuration is carried and reports its own diagnostics,
+//! counting them toward the exit code. This module loads, validates,
+//! and derives: `include`/`exclude` and the `php` override are consumed
+//! by discovery and the walk, `configuration_digest` keys the
+//! persistent cache on the `[rules]` and `[severity]` sections,
 //! `rule_overrides` feeds `celerrate_cli::plugins::core_registrations`
-//! the `[rules]` activation overrides. The severity remap is not
-//! applied yet: that remains a later task of this sub-project.
+//! the `[rules]` activation overrides, and `severity_remap` is what the
+//! per-file composition in `celerrate_cli::analysis` applies before
+//! persistence.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -205,6 +206,38 @@ pub fn rule_overrides(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, 
         .collect()
 }
 
+/// The `[severity]` remap that actually applies: entries naming a
+/// remappable identifier, keyed by identifier text. Resilience and
+/// unknown entries were already reported (CEL0048/CEL0049) and must
+/// not half-apply; an entry whose value failed to parse carries no
+/// severity to apply.
+pub fn severity_remap(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, Severity> {
+    let Some(loaded) = loaded else {
+        return BTreeMap::new();
+    };
+    let metadata: Vec<RuleMetadata> = celerrate_rules::core_rules()
+        .into_iter()
+        .map(|(metadata, _)| metadata)
+        .collect();
+    let known = known_sets(&metadata);
+    loaded
+        .configuration
+        .severity
+        .iter()
+        .filter(|entry| {
+            known
+                .remappable_identifiers
+                .contains(entry.identifier.value.as_str())
+        })
+        .filter_map(|entry| {
+            entry
+                .severity
+                .as_ref()
+                .map(|severity| (entry.identifier.value.clone(), severity.value))
+        })
+        .collect()
+}
+
 fn hash_count(hasher: &mut blake3::Hasher, count: usize) {
     hasher.update(&u64::try_from(count).unwrap_or(u64::MAX).to_le_bytes());
 }
@@ -220,7 +253,7 @@ mod tests {
 
     use celerrate_vfs::Vfs;
 
-    use super::{configuration_digest, known_sets, load, rule_overrides};
+    use super::{configuration_digest, known_sets, load, rule_overrides, severity_remap};
 
     /// A project root on disk, written into a temporary directory.
     fn root(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -374,6 +407,22 @@ mod tests {
         let overrides = rule_overrides(loaded.as_ref());
         assert_eq!(overrides.len(), 1, "a table without `enabled` is a no-op");
         assert_eq!(overrides.get("null-dereference"), Some(&false));
+    }
+
+    #[test]
+    fn the_remap_keeps_remappable_entries_and_drops_the_reported_ones() {
+        let root = root(&[(
+            "celerrate.toml",
+            "[severity]\n\"CEL0034\" = \"warning\"\n\"CEL0026\" = \"warning\"\n\"CEL9999\" = \"warning\"\n",
+        )]);
+        let mut vfs = Vfs::default();
+        let loaded = load(root.path(), &mut vfs);
+        let remap = severity_remap(loaded.as_ref());
+        assert_eq!(remap.len(), 1, "resilience and unknown entries never apply");
+        assert_eq!(
+            remap.get("CEL0034"),
+            Some(&celerrate_diagnostics::Severity::Warning),
+        );
     }
 
     #[test]

@@ -55,6 +55,12 @@ pub struct AnalysisInputs {
     /// The session's cache counters. Written by the pass, never read
     /// by it: statistics do not feed analysis.
     pub statistics: Arc<crate::cache::statistics::CacheStatistics>,
+    /// The `[severity]` remap, applied by the per-file composers below,
+    /// never inside a query: `persistable_diagnostics` and `typed_portion`
+    /// remap right where they filter suppressions, so the exit-code count,
+    /// the printed report, and the persisted verdict carry the same
+    /// severities by construction (spec section 2).
+    pub severity_remap: Arc<std::collections::BTreeMap<String, celerrate_diagnostics::Severity>>,
 }
 
 /// An input was mutated while the fan-out ran. Not an error: a restart
@@ -174,6 +180,23 @@ fn retain_unsuppressed(
     matched.into_iter().collect()
 }
 
+/// Applies the `[severity]` remap in place. Only remappable
+/// identifiers are in the map (`configuration::severity_remap`), so
+/// resilience diagnostics cannot be touched here by construction.
+fn apply_severity_remap(
+    remap: &std::collections::BTreeMap<String, celerrate_diagnostics::Severity>,
+    diagnostics: &mut [Diagnostic],
+) {
+    if remap.is_empty() {
+        return;
+    }
+    for diagnostic in diagnostics {
+        if let Some(&severity) = remap.get(diagnostic.id.as_str()) {
+            diagnostic.severity = severity;
+        }
+    }
+}
+
 /// One filtered half of a file's diagnostics: what survived the
 /// directive filter, and the sorted indexes (into
 /// `suppression_directives(db, file)`) of every directive that
@@ -226,6 +249,7 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Fil
     } else {
         retain_unsuppressed(database, file, directives, &mut diagnostics)
     };
+    apply_severity_remap(&inputs.severity_remap, &mut diagnostics);
     FilteredPortion {
         diagnostics,
         matched,
@@ -264,6 +288,7 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> FilteredPorti
     } else {
         retain_unsuppressed(database, file, directives, &mut diagnostics)
     };
+    apply_severity_remap(&inputs.severity_remap, &mut diagnostics);
     FilteredPortion {
         diagnostics,
         matched,

@@ -134,3 +134,18 @@ fn a_rule_disabled_after_a_warm_run_stops_speaking() {
         "a stale pack must not resurrect a disabled rule: {second}",
     );
 }
+
+#[test]
+fn a_remap_changed_after_a_warm_run_reprints_with_the_new_severity() {
+    let root = project(&[("composer.json", MANIFEST), ("src/Example.php", SOURCE)]);
+    let first = run_check(root.path());
+
+    std::fs::write(
+        root.path().join("celerrate.toml"),
+        "[severity]\n\"CEL0018\" = \"warning\"\n",
+    )
+    .unwrap();
+    let second = run_check(root.path());
+    assert_ne!(first, second, "the digest forced the cold path");
+    assert!(second.contains("warning[CEL0018]"), "{second}");
+}

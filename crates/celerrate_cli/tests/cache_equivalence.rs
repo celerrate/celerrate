@@ -215,3 +215,16 @@ fn typed_answers_replay_equal() {
         );
     }
 }
+
+/// The severity remap rides the persisted verdicts: a warm run must
+/// serve the remapped severity, equal to what recomputation under the
+/// same remap produces (spec section 2's "persisted verdict equals the
+/// printed report").
+#[test]
+fn remapped_severities_replay_equal() {
+    let identifiers = served_equals_recomputed(&[
+        ("celerrate.toml", "[severity]\n\"CEL0018\" = \"warning\"\n"),
+        ("a.php", "<?php class Known {} new Known(); new Missing();"),
+    ]);
+    assert!(identifiers.contains("CEL0018"), "{identifiers:?}");
+}
