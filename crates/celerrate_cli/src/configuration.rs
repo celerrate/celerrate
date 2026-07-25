@@ -33,7 +33,7 @@ use celerrate_source::FileId;
 use celerrate_vfs::Vfs;
 
 /// The loaded `celerrate.toml`: its identity, its text (for the
-/// renderer), the parsed model (for part 2), and its diagnostics.
+/// renderer), the parsed model (for rule configuration), and its diagnostics.
 pub struct LoadedConfiguration {
     pub file: FileId,
     pub text: String,
