@@ -1,7 +1,7 @@
 //! `celerrate.toml` loading: configuration diagnostics are reported
 //! span-anchored and affect the exit code; a missing file changes
-//! nothing (zero-config parity); the configuration itself is not yet
-//! consumed (part 2).
+//! nothing (zero-config parity); `include`, `exclude`, and the `php`
+//! override are consumed by discovery and the walk.
 
 #![allow(
     clippy::unwrap_used,
@@ -151,4 +151,72 @@ fn a_non_utf8_configuration_file_reports_a_diagnostic_and_does_not_crash_the_ren
         "an unreadable configuration source must still render, not internal-error: report was:\n{report}",
     );
     assert!(report.contains("CEL0043"), "report was:\n{report}");
+}
+
+#[test]
+fn include_widens_the_analysis_to_directories_composer_does_not_declare() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", MANIFEST),
+        ("src/Example.php", CLEAN_SOURCE),
+        ("scripts/tool.php", "<?php\nnew MissingFromScripts();\n"),
+    ];
+    let (outcome, report) = check(files);
+    assert!(
+        matches!(outcome, Outcome::Clean),
+        "without include, scripts/ is not walked: {report}",
+    );
+
+    let mut with_include = files.to_vec();
+    with_include.push((
+        "celerrate.toml",
+        "[project]\ninclude = [\"src\", \"scripts\"]\n",
+    ));
+    let (outcome, report) = check(&with_include);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("CEL0018"), "{report}");
+    assert!(report.contains("MissingFromScripts"), "{report}");
+}
+
+#[test]
+fn exclude_subtracts_a_directory_from_the_analysis() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", MANIFEST),
+        ("src/Example.php", CLEAN_SOURCE),
+        (
+            "src/Generated/Machine.php",
+            "<?php\nnew MissingFromGenerated();\n",
+        ),
+    ];
+    let (outcome, report) = check(files);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+
+    let mut with_exclude = files.to_vec();
+    with_exclude.push((
+        "celerrate.toml",
+        "[project]\nexclude = [\"src/Generated\"]\n",
+    ));
+    let (outcome, report) = check(&with_exclude);
+    assert!(
+        matches!(outcome, Outcome::Clean),
+        "the excluded directory no longer speaks: {report}",
+    );
+}
+
+#[test]
+fn the_php_override_collapses_the_range_and_gates_availability() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", r#"{"require": {"php": ">=8.1"}}"#),
+        ("a.php", "<?php json_validate('{}');\n"),
+    ];
+    let (outcome, report) = check(files);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("CEL0021"), "{report}");
+
+    let mut with_override = files.to_vec();
+    with_override.push(("celerrate.toml", "[project]\nphp = \"8.3\"\n"));
+    let (outcome, report) = check(&with_override);
+    assert!(
+        matches!(outcome, Outcome::Clean),
+        "at a fixed 8.3 the symbol exists: {report}",
+    );
 }

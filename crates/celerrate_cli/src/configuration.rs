@@ -9,12 +9,12 @@
 //! dependency DAG. This module is the one place that sees both, which
 //! is the whole reason it exists here and not there.
 //!
-//! Part 1 boundary: the parsed configuration is carried but not yet
-//! consumed. `include`/`exclude` filter nothing, `php` narrows no
-//! version range, no active rule set is built, the severity remap is
-//! not applied, and the cache digest does not see it. All of that is
-//! part 2 of the sub-project. What part 1 does is report the file's
-//! diagnostics and count them toward the exit code.
+//! Part 1 boundary: the parsed configuration is carried and reports its
+//! own diagnostics, counting them toward the exit code. As of the
+//! composition root's wiring, `include`/`exclude` and the `php` override
+//! are consumed by discovery and the walk. No active rule set is built
+//! yet, the severity remap is not applied, and the cache digest does not
+//! see it: those remain later tasks of this sub-project.
 
 use std::collections::BTreeSet;
 use std::path::Path;

@@ -118,9 +118,10 @@ pub struct Session {
     /// same value, never recompute it independently.
     pub plugin_set_digest: [u8; 32],
     /// The loaded `celerrate.toml`, `None` when the project has none.
-    /// Part 1 reports its diagnostics and counts them toward the exit
-    /// code; part 2 consumes its content. `--watch` does not reload or
-    /// report it yet (part 2, with the behavioral wiring).
+    /// Its diagnostics are reported and count toward the exit code, and
+    /// `configuration_model` is what every consumer of its parsed content
+    /// reads. `--watch` does not reload or report it yet on a manifest
+    /// change (a later task).
     pub loaded_configuration: Option<crate::configuration::LoadedConfiguration>,
 }
 
@@ -129,10 +130,23 @@ impl Session {
     /// missing manifest is a notice, an undecodable stub blob is an
     /// internal error, and neither stops the run.
     pub fn start(root: &Path) -> Self {
+        // The same normalized form discovery would produce: paths are
+        // interned and relativized against this exact value.
+        let root = celerrate_vfs::normalize_path(root, root);
         let mut internal_errors = Vec::new();
         let database = AnalysisDatabase::default();
-        // Task 3 threads the loaded configuration here.
-        let discovery = discover(root, &celerrate_config::Configuration::default());
+        let mut vfs = Vfs::default();
+        // Loaded before discovery, deliberately: include/exclude and the
+        // `php` override are discovery inputs now (spec section 2).
+        // `celerrate.toml` therefore takes the first file identifier;
+        // nothing reads the interning order, and rendering resolves
+        // display paths through the VFS by identity.
+        let loaded_configuration = crate::configuration::load(&root, &mut vfs);
+        let configuration_model = loaded_configuration
+            .as_ref()
+            .map(|loaded| loaded.configuration.clone())
+            .unwrap_or_default();
+        let discovery = discover(&root, &configuration_model);
 
         let index = match embedded_stub_index() {
             Ok(index) => index,
@@ -191,7 +205,7 @@ impl Session {
 
         let mut session = Self {
             database,
-            vfs: Vfs::default(),
+            vfs,
             discovery,
             configuration,
             stubs,
@@ -204,26 +218,23 @@ impl Session {
             statistics,
             plugins,
             plugin_set_digest,
-            loaded_configuration: None,
+            loaded_configuration,
         };
         let walk = enumerate_php_files(
             &session.discovery.walk_roots(),
             &session.discovery.excluded_roots,
         );
         session.load(&walk);
-        // After the walk, deliberately: the VFS then already holds every
-        // PHP file the project declares, so interning `celerrate.toml`
-        // leaves their identifiers exactly where they were.
-        //
-        // The normalized root, not the raw CLI argument: `discovery.root`
-        // is what `render::relative_path` strips off every other path in
-        // the report, and interning against anything else (an
-        // unnormalized `..`-bearing root, for instance) would print this
-        // one file's path unrelativized next to every PHP file's clean
-        // one.
-        session.loaded_configuration =
-            crate::configuration::load(&session.discovery.root, &mut session.vfs);
         session
+    }
+
+    /// The parsed configuration model, or the default when the project
+    /// has no file: what every consumer of configuration data reads.
+    pub(crate) fn configuration_model(&self) -> celerrate_config::Configuration {
+        self.loaded_configuration
+            .as_ref()
+            .map(|loaded| loaded.configuration.clone())
+            .unwrap_or_default()
     }
 
     /// The discovery notices, rendered as their own spanless block: a
@@ -448,7 +459,7 @@ impl Session {
             return;
         }
         for path in changed {
-            if !is_php(path) {
+            if !is_php(path) || self.discovery.is_excluded(path) {
                 continue;
             }
             let contents = std::fs::read(path).ok();
@@ -471,8 +482,7 @@ impl Session {
     /// change triggers anyway.
     fn rediscover(&mut self) {
         let root = self.discovery.root.clone();
-        // Task 3 threads the loaded configuration here.
-        let discovery = discover(&root, &celerrate_config::Configuration::default());
+        let discovery = discover(&root, &self.configuration_model());
         if discovery.php_version_range != self.discovery.php_version_range {
             self.configuration
                 .set_php_version_range(&mut self.database)
