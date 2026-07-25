@@ -121,6 +121,7 @@ fn a_rule_disabled_after_a_warm_run_stops_speaking() {
     ]);
     let first = run_check(root.path());
     assert!(first.contains("CEL0034"), "{first}");
+    assert!(all_verdicts_hit(root.path()), "the first run persisted");
 
     std::fs::write(
         root.path().join("celerrate.toml"),
