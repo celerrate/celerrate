@@ -117,6 +117,13 @@ pub struct Session {
     /// call this session makes: load and persist must key packs on the
     /// same value, never recompute it independently.
     pub plugin_set_digest: [u8; 32],
+    /// The configuration digest packs are keyed on this session
+    /// (`configuration::configuration_digest` over the loaded model).
+    pub configuration_digest: [u8; 32],
+    /// The digest the snapshot was loaded under: `--watch` can move the
+    /// live digest at runtime (a `celerrate.toml` edit), and verdicts
+    /// persisted under the old configuration must not be served past it.
+    pub cache_loaded_configuration_digest: [u8; 32],
     /// The loaded `celerrate.toml`, `None` when the project has none.
     /// Its diagnostics are reported and count toward the exit code, and
     /// `configuration_model` is what every consumer of its parsed content
@@ -147,6 +154,11 @@ impl Session {
             .map(|loaded| loaded.configuration.clone())
             .unwrap_or_default();
         let discovery = discover(&root, &configuration_model);
+        // Computed right after the model exists and before the cache
+        // loads: load and persist must key packs on the same digest,
+        // never recompute it independently (mirrors `plugin_set_digest`
+        // below).
+        let configuration_digest = crate::configuration::configuration_digest(&configuration_model);
 
         let index = match embedded_stub_index() {
             Ok(index) => index,
@@ -184,7 +196,7 @@ impl Session {
         let plugin_set_digest = plugin_set_digest(&plugins);
         let cache = Arc::new(CacheSnapshot::load(
             &cache_directory,
-            &PackHeader::current(cache_loaded_range, plugin_set_digest),
+            &PackHeader::current(cache_loaded_range, plugin_set_digest, configuration_digest),
         ));
         let _ = ArtifactCacheInput::builder(CacheHandle(Arc::new(SnapshotCache {
             snapshot: cache.clone(),
@@ -218,6 +230,8 @@ impl Session {
             statistics,
             plugins,
             plugin_set_digest,
+            configuration_digest,
+            cache_loaded_configuration_digest: configuration_digest,
             loaded_configuration,
         };
         let walk = enumerate_php_files(
@@ -256,7 +270,9 @@ impl Session {
             stubs: self.stubs,
             configuration: self.configuration,
             reported: self.reported_files(),
-            cache: if current_range == self.cache_loaded_range {
+            cache: if current_range == self.cache_loaded_range
+                && self.configuration_digest == self.cache_loaded_configuration_digest
+            {
                 self.cache.clone()
             } else {
                 Arc::new(CacheSnapshot::default())

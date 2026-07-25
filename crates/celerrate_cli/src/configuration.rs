@@ -12,9 +12,10 @@
 //! Part 1 boundary: the parsed configuration is carried and reports its
 //! own diagnostics, counting them toward the exit code. As of the
 //! composition root's wiring, `include`/`exclude` and the `php` override
-//! are consumed by discovery and the walk. No active rule set is built
-//! yet, the severity remap is not applied, and the cache digest does not
-//! see it: those remain later tasks of this sub-project.
+//! are consumed by discovery and the walk, and `configuration_digest`
+//! keys the persistent cache on the `[rules]` and `[severity]` sections.
+//! No active rule set is built yet and the severity remap is not
+//! applied: those remain later tasks of this sub-project.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -136,13 +137,69 @@ fn known_sets(metadata: &[RuleMetadata]) -> KnownSets<'_> {
     }
 }
 
+/// blake3 over the normalized `[rules]` and `[severity]` sections: the
+/// active-set-and-severity cache key the sub-project 4 spec reserved a
+/// header field for (CLI product spec section 2). The whole sections
+/// are digested, not the derived active set, so future rule options
+/// join the key with no header change. Normalization: entries sorted,
+/// text length-prefixed, sections count-prefixed, spans dropped.
+pub fn configuration_digest(configuration: &celerrate_config::Configuration) -> [u8; 32] {
+    let mut hasher = blake3::Hasher::new();
+    let mut rules: Vec<(&str, u8)> = configuration
+        .rules
+        .iter()
+        .map(|rule| {
+            let enabled = match &rule.enabled {
+                None => 0u8,
+                Some(enabled) if !enabled.value => 1,
+                Some(_) => 2,
+            };
+            (rule.name.value.as_str(), enabled)
+        })
+        .collect();
+    rules.sort_unstable();
+    hash_count(&mut hasher, rules.len());
+    for (name, enabled) in rules {
+        hash_text(&mut hasher, name);
+        hasher.update(&[enabled]);
+    }
+    let mut severity: Vec<(&str, u8)> = configuration
+        .severity
+        .iter()
+        .map(|entry| {
+            let level = match &entry.severity {
+                None => 0u8,
+                Some(severity) if severity.value == celerrate_diagnostics::Severity::Warning => 1,
+                Some(_) => 2,
+            };
+            (entry.identifier.value.as_str(), level)
+        })
+        .collect();
+    severity.sort_unstable();
+    hash_count(&mut hasher, severity.len());
+    for (identifier, level) in severity {
+        hash_text(&mut hasher, identifier);
+        hasher.update(&[level]);
+    }
+    *hasher.finalize().as_bytes()
+}
+
+fn hash_count(hasher: &mut blake3::Hasher, count: usize) {
+    hasher.update(&u64::try_from(count).unwrap_or(u64::MAX).to_le_bytes());
+}
+
+fn hash_text(hasher: &mut blake3::Hasher, text: &str) {
+    hash_count(hasher, text.len());
+    hasher.update(text.as_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
 
     use celerrate_vfs::Vfs;
 
-    use super::{known_sets, load};
+    use super::{configuration_digest, known_sets, load};
 
     /// A project root on disk, written into a temporary directory.
     fn root(files: &[(&str, &str)]) -> tempfile::TempDir {
@@ -243,5 +300,55 @@ mod tests {
                 && !known.remappable_identifiers.contains("CEL0026"),
             "a resilience identifier is registered and not remappable",
         );
+    }
+
+    /// Parses a `celerrate.toml` text into its model, for digest tests.
+    fn model_of(text: &str) -> celerrate_config::Configuration {
+        let (configuration, _) = celerrate_config::parse(celerrate_source::FileId::new(0), text);
+        configuration
+    }
+
+    #[test]
+    fn the_digest_ignores_span_and_order_but_not_content() {
+        let ordered =
+            model_of("[rules.a-rule]\nenabled = true\n\n[rules.b-rule]\nenabled = false\n");
+        let reversed =
+            model_of("[rules.b-rule]\nenabled = false\n\n[rules.a-rule]\nenabled = true\n");
+        assert_eq!(
+            configuration_digest(&ordered),
+            configuration_digest(&reversed),
+            "normalization sorts the entries",
+        );
+        let changed =
+            model_of("[rules.a-rule]\nenabled = false\n\n[rules.b-rule]\nenabled = false\n");
+        assert_ne!(
+            configuration_digest(&ordered),
+            configuration_digest(&changed)
+        );
+    }
+
+    #[test]
+    fn a_severity_entry_moves_the_digest() {
+        let without = model_of("");
+        let with = model_of("[severity]\n\"CEL0034\" = \"warning\"\n");
+        assert_ne!(configuration_digest(&without), configuration_digest(&with));
+    }
+
+    #[test]
+    fn no_file_and_an_empty_file_share_the_digest() {
+        assert_eq!(
+            configuration_digest(&celerrate_config::Configuration::default()),
+            configuration_digest(&model_of("")),
+        );
+    }
+
+    #[test]
+    fn the_project_table_does_not_move_the_digest() {
+        // include/exclude change file membership (per-entry keys) and the
+        // php override moves the header's own range fields: neither
+        // belongs in this digest, per the spec's normalized-sections rule.
+        let without = model_of("");
+        let with = model_of("[project]\nphp = \"8.2\"\ninclude = [\"src\"]\n");
+        assert_eq!(configuration_digest(&without), configuration_digest(&with));
     }
 }

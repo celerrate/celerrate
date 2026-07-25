@@ -44,7 +44,11 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// `matched_directives`: the per-directive match records the
 /// `Reporting` phase needs to replay a warm run's suppression report
 /// without re-parsing (this crate's `cache::stored` module doc).
-pub const CACHE_SCHEMA_VERSION: u32 = 7;
+///
+/// 8: the header gains `configuration`, the active-set-and-severity
+/// digest the diagnostics-and-fixes spec reserved a field for (CLI
+/// product spec, section 2).
+pub const CACHE_SCHEMA_VERSION: u32 = 8;
 
 /// What must match for a pack to be readable at all: the schema, the
 /// binary, the stub content, the plugin set, and the PHP version range.
@@ -65,19 +69,28 @@ pub struct PackHeader {
     /// cache key the `PluginIdentity` rustdoc promised (plan 4a
     /// decision 1), keyed on the set actually active.
     pub plugins: [u8; 32],
+    /// blake3 over the normalized `[rules]` and `[severity]` sections of
+    /// `celerrate.toml` (`configuration::configuration_digest`): the
+    /// field sub-project 4 reserved. A configuration change discards the
+    /// pack wholesale, which is what keeps a warm run under a new
+    /// configuration honest.
+    pub configuration: [u8; 32],
     pub php_minimum: (u8, u8),
     pub php_maximum: (u8, u8),
 }
 
 impl PackHeader {
     /// The header of this binary analyzing under `range`, with `plugins`
-    /// the registered plugin-set digest (`plugins::plugin_set_digest`).
-    pub fn current(range: PhpVersionRange, plugins: [u8; 32]) -> Self {
+    /// the registered plugin-set digest (`plugins::plugin_set_digest`)
+    /// and `configuration` the loaded `celerrate.toml`'s digest
+    /// (`configuration::configuration_digest`).
+    pub fn current(range: PhpVersionRange, plugins: [u8; 32], configuration: [u8; 32]) -> Self {
         Self {
             schema: CACHE_SCHEMA_VERSION,
             binary: super::identity::binary_identity().to_owned(),
             stub_blob: *blake3::hash(celerrate_stubs::EMBEDDED_STUB_BLOB).as_bytes(),
             plugins,
+            configuration,
             php_minimum: (range.minimum.major, range.minimum.minor),
             php_maximum: (range.maximum.major, range.maximum.minor),
         }
@@ -156,9 +169,13 @@ mod tests {
         // The pack format itself does not care which plugins are
         // registered, only that a digest is present: an empty
         // `RegisteredPlugins` is a valid, deterministic stand-in here.
+        // Likewise, the default `Configuration` stands in for "no
+        // `celerrate.toml`", the zero-config digest every fixture here
+        // shares.
         PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
             crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
+            crate::configuration::configuration_digest(&celerrate_config::Configuration::default()),
         )
     }
 
@@ -218,6 +235,7 @@ mod tests {
         let other_range = PackHeader::current(
             PhpVersionRange::new(PhpVersion::new(8, 2), PhpVersion::new(8, 5)),
             crate::plugins::plugin_set_digest(&crate::plugins::RegisteredPlugins::default()),
+            crate::configuration::configuration_digest(&celerrate_config::Configuration::default()),
         );
         assert!(decode::<Vec<(u32, String)>>(&bytes, &other_range).is_none());
 
@@ -241,6 +259,13 @@ mod tests {
         assert!(
             decode::<Vec<(u32, String)>>(&bytes, &other_plugins).is_none(),
             "the plugin-set field is load-bearing",
+        );
+
+        let mut other_configuration = header();
+        other_configuration.configuration[0] ^= 0xFF;
+        assert!(
+            decode::<Vec<(u32, String)>>(&bytes, &other_configuration).is_none(),
+            "the configuration field is load-bearing",
         );
     }
 

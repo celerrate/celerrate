@@ -1977,6 +1977,7 @@ mod tests {
         let header = PackHeader::current(
             session.configuration.php_version_range(&session.database),
             session.plugin_set_digest,
+            session.configuration_digest,
         );
         let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
         assert!(
@@ -2209,6 +2210,7 @@ mod tests {
         let header = PackHeader::current(
             session.configuration.php_version_range(&session.database),
             session.plugin_set_digest,
+            session.configuration_digest,
         );
         let after_second = std::fs::read(&diagnostics_pack).unwrap();
         let pack: Pack<Vec<([u8; 32], StoredVerdict)>> = decode(&after_second, &header).unwrap();
