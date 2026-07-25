@@ -175,8 +175,10 @@ pub fn configuration_digest(configuration: &celerrate_config::Configuration) -> 
         .map(|entry| {
             let level = match &entry.severity {
                 None => 0u8,
-                Some(severity) if severity.value == celerrate_diagnostics::Severity::Warning => 1,
-                Some(_) => 2,
+                Some(severity) => match severity.value {
+                    celerrate_diagnostics::Severity::Warning => 1,
+                    celerrate_diagnostics::Severity::Error => 2,
+                },
             };
             (entry.identifier.value.as_str(), level)
         })

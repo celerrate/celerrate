@@ -975,11 +975,21 @@ mod tests {
             .configuration
             .set_php_version_range(&mut session.database)
             .to(moved_range);
+        // Simulate a `celerrate.toml` edit moving the configuration
+        // digest in the same cycle: without the sync below, a mid-watch
+        // configuration edit would disable the cache for the rest of the
+        // process, comparing against the stale digest forever.
+        let moved_digest = [0xab; 32];
+        session.configuration_digest = moved_digest;
         super::persist(&mut session, &outcome);
 
         assert_eq!(
             session.cache_loaded_range, moved_range,
             "persist adopts the new range once the rewrite is confirmed",
+        );
+        assert_eq!(
+            session.cache_loaded_configuration_digest, moved_digest,
+            "persist adopts the new configuration digest once the rewrite is confirmed",
         );
         let moved_header = super::pack::PackHeader::current(
             moved_range,
