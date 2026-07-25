@@ -17,7 +17,11 @@
 //! `rule_overrides` feeds `celerrate_cli::plugins::core_registrations`
 //! the `[rules]` activation overrides, and `severity_remap` is what the
 //! per-file composition in `celerrate_cli::analysis` applies before
-//! persistence.
+//! persistence. `merge_diagnostics` and `diagnostic_count` are the
+//! presentation side: both `check` and `--watch` merge the loaded
+//! file's own diagnostics into a presentation copy of the outcome and
+//! into the exit code, never into the outcome the persisted verdicts
+//! read.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -236,6 +240,33 @@ pub fn severity_remap(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, 
                 .map(|severity| (entry.identifier.value.clone(), severity.value))
         })
         .collect()
+}
+
+/// Merges the configuration diagnostics into a presentation outcome and
+/// answers how many were merged. Presentation and exit-code input only,
+/// never cache input: callers keep the analysis outcome pure and merge
+/// into a copy.
+pub fn merge_diagnostics(
+    session: &crate::session::Session,
+    outcome: &mut crate::analysis::AnalysisOutcome,
+) -> usize {
+    let Some(loaded) = &session.loaded_configuration else {
+        return 0;
+    };
+    outcome
+        .diagnostics
+        .extend(loaded.diagnostics.iter().cloned());
+    outcome.diagnostics.sort();
+    loaded.diagnostics.len()
+}
+
+/// The configuration diagnostics' contribution to the exit code.
+pub fn diagnostic_count(session: &crate::session::Session) -> usize {
+    session
+        .loaded_configuration
+        .as_ref()
+        .map(|loaded| loaded.diagnostics.len())
+        .unwrap_or(0)
 }
 
 fn hash_count(hasher: &mut blake3::Hasher, count: usize) {

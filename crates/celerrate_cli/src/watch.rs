@@ -136,10 +136,15 @@ fn completed_cycle(
     // frame the user no longer has.
     let height =
         terminal_size::terminal_size().map(|(_, terminal_size::Height(rows))| rows as usize);
+    // Configuration diagnostics are part of every picture, exactly as in
+    // a single check: merged into a presentation copy, never into the
+    // outcome the persisted verdicts read.
+    let mut presented = outcome.clone();
+    let _ = crate::configuration::merge_diagnostics(session, &mut presented);
     if render::render_cycle(
         output,
         session,
-        &outcome,
+        &presented,
         reanalyzed,
         started.elapsed(),
         color,
@@ -325,7 +330,7 @@ fn iteration(
             // since `write_when_changed` compares before writing.
             crate::cache::persist(session, &outcome);
             return ControlFlow::Break(Outcome::of(
-                outcome.diagnostics.len(),
+                outcome.diagnostics.len() + crate::configuration::diagnostic_count(session),
                 session.internal_errors.len(),
             ));
         }
@@ -484,10 +489,11 @@ struct Built {
 }
 
 impl Watch {
-    /// The watcher observes the project walk roots plus `composer.json`
-    /// and `composer.lock`. The vendor walk roots are never watched on
-    /// their own: thousands of files that only move when the lockfile
-    /// does, and a lockfile change triggers full re-discovery anyway.
+    /// The watcher observes the project walk roots plus `composer.json`,
+    /// `composer.lock`, and `celerrate.toml`. The vendor walk roots are
+    /// never watched on their own: thousands of files that only move when
+    /// the lockfile does, and a lockfile change triggers full
+    /// re-discovery anyway.
     ///
     /// That is not a promise that `vendor/` goes unwatched. When a
     /// manifest declares no autoload, or none that resolves,
@@ -550,14 +556,15 @@ impl Watch {
                 Declared::ByTheProject,
             ));
         }
-        for manifest in ["composer.json", "composer.lock"] {
+        for manifest in ["composer.json", "composer.lock", "celerrate.toml"] {
             let path = session.discovery.root.join(manifest);
             // A project may perfectly well have neither file: a missing
             // manifest is already a notice, and a project with no lockfile
-            // is ordinary. Neither is declared by anyone, so neither
-            // refusal is reported while the file is absent. The refusal is
-            // still *recorded*, because that is a different question: it is
-            // what lets a lockfile that appears mid-session be picked up.
+            // (or no `celerrate.toml`) is ordinary. Neither is declared by
+            // anyone, so neither refusal is reported while the file is
+            // absent. The refusal is still *recorded*, because that is a
+            // different question: it is what lets a lockfile — or a
+            // `celerrate.toml` — that appears mid-session be picked up.
             unwatchable.extend(register(
                 &mut watcher,
                 &path,
@@ -654,8 +661,8 @@ impl Watch {
     /// main thread, after the join, outside every salsa query.
     ///
     /// The project root itself is not compared: `rediscover` rediscovers
-    /// the same root it was given, so the two manifest watches, which hang
-    /// off that root, cannot move.
+    /// the same root it was given, so the three manifest watches, which
+    /// hang off that root, cannot move.
     ///
     /// A respawn replaces the channel, and the events already queued on
     /// the old one are dropped with it. That is deliberate. A respawn
@@ -1404,6 +1411,7 @@ mod tests {
         // Every path this watch registers is there, so it refuses nothing:
         // the assertion below is about the roots not moving, and only that.
         std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
+        std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
 
         let mut session = Session::start(root.path());
         let mut watcher = Watch::spawn(&session).unwrap();
@@ -1438,10 +1446,11 @@ mod tests {
     /// before anyone has written it. The declared roots are lexical, so the
     /// directory that does not exist is a walk root all the same.
     ///
-    /// The lockfile is written so that the only refusal these tests see is
-    /// the one they are about. A project without a lockfile records a
-    /// refusal for it too (which is what lets one created mid-session be
-    /// picked up), and that has its own test.
+    /// The lockfile and `celerrate.toml` are both written so that the only
+    /// refusal these tests see is the one they are about. A project
+    /// without a lockfile (or without `celerrate.toml`) records a refusal
+    /// for it too (which is what lets one created mid-session be picked
+    /// up), and each has its own test.
     fn project_declaring_a_directory_that_does_not_exist() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
@@ -1452,6 +1461,7 @@ mod tests {
         )
         .unwrap();
         std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
+        std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
         root
     }
 
@@ -1613,6 +1623,10 @@ mod tests {
             r#"{"autoload": {"psr-4": {"App\\": "src"}}}"#,
         )
         .unwrap();
+        // Present from the start so the only refusal this test is about is
+        // the lockfile's: a project with no `celerrate.toml` is exactly as
+        // ordinary, and its own mid-session appearance has its own test.
+        std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
         let lockfile = root.path().join("composer.lock");
 
         let mut session = Session::start(root.path());
@@ -2450,6 +2464,184 @@ mod tests {
         assert!(
             diagnostics_pack.exists(),
             "the graceful exit persists the cycle it completed before the disconnect",
+        );
+    }
+
+    /// The part 2 wiring promise: a `celerrate.toml` saved mid-watch
+    /// reconfigures the very next cycle. The project fires CEL0034; a
+    /// saved configuration disabling `null-dereference` must make the next
+    /// picture clean, and deleting the file must bring the diagnostic
+    /// back.
+    ///
+    /// Driven with a held sender exactly like `a_burst_event_continues_
+    /// the_loop` above, and for the same reason that test delivers its
+    /// event from a delayed background thread rather than sending it
+    /// synchronously before the call: `cycle`'s own inner loop polls the
+    /// channel while analysis is in flight, and a message already queued
+    /// by the time `iteration` is called can be caught and absorbed by
+    /// that inner cancel-and-restart mechanism before `iteration`'s own
+    /// burst-wait logic ever sees anything queued — which would then
+    /// block forever in `wait_for_a_burst` with no second message ever
+    /// coming. Delaying the send until after the fixture's own trivial
+    /// cycle has settled guarantees the event is instead picked up by
+    /// `iteration`'s own logic, exactly like the existing test's fixture.
+    /// What that absorption changed is only visible in the cycle after,
+    /// so every reconfiguring step here is a call to `iteration` (to
+    /// absorb) followed by a call to `completed_cycle` (to see the
+    /// picture that absorption produced).
+    #[test]
+    fn a_configuration_saved_mid_watch_reconfigures_the_next_cycle() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        std::fs::write(
+            root.path().join("composer.json"),
+            r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("src/Consumer.php"),
+            r#"<?php
+declare(strict_types=1);
+namespace App;
+
+class User
+{
+    public function save(): void
+    {
+    }
+}
+
+class Consumer
+{
+    public function run(?User $user): void
+    {
+        $user->save();
+    }
+}
+"#,
+        )
+        .unwrap();
+
+        let mut session = Session::start(root.path());
+        let (mut watcher, sender) = watch_with_held_sender(&session);
+        let mut output = Vec::new();
+
+        // The first picture, over the project as it stands: the possibly-
+        // null dereference fires.
+        let (first, _, _) =
+            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
+                .unwrap();
+        assert_eq!(
+            first.diagnostics.len(),
+            1,
+            "the fixture fires exactly the null dereference: {:?}",
+            first.diagnostics,
+        );
+        let first_text = String::from_utf8(output.clone()).unwrap();
+        assert!(
+            first_text.contains("CEL0034"),
+            "the initial picture reports the null dereference: {first_text}",
+        );
+
+        // A `celerrate.toml` disabling the rule is saved mid-watch, and the
+        // watch is told about it exactly as the real notify adapter would:
+        // the event is delivered from a delayed background thread, after
+        // the fixture's own trivial cycle has settled (see the doc comment
+        // above for why a synchronous send races `cycle`'s own inner
+        // loop).
+        let configuration = root.path().join("celerrate.toml");
+        std::fs::write(
+            &configuration,
+            "[rules.null-dereference]\nenabled = false\n",
+        )
+        .unwrap();
+        let sent = configuration.clone();
+        let deliver = sender.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            deliver.send(WatchEvent::Changed(sent)).unwrap();
+        });
+
+        let next =
+            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
+                ControlFlow::Continue(next) => next,
+                ControlFlow::Break(outcome) => {
+                    panic!("a configuration save must not break the loop: {outcome:?}")
+                }
+            };
+
+        output.clear();
+        let (second, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            next,
+            ColorMode::Plain,
+        )
+        .unwrap();
+        assert!(
+            second.diagnostics.is_empty(),
+            "the disabled rule no longer fires: {:?}",
+            second.diagnostics,
+        );
+        let second_text = String::from_utf8(output.clone()).unwrap();
+        assert!(
+            !second_text.contains("CEL0034"),
+            "the next picture is clean: {second_text}",
+        );
+        for identifier in [
+            "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
+        ] {
+            assert!(
+                !second_text.contains(identifier),
+                "a valid celerrate.toml carries no configuration diagnostic of its own \
+                 ({identifier}): {second_text}",
+            );
+        }
+
+        // Deleting the file returns the session to defaults, and the
+        // diagnostic the file had silenced comes back. Same delayed
+        // delivery, same reason.
+        std::fs::remove_file(&configuration).unwrap();
+        let sent = configuration.clone();
+        let deliver = sender.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            deliver.send(WatchEvent::Changed(sent)).unwrap();
+        });
+
+        let next = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            next,
+            ColorMode::Plain,
+        ) {
+            ControlFlow::Continue(next) => next,
+            ControlFlow::Break(outcome) => {
+                panic!("a configuration deletion must not break the loop: {outcome:?}")
+            }
+        };
+
+        output.clear();
+        let (third, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            next,
+            ColorMode::Plain,
+        )
+        .unwrap();
+        assert_eq!(
+            third.diagnostics.len(),
+            1,
+            "deleting the file returns the rule to active: {:?}",
+            third.diagnostics,
+        );
+        let third_text = String::from_utf8(output.clone()).unwrap();
+        assert!(
+            third_text.contains("CEL0034"),
+            "the diagnostic is back: {third_text}",
         );
     }
 }
