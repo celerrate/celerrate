@@ -26,7 +26,7 @@ fn analyze(root: &Path) -> Vec<(String, FileOrigin, usize)> {
         PhpVersionRange::new(PhpVersion::new(8, 1), PhpVersion::new(8, 5)),
     );
     assert!(discovery.notices.is_empty());
-    let walk = enumerate_php_files(&discovery.walk_roots());
+    let walk = enumerate_php_files(&discovery.walk_roots(), &[]);
     assert!(
         walk.unreadable_directories.is_empty(),
         "every declared root is readable here: {:?}",

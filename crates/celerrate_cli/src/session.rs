@@ -206,7 +206,10 @@ impl Session {
             plugin_set_digest,
             loaded_configuration: None,
         };
-        let walk = enumerate_php_files(&session.discovery.walk_roots());
+        let walk = enumerate_php_files(
+            &session.discovery.walk_roots(),
+            &session.discovery.excluded_roots,
+        );
         session.load(&walk);
         // After the walk, deliberately: the VFS then already holds every
         // PHP file the project declares, so interning `celerrate.toml`
@@ -476,7 +479,8 @@ impl Session {
                 .to(discovery.php_version_range);
         }
         self.discovery = discovery;
-        let walk = enumerate_php_files(&self.discovery.walk_roots());
+        let walk =
+            enumerate_php_files(&self.discovery.walk_roots(), &self.discovery.excluded_roots);
         self.load(&walk);
     }
 }
