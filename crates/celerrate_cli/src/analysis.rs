@@ -358,7 +358,18 @@ pub fn reporting_portion(
         .as_ref()
         .map(|text| TextSize::of(text.text()))
         .unwrap_or_default();
-    celerrate_rules::reporting_phase_diagnostics(database, file_id, text_end, outcomes)
+    let mut diagnostics =
+        celerrate_rules::reporting_phase_diagnostics(database, file_id, text_end, outcomes);
+    // The reporting phase is the rule framework's fourth phase (CEL0041,
+    // CEL0042): every consumer of this function (`composed_diagnostics`,
+    // `analyze_one`, and the equivalence harness) reaches its diagnostics
+    // only through here, so remapping in this one place is what makes
+    // `[severity]` apply to the reporting family exactly as it already
+    // applies to the syntax/semantic/typed families above. This portion
+    // is never persisted — both paths recompute it from the match
+    // records — so nothing moves cache-side.
+    apply_severity_remap(&inputs.severity_remap, &mut diagnostics);
+    diagnostics
 }
 
 /// The fresh equivalent of the stored directive records: the query's

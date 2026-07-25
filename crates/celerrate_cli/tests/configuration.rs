@@ -281,3 +281,31 @@ fn a_severity_remap_changes_the_printed_severity_but_not_the_exit_code() {
     assert!(report.contains("warning[CEL0018]"), "{report}");
     assert!(!report.contains("error[CEL0018]"), "{report}");
 }
+
+/// CEL0042 (`unused-suppression`) is produced by the rule framework's
+/// fourth, reporting phase, not by the syntax/semantic/typed families
+/// `a_severity_remap_changes_the_printed_severity_but_not_the_exit_code`
+/// exercises above. The remap must reach it too.
+#[test]
+fn a_severity_remap_reaches_the_reporting_phase_diagnostics_too() {
+    let files: &[(&str, &str)] = &[
+        ("composer.json", MANIFEST),
+        (
+            "src/Example.php",
+            "<?php\nnamespace App;\n\n// @celerrate-ignore CEL0030\nfunction example(): void {}\n",
+        ),
+    ];
+    let (outcome, report) = check(files);
+    assert!(matches!(outcome, Outcome::DiagnosticsReported), "{report}");
+    assert!(report.contains("warning[CEL0042]"), "{report}");
+
+    let mut remapped = files.to_vec();
+    remapped.push(("celerrate.toml", "[severity]\n\"CEL0042\" = \"error\"\n"));
+    let (outcome, report) = check(&remapped);
+    assert!(
+        matches!(outcome, Outcome::DiagnosticsReported),
+        "an error still exits 1: {report}",
+    );
+    assert!(report.contains("error[CEL0042]"), "{report}");
+    assert!(!report.contains("warning[CEL0042]"), "{report}");
+}
