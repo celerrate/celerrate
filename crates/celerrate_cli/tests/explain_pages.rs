@@ -134,8 +134,15 @@ fn the_forced_activation_names_every_core_rule_and_stays_silent() {
         );
     }
     let report = report_for("<?php\n\nfunction example(): void {}\n");
-    assert!(
-        !report.contains("CEL004"),
-        "the forced activation must not report configuration diagnostics:\n{report}",
-    );
+    // Named rather than prefix-matched: a bare "CEL004" prefix also
+    // catches CEL0041 and CEL0042, which are legitimate reporting-phase
+    // rule output, not configuration diagnostics.
+    for identifier in [
+        "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
+    ] {
+        assert!(
+            !report.contains(identifier),
+            "the forced activation must not report configuration diagnostics:\n{report}",
+        );
+    }
 }
