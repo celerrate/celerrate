@@ -6,6 +6,7 @@
 
 pub mod entry;
 pub mod file;
+pub mod symbol;
 
 /// The fixed file name at the project root. No configuration key moves it.
 pub const BASELINE_FILE_NAME: &str = "celerrate-baseline.toml";
