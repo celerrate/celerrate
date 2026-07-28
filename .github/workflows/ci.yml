@@ -120,7 +120,11 @@ jobs:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         uses: Swatinem/rust-cache@v2
       - if: ${{ needs.changes.outputs.code == 'true' }}
-        run: cargo test --workspace
+        # `--include-ignored` runs the watch tests that drive a real
+        # filesystem watcher. They cost seconds each waiting on operating
+        # system notifications, so they are `#[ignore]`d to keep the local
+        # suite fast, and this is the run that still proves them.
+        run: cargo test --workspace -- --include-ignored
 
   deny:
     needs: changes

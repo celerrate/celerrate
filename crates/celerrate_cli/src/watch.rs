@@ -1233,6 +1233,7 @@ mod tests {
         }
 
         #[test]
+        #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
         fn the_adapter_reports_creation_modification_and_deletion() {
             let root = tempfile::tempdir().unwrap();
             std::fs::write(root.path().join("a.php"), "<?php class A {}").unwrap();
@@ -1290,6 +1291,7 @@ mod tests {
     /// arrives in the project's own spelling of that directory, not the
     /// operating system's).
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_walk_root_the_manifest_grows_is_watched_and_mapped() {
         let root = project_with_an_undeclared_directory();
         let source = root.path().join("src");
@@ -1342,6 +1344,7 @@ mod tests {
     /// `Shutdown` through the cell taken *before* the respawn, and observe
     /// it on the watch's *current*, post-respawn receiver.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_respawn_updates_the_shared_sender_cell() {
         let root = project_with_an_undeclared_directory();
         let manifest = root.path().join("composer.json");
@@ -1383,6 +1386,7 @@ mod tests {
     /// assertion that nothing arrives from the dropped root would pass just
     /// as well on a watch that reports nothing at all.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_walk_root_the_manifest_drops_stops_being_watched() {
         let root = project_with_an_undeclared_directory();
         let source = root.path().join("src");
@@ -1442,6 +1446,7 @@ mod tests {
     /// did re-run, and really did change the session. It is the walk roots
     /// that did not move.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_manifest_save_that_leaves_the_roots_alone_does_not_respawn() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
@@ -1528,6 +1533,7 @@ mod tests {
     /// and it must not invite a bug report, exactly as an unreadable file
     /// does not: a directory a project has not created yet is nobody's bug.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_declared_walk_root_that_does_not_exist_is_reported_not_swallowed() {
         let root = project_declaring_a_directory_that_does_not_exist();
         let tests = root.path().join("tests");
@@ -1604,6 +1610,7 @@ mod tests {
     /// spelling of it, not the operating system's). And it asserts the
     /// retry is spent: the cycle after it respawns nothing.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_walk_root_that_was_missing_and_now_exists_is_watched_and_mapped() {
         let root = project_declaring_a_directory_that_does_not_exist();
         let source = root.path().join("src");
@@ -1665,6 +1672,7 @@ mod tests {
     /// cannot livelock: while the file is absent `can_be_retried` is false,
     /// and it is true exactly once, when the file appears.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_lockfile_created_mid_session_is_watched_from_then_on() {
         let root = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(root.path().join("src")).unwrap();
@@ -1734,6 +1742,7 @@ mod tests {
     /// stop following the project's dependencies. Reporting turns on the
     /// path's existence, not on whether the project declared it.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_manifest_refused_while_it_exists_is_reported() {
         let root = tempfile::tempdir().unwrap();
         std::fs::write(root.path().join("a.php"), "<?php echo 1;").unwrap();
@@ -1777,6 +1786,7 @@ mod tests {
     /// exhaust a real watch budget, but it is fabricated in the exact shape
     /// the operating system produces: a path that is there, refused anyway.
     #[test]
+    #[ignore = "spawns a real filesystem watcher and waits on operating system notifications, which costs seconds per test; the continuous integration suite runs it with --include-ignored"]
     fn a_root_that_can_never_be_registered_does_not_respawn_the_watch_forever() {
         let root = project_declaring_a_directory_that_does_not_exist();
         let source = root.path().join("src");
