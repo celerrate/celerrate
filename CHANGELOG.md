@@ -123,8 +123,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   records or rewrites the file; `--ignore-baseline` runs strict. Entries are
   structural (path, identifier, enclosing symbol, message, count) with no
   line numbers: they survive moving code and die with their finding.
-  Obsolete entries are announced by the exit-neutral notice CEL0050, an
-  unreadable file by CEL0051; nothing is ever pruned silently.
+  Obsolete entries and an unreadable file are each announced by their own
+  exit-neutral notice, CEL0050 and CEL0051 respectively; nothing is ever
+  pruned silently.
 
 ### Changed
 
