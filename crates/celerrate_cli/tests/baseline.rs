@@ -296,3 +296,109 @@ fn a_baselined_diagnostic_is_not_fixed_by_fix() {
     let after = std::fs::read_to_string(root.path().join("src/Kernel.php")).unwrap();
     assert_eq!(before, after);
 }
+
+#[test]
+fn an_entry_survives_line_movement() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let moved = "<?php\n\nnamespace App;\n\n// pushed down\n// by two comment lines\nclass Kernel extends Missing\n{\n}\n";
+    std::fs::write(root.path().join("src/Kernel.php"), moved).unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    assert!(
+        text.contains("1 baselined diagnostic hidden"),
+        "report was:\n{text}"
+    );
+    assert!(!text.contains("CEL0050"), "report was:\n{text}");
+}
+
+#[test]
+fn an_entry_dies_with_its_diagnostic_and_is_reported_obsolete() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    std::fs::write(root.path().join("src/Kernel.php"), CLEAN_SOURCE).unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    assert!(text.contains("notice CEL0050"), "report was:\n{text}");
+    assert!(text.contains("re-record"), "report was:\n{text}");
+}
+
+#[test]
+fn the_count_never_masks_occurrence_n_plus_one() {
+    let two = "<?php\n\nnamespace App;\n\nclass Runner\n{\n    public function run(): void\n    {\n        new Missing();\n        new Missing();\n    }\n}\n";
+    let three = "<?php\n\nnamespace App;\n\nclass Runner\n{\n    public function run(): void\n    {\n        new Missing();\n        new Missing();\n        new Missing();\n    }\n}\n";
+    let root = project(&[("composer.json", MANIFEST), ("src/Runner.php", two)]);
+    check_with(root.path(), &["--baseline"]);
+    std::fs::write(root.path().join("src/Runner.php"), three).unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(
+        text.contains("2 baselined diagnostics hidden"),
+        "report was:\n{text}"
+    );
+    assert!(text.contains("1 diagnostic"), "report was:\n{text}");
+}
+
+#[test]
+fn a_renamed_method_resurfaces_its_findings_and_reports_obsolescence() {
+    let before = "<?php\n\nnamespace App;\n\nclass Runner\n{\n    public function run(): void\n    {\n        new Missing();\n    }\n}\n";
+    let renamed = "<?php\n\nnamespace App;\n\nclass Runner\n{\n    public function launch(): void\n    {\n        new Missing();\n    }\n}\n";
+    let root = project(&[("composer.json", MANIFEST), ("src/Runner.php", before)]);
+    check_with(root.path(), &["--baseline"]);
+    std::fs::write(root.path().join("src/Runner.php"), renamed).unwrap();
+    let (outcome, text) = check(root.path());
+    // Noisy but honest, never silent: the finding is back AND the stale
+    // entry is announced.
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(text.contains("notice CEL0050"), "report was:\n{text}");
+}
+
+#[test]
+fn a_new_suppression_makes_the_baseline_entry_obsolete() {
+    // Filter order: suppression (in-engine), then baseline (CLI). Adding a
+    // suppression starves the entry -- the intended behavior.
+    //
+    // The brief assumed `@celerrate-suppress`; the project's real native
+    // directive (see `tests/suppressions.rs`) is `@celerrate-ignore`, and a
+    // docblock directive covers the annotated declaration's whole span.
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let suppressed = "<?php\n\nnamespace App;\n\n/** @celerrate-ignore CEL0018 */\nclass Kernel extends Missing\n{\n}\n";
+    std::fs::write(root.path().join("src/Kernel.php"), suppressed).unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    assert!(text.contains("notice CEL0050"), "report was:\n{text}");
+}
+
+#[test]
+fn a_partially_parsed_baseline_hides_its_valid_entries_and_reports_cel0051() {
+    // Coverage gap flagged in task 5's review: a baseline file that only
+    // half-parses must not treat its unreadable half as lost capacity --
+    // the valid entry still hides its finding, and the broken line is
+    // still announced, both at once.
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let mut written = baseline_text(root.path());
+    written.push_str("\n[[entry]]\npath = \"src/Ghost.php\"\ncount = 0\n");
+    std::fs::write(root.path().join("celerrate-baseline.toml"), written).unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    assert!(text.contains("notice CEL0051"), "report was:\n{text}");
+    assert!(
+        text.contains("1 baselined diagnostic hidden"),
+        "report was:\n{text}"
+    );
+    assert!(!text.contains("CEL0050"), "report was:\n{text}");
+}

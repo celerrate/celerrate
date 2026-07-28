@@ -160,8 +160,10 @@ impl BaselineNotice {
 
 /// Applies the session's loaded baseline to the diagnostic list, in place.
 /// Matching consumes at most `count` occurrences per key; occurrence
-/// `count + 1` stays reported. Obsolescence (leftover capacity) becomes a
-/// notice in task 6.
+/// `count + 1` stays reported. An entry that consumed fewer occurrences
+/// than its count is obsolete -- surplus capacity that could silently
+/// absorb a future regression -- and is reported through one aggregated
+/// [`BaselineNotice::ObsoleteEntries`], never per entry.
 pub fn apply(session: &Session, diagnostics: &mut Vec<Diagnostic>) -> BaselineOutcome {
     let Some(loaded) = session.loaded_baseline.as_ref() else {
         return BaselineOutcome::default();
@@ -189,6 +191,10 @@ pub fn apply(session: &Session, diagnostics: &mut Vec<Diagnostic>) -> BaselineOu
             _ => true,
         }
     });
+    let obsolete = remaining.values().filter(|capacity| **capacity > 0).count();
+    if obsolete > 0 {
+        notices.push(BaselineNotice::ObsoleteEntries { count: obsolete });
+    }
     BaselineOutcome {
         hidden: before - diagnostics.len(),
         recorded: None,
