@@ -79,16 +79,22 @@ pub fn enclosing_symbol_path(
 /// The `SourceFile` handle of `file` within `files`, when it is one of the
 /// analyzed files: the bridge from the caller's `FileId` to the salsa
 /// handle the semantic queries key on.
+///
+/// `analyzed_file_index` documents, and returns, its pairs sorted by
+/// `FileId`, precisely so a lookup against it can be a binary search
+/// rather than a linear scan: with tens of thousands of analyzed files and
+/// thousands of findings on a first baseline adoption, a linear scan here
+/// would make both recording and applying quadratic in the corpus size.
 fn source_file_of(
     database: &dyn salsa::Database,
     files: AnalyzedFileSet,
     file: FileId,
 ) -> Option<celerrate_db::SourceFile> {
     let index = analyzed_file_index(database, files);
-    index
-        .iter()
-        .find(|(candidate, _)| *candidate == file)
-        .map(|(_, source_file)| *source_file)
+    let position = index
+        .binary_search_by_key(&file, |(candidate, _)| *candidate)
+        .ok()?;
+    index.get(position).map(|(_, source_file)| *source_file)
 }
 
 #[cfg(test)]
@@ -159,5 +165,48 @@ mod tests {
             symbol_at(source, "new Missing"),
             format!("{ANONYMOUS_CLASS}::run")
         );
+    }
+
+    /// `source_file_of` looks up its `FileId` with a binary search over
+    /// `analyzed_file_index`'s pairs, which that query sorts and documents
+    /// as sorted. A single-file fixture (every test above) cannot tell a
+    /// correct binary search apart from one that always answers with
+    /// whatever sits at index 0: this drives several analyzed files at
+    /// once and asserts each finding resolves to the enclosing symbol of
+    /// its OWN file, proving the lookup actually discriminates between
+    /// entries rather than only ever finding the first one the sorted
+    /// index happens to hold.
+    #[test]
+    fn a_finding_resolves_against_its_own_file_among_several_analyzed_ones() {
+        let root = tempfile::tempdir().unwrap();
+        std::fs::write(root.path().join("composer.json"), MANIFEST).unwrap();
+        std::fs::create_dir_all(root.path().join("src")).unwrap();
+        let classes = ["Alpha", "Beta", "Gamma"];
+        for class in classes {
+            std::fs::write(
+                root.path().join("src").join(format!("{class}.php")),
+                format!(
+                    "<?php\nnamespace App;\n\nclass {class}\n{{\n    public function run(): void\n    \
+                     {{\n        new Missing();\n    }}\n}}\n"
+                ),
+            )
+            .unwrap();
+        }
+        let mut session = Session::start(root.path());
+        for class in classes {
+            let file_path = root.path().join("src").join(format!("{class}.php"));
+            let file = session.vfs.file_id(&file_path);
+            let source = std::fs::read_to_string(&file_path).unwrap();
+            let offset = u32::try_from(source.find("new Missing").unwrap()).unwrap();
+            let range = celerrate_source::TextRange::new(
+                offset.into(),
+                (offset + u32::try_from("new Missing".len()).unwrap()).into(),
+            );
+            assert_eq!(
+                enclosing_symbol_path(&session.database, session.files, file, range),
+                format!("App\\{class}::run"),
+                "the lookup for {class}.php must resolve that file's own entry",
+            );
+        }
     }
 }
