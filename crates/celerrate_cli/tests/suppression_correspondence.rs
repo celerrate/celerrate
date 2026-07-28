@@ -92,6 +92,9 @@ const UNMAPPED_BY_DESIGN: &[&str] = &[
     // directive could ever sit on their anchor; neither tool has an
     // identifier for a competitor's configuration either.
     "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
+    // CEL0050 and CEL0051 are project-anchored baseline notices; there is
+    // no span to suppress.
+    "CEL0050", "CEL0051",
 ];
 
 /// Every Celerrate code some `Codes` entry of either dialect names.

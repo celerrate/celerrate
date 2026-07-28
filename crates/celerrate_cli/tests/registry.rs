@@ -27,6 +27,10 @@ fn producers() -> Vec<(&'static str, &'static [DiagnosticId])> {
             celerrate_project::ALLOCATED_IDENTIFIERS,
         ),
         ("celerrate_rules", celerrate_rules::ALLOCATED_IDENTIFIERS),
+        (
+            "celerrate_cli",
+            celerrate_cli::baseline::ALLOCATED_IDENTIFIERS,
+        ),
     ]
 }
 
@@ -62,10 +66,15 @@ fn the_named_producers_are_exactly_the_producers_in_the_dependency_graph() {
         .iter()
         .map(|(name, _)| (*name).to_owned())
         .collect();
-    let derived: BTreeSet<String> = celerrate_dependencies()
+    let mut derived: BTreeSet<String> = celerrate_dependencies()
         .into_iter()
         .filter(|dependency| allocates_identifiers(&crate_directory(dependency)))
         .collect();
+    // The composition root itself allocates the baseline notices, because
+    // the baseline mechanics live here rather than in a dependency: the
+    // scan above only ever looks at what `celerrate_cli` depends on, so it
+    // must be added to the derived set by hand.
+    derived.insert("celerrate_cli".to_string());
 
     let unnamed: Vec<&String> = derived.difference(&named).collect();
     let underived: Vec<&String> = named.difference(&derived).collect();

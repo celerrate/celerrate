@@ -335,6 +335,18 @@ pub const REGISTRY: &[RegisteredDiagnostic] = &[
         "celerrate_config",
         &pages::configuration::CEL0049,
     ),
+    registered(
+        "CEL0050",
+        "obsolete baseline entries",
+        "celerrate_cli",
+        &pages::baseline::CEL0050,
+    ),
+    registered(
+        "CEL0051",
+        "invalid baseline file",
+        "celerrate_cli",
+        &pages::baseline::CEL0051,
+    ),
 ];
 
 /// The registered identifier whose text is `text`, re-interned to its
@@ -380,7 +392,7 @@ mod tests {
             );
             previous = number;
         }
-        assert_eq!(previous, 49, "forty-nine identifiers allocated so far");
+        assert_eq!(previous, 51, "fifty-one identifiers allocated so far");
     }
 
     #[test]

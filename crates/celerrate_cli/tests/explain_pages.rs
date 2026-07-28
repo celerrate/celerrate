@@ -138,7 +138,8 @@ fn the_forced_activation_names_every_core_rule_and_stays_silent() {
     // catches CEL0041 and CEL0042, which are legitimate reporting-phase
     // rule output, not configuration diagnostics.
     for identifier in [
-        "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049",
+        "CEL0043", "CEL0044", "CEL0045", "CEL0046", "CEL0047", "CEL0048", "CEL0049", "CEL0050",
+        "CEL0051",
     ] {
         assert!(
             !report.contains(identifier),
