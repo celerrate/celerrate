@@ -118,7 +118,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                     return Outcome::UsageError;
                 }
             };
-            let _mode = baseline::Mode::of(baseline, ignore_baseline);
+            let mode = baseline::Mode::of(baseline, ignore_baseline);
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
             if watch {
@@ -133,15 +133,44 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 diagnostics: suggest::enrich(&session, &outcome.diagnostics),
                 panicked: outcome.panicked.clone(),
             };
+            let baseline_outcome = match mode {
+                baseline::Mode::Record => {
+                    match baseline::record(&session, &presented.diagnostics) {
+                        Ok(recorded) => {
+                            let before = presented.diagnostics.len();
+                            presented
+                                .diagnostics
+                                .retain(|diagnostic| diagnostic.span().is_none());
+                            baseline::BaselineOutcome {
+                                hidden: before - presented.diagnostics.len(),
+                                recorded: Some(recorded),
+                            }
+                        }
+                        Err(error) => {
+                            let _ = writeln!(
+                                output,
+                                "error: could not write {}: {error}",
+                                baseline::BASELINE_FILE_NAME
+                            );
+                            return Outcome::InternalError;
+                        }
+                    }
+                }
+                baseline::Mode::Apply | baseline::Mode::Ignore => {
+                    baseline::BaselineOutcome::default()
+                }
+            };
             // Configuration diagnostics are presentation and exit-code
             // input, never cache input: `outcome` stays untouched, so
             // the persisted verdicts cannot absorb them.
             let configuration_diagnostics =
                 configuration::merge_diagnostics(&session, &mut presented);
-            let failures = match render::render_report(output, &session, &presented, color) {
-                Ok(failures) => failures,
-                Err(_) => return Outcome::InternalError,
-            };
+            let failures =
+                match render::render_report(output, &session, &presented, color, &baseline_outcome)
+                {
+                    Ok(failures) => failures,
+                    Err(_) => return Outcome::InternalError,
+                };
             session.absorb_render_failures(failures);
             cache::persist(&mut session, &outcome);
             if let Some(threshold) = fix::fix_threshold(fix, fix_suggestions) {
@@ -156,7 +185,11 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             }
             session.statistics.report();
             Outcome::of(
-                outcome.diagnostics.len() + configuration_diagnostics,
+                outcome
+                    .diagnostics
+                    .len()
+                    .saturating_sub(baseline_outcome.hidden)
+                    + configuration_diagnostics,
                 session.internal_errors.len(),
             )
         }

@@ -44,7 +44,13 @@ pub(crate) fn render_check(
 ) -> io::Result<()> {
     let failures = {
         let mut body: Vec<u8> = Vec::new();
-        let failures = render_report(&mut body, session, outcome, color)?;
+        let failures = render_report(
+            &mut body,
+            session,
+            outcome,
+            color,
+            &crate::baseline::BaselineOutcome::default(),
+        )?;
         output.write_all(&body)?;
         failures
     };
@@ -105,8 +111,16 @@ pub fn render_report(
     session: &Session,
     outcome: &AnalysisOutcome,
     color: ColorMode,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<Vec<RenderFailure>> {
-    render_report_with(output, session, outcome, color, &FaultInjection::None)
+    render_report_with(
+        output,
+        session,
+        outcome,
+        color,
+        &FaultInjection::None,
+        baseline,
+    )
 }
 
 /// The seam the fault-injection tests use; production always passes
@@ -117,6 +131,7 @@ pub(crate) fn render_report_with(
     outcome: &AnalysisOutcome,
     color: ColorMode,
     fault: &FaultInjection,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
     write_notices(output, notices)?;
@@ -128,6 +143,14 @@ pub(crate) fn render_report_with(
     }
 
     write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
+    if let Some(recorded) = baseline.recorded {
+        writeln!(
+            output,
+            "recorded {} to {}",
+            count(recorded, "baseline entry", "baseline entries"),
+            crate::baseline::BASELINE_FILE_NAME
+        )?;
+    }
 
     let mut identifiers: Vec<DiagnosticId> =
         notices.iter().map(|notice| notice.identifier()).collect();
@@ -537,6 +560,7 @@ mod tests {
             &FaultInjection::ForIdentifier(
                 celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
             ),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         session.absorb_render_failures(failures);
