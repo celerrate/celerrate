@@ -34,6 +34,14 @@ pub enum Command {
         /// Apply safe and needs-review suggestions alike.
         #[arg(long, conflicts_with = "watch")]
         fix_suggestions: bool,
+
+        /// Record (or rewrite) `celerrate-baseline.toml` from the current findings.
+        #[arg(long, conflicts_with_all = ["watch", "fix", "fix_suggestions", "ignore_baseline"])]
+        baseline: bool,
+
+        /// Ignore an existing `celerrate-baseline.toml` and report every finding.
+        #[arg(long)]
+        ignore_baseline: bool,
     },
 
     /// Explain a diagnostic identifier: why it fires, a failing and a

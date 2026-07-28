@@ -10,3 +10,27 @@ pub mod symbol;
 
 /// The fixed file name at the project root. No configuration key moves it.
 pub const BASELINE_FILE_NAME: &str = "celerrate-baseline.toml";
+
+/// How this run treats the baseline file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    /// A present file applies automatically (the default).
+    Apply,
+    /// `--baseline`: record or rewrite the file from the current findings.
+    Record,
+    /// `--ignore-baseline`: strict run, the file is not consulted.
+    Ignore,
+}
+
+impl Mode {
+    pub fn of(record: bool, ignore: bool) -> Self {
+        // clap guarantees record and ignore are mutually exclusive.
+        if record {
+            Self::Record
+        } else if ignore {
+            Self::Ignore
+        } else {
+            Self::Apply
+        }
+    }
+}

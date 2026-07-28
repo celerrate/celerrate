@@ -104,6 +104,8 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             watch,
             fix,
             fix_suggestions,
+            baseline,
+            ignore_baseline,
         } => {
             if let Some(message) = unusable_root(&path) {
                 let _ = writeln!(output, "{message}");
@@ -116,6 +118,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                     return Outcome::UsageError;
                 }
             };
+            let _mode = baseline::Mode::of(baseline, ignore_baseline);
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
             if watch {
