@@ -8,6 +8,7 @@
 
 pub mod analysis;
 pub mod arguments;
+pub mod baseline;
 pub mod cache;
 pub mod configuration;
 pub mod database;

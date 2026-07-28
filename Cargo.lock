@@ -181,6 +181,7 @@ dependencies = [
  "serde",
  "tempfile",
  "terminal_size",
+ "toml_edit",
 ]
 
 [[package]]
