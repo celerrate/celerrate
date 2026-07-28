@@ -122,7 +122,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
             if watch {
-                return watch::watch(&mut session, output, color);
+                return watch::watch(&mut session, output, color, mode);
             }
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));

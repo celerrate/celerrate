@@ -343,6 +343,15 @@ fn internal_error_rows(session: &Session, new_failures: usize) -> usize {
 /// [`internal_error_rows`] for exactly how many are reserved and why.
 /// Without that reservation a cycle carrying internal errors could
 /// still overrun the terminal height it was supposedly capped against.
+///
+/// `baseline` mirrors what the single-pass `render_report_with` does with
+/// its own `BaselineOutcome`: the baseline's notices render in their own
+/// block (right after the project notices, in their own call to
+/// [`write_notice_block`]), they count toward the summary line's notice
+/// total, and a nonzero `hidden` count prints the "N baselined
+/// diagnostics hidden" line. The blocks these add are reserved for in the
+/// height budget the same way the project notices already are.
+#[allow(clippy::too_many_arguments)]
 pub fn render_cycle(
     output: &mut dyn Write,
     session: &mut Session,
@@ -351,23 +360,33 @@ pub fn render_cycle(
     elapsed: std::time::Duration,
     color: ColorMode,
     height: Option<usize>,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<()> {
     let report = build_report(session, outcome, color, &FaultInjection::None);
 
     let notices = session.notices();
-    // Overhead: the notice lines plus their blank separator, the summary
-    // line, one blank line, the status line, the watching line, one spare
-    // row for the cursor, and the rows `render_internal_errors` will
-    // actually write below for the internal errors this cycle carries
-    // (the session's already-accumulated ones plus the render failures
-    // this cycle produced, which is exactly what gets absorbed into the
-    // same list right before that function runs).
-    let overhead = if notices.is_empty() {
+    // Overhead: the notice lines plus their blank separator (one block for
+    // the project notices, a second for the baseline notices — each is
+    // its own call to `write_notice_block` and pays its own separator),
+    // the "N baselined diagnostics hidden" line when there is one, the
+    // summary line, one blank line, the status line, the watching line,
+    // one spare row for the cursor, and the rows `render_internal_errors`
+    // will actually write below for the internal errors this cycle
+    // carries (the session's already-accumulated ones plus the render
+    // failures this cycle produced, which is exactly what gets absorbed
+    // into the same list right before that function runs).
+    let notice_rows = if notices.is_empty() {
         0
     } else {
         notices.len() + 1
-    } + 6
-        + internal_error_rows(session, report.failures.len());
+    } + if baseline.notices.is_empty() {
+        0
+    } else {
+        baseline.notices.len() + 1
+    };
+    let hidden_row = usize::from(baseline.hidden > 0);
+    let overhead =
+        notice_rows + hidden_row + 6 + internal_error_rows(session, report.failures.len());
     let (shown, hidden) = match height {
         Some(rows) => capped_blocks(&report.blocks, rows.saturating_sub(overhead)),
         None => (report.blocks.len(), 0),
@@ -378,6 +397,7 @@ pub fn render_cycle(
     // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
     write_notice_block(output, notices)?;
+    write_notice_block(output, &baseline.notices)?;
     for block in report.blocks.iter().take(shown) {
         writeln!(output, "{block}")?;
         writeln!(output)?;
@@ -390,7 +410,22 @@ pub fn render_cycle(
         )?;
         writeln!(output)?;
     }
-    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
+    write_summary_line(
+        output,
+        notices.len() + baseline.notices.len(),
+        outcome.diagnostics.len(),
+    )?;
+    if baseline.hidden > 0 {
+        writeln!(
+            output,
+            "{} hidden",
+            count(
+                baseline.hidden,
+                "baselined diagnostic",
+                "baselined diagnostics"
+            )
+        )?;
+    }
 
     session.absorb_render_failures(report.failures);
     render_internal_errors(output, session)?;
@@ -837,6 +872,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             None,
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(output).unwrap();
@@ -897,6 +933,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(20),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(body).unwrap();
@@ -922,6 +959,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             None,
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(body).unwrap();
@@ -978,6 +1016,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(height),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text_without = String::from_utf8(without_errors).unwrap();
@@ -1004,6 +1043,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(height),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text_with = String::from_utf8(with_errors).unwrap();

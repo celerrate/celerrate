@@ -112,6 +112,7 @@ fn completed_cycle(
     output: &mut dyn Write,
     reanalyzed: usize,
     color: ColorMode,
+    mode: crate::baseline::Mode,
 ) -> Result<(AnalysisOutcome, Option<WatchEvent>, bool), Outcome> {
     let started = Instant::now();
     // Every cycle re-analyzes, so every cycle also recomputes what the
@@ -136,10 +137,23 @@ fn completed_cycle(
     // frame the user no longer has.
     let height =
         terminal_size::terminal_size().map(|(_, terminal_size::Height(rows))| rows as usize);
+    // The baseline is presentation, exactly as in the single-pass check:
+    // applied to a cloned copy, never to the `outcome` the persisted
+    // verdicts read. `Mode::Record` cannot reach the watch loop at all —
+    // clap rejects `--baseline --watch` as a usage error before either
+    // session exists — so only `Apply` ever hides anything here; `Ignore`
+    // (and the unreachable `Record`) leave `presented` untouched, exactly
+    // like a session with no baseline file.
+    let mut presented = outcome.clone();
+    let baseline_outcome = match mode {
+        crate::baseline::Mode::Apply => crate::baseline::apply(session, &mut presented.diagnostics),
+        _ => crate::baseline::BaselineOutcome::default(),
+    };
     // Configuration diagnostics are part of every picture, exactly as in
     // a single check: merged into a presentation copy, never into the
-    // outcome the persisted verdicts read.
-    let mut presented = outcome.clone();
+    // outcome the persisted verdicts read. The baseline filter runs
+    // before this, and configuration diagnostics stay exempt from it,
+    // exactly as in the single-pass path.
     let _ = crate::configuration::merge_diagnostics(session, &mut presented);
     if render::render_cycle(
         output,
@@ -149,6 +163,7 @@ fn completed_cycle(
         started.elapsed(),
         color,
         height,
+        &baseline_outcome,
     )
     .is_err()
     {
@@ -221,7 +236,12 @@ fn persist_unless_a_burst_is_already_waiting(
 /// Watches, analyzes, reprints, forever. Returns only when the watch
 /// itself cannot be established or re-established, or when the output
 /// stream is gone.
-pub fn watch(session: &mut Session, output: &mut dyn Write, color: ColorMode) -> Outcome {
+pub fn watch(
+    session: &mut Session,
+    output: &mut dyn Write,
+    color: ColorMode,
+    mode: crate::baseline::Mode,
+) -> Outcome {
     let mut watcher = match Watch::spawn(session) {
         Ok(watcher) => watcher,
         Err(error) => return unwatchable(output, &error),
@@ -235,7 +255,7 @@ pub fn watch(session: &mut Session, output: &mut dyn Write, color: ColorMode) ->
 
     let mut reanalyzed = session.sources.len();
     loop {
-        match iteration(session, &mut watcher, output, reanalyzed, color) {
+        match iteration(session, &mut watcher, output, reanalyzed, color, mode) {
             ControlFlow::Continue(next) => reanalyzed = next,
             ControlFlow::Break(outcome) => return outcome,
         }
@@ -292,9 +312,10 @@ fn iteration(
     output: &mut dyn Write,
     reanalyzed: usize,
     color: ColorMode,
+    mode: crate::baseline::Mode,
 ) -> ControlFlow<Outcome, usize> {
     let (outcome, pending, shutdown) =
-        match completed_cycle(session, watcher, output, reanalyzed, color) {
+        match completed_cycle(session, watcher, output, reanalyzed, color, mode) {
             Ok(result) => result,
             Err(ended) => return ControlFlow::Break(ended),
         };
@@ -328,9 +349,21 @@ fn iteration(
             // busy cycle skipped is flushed before the process returns —
             // a no-op write when that cycle's own persist already ran,
             // since `write_when_changed` compares before writing.
+            //
+            // The exit count is computed on a clone, exactly as the
+            // rendered picture was: `outcome` itself must reach `persist`
+            // un-filtered, so the cache never absorbs the baseline's
+            // presentation-only hiding. `apply` already removes the
+            // hidden diagnostics from `final_diagnostics` in place, so its
+            // length IS the post-baseline count with no separate
+            // subtraction needed.
+            let mut final_diagnostics = outcome.diagnostics.clone();
+            if let crate::baseline::Mode::Apply = mode {
+                crate::baseline::apply(session, &mut final_diagnostics);
+            }
             crate::cache::persist(session, &outcome);
             return ControlFlow::Break(Outcome::of(
-                outcome.diagnostics.len() + crate::configuration::diagnostic_count(session),
+                final_diagnostics.len() + crate::configuration::diagnostic_count(session),
                 session.internal_errors.len(),
             ));
         }
@@ -490,10 +523,10 @@ struct Built {
 
 impl Watch {
     /// The watcher observes the project walk roots plus `composer.json`,
-    /// `composer.lock`, and `celerrate.toml`. The vendor walk roots are
-    /// never watched on their own: thousands of files that only move when
-    /// the lockfile does, and a lockfile change triggers full
-    /// re-discovery anyway.
+    /// `composer.lock`, `celerrate.toml`, and `celerrate-baseline.toml`.
+    /// The vendor walk roots are never watched on their own: thousands of
+    /// files that only move when the lockfile does, and a lockfile change
+    /// triggers full re-discovery anyway.
     ///
     /// That is not a promise that `vendor/` goes unwatched. When a
     /// manifest declares no autoload, or none that resolves,
@@ -556,15 +589,25 @@ impl Watch {
                 Declared::ByTheProject,
             ));
         }
-        for manifest in ["composer.json", "composer.lock", "celerrate.toml"] {
+        for manifest in [
+            "composer.json",
+            "composer.lock",
+            "celerrate.toml",
+            crate::baseline::BASELINE_FILE_NAME,
+        ] {
             let path = session.discovery.root.join(manifest);
-            // A project may perfectly well have neither file: a missing
-            // manifest is already a notice, and a project with no lockfile
-            // (or no `celerrate.toml`) is ordinary. Neither is declared by
-            // anyone, so neither refusal is reported while the file is
-            // absent. The refusal is still *recorded*, because that is a
-            // different question: it is what lets a lockfile — or a
-            // `celerrate.toml` — that appears mid-session be picked up.
+            // A project may perfectly well have none of these files: a
+            // missing manifest is already a notice, and a project with no
+            // lockfile, no `celerrate.toml`, or no recorded baseline is
+            // ordinary. None of them is declared by anyone, so no refusal
+            // is reported while the file is absent. The refusal is still
+            // *recorded*, because that is a different question: it is what
+            // lets a lockfile, a `celerrate.toml`, or a baseline file that
+            // appears (or is deleted and rewritten) mid-session be picked
+            // up. Watching it is what lets a `celerrate check --baseline`
+            // run outside the watch, or an edit made directly to the file,
+            // reach `Session::absorb`'s `is_project_manifest` routing to
+            // `rediscover` and reload it.
             unwatchable.extend(register(
                 &mut watcher,
                 &path,
@@ -1412,6 +1455,7 @@ mod tests {
         // the assertion below is about the roots not moving, and only that.
         std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
         std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
+        std::fs::write(root.path().join(crate::baseline::BASELINE_FILE_NAME), "").unwrap();
 
         let mut session = Session::start(root.path());
         let mut watcher = Watch::spawn(&session).unwrap();
@@ -1446,11 +1490,11 @@ mod tests {
     /// before anyone has written it. The declared roots are lexical, so the
     /// directory that does not exist is a walk root all the same.
     ///
-    /// The lockfile and `celerrate.toml` are both written so that the only
-    /// refusal these tests see is the one they are about. A project
-    /// without a lockfile (or without `celerrate.toml`) records a refusal
-    /// for it too, which is what lets one created mid-session be picked
-    /// up; the lockfile case has its own test at this registration-retry
+    /// The lockfile, `celerrate.toml`, and the baseline file are all
+    /// written so that the only refusal these tests see is the one they
+    /// are about. A project without any one of them records a refusal for
+    /// it too, which is what lets one created mid-session be picked up;
+    /// the lockfile case has its own test at this registration-retry
     /// level. `celerrate.toml`'s mid-session appearance is instead
     /// covered at the higher reconfiguration level, by
     /// `a_configuration_saved_mid_watch_reconfigures_the_next_cycle`,
@@ -1467,6 +1511,7 @@ mod tests {
         .unwrap();
         std::fs::write(root.path().join("composer.lock"), "{}").unwrap();
         std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
+        std::fs::write(root.path().join(crate::baseline::BASELINE_FILE_NAME), "").unwrap();
         root
     }
 
@@ -1629,9 +1674,11 @@ mod tests {
         )
         .unwrap();
         // Present from the start so the only refusal this test is about is
-        // the lockfile's: a project with no `celerrate.toml` is exactly as
-        // ordinary, and its own mid-session appearance has its own test.
+        // the lockfile's: a project with no `celerrate.toml` or no
+        // recorded baseline is exactly as ordinary, and their own
+        // mid-session appearance is covered elsewhere.
         std::fs::write(root.path().join("celerrate.toml"), "").unwrap();
+        std::fs::write(root.path().join(crate::baseline::BASELINE_FILE_NAME), "").unwrap();
         let lockfile = root.path().join("composer.lock");
 
         let mut session = Session::start(root.path());
@@ -1964,9 +2011,15 @@ mod tests {
         let mut watcher = silent_watch(&session);
         let mut output = Vec::new();
 
-        let (first, pending, shutdown) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
-                .unwrap();
+        let (first, pending, shutdown) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
         assert!(
             first.diagnostics.is_empty(),
             "sanity: the initial state is clean"
@@ -1982,9 +2035,15 @@ mod tests {
         let edited_source = "<?php class A {} new Missing();";
         std::fs::write(&edited, edited_source).unwrap();
         session.absorb(std::slice::from_ref(&edited));
-        let (second, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
-                .unwrap();
+        let (second, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
         assert_eq!(second.diagnostics.len(), 1, "the cycle sees the edit");
 
         let after_second = std::fs::read(&diagnostics_pack).unwrap();
@@ -2137,6 +2196,7 @@ mod tests {
             &mut output,
             total,
             ColorMode::Plain,
+            crate::baseline::Mode::Apply,
         )
         .unwrap();
         assert!(
@@ -2209,9 +2269,15 @@ mod tests {
         // disk: `new Missing();`) and persists it — proving the
         // comparison above was not vacuous, since the packs on disk CAN
         // and DO change once a cycle actually completes.
-        let (second, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
-                .unwrap();
+        let (second, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
         assert!(
             second
                 .diagnostics
@@ -2362,13 +2428,19 @@ mod tests {
         assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
 
         sender.send(WatchEvent::Shutdown).unwrap();
-        let outcome =
-            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
-                ControlFlow::Break(outcome) => outcome,
-                ControlFlow::Continue(next) => {
-                    panic!("a shutdown must break the loop, not continue with {next}")
-                }
-            };
+        let outcome = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        ) {
+            ControlFlow::Break(outcome) => outcome,
+            ControlFlow::Continue(next) => {
+                panic!("a shutdown must break the loop, not continue with {next}")
+            }
+        };
         assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
         assert!(
             diagnostics_pack.exists(),
@@ -2403,13 +2475,19 @@ mod tests {
             sender.send(WatchEvent::Changed(sent)).unwrap();
         });
 
-        let next =
-            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
-                ControlFlow::Continue(next) => next,
-                ControlFlow::Break(outcome) => {
-                    panic!("a plain change must not break the loop: {outcome:?}")
-                }
-            };
+        let next = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        ) {
+            ControlFlow::Continue(next) => next,
+            ControlFlow::Break(outcome) => {
+                panic!("a plain change must not break the loop: {outcome:?}")
+            }
+        };
         assert_eq!(
             next, 1,
             "one path changed, so the next cycle reports one reanalyzed file",
@@ -2421,6 +2499,7 @@ mod tests {
             &mut output,
             next,
             ColorMode::Plain,
+            crate::baseline::Mode::Apply,
         )
         .unwrap();
         assert!(!shutdown, "no shutdown was ever sent");
@@ -2458,13 +2537,19 @@ mod tests {
         let diagnostics_pack = root.path().join(".celerrate/cache/diagnostics.bin");
         assert!(!diagnostics_pack.exists(), "sanity: nothing persisted yet",);
 
-        let outcome =
-            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
-                ControlFlow::Break(outcome) => outcome,
-                ControlFlow::Continue(next) => {
-                    panic!("a disconnected channel must break the loop, not continue with {next}")
-                }
-            };
+        let outcome = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        ) {
+            ControlFlow::Break(outcome) => outcome,
+            ControlFlow::Continue(next) => {
+                panic!("a disconnected channel must break the loop, not continue with {next}")
+            }
+        };
         assert_eq!(outcome, Outcome::Clean, "the fixture project is clean");
         assert!(
             diagnostics_pack.exists(),
@@ -2533,9 +2618,15 @@ class Consumer
 
         // The first picture, over the project as it stands: the possibly-
         // null dereference fires.
-        let (first, _, _) =
-            super::completed_cycle(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain)
-                .unwrap();
+        let (first, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
         assert_eq!(
             first.diagnostics.len(),
             1,
@@ -2567,13 +2658,19 @@ class Consumer
             deliver.send(WatchEvent::Changed(sent)).unwrap();
         });
 
-        let next =
-            match super::iteration(&mut session, &mut watcher, &mut output, 1, ColorMode::Plain) {
-                ControlFlow::Continue(next) => next,
-                ControlFlow::Break(outcome) => {
-                    panic!("a configuration save must not break the loop: {outcome:?}")
-                }
-            };
+        let next = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        ) {
+            ControlFlow::Continue(next) => next,
+            ControlFlow::Break(outcome) => {
+                panic!("a configuration save must not break the loop: {outcome:?}")
+            }
+        };
 
         output.clear();
         let (second, _, _) = super::completed_cycle(
@@ -2582,6 +2679,7 @@ class Consumer
             &mut output,
             next,
             ColorMode::Plain,
+            crate::baseline::Mode::Apply,
         )
         .unwrap();
         assert!(
@@ -2621,6 +2719,7 @@ class Consumer
             &mut output,
             next,
             ColorMode::Plain,
+            crate::baseline::Mode::Apply,
         ) {
             ControlFlow::Continue(next) => next,
             ControlFlow::Break(outcome) => {
@@ -2635,6 +2734,7 @@ class Consumer
             &mut output,
             next,
             ColorMode::Plain,
+            crate::baseline::Mode::Apply,
         )
         .unwrap();
         assert_eq!(
@@ -2647,6 +2747,171 @@ class Consumer
         assert!(
             third_text.contains("CEL0034"),
             "the diagnostic is back: {third_text}",
+        );
+    }
+
+    /// The watch's own part of the baseline promise: a recorded entry
+    /// hides its finding from a watch cycle exactly as it does from a
+    /// single `check`, and the hiding is presentation-only. `Mode::Record`
+    /// cannot reach the watch loop at all — clap rejects `--baseline
+    /// --watch` before either session exists — so `Mode::Apply` is the
+    /// only mode this cycle is ever asked to honor a baseline file under.
+    ///
+    /// The baseline is recorded from a first session's own analysis, then
+    /// a second, fresh `Session::start` picks up the file `Session::start`
+    /// reads once, up front — mirroring how `a_cycle_rewrites_the_packs_
+    /// with_its_results` above builds its fixture, and why the
+    /// configuration-reload test restarts nothing: here, unlike there, the
+    /// baseline must exist on disk before the very first cycle runs.
+    #[test]
+    fn a_cycle_applies_the_baseline_and_reports_hidden_findings() {
+        let root = tempfile::tempdir().unwrap();
+        let edited = root.path().join("a.php");
+        std::fs::write(&edited, "<?php class A {} new Missing();").unwrap();
+
+        let recording_session = Session::start(root.path());
+        let inputs = recording_session.inputs();
+        let outcome = analyze(&inputs).unwrap();
+        assert_eq!(
+            outcome.diagnostics.len(),
+            1,
+            "sanity: exactly one finding to baseline: {:?}",
+            outcome.diagnostics,
+        );
+        let recorded = crate::baseline::record(&recording_session, &outcome.diagnostics).unwrap();
+        assert!(recorded.is_some(), "a fresh finding is always recorded");
+
+        let mut session = Session::start(root.path());
+        let mut watcher = silent_watch(&session);
+        let mut output = Vec::new();
+
+        let (result, pending, shutdown) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
+        assert!(
+            pending.is_none(),
+            "the silent watch never has anything queued",
+        );
+        assert!(!shutdown, "the silent watch never sends a shutdown");
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "the baseline hides the finding from presentation only: the outcome the cache \
+             reads still carries it: {:?}",
+            result.diagnostics,
+        );
+
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("1 baselined diagnostic hidden"),
+            "the frame reports what it hid: {text}",
+        );
+        assert!(
+            !text.contains("CEL0018"),
+            "the hidden finding's identifier is absent from the frame: {text}",
+        );
+        assert!(
+            !text.contains("Missing"),
+            "the hidden finding's own message is absent from the frame: {text}",
+        );
+    }
+
+    /// The reload half of the same promise: `Session::absorb` already
+    /// routes an edit of `celerrate-baseline.toml` to `rediscover` (task
+    /// 5's extension of `is_project_manifest`), and `rediscover` reloads
+    /// `loaded_baseline` from whatever is on disk now. Deleting the file
+    /// mid-watch must therefore bring the finding back on the very next
+    /// cycle, exactly as deleting `celerrate.toml` brings its silenced
+    /// diagnostic back in `a_configuration_saved_mid_watch_reconfigures_
+    /// the_next_cycle` above — driven the same way, for the same reason:
+    /// a synchronous send would race `cycle`'s own inner polling loop, so
+    /// the event is delivered from a delayed background thread instead.
+    #[test]
+    fn deleting_the_baseline_file_mid_watch_reports_the_finding_again() {
+        let root = tempfile::tempdir().unwrap();
+        let edited = root.path().join("a.php");
+        std::fs::write(&edited, "<?php class A {} new Missing();").unwrap();
+
+        let recording_session = Session::start(root.path());
+        let inputs = recording_session.inputs();
+        let outcome = analyze(&inputs).unwrap();
+        assert_eq!(
+            outcome.diagnostics.len(),
+            1,
+            "sanity: exactly one finding to baseline: {:?}",
+            outcome.diagnostics,
+        );
+        let recorded = crate::baseline::record(&recording_session, &outcome.diagnostics).unwrap();
+        assert!(recorded.is_some(), "a fresh finding is always recorded");
+
+        let mut session = Session::start(root.path());
+        let (mut watcher, sender) = watch_with_held_sender(&session);
+        let mut output = Vec::new();
+
+        let (first, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
+        assert_eq!(first.diagnostics.len(), 1, "the finding is still analyzed");
+        let first_text = String::from_utf8(output.clone()).unwrap();
+        assert!(
+            first_text.contains("1 baselined diagnostic hidden"),
+            "sanity: the first cycle hides it: {first_text}",
+        );
+
+        let baseline_file = root.path().join(crate::baseline::BASELINE_FILE_NAME);
+        std::fs::remove_file(&baseline_file).unwrap();
+        let sent = baseline_file.clone();
+        let deliver = sender.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            deliver.send(WatchEvent::Changed(sent)).unwrap();
+        });
+
+        let next = match super::iteration(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        ) {
+            ControlFlow::Continue(next) => next,
+            ControlFlow::Break(outcome) => {
+                panic!("deleting the baseline file must not break the loop: {outcome:?}")
+            }
+        };
+
+        output.clear();
+        let (second, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            next,
+            ColorMode::Plain,
+            crate::baseline::Mode::Apply,
+        )
+        .unwrap();
+        assert_eq!(second.diagnostics.len(), 1);
+        let second_text = String::from_utf8(output.clone()).unwrap();
+        assert!(
+            second_text.contains("CEL0018"),
+            "the finding is reported again once the baseline that hid it is gone: {second_text}",
+        );
+        assert!(
+            !second_text.contains("hidden"),
+            "nothing is baselined anymore: {second_text}",
         );
     }
 }
