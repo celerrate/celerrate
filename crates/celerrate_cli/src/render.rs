@@ -1066,6 +1066,97 @@ mod tests {
         );
     }
 
+    /// The same review finding, applied to the baseline's own two
+    /// additions: the notice block `write_notice_block(output,
+    /// &baseline.notices)` writes, and the "N baselined diagnostics
+    /// hidden" line. Neither was reserved for in the overhead calculation
+    /// until this test existed to demand it: a cycle carrying a baseline
+    /// notice and a nonzero `hidden` count could otherwise overrun the
+    /// terminal height it was supposedly capped against, exactly as an
+    /// uncounted internal error could before the fix above.
+    #[test]
+    fn a_baseline_notice_and_hidden_line_reserve_rows_and_shrink_the_capped_block_count() {
+        let (_root, mut session, outcome) = fixture_with_many_diagnostics();
+
+        // Measure a real block's cost and the pre-baseline overhead
+        // exactly the way the internal-errors test above does, so the
+        // chosen height is derived from the real content, not guessed.
+        let report =
+            render::build_report(&session, &outcome, ColorMode::Plain, &FaultInjection::None);
+        let block_cost = report.blocks[0].lines().count() + 1;
+        let notices = session.notices();
+        let base_overhead = if notices.is_empty() {
+            0
+        } else {
+            notices.len() + 1
+        } + 6;
+        let height = base_overhead + 3 * block_cost;
+
+        let mut without_baseline: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut without_baseline,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+            &crate::baseline::BaselineOutcome::default(),
+        )
+        .unwrap();
+        let text_without = String::from_utf8(without_baseline).unwrap();
+        let hidden_without = hidden_diagnostic_count(&text_without);
+        assert_eq!(
+            hidden_without, 2,
+            "the height was chosen to fit exactly three of the five blocks: {text_without}",
+        );
+
+        // A baseline notice plus a nonzero hidden count: rows the
+        // pre-fix overhead never budgeted for (a notice line and its
+        // blank separator, and the "N baselined diagnostics hidden"
+        // line).
+        let baseline = crate::baseline::BaselineOutcome {
+            hidden: 1,
+            recorded: None,
+            notices: vec![crate::baseline::BaselineNotice::ObsoleteEntries { count: 1 }],
+        };
+
+        let mut with_baseline: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut with_baseline,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+            &baseline,
+        )
+        .unwrap();
+        let text_with = String::from_utf8(with_baseline).unwrap();
+        let hidden_with = hidden_diagnostic_count(&text_with);
+
+        assert!(
+            hidden_with > hidden_without,
+            "reserving the baseline's own rows must shrink how many blocks fit: \
+             {hidden_without} hidden before, {hidden_with} after: {text_with}",
+        );
+        assert!(
+            text_with.contains("no longer matches the current findings"),
+            "the baseline notice itself still prints in the capped frame: {text_with}",
+        );
+        assert!(
+            text_with.contains("1 baselined diagnostic hidden"),
+            "the hidden line itself still prints in the capped frame: {text_with}",
+        );
+        assert!(
+            text_with.lines().count() <= height,
+            "the frame must still respect the height budget: {} lines against a height of \
+             {height}: {text_with}",
+            text_with.lines().count(),
+        );
+    }
+
     /// When an unreadable file sits alongside a genuine Celerrate bug,
     /// both are named, and the bug-report invitation still appears,
     /// because at least one internal error really is Celerrate's fault.

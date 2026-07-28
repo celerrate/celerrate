@@ -145,9 +145,10 @@ fn completed_cycle(
     // (and the unreachable `Record`) leave `presented` untouched, exactly
     // like a session with no baseline file.
     let mut presented = outcome.clone();
-    let baseline_outcome = match mode {
-        crate::baseline::Mode::Apply => crate::baseline::apply(session, &mut presented.diagnostics),
-        _ => crate::baseline::BaselineOutcome::default(),
+    let baseline_outcome = if let crate::baseline::Mode::Apply = mode {
+        crate::baseline::apply(session, &mut presented.diagnostics)
+    } else {
+        crate::baseline::BaselineOutcome::default()
     };
     // Configuration diagnostics are part of every picture, exactly as in
     // a single check: merged into a presentation copy, never into the
@@ -2750,24 +2751,21 @@ class Consumer
         );
     }
 
-    /// The watch's own part of the baseline promise: a recorded entry
-    /// hides its finding from a watch cycle exactly as it does from a
-    /// single `check`, and the hiding is presentation-only. `Mode::Record`
-    /// cannot reach the watch loop at all — clap rejects `--baseline
-    /// --watch` before either session exists — so `Mode::Apply` is the
-    /// only mode this cycle is ever asked to honor a baseline file under.
+    /// A project with a single finding (`a.php` contains exactly one
+    /// `new Missing()`, CEL0018) and a `celerrate-baseline.toml` that
+    /// already records it, recorded from a first session's own analysis.
     ///
-    /// The baseline is recorded from a first session's own analysis, then
-    /// a second, fresh `Session::start` picks up the file `Session::start`
-    /// reads once, up front — mirroring how `a_cycle_rewrites_the_packs_
-    /// with_its_results` above builds its fixture, and why the
-    /// configuration-reload test restarts nothing: here, unlike there, the
-    /// baseline must exist on disk before the very first cycle runs.
-    #[test]
-    fn a_cycle_applies_the_baseline_and_reports_hidden_findings() {
+    /// Shared by the watch-cycle baseline tests below, which differ only
+    /// in what they do with the fixture afterward: a fresh
+    /// `Session::start` over the returned root is what picks up the file
+    /// `Session::start` reads once, up front — mirroring how
+    /// `a_cycle_rewrites_the_packs_with_its_results` above builds its own
+    /// fixture, and why the configuration-reload test restarts nothing:
+    /// here, unlike there, the baseline must exist on disk before the
+    /// very first cycle runs.
+    fn project_with_a_recorded_baseline() -> tempfile::TempDir {
         let root = tempfile::tempdir().unwrap();
-        let edited = root.path().join("a.php");
-        std::fs::write(&edited, "<?php class A {} new Missing();").unwrap();
+        std::fs::write(root.path().join("a.php"), "<?php class A {} new Missing();").unwrap();
 
         let recording_session = Session::start(root.path());
         let inputs = recording_session.inputs();
@@ -2780,6 +2778,19 @@ class Consumer
         );
         let recorded = crate::baseline::record(&recording_session, &outcome.diagnostics).unwrap();
         assert!(recorded.is_some(), "a fresh finding is always recorded");
+
+        root
+    }
+
+    /// The watch's own part of the baseline promise: a recorded entry
+    /// hides its finding from a watch cycle exactly as it does from a
+    /// single `check`, and the hiding is presentation-only. `Mode::Record`
+    /// cannot reach the watch loop at all — clap rejects `--baseline
+    /// --watch` before either session exists — so `Mode::Apply` is the
+    /// only mode this cycle is ever asked to honor a baseline file under.
+    #[test]
+    fn a_cycle_applies_the_baseline_and_reports_hidden_findings() {
+        let root = project_with_a_recorded_baseline();
 
         let mut session = Session::start(root.path());
         let mut watcher = silent_watch(&session);
@@ -2834,21 +2845,7 @@ class Consumer
     /// the event is delivered from a delayed background thread instead.
     #[test]
     fn deleting_the_baseline_file_mid_watch_reports_the_finding_again() {
-        let root = tempfile::tempdir().unwrap();
-        let edited = root.path().join("a.php");
-        std::fs::write(&edited, "<?php class A {} new Missing();").unwrap();
-
-        let recording_session = Session::start(root.path());
-        let inputs = recording_session.inputs();
-        let outcome = analyze(&inputs).unwrap();
-        assert_eq!(
-            outcome.diagnostics.len(),
-            1,
-            "sanity: exactly one finding to baseline: {:?}",
-            outcome.diagnostics,
-        );
-        let recorded = crate::baseline::record(&recording_session, &outcome.diagnostics).unwrap();
-        assert!(recorded.is_some(), "a fresh finding is always recorded");
+        let root = project_with_a_recorded_baseline();
 
         let mut session = Session::start(root.path());
         let (mut watcher, sender) = watch_with_held_sender(&session);
@@ -2903,7 +2900,11 @@ class Consumer
             crate::baseline::Mode::Apply,
         )
         .unwrap();
-        assert_eq!(second.diagnostics.len(), 1);
+        assert_eq!(
+            second.diagnostics.len(),
+            1,
+            "the finding is still analyzed once the baseline that hid it is gone",
+        );
         let second_text = String::from_utf8(output.clone()).unwrap();
         assert!(
             second_text.contains("CEL0018"),
@@ -2912,6 +2913,47 @@ class Consumer
         assert!(
             !second_text.contains("hidden"),
             "nothing is baselined anymore: {second_text}",
+        );
+    }
+
+    /// `Mode::Ignore` (`--ignore-baseline`) must not apply a baseline even
+    /// when one is recorded and present on disk: the finding stays
+    /// reported, and the frame carries no "hidden" line at all. Pins that
+    /// folding `Ignore` into the same do-nothing arm as the unreachable
+    /// `Record` really does skip `baseline::apply` altogether, rather
+    /// than applying an empty or vacuous baseline that happens to hide
+    /// nothing.
+    #[test]
+    fn ignore_mode_does_not_apply_a_present_baseline() {
+        let root = project_with_a_recorded_baseline();
+
+        let mut session = Session::start(root.path());
+        let mut watcher = silent_watch(&session);
+        let mut output = Vec::new();
+
+        let (result, _, _) = super::completed_cycle(
+            &mut session,
+            &mut watcher,
+            &mut output,
+            1,
+            ColorMode::Plain,
+            crate::baseline::Mode::Ignore,
+        )
+        .unwrap();
+        assert_eq!(
+            result.diagnostics.len(),
+            1,
+            "the finding is still analyzed under --ignore-baseline",
+        );
+
+        let text = String::from_utf8(output).unwrap();
+        assert!(
+            text.contains("CEL0018"),
+            "ignore mode reports the finding even though a baseline recorded it: {text}",
+        );
+        assert!(
+            !text.contains("hidden"),
+            "nothing is baselined under --ignore-baseline: {text}",
         );
     }
 }
