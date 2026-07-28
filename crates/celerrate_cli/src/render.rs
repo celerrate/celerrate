@@ -134,8 +134,8 @@ pub(crate) fn render_report_with(
     baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
-    write_notices(output, notices)?;
-    write_baseline_notices(output, &baseline.notices)?;
+    write_notice_block(output, notices)?;
+    write_notice_block(output, &baseline.notices)?;
 
     let report = build_report(session, outcome, color, fault);
     for block in &report.blocks {
@@ -186,32 +186,42 @@ pub(crate) fn render_report_with(
     Ok(report.failures)
 }
 
-/// The notice block: one line per notice, then a blank separator when
-/// there is at least one. Shared by the one-shot report and the watch
-/// frame, which both open the screen with it in exactly the same shape.
-fn write_notices(output: &mut dyn Write, notices: &[ProjectNotice]) -> io::Result<()> {
-    if notices.is_empty() {
-        return Ok(());
-    }
-    for notice in notices {
-        writeln!(
-            output,
-            "notice {}: {}",
-            notice.identifier().as_str(),
-            notice.message(),
-        )?;
-    }
-    writeln!(output)
+/// What every notice kind this module renders has in common: an
+/// identifier and a one-sentence message. `ProjectNotice` and
+/// `crate::baseline::BaselineNotice` both already expose these two
+/// methods; this trait exists only so [`write_notice_block`] can render
+/// either kind through the one function, instead of two copies of the
+/// same block kept in sync by hand.
+trait Notice {
+    fn identifier(&self) -> DiagnosticId;
+    fn message(&self) -> String;
 }
 
-/// The baseline notice block: same shape as [`write_notices`], one line
-/// per notice plus a blank separator when there is at least one. A
-/// separate function because its notices come from `BaselineOutcome`,
-/// not from the session, but the two must read identically on screen.
-fn write_baseline_notices(
-    output: &mut dyn Write,
-    notices: &[crate::baseline::BaselineNotice],
-) -> io::Result<()> {
+impl Notice for ProjectNotice {
+    fn identifier(&self) -> DiagnosticId {
+        ProjectNotice::identifier(self)
+    }
+
+    fn message(&self) -> String {
+        ProjectNotice::message(self)
+    }
+}
+
+impl Notice for crate::baseline::BaselineNotice {
+    fn identifier(&self) -> DiagnosticId {
+        crate::baseline::BaselineNotice::identifier(self)
+    }
+
+    fn message(&self) -> String {
+        crate::baseline::BaselineNotice::message(self)
+    }
+}
+
+/// The notice block: one line per notice, then a blank separator when
+/// there is at least one. Shared by the discovery notices and the
+/// baseline notices, and by the one-shot report and the watch frame,
+/// which both open the screen with it in exactly the same shape.
+fn write_notice_block<T: Notice>(output: &mut dyn Write, notices: &[T]) -> io::Result<()> {
     if notices.is_empty() {
         return Ok(());
     }
@@ -367,7 +377,7 @@ pub fn render_cycle(
     // Everything else the frame is styled with comes from the renderer's
     // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
-    write_notices(output, notices)?;
+    write_notice_block(output, notices)?;
     for block in report.blocks.iter().take(shown) {
         writeln!(output, "{block}")?;
         writeln!(output)?;
