@@ -1142,7 +1142,7 @@ mod tests {
              {hidden_without} hidden before, {hidden_with} after: {text_with}",
         );
         assert!(
-            text_with.contains("no longer matches the current findings"),
+            text_with.contains("records more occurrences than the current findings still produce"),
             "the baseline notice itself still prints in the capped frame: {text_with}",
         );
         assert!(

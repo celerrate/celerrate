@@ -5,11 +5,13 @@ use crate::explain::ExplainPage;
 
 pub(crate) const CEL0050: ExplainPage = ExplainPage {
     why: "\
-A baseline entry records a known finding so it stops failing the run. When \
-no current finding matches an entry any longer, whether because the code \
-was fixed, the enclosing method was renamed, or an engine upgrade reworded \
-the message, the entry is obsolete. Celerrate reports it and never prunes \
-silently: re-record with `celerrate check --baseline` to refresh the file.",
+A baseline entry records a known finding so it stops failing the run. The \
+entry turns obsolete once it counts more occurrences than the current \
+findings still produce, whether the finding is gone entirely or only part \
+of it was fixed, because the code changed, the enclosing method was \
+renamed, or an engine upgrade reworded the message. Celerrate reports it \
+and never prunes silently: re-record with `celerrate check --baseline` to \
+refresh the file.",
     failing_example: "\
 //// celerrate-baseline.toml
 version = 1

@@ -150,9 +150,9 @@ impl BaselineNotice {
             Self::InvalidFile { detail } => format!(
                 "{BASELINE_FILE_NAME} could not be fully read ({detail}); unreadable entries are ignored and their findings reported"
             ),
-            Self::ObsoleteEntries { count: 1 } => "1 baseline entry no longer matches the current findings; re-record with `celerrate check --baseline`".to_string(),
+            Self::ObsoleteEntries { count: 1 } => "1 baseline entry records more occurrences than the current findings still produce; re-record with `celerrate check --baseline`".to_string(),
             Self::ObsoleteEntries { count } => format!(
-                "{count} baseline entries no longer match the current findings; re-record with `celerrate check --baseline`"
+                "{count} baseline entries record more occurrences than the current findings still produce; re-record with `celerrate check --baseline`"
             ),
         }
     }
