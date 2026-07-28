@@ -117,6 +117,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `celerrate explain` pointer per reported identifier, a per-diagnostic
   fallback to the minimal line if rich rendering ever fails, and a
   watch-mode frame capped at the terminal height.
+- The baseline: a present `celerrate-baseline.toml` hides recorded findings
+  from the report and the exit code, so adoption on an existing codebase
+  starts clean while new problems still fail. `celerrate check --baseline`
+  records or rewrites the file; `--ignore-baseline` runs strict. Entries are
+  structural (path, identifier, enclosing symbol, message, count) with no
+  line numbers: they survive moving code and die with their finding.
+  Obsolete entries and an unreadable file are each announced by their own
+  exit-neutral notice, CEL0050 and CEL0051 respectively; nothing is ever
+  pruned silently.
 
 ### Changed
 

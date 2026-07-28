@@ -134,6 +134,10 @@ pub struct Session {
     /// (`configuration::severity_remap`): identifier text to severity.
     /// Empty without a file; shared with every `AnalysisInputs` clone.
     pub severity_remap: Arc<BTreeMap<String, celerrate_diagnostics::Severity>>,
+    /// The `celerrate-baseline.toml` at the project root, loaded once at
+    /// startup and reloaded whenever `rediscover` runs. `None` when the
+    /// project has none. CLI-layer only: never enters a salsa query.
+    pub(crate) loaded_baseline: Option<crate::baseline::LoadedBaseline>,
 }
 
 impl Session {
@@ -153,6 +157,10 @@ impl Session {
         // nothing reads the interning order, and rendering resolves
         // display paths through the VFS by identity.
         let loaded_configuration = crate::configuration::load(&root, &mut vfs);
+        // The baseline is presentation, read alongside the configuration
+        // and never entering a salsa query: resilience holds here too,
+        // an unreadable file yields no entries plus a failure line.
+        let loaded_baseline = crate::baseline::load(&root);
         let configuration_model = loaded_configuration
             .as_ref()
             .map(|loaded| loaded.configuration.clone())
@@ -246,6 +254,7 @@ impl Session {
             cache_loaded_configuration_digest: configuration_digest,
             loaded_configuration,
             severity_remap,
+            loaded_baseline,
         };
         let walk = enumerate_php_files(
             &session.discovery.walk_roots(),
@@ -506,6 +515,7 @@ impl Session {
         path == root.join("composer.json")
             || path == root.join("composer.lock")
             || path == root.join("celerrate.toml")
+            || path == root.join(crate::baseline::BASELINE_FILE_NAME)
     }
 
     /// A changed manifest, lockfile, or `celerrate.toml` re-runs discovery
@@ -517,6 +527,7 @@ impl Session {
     fn rediscover(&mut self) {
         let root = self.discovery.root.clone();
         self.loaded_configuration = crate::configuration::load(&root, &mut self.vfs);
+        self.loaded_baseline = crate::baseline::load(&root);
         let model = self.configuration_model();
         let discovery = discover(&root, &model);
         if discovery.php_version_range != self.discovery.php_version_range {

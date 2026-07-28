@@ -44,7 +44,13 @@ pub(crate) fn render_check(
 ) -> io::Result<()> {
     let failures = {
         let mut body: Vec<u8> = Vec::new();
-        let failures = render_report(&mut body, session, outcome, color)?;
+        let failures = render_report(
+            &mut body,
+            session,
+            outcome,
+            color,
+            &crate::baseline::BaselineOutcome::default(),
+        )?;
         output.write_all(&body)?;
         failures
     };
@@ -105,8 +111,16 @@ pub fn render_report(
     session: &Session,
     outcome: &AnalysisOutcome,
     color: ColorMode,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<Vec<RenderFailure>> {
-    render_report_with(output, session, outcome, color, &FaultInjection::None)
+    render_report_with(
+        output,
+        session,
+        outcome,
+        color,
+        &FaultInjection::None,
+        baseline,
+    )
 }
 
 /// The seam the fault-injection tests use; production always passes
@@ -117,9 +131,11 @@ pub(crate) fn render_report_with(
     outcome: &AnalysisOutcome,
     color: ColorMode,
     fault: &FaultInjection,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
-    write_notices(output, notices)?;
+    write_notice_block(output, notices)?;
+    write_notice_block(output, &baseline.notices)?;
 
     let report = build_report(session, outcome, color, fault);
     for block in &report.blocks {
@@ -127,10 +143,39 @@ pub(crate) fn render_report_with(
         writeln!(output)?;
     }
 
-    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
+    write_summary_line(
+        output,
+        notices.len() + baseline.notices.len(),
+        outcome.diagnostics.len(),
+    )?;
+    if baseline.hidden > 0 {
+        writeln!(
+            output,
+            "{} hidden",
+            count(
+                baseline.hidden,
+                "baselined diagnostic",
+                "baselined diagnostics"
+            )
+        )?;
+    }
+    if let Some(recorded) = baseline.recorded {
+        writeln!(
+            output,
+            "recorded {} to {}",
+            count(recorded, "baseline entry", "baseline entries"),
+            crate::baseline::BASELINE_FILE_NAME
+        )?;
+    }
 
     let mut identifiers: Vec<DiagnosticId> =
         notices.iter().map(|notice| notice.identifier()).collect();
+    identifiers.extend(
+        baseline
+            .notices
+            .iter()
+            .map(crate::baseline::BaselineNotice::identifier),
+    );
     identifiers.extend(outcome.diagnostics.iter().map(|diagnostic| diagnostic.id));
     let pointers = explain_pointers(identifiers);
     if !pointers.is_empty() {
@@ -141,10 +186,42 @@ pub(crate) fn render_report_with(
     Ok(report.failures)
 }
 
+/// What every notice kind this module renders has in common: an
+/// identifier and a one-sentence message. `ProjectNotice` and
+/// `crate::baseline::BaselineNotice` both already expose these two
+/// methods; this trait exists only so [`write_notice_block`] can render
+/// either kind through the one function, instead of two copies of the
+/// same block kept in sync by hand.
+trait Notice {
+    fn identifier(&self) -> DiagnosticId;
+    fn message(&self) -> String;
+}
+
+impl Notice for ProjectNotice {
+    fn identifier(&self) -> DiagnosticId {
+        ProjectNotice::identifier(self)
+    }
+
+    fn message(&self) -> String {
+        ProjectNotice::message(self)
+    }
+}
+
+impl Notice for crate::baseline::BaselineNotice {
+    fn identifier(&self) -> DiagnosticId {
+        crate::baseline::BaselineNotice::identifier(self)
+    }
+
+    fn message(&self) -> String {
+        crate::baseline::BaselineNotice::message(self)
+    }
+}
+
 /// The notice block: one line per notice, then a blank separator when
-/// there is at least one. Shared by the one-shot report and the watch
-/// frame, which both open the screen with it in exactly the same shape.
-fn write_notices(output: &mut dyn Write, notices: &[ProjectNotice]) -> io::Result<()> {
+/// there is at least one. Shared by the discovery notices and the
+/// baseline notices, and by the one-shot report and the watch frame,
+/// which both open the screen with it in exactly the same shape.
+fn write_notice_block<T: Notice>(output: &mut dyn Write, notices: &[T]) -> io::Result<()> {
     if notices.is_empty() {
         return Ok(());
     }
@@ -266,6 +343,15 @@ fn internal_error_rows(session: &Session, new_failures: usize) -> usize {
 /// [`internal_error_rows`] for exactly how many are reserved and why.
 /// Without that reservation a cycle carrying internal errors could
 /// still overrun the terminal height it was supposedly capped against.
+///
+/// `baseline` mirrors what the single-pass `render_report_with` does with
+/// its own `BaselineOutcome`: the baseline's notices render in their own
+/// block (right after the project notices, in their own call to
+/// [`write_notice_block`]), they count toward the summary line's notice
+/// total, and a nonzero `hidden` count prints the "N baselined
+/// diagnostics hidden" line. The blocks these add are reserved for in the
+/// height budget the same way the project notices already are.
+#[allow(clippy::too_many_arguments)]
 pub fn render_cycle(
     output: &mut dyn Write,
     session: &mut Session,
@@ -274,23 +360,33 @@ pub fn render_cycle(
     elapsed: std::time::Duration,
     color: ColorMode,
     height: Option<usize>,
+    baseline: &crate::baseline::BaselineOutcome,
 ) -> io::Result<()> {
     let report = build_report(session, outcome, color, &FaultInjection::None);
 
     let notices = session.notices();
-    // Overhead: the notice lines plus their blank separator, the summary
-    // line, one blank line, the status line, the watching line, one spare
-    // row for the cursor, and the rows `render_internal_errors` will
-    // actually write below for the internal errors this cycle carries
-    // (the session's already-accumulated ones plus the render failures
-    // this cycle produced, which is exactly what gets absorbed into the
-    // same list right before that function runs).
-    let overhead = if notices.is_empty() {
+    // Overhead: the notice lines plus their blank separator (one block for
+    // the project notices, a second for the baseline notices: each is
+    // its own call to `write_notice_block` and pays its own separator),
+    // the "N baselined diagnostics hidden" line when there is one, the
+    // summary line, one blank line, the status line, the watching line,
+    // one spare row for the cursor, and the rows `render_internal_errors`
+    // will actually write below for the internal errors this cycle
+    // carries (the session's already-accumulated ones plus the render
+    // failures this cycle produced, which is exactly what gets absorbed
+    // into the same list right before that function runs).
+    let notice_rows = if notices.is_empty() {
         0
     } else {
         notices.len() + 1
-    } + 6
-        + internal_error_rows(session, report.failures.len());
+    } + if baseline.notices.is_empty() {
+        0
+    } else {
+        baseline.notices.len() + 1
+    };
+    let hidden_row = usize::from(baseline.hidden > 0);
+    let overhead =
+        notice_rows + hidden_row + 6 + internal_error_rows(session, report.failures.len());
     let (shown, hidden) = match height {
         Some(rows) => capped_blocks(&report.blocks, rows.saturating_sub(overhead)),
         None => (report.blocks.len(), 0),
@@ -300,7 +396,8 @@ pub fn render_cycle(
     // Everything else the frame is styled with comes from the renderer's
     // own `ColorMode`.
     write!(output, "\x1b[2J\x1b[H")?;
-    write_notices(output, notices)?;
+    write_notice_block(output, notices)?;
+    write_notice_block(output, &baseline.notices)?;
     for block in report.blocks.iter().take(shown) {
         writeln!(output, "{block}")?;
         writeln!(output)?;
@@ -313,7 +410,22 @@ pub fn render_cycle(
         )?;
         writeln!(output)?;
     }
-    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
+    write_summary_line(
+        output,
+        notices.len() + baseline.notices.len(),
+        outcome.diagnostics.len(),
+    )?;
+    if baseline.hidden > 0 {
+        writeln!(
+            output,
+            "{} hidden",
+            count(
+                baseline.hidden,
+                "baselined diagnostic",
+                "baselined diagnostics"
+            )
+        )?;
+    }
 
     session.absorb_render_failures(report.failures);
     render_internal_errors(output, session)?;
@@ -537,6 +649,7 @@ mod tests {
             &FaultInjection::ForIdentifier(
                 celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
             ),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         session.absorb_render_failures(failures);
@@ -759,6 +872,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             None,
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(output).unwrap();
@@ -819,6 +933,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(20),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(body).unwrap();
@@ -844,6 +959,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             None,
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text = String::from_utf8(body).unwrap();
@@ -900,6 +1016,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(height),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text_without = String::from_utf8(without_errors).unwrap();
@@ -926,6 +1043,7 @@ mod tests {
             std::time::Duration::from_millis(4),
             ColorMode::Plain,
             Some(height),
+            &crate::baseline::BaselineOutcome::default(),
         )
         .unwrap();
         let text_with = String::from_utf8(with_errors).unwrap();
@@ -939,6 +1057,97 @@ mod tests {
         assert!(
             text_with.contains("panicked"),
             "the internal error itself still prints in the capped frame: {text_with}",
+        );
+        assert!(
+            text_with.lines().count() <= height,
+            "the frame must still respect the height budget: {} lines against a height of \
+             {height}: {text_with}",
+            text_with.lines().count(),
+        );
+    }
+
+    /// The same review finding, applied to the baseline's own two
+    /// additions: the notice block `write_notice_block(output,
+    /// &baseline.notices)` writes, and the "N baselined diagnostics
+    /// hidden" line. Neither was reserved for in the overhead calculation
+    /// until this test existed to demand it: a cycle carrying a baseline
+    /// notice and a nonzero `hidden` count could otherwise overrun the
+    /// terminal height it was supposedly capped against, exactly as an
+    /// uncounted internal error could before the fix above.
+    #[test]
+    fn a_baseline_notice_and_hidden_line_reserve_rows_and_shrink_the_capped_block_count() {
+        let (_root, mut session, outcome) = fixture_with_many_diagnostics();
+
+        // Measure a real block's cost and the pre-baseline overhead
+        // exactly the way the internal-errors test above does, so the
+        // chosen height is derived from the real content, not guessed.
+        let report =
+            render::build_report(&session, &outcome, ColorMode::Plain, &FaultInjection::None);
+        let block_cost = report.blocks[0].lines().count() + 1;
+        let notices = session.notices();
+        let base_overhead = if notices.is_empty() {
+            0
+        } else {
+            notices.len() + 1
+        } + 6;
+        let height = base_overhead + 3 * block_cost;
+
+        let mut without_baseline: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut without_baseline,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+            &crate::baseline::BaselineOutcome::default(),
+        )
+        .unwrap();
+        let text_without = String::from_utf8(without_baseline).unwrap();
+        let hidden_without = hidden_diagnostic_count(&text_without);
+        assert_eq!(
+            hidden_without, 2,
+            "the height was chosen to fit exactly three of the five blocks: {text_without}",
+        );
+
+        // A baseline notice plus a nonzero hidden count: rows the
+        // pre-fix overhead never budgeted for (a notice line and its
+        // blank separator, and the "N baselined diagnostics hidden"
+        // line).
+        let baseline = crate::baseline::BaselineOutcome {
+            hidden: 1,
+            recorded: None,
+            notices: vec![crate::baseline::BaselineNotice::ObsoleteEntries { count: 1 }],
+        };
+
+        let mut with_baseline: Vec<u8> = Vec::new();
+        render::render_cycle(
+            &mut with_baseline,
+            &mut session,
+            &outcome,
+            outcome.diagnostics.len(),
+            std::time::Duration::from_millis(4),
+            ColorMode::Plain,
+            Some(height),
+            &baseline,
+        )
+        .unwrap();
+        let text_with = String::from_utf8(with_baseline).unwrap();
+        let hidden_with = hidden_diagnostic_count(&text_with);
+
+        assert!(
+            hidden_with > hidden_without,
+            "reserving the baseline's own rows must shrink how many blocks fit: \
+             {hidden_without} hidden before, {hidden_with} after: {text_with}",
+        );
+        assert!(
+            text_with.contains("records more occurrences than the current findings still produce"),
+            "the baseline notice itself still prints in the capped frame: {text_with}",
+        );
+        assert!(
+            text_with.contains("1 baselined diagnostic hidden"),
+            "the hidden line itself still prints in the capped frame: {text_with}",
         );
         assert!(
             text_with.lines().count() <= height,

@@ -25,16 +25,21 @@ for more information, run `celerrate explain CEL0018`
 Severity is reporting weight, not exit behavior: `celerrate check`
 exits 1 as soon as it reports any diagnostic, **error** and
 **warning** alike. The project discovery notices
-(`CEL0025` to `CEL0029`, `CEL0039`, `CEL0040`) are counted separately
-in the summary line and do not affect the exit code.
+(`CEL0025` to `CEL0029`, `CEL0039`, `CEL0040`) and the baseline
+notices (`CEL0050`, `CEL0051`) are counted separately in the summary
+line and do not affect the exit code.
 
 ## Suppressing diagnostics
 
 To silence a single occurrence, use an inline suppression comment.
 `celerrate.toml` is read, validated, and applied (see
-[Configuration](#configuration-cel0043-to-cel0049) below), but there is
-no baseline yet; inline suppression is the only per-site switch in this
-preview.
+[Configuration](#configuration-cel0043-to-cel0049) below). A present
+`celerrate-baseline.toml` at the project root hides its recorded
+findings from the report and the exit code; `celerrate check
+--baseline` records or refreshes it from the current findings, and
+`celerrate check --ignore-baseline` runs strict, ignoring the file
+entirely. See [Baseline notices](#baseline-notices-cel0050-cel0051)
+below.
 
 Celerrate's own directive is `@celerrate-ignore`, written in a line
 comment, a block comment, or a docblock:
@@ -245,3 +250,24 @@ These are the names `[rules.<name>]` accepts in `celerrate.toml`. A
 | unknown-suppression-identifier |
 | unknown-symbols |
 | unused-suppression |
+
+## Baseline notices (CEL0050, CEL0051)
+
+About `celerrate-baseline.toml` itself, the file `celerrate check
+--baseline` records at the project root next to `composer.json`.
+Recording writes one structural entry per known finding: a
+project-relative path, the diagnostic identifier, the enclosing
+symbol path, the rendered message, and an occurrence count. There is
+no line number in an entry, so it survives ordinary code motion, and
+it applies only to its own finding, so it dies (and is reported
+obsolete) the moment that finding stops recurring. The count caps how
+many occurrences an entry absorbs: occurrence `count + 1` is never
+masked and is still reported as new. Both notices below are
+exit-neutral, project-anchored (there is no span to suppress), and
+counted separately in the summary line, like the project discovery
+notices above.
+
+| Identifier | When it fires | What to do |
+| --- | --- | --- |
+| CEL0050 | a recorded entry counts more occurrences than the current findings still produce, whether all of them or only some (the code was fixed, the enclosing method was renamed, or an engine upgrade reworded the message) | re-record with `celerrate check --baseline` to refresh the file |
+| CEL0051 | `celerrate-baseline.toml` exists but could not be fully read (invalid TOML, a missing or unsupported version, or a malformed entry); unreadable entries are ignored and their findings reported, while valid entries in the same file still apply | fix the file by hand, or re-record it with `celerrate check --baseline` |
