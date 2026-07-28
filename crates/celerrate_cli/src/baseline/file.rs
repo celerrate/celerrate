@@ -1,7 +1,8 @@
 //! The `celerrate-baseline.toml` format: a versioned header and
-//! deterministically sorted `[[entry]]` tables — minimal diffs, reviewable
-//! in a pull request. Resilient like everything else: what does not parse
-//! produces a failure line, never a crash, and valid entries still apply.
+//! deterministically sorted `[[entry]]` tables, for diffs that stay
+//! minimal and reviewable in a pull request. Resilient like everything
+//! else: what does not parse produces a failure line, never a crash,
+//! and valid entries still apply.
 
 use crate::baseline::entry::BaselineEntry;
 

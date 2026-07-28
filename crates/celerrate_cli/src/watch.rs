@@ -139,11 +139,11 @@ fn completed_cycle(
         terminal_size::terminal_size().map(|(_, terminal_size::Height(rows))| rows as usize);
     // The baseline is presentation, exactly as in the single-pass check:
     // applied to a cloned copy, never to the `outcome` the persisted
-    // verdicts read. `Mode::Record` cannot reach the watch loop at all —
+    // verdicts read. `Mode::Record` cannot reach the watch loop at all:
     // clap rejects `--baseline --watch` as a usage error before either
-    // session exists — so only `Apply` ever hides anything here; `Ignore`
-    // (and the unreachable `Record`) leave `presented` untouched, exactly
-    // like a session with no baseline file.
+    // session exists, so only `Apply` ever hides anything here.
+    // `Ignore` (and the unreachable `Record`) leave `presented`
+    // untouched, exactly like a session with no baseline file.
     let mut presented = outcome.clone();
     let baseline_outcome = if let crate::baseline::Mode::Apply = mode {
         crate::baseline::apply(session, &mut presented.diagnostics)
@@ -2758,7 +2758,7 @@ class Consumer
     /// Shared by the watch-cycle baseline tests below, which differ only
     /// in what they do with the fixture afterward: a fresh
     /// `Session::start` over the returned root is what picks up the file
-    /// `Session::start` reads once, up front — mirroring how
+    /// `Session::start` reads once, up front, mirroring how
     /// `a_cycle_rewrites_the_packs_with_its_results` above builds its own
     /// fixture, and why the configuration-reload test restarts nothing:
     /// here, unlike there, the baseline must exist on disk before the
@@ -2785,8 +2785,8 @@ class Consumer
     /// The watch's own part of the baseline promise: a recorded entry
     /// hides its finding from a watch cycle exactly as it does from a
     /// single `check`, and the hiding is presentation-only. `Mode::Record`
-    /// cannot reach the watch loop at all — clap rejects `--baseline
-    /// --watch` before either session exists — so `Mode::Apply` is the
+    /// cannot reach the watch loop at all: clap rejects `--baseline
+    /// --watch` before either session exists, so `Mode::Apply` is the
     /// only mode this cycle is ever asked to honor a baseline file under.
     #[test]
     fn a_cycle_applies_the_baseline_and_reports_hidden_findings() {
@@ -2840,7 +2840,7 @@ class Consumer
     /// mid-watch must therefore bring the finding back on the very next
     /// cycle, exactly as deleting `celerrate.toml` brings its silenced
     /// diagnostic back in `a_configuration_saved_mid_watch_reconfigures_
-    /// the_next_cycle` above — driven the same way, for the same reason:
+    /// the_next_cycle` above, driven the same way, for the same reason:
     /// a synchronous send would race `cycle`'s own inner polling loop, so
     /// the event is delivered from a delayed background thread instead.
     #[test]

@@ -94,8 +94,8 @@ pub struct LoadedBaseline {
 }
 
 /// Reads `<root>/celerrate-baseline.toml`. `None` when absent; a present
-/// but unreadable file yields no entries and a failure line — resilience:
-/// never crash, and never hide silently.
+/// but unreadable file yields no entries and a failure line. This
+/// follows the resilience rule: never crash, and never hide silently.
 pub fn load(root: &std::path::Path) -> Option<LoadedBaseline> {
     let path = root.join(BASELINE_FILE_NAME);
     let bytes = match std::fs::read(&path) {

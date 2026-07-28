@@ -366,7 +366,7 @@ pub fn render_cycle(
 
     let notices = session.notices();
     // Overhead: the notice lines plus their blank separator (one block for
-    // the project notices, a second for the baseline notices — each is
+    // the project notices, a second for the baseline notices: each is
     // its own call to `write_notice_block` and pays its own separator),
     // the "N baselined diagnostics hidden" line when there is one, the
     // summary line, one blank line, the status line, the watching line,
