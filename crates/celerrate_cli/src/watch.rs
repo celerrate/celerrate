@@ -2558,6 +2558,66 @@ mod tests {
         );
     }
 
+    /// The final whole-branch review's finding: `iteration`'s
+    /// `BurstOutcome::Shutdown | Disconnected` arm computes the watch
+    /// loop's own exit code from a `final_diagnostics` clone it applies
+    /// the baseline to itself, independently of the presentation copy
+    /// `completed_cycle` already built for rendering. Both existing
+    /// shutdown tests above (`a_shutdown_event_exits_through_the_
+    /// graceful_persist`, `a_disconnected_channel_exits_through_the_
+    /// graceful_persist`) run on a project with nothing to baseline, so
+    /// `final_diagnostics.len()` is 0 whether or not the exit arm's own
+    /// `baseline::apply` call runs at all -- neither one would notice if
+    /// those four lines were deleted outright.
+    ///
+    /// This drives the one fixture that can tell the difference:
+    /// `project_with_a_recorded_baseline` has exactly one finding, and it
+    /// is fully baselined. A shutdown delivered before any burst starts
+    /// takes the very same route `a_shutdown_event_exits_through_the_
+    /// graceful_persist` pins, so the only thing left to vary is the
+    /// mode. Asserting `Mode::Ignore` still exits `DiagnosticsReported`
+    /// over the identical fixture is what proves the `Mode::Apply` result
+    /// below is the exit arm's own doing, and not some accident of the
+    /// fixture itself.
+    #[test]
+    fn a_shutdown_over_a_fully_baselined_project_exits_clean() {
+        let root = project_with_a_recorded_baseline();
+
+        let exit_outcome = |mode: crate::baseline::Mode| -> Outcome {
+            let mut session = Session::start(root.path());
+            let (mut watcher, sender) = watch_with_held_sender(&session);
+            let mut output = Vec::new();
+            sender.send(WatchEvent::Shutdown).unwrap();
+            match super::iteration(
+                &mut session,
+                &mut watcher,
+                &mut output,
+                1,
+                ColorMode::Plain,
+                mode,
+            ) {
+                ControlFlow::Break(outcome) => outcome,
+                ControlFlow::Continue(next) => {
+                    panic!("a shutdown must break the loop, not continue with {next}")
+                }
+            }
+        };
+
+        assert_eq!(
+            exit_outcome(crate::baseline::Mode::Apply),
+            Outcome::Clean,
+            "the recorded baseline hides the project's one finding, and the graceful exit's \
+             own arithmetic must apply it exactly like the cycle that ran just before it",
+        );
+        assert_eq!(
+            exit_outcome(crate::baseline::Mode::Ignore),
+            Outcome::DiagnosticsReported,
+            "sanity: --ignore-baseline over the identical fixture still reports the finding, \
+             which is what proves the Apply case above is the exit arm's own doing rather than \
+             a quirk of the fixture",
+        );
+    }
+
     /// The part 2 wiring promise: a `celerrate.toml` saved mid-watch
     /// reconfigures the very next cycle. The project fires CEL0034; a
     /// saved configuration disabling `null-dereference` must make the next
