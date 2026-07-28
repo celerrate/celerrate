@@ -144,6 +144,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                             baseline::BaselineOutcome {
                                 hidden: before - presented.diagnostics.len(),
                                 recorded,
+                                notices: Vec::new(),
                             }
                         }
                         Err(error) => {
@@ -156,9 +157,8 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                         }
                     }
                 }
-                baseline::Mode::Apply | baseline::Mode::Ignore => {
-                    baseline::BaselineOutcome::default()
-                }
+                baseline::Mode::Apply => baseline::apply(&session, &mut presented.diagnostics),
+                baseline::Mode::Ignore => baseline::BaselineOutcome::default(),
             };
             // Configuration diagnostics are presentation and exit-code
             // input, never cache input: `outcome` stays untouched, so

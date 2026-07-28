@@ -31,6 +31,10 @@ fn check_with(root: &Path, extra: &[&str]) -> (Outcome, String) {
     (outcome, String::from_utf8(output).unwrap())
 }
 
+fn check(root: &Path) -> (Outcome, String) {
+    check_with(root, &[])
+}
+
 const CLEAN_SOURCE: &str = "<?php\n\nnamespace App;\n\nclass Example\n{\n}\n";
 
 #[test]
@@ -203,4 +207,92 @@ fn configuration_diagnostics_are_never_recorded_and_still_fail_the_run() {
     assert!(text.contains("CEL0046"), "report was:\n{text}");
     let written = baseline_text(root.path());
     assert!(!written.contains("CEL0046"), "file was:\n{written}");
+}
+
+#[test]
+fn a_present_baseline_hides_its_findings_and_the_exit_code() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    assert!(
+        text.contains("1 baselined diagnostic hidden"),
+        "report was:\n{text}"
+    );
+    assert!(!text.contains("CEL0018"), "report was:\n{text}");
+}
+
+#[test]
+fn ignore_baseline_runs_strict() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let (outcome, text) = check_with(root.path(), &["--ignore-baseline"]);
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(!text.contains("hidden"), "report was:\n{text}");
+}
+
+#[test]
+fn an_unreadable_baseline_reports_cel0051_and_runs_strict() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+        ("celerrate-baseline.toml", "version = 1\n[[entry]\n"),
+    ]);
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(text.contains("notice CEL0051"), "report was:\n{text}");
+}
+
+#[test]
+fn configuration_diagnostics_are_never_hidden_by_a_baseline() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    std::fs::write(
+        root.path().join("celerrate.toml"),
+        "[rules.no-such-rule]\nenabled = true\n",
+    )
+    .unwrap();
+    let (outcome, text) = check(root.path());
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(text.contains("CEL0046"), "report was:\n{text}");
+}
+
+#[test]
+fn the_persisted_cache_stays_pre_baseline() {
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    // Cold run with the baseline applied persists packs; the warm strict
+    // run must still report the finding from the cache.
+    check(root.path());
+    let (outcome, text) = check_with(root.path(), &["--ignore-baseline"]);
+    assert_eq!(outcome, Outcome::DiagnosticsReported, "report was:\n{text}");
+    assert!(text.contains("CEL0018"), "report was:\n{text}");
+}
+
+#[test]
+fn a_baselined_diagnostic_is_not_fixed_by_fix() {
+    // --fix with an applied baseline is legal (only recording conflicts).
+    // A hidden finding must not be mutated.
+    let root = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Kernel.php", FAILING_SOURCE),
+    ]);
+    check_with(root.path(), &["--baseline"]);
+    let before = std::fs::read_to_string(root.path().join("src/Kernel.php")).unwrap();
+    let (outcome, _) = check_with(root.path(), &["--fix"]);
+    assert_eq!(outcome, Outcome::Clean);
+    let after = std::fs::read_to_string(root.path().join("src/Kernel.php")).unwrap();
+    assert_eq!(before, after);
 }

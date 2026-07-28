@@ -135,6 +135,7 @@ pub(crate) fn render_report_with(
 ) -> io::Result<Vec<RenderFailure>> {
     let notices = session.notices();
     write_notices(output, notices)?;
+    write_baseline_notices(output, &baseline.notices)?;
 
     let report = build_report(session, outcome, color, fault);
     for block in &report.blocks {
@@ -142,7 +143,22 @@ pub(crate) fn render_report_with(
         writeln!(output)?;
     }
 
-    write_summary_line(output, notices.len(), outcome.diagnostics.len())?;
+    write_summary_line(
+        output,
+        notices.len() + baseline.notices.len(),
+        outcome.diagnostics.len(),
+    )?;
+    if baseline.hidden > 0 {
+        writeln!(
+            output,
+            "{} hidden",
+            count(
+                baseline.hidden,
+                "baselined diagnostic",
+                "baselined diagnostics"
+            )
+        )?;
+    }
     if let Some(recorded) = baseline.recorded {
         writeln!(
             output,
@@ -154,6 +170,12 @@ pub(crate) fn render_report_with(
 
     let mut identifiers: Vec<DiagnosticId> =
         notices.iter().map(|notice| notice.identifier()).collect();
+    identifiers.extend(
+        baseline
+            .notices
+            .iter()
+            .map(crate::baseline::BaselineNotice::identifier),
+    );
     identifiers.extend(outcome.diagnostics.iter().map(|diagnostic| diagnostic.id));
     let pointers = explain_pointers(identifiers);
     if !pointers.is_empty() {
@@ -168,6 +190,28 @@ pub(crate) fn render_report_with(
 /// there is at least one. Shared by the one-shot report and the watch
 /// frame, which both open the screen with it in exactly the same shape.
 fn write_notices(output: &mut dyn Write, notices: &[ProjectNotice]) -> io::Result<()> {
+    if notices.is_empty() {
+        return Ok(());
+    }
+    for notice in notices {
+        writeln!(
+            output,
+            "notice {}: {}",
+            notice.identifier().as_str(),
+            notice.message(),
+        )?;
+    }
+    writeln!(output)
+}
+
+/// The baseline notice block: same shape as [`write_notices`], one line
+/// per notice plus a blank separator when there is at least one. A
+/// separate function because its notices come from `BaselineOutcome`,
+/// not from the session, but the two must read identically on screen.
+fn write_baseline_notices(
+    output: &mut dyn Write,
+    notices: &[crate::baseline::BaselineNotice],
+) -> io::Result<()> {
     if notices.is_empty() {
         return Ok(());
     }
