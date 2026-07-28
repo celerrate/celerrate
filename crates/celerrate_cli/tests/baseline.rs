@@ -138,9 +138,16 @@ fn recording_a_clean_project_writes_no_file() {
         ("composer.json", MANIFEST),
         ("src/Example.php", CLEAN_SOURCE),
     ]);
-    let (outcome, _) = check_with(root.path(), &["--baseline"]);
+    let (outcome, text) = check_with(root.path(), &["--baseline"]);
     assert_eq!(outcome, Outcome::Clean);
     assert!(!root.path().join("celerrate-baseline.toml").exists());
+    // No write happened, so the report must not claim one did: naming a
+    // file that was never created would be a lie the file system disproves
+    // on the very next line.
+    assert!(
+        !text.contains("recorded"),
+        "no file was written, so the report must not claim a recording: {text}"
+    );
 }
 
 #[test]
@@ -155,6 +162,15 @@ fn recording_a_now_clean_project_rewrites_the_existing_file_header_only() {
     ]);
     let (outcome, text) = check_with(root.path(), &["--baseline"]);
     assert_eq!(outcome, Outcome::Clean, "report was:\n{text}");
+    // A write genuinely happened here (the stale entry was dropped), so
+    // unlike the untouched-file case above, the report does announce it,
+    // with a count of zero entries: the gate is `recorded.is_some()`, not
+    // `recorded > 0`, and this is the case that would catch an inverted
+    // gate the other test alone could not.
+    assert!(
+        text.contains("recorded 0 baseline entries"),
+        "report was:\n{text}"
+    );
     let written = baseline_text(root.path());
     assert!(written.contains("version = 1"));
     assert!(!written.contains("src/Old.php"), "file was:\n{written}");

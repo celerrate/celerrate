@@ -74,9 +74,12 @@ pub fn fingerprint(session: &Session, diagnostic: &Diagnostic) -> Option<Baselin
 }
 
 /// Records the given diagnostics into `celerrate-baseline.toml` at the
-/// project root. Returns the number of entries written. Never deletes the
-/// file: a now-clean project rewrites it header-only when it exists.
-pub fn record(session: &Session, diagnostics: &[Diagnostic]) -> io::Result<usize> {
+/// project root. Returns `Ok(None)` when the file was left genuinely
+/// untouched (no entries and no existing file to rewrite), and
+/// `Ok(Some(entry count))` whenever a write actually occurred: the caller's
+/// report must never claim a recording that did not happen. Never deletes
+/// the file: a now-clean project rewrites it header-only when it exists.
+pub fn record(session: &Session, diagnostics: &[Diagnostic]) -> io::Result<Option<usize>> {
     let mut counts: BTreeMap<BaselineKey, u32> = BTreeMap::new();
     for diagnostic in diagnostics {
         if let Some(key) = fingerprint(session, diagnostic) {
@@ -95,8 +98,8 @@ pub fn record(session: &Session, diagnostics: &[Diagnostic]) -> io::Result<usize
         .collect();
     let path = session.discovery.root.join(BASELINE_FILE_NAME);
     if entries.is_empty() && !path.exists() {
-        return Ok(0);
+        return Ok(None);
     }
     crate::cache::pack::write_atomically(&path, file::serialize(&entries).as_bytes())?;
-    Ok(entries.len())
+    Ok(Some(entries.len()))
 }

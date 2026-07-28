@@ -143,7 +143,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                                 .retain(|diagnostic| diagnostic.span().is_none());
                             baseline::BaselineOutcome {
                                 hidden: before - presented.diagnostics.len(),
-                                recorded: Some(recorded),
+                                recorded,
                             }
                         }
                         Err(error) => {
