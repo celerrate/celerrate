@@ -218,24 +218,31 @@ fn json_output_validates_against_the_committed_schema() {
     ];
     // Every run above reports zero internal errors, so `$defs/internalError`
     // (the `kind`/`message`/`bug` shape and the `kind` pattern) is never
-    // exercised by them alone. A permission-locked directory is the
-    // fixture that forces a populated `internal_errors` array, and
-    // building one is a unix-only affordance (`PermissionsExt`), so this
-    // fifth shape is deliberately gated rather than attempted everywhere;
-    // the four platform-independent shapes above still validate on every
-    // platform, so the test is not vacuous off unix.
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt as _;
-
-        let root = project(&[
-            ("src/Kernel.php", "<?php\nclass Kernel {}\n"),
-            ("src/locked/Hidden.php", "<?php\nclass Hidden {}\n"),
-        ]);
-        let locked = root.path().join("src/locked");
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
-        let text = check_with(root.path(), &["--output", "json"]).1;
-        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    // exercised by them alone, and the schema places no `minItems` on
+    // `internal_errors` that would catch an accidentally-empty array. A
+    // permission-locked directory is the fixture that forces a populated
+    // `internal_errors` array; building one needs
+    // `std::os::unix::fs::PermissionsExt`, which has no portable
+    // equivalent, so `internal_error_report_text` below only produces a
+    // shape on unix (`None` elsewhere). The `push` call stays unconditional
+    // source so `runs` genuinely needs `mut` on every platform, and the
+    // assertion below fires whenever the shape is actually present, so the
+    // fixture degrading (for instance a root-run CI job for which
+    // `chmod 0o000` does not block reads) fails loudly instead of letting
+    // this run validate the schema vacuously.
+    if let Some(text) = internal_error_report_text() {
+        let instance: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let errors = instance["internal_errors"].as_array().unwrap();
+        assert!(
+            !errors.is_empty(),
+            "the locked-directory fixture must report at least one internal \
+             error, or this shape validates $defs/internalError vacuously: {text}",
+        );
+        assert_eq!(
+            instance["summary"]["internal_errors"].as_u64().unwrap(),
+            errors.len() as u64,
+            "summary.internal_errors must agree with the internal_errors array length: {text}",
+        );
         runs.push(text);
     }
     for text in runs {
@@ -246,4 +253,30 @@ fn json_output_validates_against_the_committed_schema() {
             .collect();
         assert!(errors.is_empty(), "{}", errors.join("\n"));
     }
+}
+
+/// Builds the permission-locked-directory project, runs it through
+/// `--output=json`, restores the directory's permissions immediately so
+/// the temporary directory can still be cleaned up, and returns the JSON
+/// text. `None` on non-unix targets: there is no portable way to build a
+/// directory the process cannot read, so this shape is simply unavailable
+/// there.
+#[cfg(unix)]
+fn internal_error_report_text() -> Option<String> {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = project(&[
+        ("src/Kernel.php", "<?php\nclass Kernel {}\n"),
+        ("src/locked/Hidden.php", "<?php\nclass Hidden {}\n"),
+    ]);
+    let locked = root.path().join("src/locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+    let text = check_with(root.path(), &["--output", "json"]).1;
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+    Some(text)
+}
+
+#[cfg(not(unix))]
+fn internal_error_report_text() -> Option<String> {
+    None
 }
