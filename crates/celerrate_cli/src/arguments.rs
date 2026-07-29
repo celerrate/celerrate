@@ -24,6 +24,8 @@ pub enum OutputFormat {
     Human,
     /// The versioned JSON report for tooling.
     Json,
+    /// SARIF 2.1.0 for code-scanning integrations.
+    Sarif,
 }
 
 impl OutputFormat {
@@ -32,6 +34,7 @@ impl OutputFormat {
         match self {
             Self::Human => "human",
             Self::Json => "json",
+            Self::Sarif => "sarif",
         }
     }
 }

@@ -4,6 +4,7 @@
 
 pub mod json;
 pub mod model;
+pub mod sarif;
 
 use std::io::{self, Write};
 
@@ -15,6 +16,7 @@ use crate::arguments::OutputFormat;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineFormat {
     Json,
+    Sarif,
 }
 
 impl MachineFormat {
@@ -22,6 +24,7 @@ impl MachineFormat {
         match format {
             OutputFormat::Human => None,
             OutputFormat::Json => Some(Self::Json),
+            OutputFormat::Sarif => Some(Self::Sarif),
         }
     }
 }
@@ -33,5 +36,6 @@ pub fn write(
 ) -> io::Result<()> {
     match format {
         MachineFormat::Json => json::write(output, report),
+        MachineFormat::Sarif => sarif::write(output, report),
     }
 }
