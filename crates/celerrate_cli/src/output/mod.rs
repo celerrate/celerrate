@@ -2,6 +2,7 @@
 //! the edge, after suppression and the baseline. One pipeline, four
 //! serializations.
 
+pub mod github;
 pub mod json;
 pub mod model;
 pub mod sarif;
@@ -17,6 +18,7 @@ use crate::arguments::OutputFormat;
 pub enum MachineFormat {
     Json,
     Sarif,
+    Github,
 }
 
 impl MachineFormat {
@@ -25,6 +27,7 @@ impl MachineFormat {
             OutputFormat::Human => None,
             OutputFormat::Json => Some(Self::Json),
             OutputFormat::Sarif => Some(Self::Sarif),
+            OutputFormat::Github => Some(Self::Github),
         }
     }
 }
@@ -37,5 +40,6 @@ pub fn write(
     match format {
         MachineFormat::Json => json::write(output, report),
         MachineFormat::Sarif => sarif::write(output, report),
+        MachineFormat::Github => github::write(output, report),
     }
 }

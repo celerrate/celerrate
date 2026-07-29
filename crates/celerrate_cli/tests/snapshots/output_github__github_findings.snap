@@ -1,0 +1,8 @@
+---
+source: crates/celerrate_cli/tests/output_github.rs
+assertion_line: 90
+expression: text
+---
+::notice::CEL0027: no PHP version configured; assuming 8.5
+::error file=src/Example.php,line=3,col=1,endLine=3,endColumn=8::CEL0019: unknown function `strlenn`
+1 notice, 1 diagnostic

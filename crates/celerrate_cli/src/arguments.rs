@@ -26,6 +26,8 @@ pub enum OutputFormat {
     Json,
     /// SARIF 2.1.0 for code-scanning integrations.
     Sarif,
+    /// GitHub Actions workflow commands for pull-request annotations.
+    Github,
 }
 
 impl OutputFormat {
@@ -35,6 +37,7 @@ impl OutputFormat {
             Self::Human => "human",
             Self::Json => "json",
             Self::Sarif => "sarif",
+            Self::Github => "github",
         }
     }
 }
