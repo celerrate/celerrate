@@ -3,6 +3,7 @@
 //! `properties`, never twisted into a standard field.
 
 use std::collections::BTreeMap;
+use std::fmt::Write as _;
 use std::io::{self, Write};
 
 use serde_json::{Value, json};
@@ -165,11 +166,16 @@ fn owning_rule_by_identifier(report: &MachineReport) -> BTreeMap<&str, &str> {
     owning_rule
 }
 
+/// One registry lookup, not two: the previous version called
+/// `find_identifier` to resolve `text` to an id and then re-scanned
+/// `REGISTRY` a second time to find the very entry that first scan had
+/// already located, just to reach `family` and `explain.why`. Matching
+/// directly on `entry.id.as_str() == text` gets both fields from the one
+/// entry in a single pass.
 fn described(text: &str) -> Option<(&'static str, &'static str)> {
-    let id = celerrate_diagnostics::find_identifier(text)?;
     let entry = celerrate_diagnostics::REGISTRY
         .iter()
-        .find(|entry| entry.id == id)?;
+        .find(|entry| entry.id.as_str() == text)?;
     Some((entry.family, entry.explain.why))
 }
 
@@ -228,16 +234,14 @@ fn result(diagnostic: &ReportedDiagnostic) -> Value {
     }
     let mut properties = serde_json::Map::new();
     if !needs_review.is_empty() {
-        properties.insert(
-            "needsReviewSuggestions".to_owned(),
-            serde_json::to_value(&needs_review).unwrap_or(Value::Null),
-        );
+        let suggestions: Vec<Value> = needs_review
+            .iter()
+            .map(|suggestion| needs_review_suggestion(suggestion))
+            .collect();
+        properties.insert("needsReviewSuggestions".to_owned(), json!(suggestions));
     }
     if !diagnostic.notes.is_empty() {
-        properties.insert(
-            "notes".to_owned(),
-            serde_json::to_value(&diagnostic.notes).unwrap_or(Value::Null),
-        );
+        properties.insert("notes".to_owned(), json!(diagnostic.notes));
     }
     if !properties.is_empty() {
         object.insert("properties".to_owned(), Value::Object(properties));
@@ -245,19 +249,93 @@ fn result(diagnostic: &ReportedDiagnostic) -> Value {
     value
 }
 
+/// A needs-review suggestion, projected camelCase and reusing the same
+/// `region` encoding every result location already carries, instead of
+/// serializing `ReportedSuggestion` verbatim: the derived `Serialize`
+/// shape is snake_case field names (`byte_end`, `start_line`) wrapped in
+/// a `location` object, a second naming convention and a second location
+/// encoding next to the sibling `region` a few lines above it in the same
+/// result. The array lives under `needsReviewSuggestions` precisely
+/// because it is not a real SARIF `fix`: it needs a human to look at it
+/// first, so its `confidence` (needs-review, by construction of this
+/// partition) is not repeated on every entry.
+fn needs_review_suggestion(suggestion: &ReportedSuggestion) -> Value {
+    let edits: Vec<Value> = suggestion
+        .edits
+        .iter()
+        .map(|edit| {
+            json!({
+                "artifactLocation": { "uri": path_to_uri(&edit.location.path) },
+                "region": region(&edit.location),
+                "replacement": edit.replacement,
+            })
+        })
+        .collect();
+    json!({
+        "message": suggestion.message,
+        "edits": edits,
+    })
+}
+
+/// The model's `path` is a project-relative filesystem path, correct
+/// verbatim for the JSON writer, but SARIF's `artifactLocation.uri`
+/// reinterprets the same string as a URI reference. A raw `#` would open
+/// a fragment, a raw `?` a query, and a raw `%` an escape, so a file
+/// named with a space or any of those characters, or with a non-ASCII
+/// character, would misparse under a strict consumer (GitHub code
+/// scanning resolves this URI against the repository tree). Every
+/// segment is percent-encoded, byte by byte, leaving `/` alone as the
+/// separator; only the URI stays encoded, the JSON `path` field must
+/// keep the raw path.
+fn path_to_uri(path: &str) -> String {
+    path.split('/')
+        .map(encode_uri_segment)
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// Percent-encodes everything outside the URI "unreserved" set (RFC
+/// 3986: ASCII letters, digits, `-`, `.`, `_`, `~`), one byte at a time.
+/// Deliberately conservative: encoding a byte that need not have been
+/// encoded is harmless, but leaving one that should have been encoded
+/// unescaped is a misparse.
+fn encode_uri_segment(segment: &str) -> String {
+    let mut encoded = String::with_capacity(segment.len());
+    for byte in segment.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                encoded.push(byte as char);
+            }
+            _ => {
+                let _ = write!(encoded, "%{byte:02X}");
+            }
+        }
+    }
+    encoded
+}
+
 fn physical_location(location: &SpanLocation) -> Value {
     json!({
         "physicalLocation": {
-            "artifactLocation": { "uri": location.path },
-            "region": {
-                "startLine": location.start_line,
-                "startColumn": location.start_column,
-                "endLine": location.end_line,
-                "endColumn": location.end_column,
-                "byteOffset": location.byte_start,
-                "byteLength": location.byte_end.saturating_sub(location.byte_start),
-            }
+            "artifactLocation": { "uri": path_to_uri(&location.path) },
+            "region": region(location)
         }
+    })
+}
+
+/// The `region` shape shared by every location this writer emits: a
+/// result's own location, a related location, and (via
+/// `needs_review_suggestion`) a needs-review edit. One encoding, so a
+/// needs-review suggestion's edit reads exactly like every other
+/// location in the document instead of inventing a second one.
+fn region(location: &SpanLocation) -> Value {
+    json!({
+        "startLine": location.start_line,
+        "startColumn": location.start_column,
+        "endLine": location.end_line,
+        "endColumn": location.end_column,
+        "byteOffset": location.byte_start,
+        "byteLength": location.byte_end.saturating_sub(location.byte_start),
     })
 }
 
@@ -267,7 +345,7 @@ fn fix(suggestion: &ReportedSuggestion) -> Value {
         .iter()
         .map(|edit| {
             json!({
-                "artifactLocation": { "uri": edit.location.path },
+                "artifactLocation": { "uri": path_to_uri(&edit.location.path) },
                 "replacements": [{
                     "deletedRegion": {
                         "byteOffset": edit.location.byte_start,
@@ -413,6 +491,94 @@ mod tests {
         assert_eq!(replacement["deletedRegion"]["byteLength"], 7);
         assert_eq!(replacement["insertedContent"]["text"], "strlen");
         assert_valid(&document);
+    }
+
+    /// A needs-review suggestion must project into
+    /// `properties.needsReviewSuggestions` in camelCase, reusing the same
+    /// `region` fields (`startLine`, `endColumn`, `byteOffset`,
+    /// `byteLength`) the sibling `region` object carries, rather than the
+    /// derived `Serialize` shape (`start_line`, `byte_end`, a nested
+    /// `location` object) that would otherwise leak snake_case into an
+    /// camelCase document. `confidence` must not repeat: the array is
+    /// needs-review by construction.
+    #[test]
+    fn a_needs_review_suggestion_becomes_a_camel_case_property_without_confidence() {
+        let mut report = sample_report();
+        report.diagnostics[0].suggestions = vec![ReportedSuggestion {
+            message: "consider renaming to `strlen`".to_owned(),
+            confidence: ReportedConfidence::NeedsReview,
+            edits: vec![ReportedEdit {
+                location: SpanLocation {
+                    path: "src/Example.php".to_owned(),
+                    start_line: 3,
+                    start_column: 1,
+                    end_line: 3,
+                    end_column: 8,
+                    byte_start: 7,
+                    byte_end: 14,
+                },
+                replacement: "strlen".to_owned(),
+            }],
+        }];
+        let document = document(&report);
+        let result = &document["runs"][0]["results"][0];
+        assert!(result.get("fixes").is_none(), "not a real, applicable fix");
+        let suggestions = result["properties"]["needsReviewSuggestions"]
+            .as_array()
+            .unwrap();
+        assert_eq!(suggestions.len(), 1);
+        let suggestion = &suggestions[0];
+        assert_eq!(suggestion["message"], "consider renaming to `strlen`");
+        assert!(
+            suggestion.get("confidence").is_none(),
+            "the array is needs-review by construction, confidence is redundant",
+        );
+        let edit = &suggestion["edits"][0];
+        assert_eq!(edit["artifactLocation"]["uri"], "src/Example.php");
+        assert_eq!(edit["region"]["startLine"], 3);
+        assert_eq!(edit["region"]["endColumn"], 8);
+        assert_eq!(edit["region"]["byteOffset"], 7);
+        assert_eq!(edit["region"]["byteLength"], 7);
+        assert_eq!(edit["replacement"], "strlen");
+        assert!(
+            edit.get("start_line").is_none() && edit.get("byte_end").is_none(),
+            "no snake_case field must leak into the projected shape: {edit}",
+        );
+        assert!(edit.get("location").is_none(), "no nested location object");
+        assert_valid(&document);
+    }
+
+    /// A path containing a space and a `#` must not survive verbatim into
+    /// `artifactLocation.uri`: a raw `#` opens a fragment and a raw space
+    /// is not a legal URI character, so a strict consumer (GitHub code
+    /// scanning, resolving the URI against the repository tree) would
+    /// misparse it. The JSON `path` field, unlike the URI, must keep the
+    /// raw string.
+    #[test]
+    fn a_path_with_a_space_and_a_hash_is_percent_encoded_in_the_uri_but_raw_in_json() {
+        let mut report = sample_report();
+        report.diagnostics[0].anchor = ReportedAnchor::Span(SpanLocation {
+            path: "src/My Service#2.php".to_owned(),
+            start_line: 3,
+            start_column: 1,
+            end_line: 3,
+            end_column: 8,
+            byte_start: 7,
+            byte_end: 14,
+        });
+        let document = document(&report);
+        let result = &document["runs"][0]["results"][0];
+        let uri = result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
+            .as_str()
+            .unwrap();
+        assert_eq!(uri, "src/My%20Service%232.php");
+        assert_valid(&document);
+
+        let json_value = serde_json::to_value(&report).unwrap();
+        assert_eq!(
+            json_value["diagnostics"][0]["anchor"]["path"], "src/My Service#2.php",
+            "the JSON path field must stay a raw path, never a URI",
+        );
     }
 
     #[test]
