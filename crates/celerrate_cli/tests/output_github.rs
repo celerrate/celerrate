@@ -114,6 +114,40 @@ fn machine_output_refuses_the_mutating_and_looping_flags() {
     }
 }
 
+/// A baseline that hides a finding must still be counted: the "N baselined
+/// diagnostic(s) hidden" line is the only place that count survives, and
+/// nothing exercised it before this test (every hand-built `MachineReport`
+/// unit test uses `baselined_hidden: 0`, and no other integration test
+/// records a baseline). Run through the real baseline path, not a
+/// hand-built report, so the count surviving from `--baseline` recording
+/// through to the `github` writer is proven end to end.
+#[test]
+fn an_applied_baseline_reports_the_hidden_count_after_the_summary() {
+    let root = findings_project();
+    // Recording under the human (default) output is not the disallowed
+    // combination `machine_output_refuses_the_mutating_and_looping_flags`
+    // guards: that guard is about recording under a machine format, not
+    // about recording at all.
+    let (_, _) = check_with(root.path(), &["--baseline"]);
+    let (outcome, text) = check_with(root.path(), &["--output", "github"]);
+    assert_eq!(outcome, Outcome::Clean, "{text}");
+
+    let lines: Vec<&str> = text.lines().collect();
+    let last_index = lines.len() - 1;
+    let hidden_line = lines[last_index];
+    assert_eq!(
+        hidden_line, "1 baselined diagnostic hidden",
+        "the hidden count must carry the same wording the human report \
+         prints, and must close the output: {text}",
+    );
+    let summary_index = last_index - 1;
+    assert!(
+        lines[summary_index].contains("diagnostic") && !lines[summary_index].starts_with("::"),
+        "the hidden line must come right after the summary line: {text}",
+    );
+    assert!(!hidden_line.starts_with("::"), "{hidden_line}");
+}
+
 /// An internal error the run survives must appear as an `::error::`
 /// workflow command carrying the same message the JSON and SARIF writers
 /// carry, placed after the diagnostics and before the summary so the
