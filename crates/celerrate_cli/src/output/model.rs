@@ -16,7 +16,7 @@ use crate::Outcome;
 use crate::analysis::AnalysisOutcome;
 use crate::baseline::BaselineOutcome;
 use crate::render::SessionSources;
-use crate::session::Session;
+use crate::session::{InternalError, Session};
 
 /// The JSON contract version. Adding a field is non-breaking; removing
 /// one or changing its meaning increments this constant and forks the
@@ -28,6 +28,7 @@ pub struct MachineReport {
     pub schema_version: u32,
     pub summary: Summary,
     pub notices: Vec<Notice>,
+    pub internal_errors: Vec<ReportedInternalError>,
     pub diagnostics: Vec<ReportedDiagnostic>,
 }
 
@@ -47,6 +48,17 @@ pub struct Summary {
 pub struct Notice {
     pub id: String,
     pub message: String,
+}
+
+/// An internal error the run survived: the tool degraded instead of
+/// crashing. `kind` names the condition so tooling can route it, `message`
+/// is the same sentence the human channel prints, and `bug` separates a
+/// defect in Celerrate from a condition of the environment.
+#[derive(Debug, PartialEq, Eq, Serialize)]
+pub struct ReportedInternalError {
+    pub kind: String,
+    pub message: String,
+    pub bug: bool,
 }
 
 #[derive(Debug, PartialEq, Eq, Serialize)]
@@ -179,6 +191,15 @@ pub fn build(
         id: notice.identifier().as_str().to_owned(),
         message: notice.message(),
     }));
+    let internal_errors: Vec<ReportedInternalError> = session
+        .internal_errors
+        .iter()
+        .map(|error| ReportedInternalError {
+            kind: internal_error_kind(error).to_owned(),
+            message: crate::render::internal_error_message(session, error),
+            bug: crate::render::is_celerrate_bug(error),
+        })
+        .collect();
     MachineReport {
         schema_version: SCHEMA_VERSION,
         summary: Summary {
@@ -190,7 +211,25 @@ pub fn build(
             exit_code: verdict.code(),
         },
         notices,
+        internal_errors,
         diagnostics,
+    }
+}
+
+/// The variant name in kebab-case, matched explicitly rather than derived
+/// from the type name: a rename of the Rust variant must not silently
+/// change the wire value tooling routes on.
+fn internal_error_kind(error: &InternalError) -> &'static str {
+    match error {
+        InternalError::StubBlobUndecodable(_) => "stub-blob-undecodable",
+        InternalError::FileUnreadable { .. } => "file-unreadable",
+        InternalError::DirectoryUnreadable { .. } => "directory-unreadable",
+        InternalError::PathUnwatchable { .. } => "path-unwatchable",
+        InternalError::FilePanicked { .. } => "file-panicked",
+        InternalError::AnalysisPanicked => "analysis-panicked",
+        InternalError::FixUnappliable { .. } => "fix-unappliable",
+        InternalError::FixWriteFailed { .. } => "fix-write-failed",
+        InternalError::DiagnosticRenderFailed { .. } => "diagnostic-render-failed",
     }
 }
 
@@ -313,4 +352,56 @@ fn rule_name_index() -> BTreeMap<&'static str, String> {
         }
     }
     index
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::indexing_slicing, clippy::panic)]
+
+    use celerrate_source::{LineIndex, TextSize};
+
+    use super::position;
+
+    /// A plain ASCII prefix: the byte column and the code-point column
+    /// coincide, so this pins the ordinary case before the multi-byte
+    /// ones below exercise the conversion.
+    #[test]
+    fn an_ascii_offset_reports_the_same_column_in_bytes_and_code_points() {
+        let text = "hello world";
+        let index = LineIndex::new(text);
+        assert_eq!(position(&index, text, TextSize::from(6)), (1, 7));
+    }
+
+    /// "é" is a 2-byte UTF-8 character. The byte offset right after it is
+    /// 3, which `LineIndex::line_column` reports as a 0-based byte column
+    /// of 3 (a naive `+ 1` would report column 4), but only two code
+    /// points (`h`, `é`) actually precede it: the reported column must be
+    /// 3, not 4.
+    #[test]
+    fn a_multi_byte_character_before_the_offset_is_counted_once_not_by_its_byte_length() {
+        let text = "héllo world";
+        let index = LineIndex::new(text);
+        assert_eq!(
+            position(&index, text, TextSize::from(3)),
+            (1, 3),
+            "two code points precede the offset, not three bytes' worth",
+        );
+    }
+
+    /// Byte 2 sits inside "é" (a 2-byte character spanning bytes 1 and
+    /// 2): not a char boundary, so `text.get(line_start..offset)` returns
+    /// `None` and the conversion must fall back to the 0-based byte
+    /// column rather than panic. No real diagnostic anchors mid-character,
+    /// but the fallback exists precisely so a hostile or miscomputed
+    /// offset degrades instead of crashing the report.
+    #[test]
+    fn an_offset_landing_inside_a_multi_byte_character_falls_back_to_the_byte_column() {
+        let text = "héllo world";
+        let index = LineIndex::new(text);
+        assert_eq!(
+            position(&index, text, TextSize::from(2)),
+            (1, 3),
+            "falls back to the 0-based byte column (2), plus one",
+        );
+    }
 }

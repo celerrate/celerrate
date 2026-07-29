@@ -115,6 +115,46 @@ fn an_applied_baseline_hides_findings_from_the_payload() {
     assert_eq!(value["diagnostics"].as_array().unwrap().len(), 0);
 }
 
+/// An internal error the run survives (here: a subdirectory nobody may
+/// list) must still tell tooling why, not just how many, so a caller
+/// that sees exit code 2 does not have to re-run the tool on the human
+/// channel to learn what happened.
+#[cfg(unix)]
+#[test]
+fn an_internal_error_carries_its_kind_message_and_bug_flag_in_the_payload() {
+    use std::os::unix::fs::PermissionsExt as _;
+
+    let root = project(&[
+        ("src/Kernel.php", "<?php\nclass Kernel {}\n"),
+        ("src/locked/Hidden.php", "<?php\nclass Hidden {}\n"),
+    ]);
+    let locked = root.path().join("src/locked");
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+    let (outcome, text) = check_with(root.path(), &["--output", "json"]);
+
+    std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(outcome, Outcome::InternalError, "{text}");
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(value["summary"]["exit_code"], 2);
+    assert_eq!(value["summary"]["internal_errors"], 1);
+    let errors = value["internal_errors"].as_array().unwrap();
+    assert_eq!(errors.len(), 1, "{text}");
+    assert_eq!(errors[0]["kind"], "directory-unreadable");
+    assert!(
+        errors[0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("could not be read"),
+        "{text}",
+    );
+    assert_eq!(
+        errors[0]["bug"], false,
+        "a permissions problem is the environment's condition, not a Celerrate bug: {text}",
+    );
+}
+
 #[test]
 fn machine_output_refuses_the_mutating_and_looping_flags() {
     let root = findings_project();

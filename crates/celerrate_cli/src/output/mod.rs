@@ -1,6 +1,6 @@
 //! Machine output formats: pure serializations of the final stream, at
 //! the edge, after suppression and the baseline. One pipeline, four
-//! serializations (design spec 2026-07-24, section 6).
+//! serializations.
 
 pub mod json;
 pub mod model;
@@ -10,8 +10,8 @@ use std::io::{self, Write};
 use crate::arguments::OutputFormat;
 
 /// The non-human formats. Converting up front keeps every writer match
-/// exhaustive: adding a format extends this enum and the compiler walks
-/// the plan to every dispatch site.
+/// exhaustive: adding a format extends this enum and the compiler points
+/// at every dispatch site.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MachineFormat {
     Json,

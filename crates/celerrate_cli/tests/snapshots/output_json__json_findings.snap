@@ -1,6 +1,6 @@
 ---
 source: crates/celerrate_cli/tests/output_json.rs
-assertion_line: 147
+assertion_line: 192
 expression: text
 ---
 {
@@ -19,6 +19,7 @@ expression: text
       "message": "no PHP version configured; assuming 8.5"
     }
   ],
+  "internal_errors": [],
   "diagnostics": [
     {
       "id": "CEL0019",
