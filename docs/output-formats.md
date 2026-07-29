@@ -69,10 +69,11 @@ celerrate check --output=sarif
 
 SARIF 2.1.0, validated against the official schema in CI. Referenced
 identifiers are described under `tool.driver.rules` (short description,
-full description, an `explain` pointer); a rule-owned identifier's
-`reportingDescriptor` additionally carries the owning rule's name in
-`properties.rule`, since the identifier-to-rule relation is constant
-per run and repeating it on every result would be wasteful.
+full description, and help text pointing at `celerrate explain`); a
+rule-owned identifier's `reportingDescriptor` additionally carries the
+owning rule's name in `properties.rule`, since the identifier-to-rule
+relation is constant per run and repeating it on every result would be
+wasteful.
 
 Findings become `results` with physical locations (`columnKind` on the
 run is `unicodeCodePoints`); exit-neutral notices become `level: note`
@@ -115,8 +116,11 @@ celerrate check --output=github
 
 `::notice` for each exit-neutral notice, then one workflow command per
 finding (`::error` or `::warning` with `file`, `line`, `col`,
-`endLine`, `endColumn`), then one `::error::` line per internal error
-with no file properties (an internal error is a problem the tool
+`endLine`, `endColumn`) for a finding with a `span` anchor. A finding
+with a `project` anchor instead, the same distinction the JSON section
+describes, emits the command with no file properties, exactly like an
+internal error's line below. Then one `::error::` line per internal
+error with no file properties (an internal error is a problem the tool
 itself hit, not a finding anchored in the analyzed code), and finally
 the end-of-run summary. The internal-error lines print after the
 diagnostics and before the summary, so the summary genuinely closes the
