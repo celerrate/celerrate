@@ -17,7 +17,11 @@
     "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
   },
   "$defs": {
-    "identifier": { "type": "string", "pattern": "^CEL[0-9]{4}$" },
+    "identifier": {
+      "type": "string",
+      "description": "A diagnostic identifier. Every identifier Celerrate itself allocates follows the strict form CELxxxx (the letters CEL followed by four or more digits); the pattern is deliberately broader so a plugin-registered rule using another prefix does not break validation.",
+      "pattern": "^[A-Z][A-Z0-9]*[0-9]{4,}$"
+    },
     "summary": {
       "type": "object",
       "required": [
