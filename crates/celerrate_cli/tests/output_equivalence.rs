@@ -117,6 +117,55 @@ fn every_format_reports_the_same_findings_in_the_same_order() {
     }
 }
 
+/// Two findings in one file, positioned so the order the repository
+/// actually reports them in disagrees with their identifier order: the
+/// unknown-function call on line 3 reports `CEL0019`, and the reference
+/// to a missing base class on line 5 reports `CEL0018`. Diagnostics are
+/// sorted by position, so the correct order is `CEL0019` then `CEL0018`,
+/// the reverse of ascending identifier order. A writer that resorted by
+/// identifier, by rule name, or by any order other than the one it was
+/// handed would flip this pair.
+fn order_sensitive_project() -> tempfile::TempDir {
+    project(&[
+        ("composer.json", MANIFEST),
+        (
+            "src/Example.php",
+            "<?php\n\nstrlenn(\"hello\");\n\nclass Kernel extends Missing\n{\n}\n",
+        ),
+    ])
+}
+
+/// `every_format_reports_the_same_findings_in_the_same_order` above uses
+/// `findings_project()`, which reports exactly one diagnostic: a
+/// single-element list trivially matches any other single-element list
+/// in the same order, so that test cannot tell a writer that preserves
+/// order from one that resorts by severity, by identifier, or by
+/// anything else. This test makes the order clause load-bearing: the
+/// fixture produces two findings whose position order is the reverse of
+/// their identifier order, and the length guard makes sure the fixture
+/// degrading back to one finding fails loudly rather than quietly
+/// restoring that blind spot.
+#[test]
+fn every_format_preserves_an_order_that_disagrees_with_identifier_order() {
+    let root = order_sensitive_project();
+    let (_, json) = check_with(root.path(), &["--output", "json"]);
+    let (_, sarif) = check_with(root.path(), &["--output", "sarif"]);
+    let (_, github) = check_with(root.path(), &["--output", "github"]);
+    let ids = json_diagnostic_ids(&json);
+    assert!(
+        ids.len() >= 2,
+        "the fixture must produce at least two findings, or this test \
+         degrades back to the single-finding blind spot: {ids:?}",
+    );
+    // Pinned to the exact expected order, not just to the three writers
+    // agreeing with each other: three writers sharing the same wrong
+    // sort would still agree with each other while all disagreeing with
+    // the real position order.
+    assert_eq!(ids, vec!["CEL0019".to_owned(), "CEL0018".to_owned()]);
+    assert_eq!(ids, sarif_finding_ids(&sarif));
+    assert_eq!(ids, github_finding_ids(&github));
+}
+
 #[test]
 fn every_format_agrees_on_the_outcome() {
     let root = findings_project();
