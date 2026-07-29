@@ -94,11 +94,66 @@ mod tests {
     )]
 
     use super::*;
-    use crate::output::model::{ReportedDiagnostic, ReportedInternalError, Summary};
+    use crate::output::model::{ReportedDiagnostic, ReportedInternalError, SpanLocation, Summary};
 
     #[test]
     fn data_escaping_covers_percent_and_line_breaks() {
         assert_eq!(escape_data("50% done\r\nnext"), "50%25 done%0D%0Anext");
+    }
+
+    /// A `Warning`-severity diagnostic must become a `::warning` command,
+    /// not `::error`: no CLI fixture happens to produce a warning through
+    /// this writer, so a swapped match arm (`Warning` silently falling
+    /// through to `"error"`) would otherwise ship unnoticed. Also pins
+    /// that the position properties still appear on a warning exactly as
+    /// they do on an error.
+    #[test]
+    fn a_warning_severity_diagnostic_emits_a_warning_command_with_position_properties() {
+        let location = SpanLocation {
+            path: "src/Legacy.php".to_owned(),
+            start_line: 10,
+            start_column: 5,
+            end_line: 10,
+            end_column: 12,
+            byte_start: 90,
+            byte_end: 97,
+        };
+        let report = MachineReport {
+            schema_version: 1,
+            summary: Summary {
+                warnings: 1,
+                ..empty_summary()
+            },
+            notices: Vec::new(),
+            internal_errors: Vec::new(),
+            diagnostics: vec![ReportedDiagnostic {
+                id: "CEL0200".to_owned(),
+                severity: ReportedSeverity::Warning,
+                rule: None,
+                anchor: ReportedAnchor::Span(location),
+                message: "calling a deprecated function".to_owned(),
+                labels: Vec::new(),
+                notes: Vec::new(),
+                suggestions: Vec::new(),
+            }],
+        };
+        let mut output = Vec::new();
+        write(&mut output, &report).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let line = text
+            .lines()
+            .next()
+            .expect("the diagnostic becomes the first line");
+        assert!(
+            line.starts_with("::warning"),
+            "a warning severity must not emit ::error: {line}",
+        );
+        assert!(!line.starts_with("::error"), "{line}");
+        assert_eq!(
+            line,
+            "::warning file=src/Legacy.php,line=10,col=5,endLine=10,endColumn=12\
+             ::CEL0200: calling a deprecated function",
+        );
     }
 
     #[test]
