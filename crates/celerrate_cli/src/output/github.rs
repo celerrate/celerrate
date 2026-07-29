@@ -7,7 +7,7 @@
 use std::io::{self, Write};
 
 use super::model::{MachineReport, ReportedAnchor, ReportedSeverity};
-use crate::render::count;
+use crate::render::{baselined_hidden_line, summary_line};
 
 pub fn write(output: &mut dyn Write, report: &MachineReport) -> io::Result<()> {
     for notice in &report.notices {
@@ -47,24 +47,14 @@ pub fn write(output: &mut dyn Write, report: &MachineReport) -> io::Result<()> {
     }
     writeln!(
         output,
-        "{}, {}",
-        count(report.summary.notices, "notice", "notices"),
-        count(
+        "{}",
+        summary_line(
+            report.summary.notices,
             report.summary.errors + report.summary.warnings,
-            "diagnostic",
-            "diagnostics",
         ),
     )?;
-    if report.summary.baselined_hidden > 0 {
-        writeln!(
-            output,
-            "{} hidden",
-            count(
-                report.summary.baselined_hidden,
-                "baselined diagnostic",
-                "baselined diagnostics",
-            ),
-        )?;
+    if let Some(line) = baselined_hidden_line(report.summary.baselined_hidden) {
+        writeln!(output, "{line}")?;
     }
     Ok(())
 }

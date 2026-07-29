@@ -148,16 +148,8 @@ pub(crate) fn render_report_with(
         notices.len() + baseline.notices.len(),
         outcome.diagnostics.len(),
     )?;
-    if baseline.hidden > 0 {
-        writeln!(
-            output,
-            "{} hidden",
-            count(
-                baseline.hidden,
-                "baselined diagnostic",
-                "baselined diagnostics"
-            )
-        )?;
+    if let Some(line) = baselined_hidden_line(baseline.hidden) {
+        writeln!(output, "{line}")?;
     }
     if let Some(recorded) = baseline.recorded {
         writeln!(
@@ -252,6 +244,19 @@ fn build_report(
     render_blocks(&outcome.diagnostics, &sources, &resolver, color, fault)
 }
 
+/// The summary line's exact wording: how many notices, how many
+/// diagnostics. Shared by every render channel that closes with this
+/// sentence, currently the human channel and the GitHub Actions writer,
+/// so the two can never drift, the same `degraded_note` /
+/// `internal_error_message` pattern.
+pub(crate) fn summary_line(notice_count: usize, diagnostic_count: usize) -> String {
+    format!(
+        "{}, {}",
+        count(notice_count, "notice", "notices"),
+        count(diagnostic_count, "diagnostic", "diagnostics"),
+    )
+}
+
 /// The summary line: how many notices, how many diagnostics. Its exact
 /// wording is a contract the plan holds constant across both assemblies,
 /// so there is exactly one place that writes it.
@@ -260,12 +265,19 @@ fn write_summary_line(
     notice_count: usize,
     diagnostic_count: usize,
 ) -> io::Result<()> {
-    writeln!(
-        output,
-        "{}, {}",
-        count(notice_count, "notice", "notices"),
-        count(diagnostic_count, "diagnostic", "diagnostics"),
-    )
+    writeln!(output, "{}", summary_line(notice_count, diagnostic_count))
+}
+
+/// The baselined-hidden line's exact wording, `None` when nothing hid:
+/// shared by every render channel for the same reason `summary_line` is.
+pub(crate) fn baselined_hidden_line(hidden: usize) -> Option<String> {
+    if hidden == 0 {
+        return None;
+    }
+    Some(format!(
+        "{} hidden",
+        count(hidden, "baselined diagnostic", "baselined diagnostics"),
+    ))
 }
 
 /// How many leading blocks fit a line budget, and how many diagnostics
@@ -406,16 +418,8 @@ pub fn render_cycle(
         notices.len() + baseline.notices.len(),
         outcome.diagnostics.len(),
     )?;
-    if baseline.hidden > 0 {
-        writeln!(
-            output,
-            "{} hidden",
-            count(
-                baseline.hidden,
-                "baselined diagnostic",
-                "baselined diagnostics"
-            )
-        )?;
+    if let Some(line) = baselined_hidden_line(baseline.hidden) {
+        writeln!(output, "{line}")?;
     }
 
     session.absorb_render_failures(report.failures);

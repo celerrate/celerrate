@@ -191,6 +191,7 @@ fn machine_output_is_deterministic_across_runs() {
     for format in ["json", "sarif", "github"] {
         let (_, first) = check_with(root.path(), &["--output", format]);
         let (_, second) = check_with(root.path(), &["--output", format]);
+        assert!(!first.is_empty(), "{format} produced no output");
         assert_eq!(first, second, "{format}");
     }
 }
@@ -213,6 +214,7 @@ fn machine_output_ignores_the_color_mode() {
         };
         run(arguments(root.path()), &mut plain_buffer, ColorMode::Plain);
         run(arguments(root.path()), &mut colored_buffer, colored);
+        assert!(!plain_buffer.is_empty(), "{format} produced no output");
         assert_eq!(plain_buffer, colored_buffer, "{format}");
         assert!(
             !plain_buffer.contains(&0x1b),
@@ -277,5 +279,45 @@ fn every_format_agrees_on_an_internal_error() {
     assert!(
         github.lines().any(|line| line == expected_github_line),
         "expected {expected_github_line:?} in: {github}",
+    );
+}
+
+/// The GitHub writer's summary line and baselined-hidden line must read
+/// exactly like the human channel's: both are produced by the same
+/// `render::summary_line` and `render::baselined_hidden_line` functions,
+/// so a wording change on one side always shows up on the other. This
+/// compares against the human channel's own output rather than a literal
+/// pinned in this file: pinning only the GitHub wording here would still
+/// pass if a future change reworded the human summary and left the
+/// GitHub writer, or a hand-rolled duplicate of it, on the old wording.
+#[test]
+fn the_github_summary_and_hidden_lines_match_the_human_channel_verbatim() {
+    let root = findings_project();
+    check_with(root.path(), &["--baseline"]);
+    let (human_outcome, human) = check_with(root.path(), &[]);
+    let (github_outcome, github) = check_with(root.path(), &["--output", "github"]);
+    assert_eq!(human_outcome, Outcome::Clean, "{human}");
+    assert_eq!(github_outcome, Outcome::Clean, "{github}");
+
+    let human_lines: Vec<&str> = human.lines().collect();
+    let github_lines: Vec<&str> = github.lines().collect();
+    assert!(
+        github_lines.len() >= 2,
+        "expected a summary line and a hidden line: {github}",
+    );
+    let github_summary = github_lines[github_lines.len() - 2];
+    let github_hidden = github_lines[github_lines.len() - 1];
+    assert!(
+        github_hidden.ends_with("hidden"),
+        "expected the last GitHub line to be the baselined-hidden line: {github}",
+    );
+
+    assert!(
+        human_lines.contains(&github_summary),
+        "the GitHub summary line {github_summary:?} must appear verbatim in the human report: {human}",
+    );
+    assert!(
+        human_lines.contains(&github_hidden),
+        "the GitHub hidden line {github_hidden:?} must appear verbatim in the human report: {human}",
     );
 }
