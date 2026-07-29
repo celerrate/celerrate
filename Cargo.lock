@@ -179,6 +179,7 @@ dependencies = [
  "rayon",
  "salsa",
  "serde",
+ "serde_json",
  "tempfile",
  "terminal_size",
  "toml_edit",

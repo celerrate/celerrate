@@ -15,6 +15,27 @@ pub struct Arguments {
     pub command: Command,
 }
 
+/// The report's serialization. The machine formats consume the same
+/// final stream as the human renderer: post-suppression, post-baseline,
+/// same order, same exit code.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, clap::ValueEnum)]
+pub enum OutputFormat {
+    /// The rich human report.
+    Human,
+    /// The versioned JSON report for tooling.
+    Json,
+}
+
+impl OutputFormat {
+    /// The value as typed on the command line, for usage errors.
+    pub fn as_argument(self) -> &'static str {
+        match self {
+            Self::Human => "human",
+            Self::Json => "json",
+        }
+    }
+}
+
 #[derive(Debug, Subcommand)]
 pub enum Command {
     /// Analyze a project and report its diagnostics.
@@ -42,6 +63,10 @@ pub enum Command {
         /// Ignore an existing `celerrate-baseline.toml` and report every finding.
         #[arg(long)]
         ignore_baseline: bool,
+
+        /// Serialize the report: human (default) or a machine format.
+        #[arg(long, value_enum, default_value_t = OutputFormat::Human)]
+        output: OutputFormat,
     },
 
     /// Explain a diagnostic identifier: why it fires, a failing and a
@@ -70,7 +95,7 @@ mod tests {
 
     use clap::Parser as _;
 
-    use super::{Arguments, Command};
+    use super::{Arguments, Command, OutputFormat};
 
     #[test]
     fn check_defaults_to_the_current_directory_and_a_single_pass() {
@@ -130,6 +155,25 @@ mod tests {
             Arguments::try_parse_from(["celerrate", "check", "--fix-suggestions", "--watch"])
                 .is_err()
         );
+    }
+
+    #[test]
+    fn output_defaults_to_human() {
+        let arguments = Arguments::try_parse_from(["celerrate", "check"]).unwrap();
+        let Command::Check { output, .. } = arguments.command else {
+            panic!("expected check");
+        };
+        assert_eq!(output, OutputFormat::Human);
+    }
+
+    #[test]
+    fn output_accepts_json() {
+        let arguments =
+            Arguments::try_parse_from(["celerrate", "check", "--output", "json"]).unwrap();
+        let Command::Check { output, .. } = arguments.command else {
+            panic!("expected check");
+        };
+        assert_eq!(output, OutputFormat::Json);
     }
 
     #[test]

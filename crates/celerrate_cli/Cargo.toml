@@ -37,6 +37,7 @@ postcard = { workspace = true }
 rayon = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 toml_edit = { workspace = true }

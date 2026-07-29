@@ -60,8 +60,8 @@ pub(crate) fn render_check(
 
 /// The CLI's view of its sources, for the renderer: display paths from
 /// the VFS, text from the decode query. Both borrow the session.
-struct SessionSources<'a> {
-    session: &'a Session,
+pub(crate) struct SessionSources<'a> {
+    pub(crate) session: &'a Session,
 }
 
 impl SourceAccess for SessionSources<'_> {
@@ -473,7 +473,7 @@ fn relative_path(session: &Session, path: &std::path::Path) -> String {
     relative.display().to_string()
 }
 
-fn count(total: usize, singular: &str, plural: &str) -> String {
+pub(crate) fn count(total: usize, singular: &str, plural: &str) -> String {
     if total == 1 {
         format!("{total} {singular}")
     } else {

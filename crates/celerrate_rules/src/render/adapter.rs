@@ -93,9 +93,9 @@ fn plan_labels<'s>(
     (local, plan)
 }
 
-/// A symbolic label whose declaration has no excerptable source
-/// degrades to a note naming the declaration (design section 3).
-fn degraded_note(symbol: &str, message: &str) -> String {
+/// The note wording a degraded symbolic label takes, shared by the human
+/// renderer and the machine formats so the channels never drift.
+pub fn degraded_note(symbol: &str, message: &str) -> String {
     format!("`{symbol}`: {message}")
 }
 
