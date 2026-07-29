@@ -19,7 +19,7 @@
   "$defs": {
     "identifier": {
       "type": "string",
-      "description": "A diagnostic identifier. Every identifier Celerrate itself allocates follows the strict form CELxxxx (the letters CEL followed by four or more digits); the pattern is deliberately broader so a plugin-registered rule using another prefix does not break validation.",
+      "description": "A diagnostic identifier. Every identifier Celerrate itself allocates follows the strict form CELxxxx (the letters CEL followed by exactly four digits); the pattern is deliberately broader so a plugin-registered rule using another prefix does not break validation.",
       "pattern": "^[A-Z][A-Z0-9]*[0-9]{4,}$"
     },
     "summary": {
@@ -81,7 +81,7 @@
         "end_column": {
           "type": "integer",
           "minimum": 1,
-          "description": "Exclusive: one past the span's last column, so `end_column - start_column` is the span's width in code points."
+          "description": "Exclusive: one past the span's last column."
         },
         "byte_start": { "type": "integer", "minimum": 0 },
         "byte_end": {
@@ -121,7 +121,7 @@
             "end_column": {
               "type": "integer",
               "minimum": 1,
-              "description": "Exclusive: one past the span's last column, so `end_column - start_column` is the span's width in code points."
+              "description": "Exclusive: one past the span's last column."
             },
             "byte_start": { "type": "integer", "minimum": 0 },
             "byte_end": {

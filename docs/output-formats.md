@@ -43,9 +43,8 @@ and exact byte offsets), message, resolved secondary labels, notes, and
 suggestions with their edits and confidence (`safe` or `needs-review`).
 Columns count Unicode code points; byte offsets index the file's UTF-8
 bytes. Every end position (`end_column`, `byte_end`) is exclusive: it
-points one past the span's last column or byte, so `end - start` is the
-span's width and `[byte_start, byte_end)` is the exact byte range to
-slice.
+points one past the span's last column or byte, so `[byte_start,
+byte_end)` is the exact byte range to slice.
 
 Each entry of `internal_errors` carries `kind`, `message`, and `bug`.
 `message` is the same sentence the human channel prints after its
