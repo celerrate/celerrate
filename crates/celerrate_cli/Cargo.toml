@@ -46,3 +46,4 @@ toml_edit = { workspace = true }
 blake3 = { workspace = true }
 celerrate_syntax = { path = "../celerrate_syntax" }
 insta = { workspace = true }
+jsonschema = { workspace = true }

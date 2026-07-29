@@ -191,3 +191,34 @@ fn json_findings_snapshot() {
     let (_, text) = check_with(root.path(), &["--output", "json"]);
     insta::assert_snapshot!("json_findings", text);
 }
+
+#[test]
+fn json_output_validates_against_the_committed_schema() {
+    let schema: serde_json::Value = serde_json::from_str(include_str!(
+        "../../../schemas/celerrate-json-report.v1.schema.json"
+    ))
+    .unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    // Three shapes: findings, clean, and notices-plus-baseline.
+    let findings = findings_project();
+    let clean = project(&[
+        ("composer.json", MANIFEST),
+        ("src/Clean.php", CLEAN_EXAMPLE),
+    ]);
+    let noticed = project(&[("src/Example.php", FAILING_EXAMPLE)]);
+    let (_, _) = check_with(findings.path(), &["--baseline"]);
+    let runs = [
+        check_with(findings.path(), &["--output", "json"]).1,
+        check_with(findings.path(), &["--output", "json", "--ignore-baseline"]).1,
+        check_with(clean.path(), &["--output", "json"]).1,
+        check_with(noticed.path(), &["--output", "json"]).1,
+    ];
+    for text in runs {
+        let instance: serde_json::Value = serde_json::from_str(&text).unwrap();
+        let errors: Vec<String> = validator
+            .iter_errors(&instance)
+            .map(|error| error.to_string())
+            .collect();
+        assert!(errors.is_empty(), "{}", errors.join("\n"));
+    }
+}
