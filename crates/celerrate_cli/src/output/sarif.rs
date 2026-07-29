@@ -430,9 +430,9 @@ mod tests {
         assert_valid(&document);
     }
 
-    /// D3: `summary.baselined_hidden` rides in the run's `properties`
-    /// bag, the only place in the document that can carry it. Without
-    /// it a run with no results and several baselined findings would be
+    /// `summary.baselined_hidden` rides in the run's `properties` bag,
+    /// the only place in the document that can carry it. Without it a
+    /// run with no results and several baselined findings would be
     /// indistinguishable from a genuinely clean project.
     #[test]
     fn the_run_carries_the_baselined_hidden_count_in_its_properties() {
@@ -442,7 +442,7 @@ mod tests {
         assert_valid(&document);
     }
 
-    /// D3: the owning rule name goes on the matching `reportingDescriptor`
+    /// The owning rule name goes on the matching `reportingDescriptor`
     /// under `tool.driver.rules`, not repeated on every result.
     #[test]
     fn a_rule_descriptor_carries_its_owning_rule_when_one_owns_the_identifier() {
@@ -456,7 +456,7 @@ mod tests {
         assert_valid(&document);
     }
 
-    /// D4: a notification's `descriptor.id` resolves against
+    /// A notification's `descriptor.id` resolves against
     /// `tool.driver.notifications`, so every referenced kind must be
     /// described there, sorted and deduplicated exactly like `rules`.
     #[test]
@@ -474,8 +474,8 @@ mod tests {
         assert_valid(&document);
     }
 
-    /// D4's key must be entirely absent, not an empty array, when the run
-    /// hit no internal error: the common case stays visually clean.
+    /// This key must be entirely absent, not an empty array, when the
+    /// run hit no internal error: the common case stays visually clean.
     #[test]
     fn the_notifications_key_is_omitted_when_there_are_no_internal_errors() {
         let mut report = sample_report();
