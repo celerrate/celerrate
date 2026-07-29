@@ -10,11 +10,13 @@
 
 One format per run. Every format serializes the same final stream: the
 same diagnostics, in the same order, after suppression and after the
-baseline, with the same exit code. A machine format writes exactly one
-document to standard output; anything else the run reports (the
-statistics line, for example) goes to standard error, so a machine
-format's standard output is never polluted with a second stream to
-parse around.
+baseline, with the same exit code. On a successful run, a machine
+format writes exactly one document to standard output; anything else
+the run reports (the statistics line, for example) goes to standard
+error, so a machine format's standard output is never polluted with a
+second stream to parse around. A bad root path or an incompatible flag
+combination writes a plain-text usage line to standard output instead,
+and no document at all.
 
 A machine format cannot be combined with `--watch`, `--fix`,
 `--fix-suggestions`, or `--baseline` (recording a new baseline): those
