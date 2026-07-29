@@ -78,9 +78,17 @@
         "start_line": { "type": "integer", "minimum": 1 },
         "start_column": { "type": "integer", "minimum": 1 },
         "end_line": { "type": "integer", "minimum": 1 },
-        "end_column": { "type": "integer", "minimum": 1 },
+        "end_column": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Exclusive: one past the span's last column, so `end_column - start_column` is the span's width in code points."
+        },
         "byte_start": { "type": "integer", "minimum": 0 },
-        "byte_end": { "type": "integer", "minimum": 0 }
+        "byte_end": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exclusive: one past the span's last byte, so `[byte_start, byte_end)` is the exact byte range to slice."
+        }
       }
     },
     "anchor": {
@@ -110,9 +118,17 @@
             "start_line": { "type": "integer", "minimum": 1 },
             "start_column": { "type": "integer", "minimum": 1 },
             "end_line": { "type": "integer", "minimum": 1 },
-            "end_column": { "type": "integer", "minimum": 1 },
+            "end_column": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Exclusive: one past the span's last column, so `end_column - start_column` is the span's width in code points."
+            },
             "byte_start": { "type": "integer", "minimum": 0 },
-            "byte_end": { "type": "integer", "minimum": 0 }
+            "byte_end": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Exclusive: one past the span's last byte, so `[byte_start, byte_end)` is the exact byte range to slice."
+            }
           }
         }
       ]
