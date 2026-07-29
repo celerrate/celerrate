@@ -199,7 +199,10 @@ fn json_output_validates_against_the_committed_schema() {
     ))
     .unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
-    // Three shapes: findings, clean, and notices-plus-baseline.
+    // Shapes covered: findings, the same findings with the baseline
+    // ignored, a clean project, a project that only reports a notice, and
+    // (unix only, see below) a run whose `internal_errors` array is
+    // actually populated rather than empty.
     let findings = findings_project();
     let clean = project(&[
         ("composer.json", MANIFEST),
@@ -207,12 +210,34 @@ fn json_output_validates_against_the_committed_schema() {
     ]);
     let noticed = project(&[("src/Example.php", FAILING_EXAMPLE)]);
     let (_, _) = check_with(findings.path(), &["--baseline"]);
-    let runs = [
+    let mut runs = vec![
         check_with(findings.path(), &["--output", "json"]).1,
         check_with(findings.path(), &["--output", "json", "--ignore-baseline"]).1,
         check_with(clean.path(), &["--output", "json"]).1,
         check_with(noticed.path(), &["--output", "json"]).1,
     ];
+    // Every run above reports zero internal errors, so `$defs/internalError`
+    // (the `kind`/`message`/`bug` shape and the `kind` pattern) is never
+    // exercised by them alone. A permission-locked directory is the
+    // fixture that forces a populated `internal_errors` array, and
+    // building one is a unix-only affordance (`PermissionsExt`), so this
+    // fifth shape is deliberately gated rather than attempted everywhere;
+    // the four platform-independent shapes above still validate on every
+    // platform, so the test is not vacuous off unix.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = project(&[
+            ("src/Kernel.php", "<?php\nclass Kernel {}\n"),
+            ("src/locked/Hidden.php", "<?php\nclass Hidden {}\n"),
+        ]);
+        let locked = root.path().join("src/locked");
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let text = check_with(root.path(), &["--output", "json"]).1;
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o755)).unwrap();
+        runs.push(text);
+    }
     for text in runs {
         let instance: serde_json::Value = serde_json::from_str(&text).unwrap();
         let errors: Vec<String> = validator
