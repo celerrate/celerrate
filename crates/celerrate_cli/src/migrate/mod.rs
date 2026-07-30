@@ -7,3 +7,4 @@
 #![allow(dead_code)]
 
 pub(crate) mod neon;
+pub(crate) mod settings;
