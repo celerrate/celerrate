@@ -1,0 +1,14 @@
+---
+source: crates/celerrate_cli/tests/migrate.rs
+expression: text
+---
+migrated phpstan.neon to celerrate.toml
+  include: 1 path, exclude: 2 paths
+  level 5: typed-family identifiers remapped to "warning"
+not carried over:
+  ignoreErrors (phpstan.neon): message patterns over PHPStan's vocabulary do not translate; the recorded baseline carries the continuity
+  bootstrapFiles (phpstan.neon): Celerrate does not execute project code before analysis
+ignored includes (never parsed; delete them once the baseline is in place):
+  phpstan-baseline.neon
+recorded 1 baseline entry to celerrate-baseline.toml
+run `celerrate check`: from here, only new problems fail

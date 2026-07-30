@@ -15,6 +15,7 @@ pub mod database;
 mod explain;
 pub mod fix;
 pub mod ground_truth;
+mod migrate;
 pub mod mixed_rate;
 pub mod output;
 pub mod plugins;
@@ -239,6 +240,28 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                     + configuration_diagnostics,
                 session.internal_errors.len(),
             )
+        }
+        Command::Migrate {
+            path,
+            from_phpstan,
+            force,
+        } => {
+            if !from_phpstan {
+                let _ = writeln!(output, "error: migrate needs a source; pass --from-phpstan");
+                return Outcome::UsageError;
+            }
+            if let Some(message) = unusable_root(&path) {
+                let _ = writeln!(output, "{message}");
+                return Outcome::UsageError;
+            }
+            let root = match absolute_root(&path) {
+                Ok(root) => root,
+                Err(message) => {
+                    let _ = writeln!(output, "{message}");
+                    return Outcome::UsageError;
+                }
+            };
+            migrate::execute(&root, force, output)
         }
         Command::Explain { identifier } => {
             let normalized = identifier.to_ascii_uppercase();

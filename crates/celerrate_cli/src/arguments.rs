@@ -75,6 +75,24 @@ pub enum Command {
         output: OutputFormat,
     },
 
+    /// Convert another tool's configuration to `celerrate.toml`,
+    /// report what does not carry over, and record the baseline so
+    /// only new problems fail.
+    Migrate {
+        /// The project root. Defaults to the current directory.
+        #[arg(default_value = ".")]
+        path: PathBuf,
+
+        /// Migrate from PHPStan: `phpstan.neon`, its includes, its
+        /// level.
+        #[arg(long)]
+        from_phpstan: bool,
+
+        /// Overwrite an existing `celerrate.toml`.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Explain a diagnostic identifier: why it fires, a failing and a
     /// fixed example, and its configuration notes.
     Explain {
@@ -98,6 +116,8 @@ pub enum Command {
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::panic)]
+
+    use std::path::PathBuf;
 
     use clap::Parser as _;
 
@@ -188,6 +208,45 @@ mod tests {
     }
 
     #[test]
+    fn migrate_parses_its_flags() {
+        let arguments = Arguments::try_parse_from([
+            "celerrate",
+            "migrate",
+            "project",
+            "--from-phpstan",
+            "--force",
+        ])
+        .unwrap();
+        let Command::Migrate {
+            path,
+            from_phpstan,
+            force,
+        } = arguments.command
+        else {
+            panic!("expected Command::Migrate");
+        };
+        assert_eq!(path, PathBuf::from("project"));
+        assert!(from_phpstan);
+        assert!(force);
+    }
+
+    #[test]
+    fn migrate_defaults_to_the_current_directory() {
+        let arguments = Arguments::try_parse_from(["celerrate", "migrate"]).unwrap();
+        let Command::Migrate {
+            path,
+            from_phpstan,
+            force,
+        } = arguments.command
+        else {
+            panic!("expected Command::Migrate");
+        };
+        assert_eq!(path, PathBuf::from("."));
+        assert!(!from_phpstan);
+        assert!(!force);
+    }
+
+    #[test]
     fn explain_takes_an_identifier() {
         let arguments = Arguments::try_parse_from(["celerrate", "explain", "CEL0030"]).unwrap();
         match arguments.command {
@@ -227,9 +286,12 @@ mod tests {
             crate::ColorMode::Plain,
         );
         assert_eq!(outcome, crate::Outcome::Clean);
+        let text = String::from_utf8(output).unwrap();
         assert!(
-            !String::from_utf8(output).unwrap().contains("mixed-rate"),
+            !text.contains("mixed-rate"),
             "mixed-rate must not appear in --help",
         );
+        // The public surface, by contrast, must be listed.
+        assert!(text.contains("migrate"), "migrate must appear in --help");
     }
 }
