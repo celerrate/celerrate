@@ -15,6 +15,7 @@ pub mod database;
 mod explain;
 pub mod fix;
 pub mod ground_truth;
+mod migrate;
 pub mod mixed_rate;
 pub mod output;
 pub mod plugins;
