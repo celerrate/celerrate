@@ -217,9 +217,9 @@ pub enum SuppressionFilter {
 /// One directive, resolved against the file: where it sits (the
 /// carrying comment token - where CEL0041/CEL0042 anchor), what it
 /// covers, what it admits, and what the reporting rules need to speak
-/// about it. The reason trailer is deliberately not carried: its only
-/// consumer (a verbose widened-directive channel) is not part of the
-/// product surface yet.
+/// about it. The reason trailer (PHPStan's parenthesized comment) is
+/// deliberately not carried: it is dropped earlier, when the bridge
+/// parses the directive.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDirective {
     pub anchor: TextRange,
