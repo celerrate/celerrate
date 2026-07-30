@@ -138,6 +138,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   or a condition of the run's environment, so tooling never has to
   re-run the tool on the human channel to learn why. See
   `docs/output-formats.md`.
+- `celerrate migrate --from-phpstan`: convert `phpstan.neon` (includes,
+  paths, level) to `celerrate.toml`, report everything that does not
+  carry over, and record `celerrate-baseline.toml` so the first check
+  is clean and only new problems fail.
 
 ### Changed
 

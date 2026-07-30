@@ -63,6 +63,33 @@ fn every_output_format_is_documented() {
 }
 
 #[test]
+fn the_migration_page_documents_the_command_and_its_level_table() {
+    let page = workspace_page("docs/migration.md");
+    for token in [
+        "--from-phpstan",
+        "--force",
+        "phpstan.neon",
+        "celerrate-baseline.toml",
+        "includes",
+        "ignoreErrors",
+    ] {
+        assert!(
+            page.contains(token),
+            "docs/migration.md must mention {token}"
+        );
+    }
+    for identifier in [
+        "CEL0030", "CEL0031", "CEL0032", "CEL0033", "CEL0034", "CEL0035", "CEL0036", "CEL0037",
+        "CEL0038",
+    ] {
+        assert!(
+            page.contains(identifier),
+            "the level table must list {identifier}"
+        );
+    }
+}
+
+#[test]
 fn the_bridge_page_documents_every_suppression_form() {
     let page = workspace_page("docs/phpdoc-bridge.md");
     for form in [
