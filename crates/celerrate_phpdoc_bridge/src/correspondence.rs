@@ -1,4 +1,4 @@
-//! The foreign-to-CEL correspondence table (design section 8): every
+//! The foreign-to-CEL correspondence table: every
 //! published identifier of both bridge dialects, triaged - mapped to a
 //! non-empty set of Celerrate code strings, explicitly scope-wide, or
 //! explicitly unmapped. Codes are plain strings; the matcher
@@ -80,11 +80,11 @@ pub fn correspondence_entries(dialect: Dialect) -> &'static [(&'static str, Fore
     }
 }
 
-// The plan seeded class.deprecated too; it exists in neither the
+// class.deprecated was considered too; it exists in neither the
 // documented catalogue nor the search index (PHPStan spells the
 // class-deprecation findings per reference site instead:
 // new.deprecatedClass, parameter.deprecatedClass, and their
-// siblings), so the seed is dropped rather than invented.
+// siblings), so it is dropped rather than invented.
 const PHPSTAN: &[(&str, ForeignMapping)] = &[
     ("argument.bitmaskNotAllowed", ForeignMapping::Unmapped),
     ("argument.byRef", ForeignMapping::Unmapped),
@@ -1303,7 +1303,7 @@ const PHPSTAN: &[(&str, ForeignMapping)] = &[
         ForeignMapping::Unmapped,
     ),
     ("staticMethod.void", ForeignMapping::Unmapped),
-    // Not seeded by the plan, added here: the exact static sibling
+    // Added here: the exact static sibling
     // of property.deprecated, and CEL0023 is "symbol deprecated"
     // for every symbol kind. Upstream reads "Accessed static
     // property is marked as deprecated."
@@ -1911,7 +1911,7 @@ mod tests {
     #[test]
     fn the_multi_code_example_of_the_design_holds() {
         // PHPStan's single arguments.count covers findings that span
-        // several CEL codes (design section 8).
+        // several CEL codes.
         assert_eq!(
             foreign_mapping(Dialect::Phpstan, "arguments.count"),
             ForeignMapping::Codes(&["CEL0036", "CEL0037"]),

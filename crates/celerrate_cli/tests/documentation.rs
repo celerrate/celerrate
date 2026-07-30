@@ -1,10 +1,9 @@
 //! Documentation drift tests. The repository documentation is the
 //! interim publication home for the identifier reference and the
-//! bridge tables (type-engine design, section 9); these tests live at
-//! the composition root for the same reason the identifier-uniqueness
-//! test does: it is the only layer that sees every producer at once.
-//! A plan that allocates a new identifier without documenting it
-//! fails here.
+//! bridge tables; these tests live at the composition root for the
+//! same reason the identifier-uniqueness test does: it is the only
+//! layer that sees every producer at once. Registering a new
+//! identifier without documenting it fails here.
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 

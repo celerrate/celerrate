@@ -1,6 +1,7 @@
 //! Shared test-only fixture for the checks family: the same
-//! `Fixture`/`fixture`/`handle_of` idiom task 2's `mod.rs` test module
-//! built, lifted here so `receivers.rs` (and the task 4-6 walkers)
+//! `Fixture`/`fixture`/`handle_of` idiom `mod.rs`'s test module
+//! built, lifted here so `receivers.rs` (and the other checks-family
+//! walkers)
 //! share one builder rather than each re-deriving it — the crate's
 //! existing `test_support`/`minimal_stub_index` pattern
 //! (`inheritance/test_support.rs`).
@@ -42,7 +43,7 @@ pub(crate) fn fixture(sources: &[&str]) -> Fixture {
 }
 
 /// A fixture over a caller-supplied stub index, for the synthetic stub
-/// surfaces a test needs (decision 7's `UnitEnum`/`BackedEnum`, a
+/// surfaces a test needs (`UnitEnum`/`BackedEnum`, a
 /// single named class) that the default minimal index does not carry.
 pub(crate) fn fixture_with_stubs(sources: &[&str], stub_index: StubIndex) -> Fixture {
     let db = TestDatabase::default();
@@ -166,7 +167,7 @@ pub(crate) fn fixture_with_stub_enum_interfaces(sources: &[&str]) -> Fixture {
     }
     // `from`/`tryFrom` carry a single `$value` parameter, matching the
     // real `BackedEnum` surface (`from(int|string $value): static`) —
-    // task 9's arity check now runs over every resolved call, so a
+    // the arity check now runs over every resolved call, so a
     // zero-parameter synthetic signature here would misreport a
     // genuine one-argument call as excess.
     fn value_parameter() -> StubParameter {
@@ -259,7 +260,7 @@ pub(crate) fn context_for(fixture: &Fixture, body_index: u32) -> CheckContext<'_
 /// `@property` tag conventions (`@method <ReturnType> <name>(...)`,
 /// `@property <Type> $<name>`) — just enough to exercise the
 /// virtual-member integration `members.rs`'s guillotine leans on
-/// (design section 8: `@method`/`@property` "count as existing"). The
+/// (`@method`/`@property` "count as existing"). The
 /// real dialect lives in `celerrate_phpdoc_bridge`, a crate above this
 /// one in the dependency DAG that cannot be depended on from here; a
 /// duplicated minimal parser is the codebase's own precedent for this
@@ -294,11 +295,11 @@ impl VirtualSymbolProvider for DocblockMemberProvider {
 
 /// The shared checks-family test entry point: one file's `typed_file_verdicts`
 /// kinds, over the default fixture with a `DocblockMemberProvider`
-/// registered (design section 8's virtual-member surface). Every
+/// registered (the virtual-member surface). Every
 /// `checks` module's test suite shares this rather than re-deriving the
 /// `typed_file_verdicts` plumbing — `members.rs`'s tests first built it
 /// (as `method_verdicts`), promoted here once `nullability.rs`'s tests
-/// needed the same fixture-to-verdicts path (task 6).
+/// needed the same fixture-to-verdicts path.
 pub(crate) fn family_verdicts(source: &str) -> Vec<TypedVerdictKind> {
     let fixture = fixture(&[source]);
     let _ = VirtualSymbolRegistry::builder(vec![VirtualSymbolRegistration {

@@ -19,12 +19,12 @@ impl<'db> Walker<'db, '_, '_> {
     /// branch join (see the module's `join`-vs-`union` convention);
     /// `None` when no key answers. Every resolving key's value funnels
     /// through `member_boundary_type` against its *own* declaring
-    /// owner and `receiver` (decision 1): a `self`/`static`/`parent`-
+    /// owner and `receiver`: a `self`/`static`/`parent`-
     /// typed property or constant substitutes exactly like a method
     /// return. The owner is resolved per key, not once for the whole
     /// call — a union receiver `A|B` where both declare the member
     /// answers each key against its own class, never both against
-    /// whichever key happened to resolve first (Finding 3).
+    /// whichever key happened to resolve first.
     pub(super) fn member_value_type(
         &mut self,
         keys: &[String],
@@ -81,17 +81,17 @@ impl<'db> Walker<'db, '_, '_> {
             .collect()
     }
 
-    /// The declared-present gate (decision 4).
+    /// The declared-present gate.
     pub(super) fn declared_present(&self, signature: &DeclaredSignature<'db>) -> bool {
         signature.value_trust != Trust::NativeOnly || !signature.value_type.is_mixed(self.db())
     }
 
-    /// Every member boundary funnels through here (decision 1): the
+    /// Every member boundary funnels through here: the
     /// declared or inferred member type is resolved against the
     /// declaring `owner` and the `receiver` — late-static-binding
     /// placeholders substitute (`self` → owner, `parent` → the owner's
     /// first `Extends` ancestor, `static` → the receiver, which may
-    /// itself be a placeholder and forward, decision 2) — and the
+    /// itself be a placeholder and forward) — and the
     /// receiver's class arguments bind its class-level templates.
     pub(super) fn member_boundary_type(
         &mut self,
@@ -138,17 +138,17 @@ impl<'db> Walker<'db, '_, '_> {
 
     /// The declaring owner of `key`'s own member — `self` and `parent`
     /// placeholders substitute against it. A per-key fact, deliberately
-    /// not a per-call one (Finding 3): a union receiver's keys may
+    /// not a per-call one: a union receiver's keys may
     /// each declare the member on a different ancestor, so a single
     /// owner hoisted out of a per-key loop and reused for every key
     /// would substitute every key's `self`/`parent` against
     /// whichever key happened to resolve first, a wrong concrete
     /// answer rather than conservative silence.
     ///
-    /// Task 7's trait boundary fix, anchored by task 7b: a
+    /// The trait boundary fix: a
     /// `Trait`-origin resolution's `owner` (from `lookup_member`) names
     /// the trait itself — the class that lexically declares the method —
-    /// but decision 5 analyzes a trait body *for the using class*, so
+    /// but a trait body is analyzed *for the using class*, so
     /// PHP's `self` and `parent` inside it are bound to the class that
     /// wrote `use`, not the trait. Substituting against the trait here
     /// would silently answer the wrong concrete class (the trait) for
@@ -171,7 +171,7 @@ impl<'db> Walker<'db, '_, '_> {
         name: &str,
     ) -> Option<String> {
         let db = self.db();
-        // Task 3: this is the walker's own direct `lookup_member`
+        // This is the walker's own direct `lookup_member`
         // consultation site — recorded here, regardless of whether it
         // resolves, so every caller (receiver resolution, property
         // types, the iteration-protocol members) shares one recording
@@ -199,7 +199,7 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// The class a `self`/`static`/`parent` keyword names in the
-    /// defining context (decision 1): each carries its own
+    /// defining context: each carries its own
     /// late-static-binding placeholder rather than an immediately
     /// resolved class — `None` for any other name (an ordinary class,
     /// which the caller resolves through `class_type_of_written`). An
@@ -228,7 +228,7 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// The first `extends` edge of the defining class's ancestry (the
-    /// body owner's own class — one of task 3's four illustrative
+    /// body owner's own class — one of four illustrative
     /// consultation categories, recorded through
     /// [`Self::parent_class_key_of`]).
     pub(super) fn parent_class_key(&mut self) -> Option<String> {
@@ -243,7 +243,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// body's own.
     pub(super) fn parent_class_key_of(&mut self, class_key: &str) -> Option<String> {
         let db = self.db();
-        // Task 3: the walker's own direct `linearized_class`
+        // The walker's own direct `linearized_class`
         // consultation site.
         self.dependencies.classes.insert(class_key.to_owned());
         let linearized = linearized_class(

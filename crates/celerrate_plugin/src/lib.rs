@@ -7,7 +7,7 @@
 //! extended, never bypassed.
 //!
 //! The API is deliberately not called v1: its second *dissimilar*
-//! consumer (a framework dynamic type provider) is sub-project 6.
+//! consumer, a framework dynamic type provider, is still to come.
 
 /// The API version the composition root checks at registration. A
 /// mismatch excludes the plugin for the whole run and the run is
@@ -57,8 +57,8 @@ pub use celerrate_types::{
 // sealed contexts they receive, and the metadata and reporting
 // vocabulary around them. Nominal re-exports only — never the rule
 // registry, never the core-only `Reporting` phase, never the
-// construction seams (composition-root vocabulary; design section 8
-// defers plugin-registered rules).
+// construction seams (composition-root vocabulary: plugin-registered
+// rules are deferred).
 pub use celerrate_rules::{
     DiagnosticId, ExplainPage, FindingAnchor, FindingSink, RuleGroup, RuleIdentifier, RuleMetadata,
     SemanticRule, Severity, SyntaxContext, SyntaxRule, Tier, TypedBodyRule,

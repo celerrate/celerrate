@@ -115,13 +115,13 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// Task 9(e): a callee's declared signature projected into a
+    /// A callee's declared signature projected into a
     /// callable type, shared by every first-class-callable form. The
-    /// return type funnels through `member_boundary_type` (decision
-    /// 1): a `self`/`static`/`parent` placeholder substitutes against
+    /// return type funnels through `member_boundary_type`: a
+    /// `self`/`static`/`parent` placeholder substitutes against
     /// the receiver and the receiver's class arguments bind its
-    /// class-level templates; the parameters are never substituted (a
-    /// later task revisits generic callables).
+    /// class-level templates; the parameters are never substituted
+    /// (generic callables are future work).
     fn projected_callable(
         &mut self,
         signature: Option<DeclaredSignature<'db>>,
@@ -185,7 +185,7 @@ impl<'db> Walker<'db, '_, '_> {
         // (declared here, inferred in the fallback branch), so the same
         // dependency must be recorded beside each — otherwise a body
         // forming `g(...)` records the edge count but no identity for
-        // task 8's live-demand validator to re-check.
+        // the live-demand validator to re-check.
         if signature
             .as_ref()
             .is_some_and(|signature| self.declared_present(signature))
@@ -194,7 +194,7 @@ impl<'db> Walker<'db, '_, '_> {
         }
         let return_fallback = if uses_fallback && source_exists {
             self.edge_counts.inferred_return_edges += 1;
-            // Decision 4: raw, pre-substitution — a free function has no
+            // Raw, pre-substitution — a free function has no
             // member boundary to substitute against, matching
             // `function_call_result`'s own capture.
             let raw = crate::inference::inferred_function_return(
@@ -207,7 +207,7 @@ impl<'db> Walker<'db, '_, '_> {
             self.dependencies
                 .inferred_functions
                 .push((key.to_owned(), raw));
-            // Plan 9a task 10: also record the callee's declared-
+            // Also record the callee's declared-
             // signature-guarding dependency (mirrors `function_call_
             // result`'s own fix) — a docblock `@return` later appearing
             // on `key` must be visible to revalidation even though only

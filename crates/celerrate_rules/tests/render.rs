@@ -1,4 +1,4 @@
-//! Colorless rendering snapshots (design section 11): the rich block
+//! Colorless rendering snapshots: the rich block
 //! shapes, pinned byte for byte in `ColorMode::Plain`.
 
 #![cfg(feature = "render")]

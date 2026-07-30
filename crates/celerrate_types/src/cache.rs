@@ -1,4 +1,4 @@
-//! The typed-artifact-cache extension point (plan 9a, task 8): the
+//! The typed-artifact-cache extension point: the
 //! dependency-inverted trait this layer consults for a persisted
 //! inferred signature, the handle the composition root registers as a
 //! salsa singleton input, and nothing about disks. The persistent cache

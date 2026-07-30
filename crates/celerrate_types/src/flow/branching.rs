@@ -10,7 +10,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// Types `condition` (side effects included) and answers the two
     /// environments its truth and falsity establish. Composition is
     /// structural: `!` swaps, `&&` chains the true side and joins the
-    /// false sides, `||` is the dual (design section 6: negation and
+    /// false sides, `||` is the dual (negation and
     /// boolean composition are in the floor — early returns are
     /// vacuous without them).
     pub(super) fn branch_environments(

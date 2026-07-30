@@ -476,7 +476,7 @@ class Service
     );
 }
 
-/// The pack serves only the untyped verdict (decision 13): the typed
+/// The pack serves only the untyped verdict: the typed
 /// families are recomputed fresh on every path, cold or warm. A warm
 /// run must still report the same typed diagnostics as the cold run
 /// that produced the cache.

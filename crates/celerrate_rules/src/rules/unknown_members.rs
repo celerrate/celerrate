@@ -1,4 +1,4 @@
-//! The unknown-member family, migrated (design section 5): the body
+//! The unknown-member family, migrated: the body
 //! walks and the ternary membership judgments live below in
 //! `celerrate_types::checks`; this rule consumes the per-body outcome
 //! records and constructs the diagnostics.

@@ -1,4 +1,4 @@
-//! The shared receiver surface (design sections 2 and 8): decompose a
+//! The shared receiver surface: decompose a
 //! receiver into atoms, resolve placeholders against the owner, judge
 //! member existence ternarily. `PossiblyExists` is always silence —
 //! the guillotine's currency. The union rule (missing on all non-null
@@ -40,7 +40,7 @@ pub(crate) enum ReceiverAtom {
 /// Decomposes a receiver into atoms. Placeholders resolve against the
 /// owner (`self`/`static` -> the owner class, `parent` -> its first
 /// `Extends` ancestor); unions and intersections flatten; every silent
-/// form of decision 5 (`mixed`, `object`, an unresolvable class name, a
+/// form (`mixed`, `object`, an unresolvable class name, a
 /// template, `class-string`, a scalar, an array, a callable) lands on
 /// `Undecidable`. Debt ledger: scalar, array, and callable receivers
 /// are silent here — a "call on non-object" family is future work.
@@ -167,7 +167,7 @@ pub(crate) fn atom_existence(
     scoped: bool,
 ) -> MemberExistence {
     let db = context.db;
-    // Plan 9a, task 3: the choke point every `member_existence` atom
+    // The choke point every `member_existence` atom
     // and every scoped-member check (`members.rs`'s direct
     // `atom_existence` calls) funnels through — recorded here rather
     // than at each caller so both paths share one recording site.
@@ -184,7 +184,7 @@ pub(crate) fn atom_existence(
     if lookup(kind, member_name).is_some() {
         return MemberExistence::Exists;
     }
-    // The engine-provided enum instance properties (decision 7):
+    // The engine-provided enum instance properties:
     // interfaces cannot declare properties, so no stub can ever carry
     // `name`/`value` — they exist on every enum by fiat.
     if kind == MemberKind::Property
@@ -299,7 +299,7 @@ pub(crate) fn receiver_display<'db>(
     }
 }
 
-/// `TypeId::display` with written spellings (decision 3): class and
+/// `TypeId::display` with written spellings: class and
 /// enum names map through the symbol index — the source table's
 /// `original`, then the stub table's `StubSymbol.name` — and fall back
 /// to the folded key when nothing answers. Anonymous keys keep the
@@ -338,8 +338,8 @@ pub(crate) fn class_kind(context: &CheckContext<'_, '_>, key: &str) -> Option<De
 
 /// Whether `key` names an enum: `class_kind` answers `Enum` for source
 /// keys; a stub key answers through the stub symbol table's own
-/// `StubSymbolKind::Enum` (the `name`/`value` engine-property rule of
-/// decision 7 needs both sides).
+/// `StubSymbolKind::Enum` (the `name`/`value` engine-property rule
+/// needs both sides).
 pub(crate) fn is_enum_key(context: &CheckContext<'_, '_>, key: &str) -> bool {
     if class_kind(context, key) == Some(DeclarationKind::Enum) {
         return true;

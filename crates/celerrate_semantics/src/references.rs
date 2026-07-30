@@ -1,5 +1,5 @@
 //! The statically named references of one file, collected from its own
-//! syntax tree — the design's deliberate boundary exception: a per-file
+//! syntax tree — a deliberate boundary exception: a per-file
 //! output may read its own tree, never another file's. Dynamic
 //! references (`new $class`, call-by-string) are out of scope by
 //! documented engine semantics, as are the relative class names

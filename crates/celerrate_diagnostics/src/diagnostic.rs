@@ -14,7 +14,7 @@ use crate::suggestion::Suggestion;
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum Anchor {
     /// The whole project: a finding with no honest span. Exit-code
-    /// neutral by the notice contract (design section 3).
+    /// neutral by the notice contract.
     Project,
     /// A primary span in one file.
     Span { file: FileId, range: TextRange },
@@ -47,7 +47,7 @@ pub struct Diagnostic {
     /// The rendered one-sentence message, parameterized by the producer
     /// (the written name, the required version).
     pub message: String,
-    /// Secondary annotated spans, local or symbolic (design section 3).
+    /// Secondary annotated spans, local or symbolic.
     pub labels: Vec<Label>,
     /// The engine's reasoning, one line each.
     pub notes: Vec<String>,

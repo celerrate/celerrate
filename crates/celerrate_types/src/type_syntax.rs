@@ -1,5 +1,5 @@
 //! The type-syntax extension point: understand an annotation
-//! notation. Owned by this crate per the design; the registry input
+//! notation. Owned by this crate; the registry input
 //! lives here too, or the DAG would break upward. Dispatch rule,
 //! fixed now: implementations are consulted in registered order with
 //! a can-parse protocol, first win — registration order is declared
@@ -13,7 +13,7 @@ use crate::declared::NameSite;
 use crate::representation::TypeId;
 
 /// Assertion tag polarity: always asserts, or only when the condition
-/// is true or false (design section 5, plan 5 consumer).
+/// is true or false.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, salsa::Update)]
 pub enum AssertionPolarity {
     Always,
@@ -21,14 +21,14 @@ pub enum AssertionPolarity {
     IfFalse,
 }
 
-/// Carried assertion from a docblock, lowered and ready for plan 5's
-/// narrowing consumer. The subject travels verbatim; the negation
+/// Carried assertion from a docblock, lowered and ready for the
+/// narrowing family to consume. The subject travels verbatim; the negation
 /// applies to the asserted type.
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 #[non_exhaustive]
 pub struct ParsedAssertion<'db> {
     /// The asserted subject, verbatim (`$value`, `$this->prop`):
-    /// interpretation is plan 5's.
+    /// interpretation belongs to the narrowing family.
     pub subject: String,
     pub asserted: TypeId<'db>,
     pub polarity: AssertionPolarity,
@@ -54,7 +54,7 @@ impl<'db> ParsedAssertion<'db> {
 }
 
 /// One `@template` declaration of the parsed docblock, in declaration
-/// order (task 3's ancestor-argument zip relies on this order).
+/// order (the ancestor-argument zip relies on this order).
 #[derive(Debug, Clone, PartialEq, Eq, salsa::Update)]
 #[non_exhaustive]
 pub struct ParsedTemplate<'db> {
@@ -182,7 +182,7 @@ impl<'db, 'site> AnnotationSite<'db, 'site> {
 
 /// One docblock, parsed: the annotation layer a member or function
 /// declares. `return_type` and `value_type` are both carried; the
-/// consumer picks by subject kind (decision 5 of the plan header).
+/// consumer picks by subject kind.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct ParsedAnnotations<'db> {
@@ -194,7 +194,7 @@ pub struct ParsedAnnotations<'db> {
     pub parameters: Vec<(String, TypeId<'db>)>,
     /// `@throws`, accumulated across tags.
     pub throws: Vec<TypeId<'db>>,
-    /// `@assert` family, accumulated across tags and carried for plan 5's narrowing.
+    /// `@assert` family, accumulated across tags and carried for the narrowing family.
     pub assertions: Vec<ParsedAssertion<'db>>,
     /// `@template` declarations, in declaration order.
     pub templates: Vec<ParsedTemplate<'db>>,
@@ -210,7 +210,7 @@ pub struct ParsedAnnotations<'db> {
 /// An implementation understands one annotation notation. Must be a
 /// deterministic pure function of its arguments; contributions are
 /// consumed through deterministic dispatch. Object-safe by design
-/// (lifetime-generic methods only), per the design's WASM projection
+/// (lifetime-generic methods only), to satisfy a WASM projection
 /// constraint.
 pub trait TypeSyntax: Send + Sync {
     /// The can-parse protocol: consulted in registered order, the

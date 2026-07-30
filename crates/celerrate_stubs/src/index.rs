@@ -80,7 +80,7 @@ impl StubIndex {
         &self.classes
     }
 
-    /// Attaches the refinements overlay (design section 7). A
+    /// Attaches the refinements overlay. A
     /// builder-style setter rather than a `new` parameter: `new`
     /// keeps its three-parameter shape so every existing caller
     /// compiles unchanged.

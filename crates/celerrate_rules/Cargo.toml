@@ -21,7 +21,7 @@ celerrate_types = { path = "../celerrate_types" }
 [features]
 # The rustc-style renderer. Behind a feature so plugin crates and the
 # future structured-diagnostics consumers (LSP) do not compile the
-# rendering dependency (design section 9).
+# rendering dependency.
 render = ["dep:annotate-snippets"]
 
 [dev-dependencies]

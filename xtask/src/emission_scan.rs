@@ -1,5 +1,5 @@
 //! The emission-side half of the "no check family outside the
-//! framework" gate (design sections 2 and 5). The allocation ledger
+//! framework" gate. The allocation ledger
 //! (`celerrate_cli/tests/registry.rs`) constrains declarations; this
 //! scan constrains emissions: a domain crate whose families migrated
 //! to `celerrate_rules` must not construct `Diagnostic` values

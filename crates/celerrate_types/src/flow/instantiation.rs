@@ -5,7 +5,7 @@
 use super::*;
 
 impl<'db> Walker<'db, '_, '_> {
-    /// Constructor inference (decision 11, task 9): `new Foo(...)`
+    /// Constructor inference: `new Foo(...)`
     /// solves `Foo`'s class-level templates from its `__construct`
     /// parameters, reusing `solver_pairs`/`solve` exactly as an
     /// ordinary call does — the constructor is simply the call whose
@@ -94,7 +94,7 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The named inline `@var` entries (decision 11) one docblock text
+    /// The named inline `@var` entries one docblock text
     /// parses to, at the body's own declaring scope: `Collection<User>
     /// $c` and the like, read straight from `ParsedAnnotations.variables`
     /// — never from trivia or a syntax tree, `text` already came from
@@ -125,7 +125,7 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// Binds every named inline `@var` entry anchored at `anchor` into
-    /// `environment` (decision 11): `None` for a body-entry
+    /// `environment`: `None` for a body-entry
     /// declaration (bound once, before any statement), `Some(id)` for
     /// one anchored to statement `id` — the caller applies this both
     /// immediately before and immediately after walking that

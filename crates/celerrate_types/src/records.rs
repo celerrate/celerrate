@@ -2,7 +2,7 @@
 //! over everything a judgment could have consulted through
 //! `lookup_member`, `member_existence`, an ancestry walk, or declared-
 //! signature resolution, so a single digest compare revalidates a
-//! cached signature (tasks 7-9). The digest is over RESOLVED signatures
+//! cached signature. The digest is over RESOLVED signatures
 //! (through [`crate::declared::declared_member_signature`] and
 //! [`crate::declared::declared_function_signature`]), so an annotation-
 //! layer edit flips it exactly as a native-signature edit does; a body
@@ -26,20 +26,20 @@
 //! [`crate::stored::StoredSignature::of`]), so the digest is a pure
 //! function of structural facts, not of process-local interner state.
 //!
-//! **Recorded scope boundary (plan 9a decision 3).** The class-like's
+//! **Recorded scope boundary.** The class-like's
 //! own `DeclarationKind` participates (via
 //! [`celerrate_semantics::class_declaration_kind`]), but class-level
 //! `abstract`/`final`/`readonly` deliberately do not — see
 //! [`class_surface_digest`]'s own rustdoc for the fact and the standing
 //! obligation this leaves behind.
 //!
-//! **Constructive dependency records (plan 9a, task 3).**
+//! **Constructive dependency records.**
 //! [`TypedDependencies`] and [`FileDependencies`] are the other half of
 //! this module's revalidation story: not a digest over what a class
 //! COULD answer, but the exact set of keys and callee returns one
-//! body's flow walk (or the plan-8 checks) actually consulted, recorded
+//! body's flow walk (or the checks family) actually consulted, recorded
 //! constructively at the walk's own existing consultation sites — never
-//! a separate mirror traversal. Tasks 7 and 9 read these verbatim to
+//! a separate mirror traversal. These are read verbatim to
 //! decide whether a cached signature or verdict may still be trusted.
 
 use std::collections::BTreeSet;
@@ -63,8 +63,8 @@ use crate::stored::{StoredSignature, StoredType, digest_of};
 /// digest compare revalidates all of it.
 ///
 /// Does NOT carry class-level `abstract`/`final`/`readonly` — see
-/// [`class_surface_digest`]'s rustdoc for why (plan 9a decision 3's
-/// recorded scope boundary).
+/// [`class_surface_digest`]'s rustdoc for why (the recorded scope
+/// boundary above).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct SurfaceProjection {
     /// The class-like's own `DeclarationKind` discriminant (stable,
@@ -149,9 +149,9 @@ fn declaration_kind_rank(kind: DeclarationKind) -> u8 {
 /// key) — mirrors `linearized_class`'s own `None` exactly, since the
 /// projection has nothing to build from.
 ///
-/// **Recorded scope boundary (plan 9a decision 3).** Decision 3
-/// names class-level `abstract`/`final`/`readonly` among the facts
-/// this digest covers, alongside `DeclarationKind`. Only
+/// **Recorded scope boundary.** This digest's recorded scope
+/// includes class-level `abstract`/`final`/`readonly` among the facts
+/// it covers, alongside `DeclarationKind`. Only
 /// `DeclarationKind` is implemented: `celerrate_semantics` exposes no
 /// class-level abstract/final/readonly fact at all today —
 /// `MemberFlags::{is_abstract,is_final,is_readonly}` exists, but only
@@ -160,8 +160,8 @@ fn declaration_kind_rank(kind: DeclarationKind) -> u8 {
 /// therefore no fact for this digest to read, and — checked
 /// exhaustively across this crate — no type-engine judgment consults a
 /// class-level abstract/final/readonly modifier either, so nothing
-/// downstream silently trusts a stale one. This mirrors the standing
-/// obligation decision 5 states for [`crate::dynamic_type_provider`]'s
+/// downstream silently trusts a stale one. This mirrors the same standing
+/// obligation documented for [`crate::dynamic_type_provider`]'s
 /// cross-file providers: if a future judgment starts reading a
 /// class-level modifier, the semantics-layer projection
 /// (`ClassMembers`/`Declaration`) and this digest's `SurfaceProjection`
@@ -255,19 +255,19 @@ pub fn function_signature_digest<'db>(
 
 /// Everything one body's flow walk (`crate::flow::walk_body`) actually
 /// consulted, recorded constructively at the walker's own existing
-/// consultation sites (task 3, decision 4) — never a separate mirror
+/// consultation sites — never a separate mirror
 /// walk. `InferredBody` carries one of these; a cached body's
-/// revalidation (task 9) replays exactly this set against the live
+/// revalidation replays exactly this set against the live
 /// project, never a wider guess.
 ///
-/// **The raw pre-substitution invariant (decision 4).** Both
+/// **The raw pre-substitution invariant.** Both
 /// `inferred_functions` and `inferred_methods` carry the RAW callee-
 /// query answer — `inferred_function_return`'s or
 /// `inferred_method_return`'s own result — captured before
 /// `crate::flow::Walker::member_boundary_type` substitutes placeholders
 /// or threaded generic arguments for the call site. Recording the
 /// substituted, call-site-relative value instead would silently and
-/// permanently mismatch task 8's live-demand validator: that validator
+/// permanently mismatch the live-demand validator: that validator
 /// re-invokes the same callee query and compares its RAW answer against
 /// the recorded one, so the two must speak the same (unsubstituted)
 /// vocabulary — no rendering test would ever catch the drift.
@@ -284,7 +284,7 @@ pub struct TypedDependencies<'db> {
     /// Folded keys of every class whose surface was consulted (every
     /// `lookup_member`/`linearized_class` consultation the walker
     /// performed: receiver resolution, the iteration protocol, property
-    /// types, the body owner's own class). Plan 9a task 10: also
+    /// types, the body owner's own class). This also
     /// includes a method callee's owning class whenever the call
     /// resolved through the INFERRED tier, so a docblock `@return`
     /// later appearing on that method (flipping `class_surface_digest`)
@@ -292,15 +292,15 @@ pub struct TypedDependencies<'db> {
     /// would not catch it.
     pub classes: BTreeSet<String>,
     /// Function-space keys whose declared signature was consulted
-    /// (every call resolved through the declared tier). Plan 9a task
-    /// 10: also includes a callee resolved through the INFERRED tier,
+    /// (every call resolved through the declared tier). This also
+    /// includes a callee resolved through the INFERRED tier,
     /// so a docblock `@return` later appearing on that callee (flipping
     /// `function_signature_digest`) is visible to revalidation even
     /// though the inferred edge alone would not catch it.
     pub functions: BTreeSet<String>,
     /// (function key, consumed inferred return) — one entry per call
     /// resolved through the inferred tier, `returned` the raw
-    /// pre-substitution callee answer (decision 4).
+    /// pre-substitution callee answer (the invariant above).
     pub inferred_functions: Vec<(String, TypeId<'db>)>,
     /// ((defining class key, member key), consumed inferred return) —
     /// the method sibling of `inferred_functions`, same raw-answer
@@ -309,8 +309,8 @@ pub struct TypedDependencies<'db> {
 }
 
 impl<'db> TypedDependencies<'db> {
-    /// The walk-end determinism step (decision 4's eq-cutoff
-    /// obligation): sorts `inferred_functions`/`inferred_methods` by
+    /// The walk-end determinism step (the eq-cutoff
+    /// obligation above): sorts `inferred_functions`/`inferred_methods` by
     /// their key and drops exact duplicate entries — repeat calls to
     /// the same callee always push the identical `(key, returned)` pair
     /// (the callee query is pure), so a stable sort-by-key already
@@ -328,14 +328,14 @@ impl<'db> TypedDependencies<'db> {
 }
 
 /// The lifetime-free, file-level aggregate of every body's
-/// [`TypedDependencies`] plus the plan-8 checks' own consulted-class
-/// set (task 3): `TypedFileResult.dependencies`. `TypeId` never enters
+/// [`TypedDependencies`] plus the checks family's own consulted-class
+/// set: `TypedFileResult.dependencies`. `TypeId` never enters
 /// this shape (the crate-wide invariant that `TypeId` never hits disk):
 /// every recorded inferred return is mirrored through
 /// [`crate::stored::StoredType::of`] on the way in, exactly like
 /// `SurfaceProjection` mirrors every declared type through
-/// [`crate::stored::StoredSignature::of`] above. Tasks 7 and 9 read
-/// this verbatim to persist and revalidate a file's cached typed
+/// [`crate::stored::StoredSignature::of`] above. This is read
+/// verbatim to persist and revalidate a file's cached typed
 /// verdicts.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct FileDependencies {

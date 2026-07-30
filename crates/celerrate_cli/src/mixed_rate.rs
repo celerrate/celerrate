@@ -1,20 +1,19 @@
-//! The mixed-rate instrument (design sections 7 and 9, decision 14):
-//! a hidden, internal counter stream measuring how much `mixed`
-//! remains once inference has run over stub-only call boundaries.
-//! This never ships a diagnostic: no `CEL####` identifier, no
-//! rendering change. `cargo xtask mixed-rate` (task 10) byte-compares
-//! the exact report format below against a committed baseline (the
-//! corpus-snapshot pattern — plain counters, no classification
-//! column), so nothing here may change it casually.
+//! The mixed-rate instrument: a hidden, internal counter stream
+//! measuring how much `mixed` remains once inference has run over
+//! stub-only call boundaries. This never ships a diagnostic: no
+//! `CEL####` identifier, no rendering change. `cargo xtask mixed-rate`
+//! byte-compares the exact report format below against a committed
+//! baseline (the corpus-snapshot pattern — plain counters, no
+//! classification column), so nothing here may change it casually.
 //!
-//! **Report format**: line 1 `expressions <total>\tmixed <count>` —
+//! **Report format**: line 1 `expressions <total>\tmixed <count>`,
 //! the whole-corpus expression-typing residual, every body's
 //! `expression_types` folded together (this line includes stub
-//! *method* calls, the task-5 class-refinement channel, which move
-//! this counter but never enter the per-callee table below — decision
-//! 14's stated scope) — then line 2
+//! *method* calls, the class-refinement channel, which move this
+//! counter but never enter the per-callee table below, by deliberate
+//! scope), then line 2
 //! `element-positions <total>\telement-mixed <count>`, the
-//! element-level mixed metric (design decision 12, issue #45): every
+//! element-level mixed metric (issue #45): every
 //! reported expression's `TypeId::element_positions` folded together,
 //! counting structural constituent slots (array/list key and value,
 //! shape field values, union constituents recursed but the union node
@@ -36,8 +35,7 @@ use crate::session::Session;
 /// reported file's `member_tree`, its free functions and its
 /// classes' own methods, each body folded into the running totals
 /// through `inferred_body_types` — the same loader and the same body
-/// enumeration `ground_truth::run` uses (plan-6 idiom), never a
-/// parallel loader. Prints the rendered report and exits clean; there
+/// enumeration `ground_truth::run` uses, never a parallel loader. Prints the rendered report and exits clean; there
 /// is no analyzable input this walks that can panic, but the output
 /// stream itself can fail, mirroring `ground_truth::run`'s
 /// precedent rather than swallowing the error.
@@ -138,7 +136,7 @@ fn accumulate(
 
 /// The pure aggregation, unit-tested ahead of the wiring above: sums
 /// every stub callee's mixed and total call counts and renders the
-/// report in the exact task-10 format, sorted by callee for
+/// report in the exact documented format, sorted by callee for
 /// byte-reproducibility (`BTreeMap` iterates in key order — the
 /// `--bless`/byte-compare pattern this instrument's `xtask` gate
 /// depends on).

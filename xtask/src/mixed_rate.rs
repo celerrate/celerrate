@@ -1,5 +1,5 @@
-//! The mixed-rate harness (design sections 7 and 9, decision 14): the
-//! hidden CLI channel run cold over the pinned corpus, byte-compared
+//! The mixed-rate harness: the hidden CLI channel run cold over the
+//! pinned corpus, byte-compared
 //! against a committed baseline. Unlike `ground_truth.rs`'s
 //! classified-merge gate, this is the corpus-snapshot pattern
 //! (`corpus.rs`'s `check_snapshot`): the report is plain counters with

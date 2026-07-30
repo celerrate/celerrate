@@ -140,7 +140,7 @@ impl<'db> Walker<'db, '_, '_> {
         }
         if by_reference {
             // `$b = &$a`: aliased locals are unknowable without alias
-            // analysis — both sides degrade to mixed (decision 10).
+            // analysis — both sides degrade to mixed.
             if let Some(subject) = subject_of(self.context.ir, target) {
                 environment.kill_call_results_for_subject(&subject);
                 environment.bind(subject, TypeId::mixed(db));
@@ -226,7 +226,7 @@ pub(super) fn widen_if_literal<'db>(db: &'db dyn salsa::Database, of: TypeId<'db
 }
 
 /// `$a op= $b` reduces to `op`; `None` for plain `=` (and for `??=`,
-/// which Task 5 handles in the walker).
+/// which the walker handles separately).
 fn compound_base(operator: SyntaxKind) -> Option<SyntaxKind> {
     Some(match operator {
         SyntaxKind::PlusEquals => SyntaxKind::Plus,

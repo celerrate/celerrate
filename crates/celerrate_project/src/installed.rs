@@ -7,7 +7,7 @@ use crate::autoload::AutoloadRules;
 /// One installed dependency: its name, its resolved package root, and
 /// the autoload rules it declares. All listed packages count,
 /// including dev packages: a symbol declared anywhere in vendor is
-/// declared (spec section 7's conservative stance).
+/// declared, which is the conservative stance.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VendorPackage {
     pub name: String,

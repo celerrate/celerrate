@@ -1,6 +1,6 @@
-//! Narrowing subjects (design section 6: locals, and property fetches
-//! on a stable base — `$this->prop`, `self::$prop`) and, from Task 4
-//! on, the pure leaf transformations the condition forms reduce to.
+//! Narrowing subjects (locals, and property fetches
+//! on a stable base — `$this->prop`, `self::$prop`) and
+//! the pure leaf transformations the condition forms reduce to.
 
 use celerrate_db::AnalyzedFileSet;
 use celerrate_project::ProjectConfiguration;
@@ -45,8 +45,8 @@ pub(crate) enum NarrowingSubject {
 /// The stable base a call-result fingerprint hangs off: `$this`
 /// (never reassignable in PHP) or a local. Property-rooted receivers
 /// are deliberately excluded in v1 — their kill discipline would have
-/// to reconcile with decision 10, and the silence they keep is
-/// today's behavior.
+/// to reconcile with the wider invalidation scheme, and the silence
+/// they keep is today's behavior.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum CallBase {
     This,

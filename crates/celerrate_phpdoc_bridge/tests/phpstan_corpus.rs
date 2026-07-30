@@ -1,4 +1,4 @@
-//! The pinned-reference coverage statement (design section 5): every
+//! The pinned-reference coverage statement: every
 //! `TypeParserTest` input from the pinned phpstan/phpdoc-parser gets
 //! a parse verdict, pinned in a committed snapshot. The snapshot's
 //! header is the published coverage number; the gate is regression

@@ -323,7 +323,7 @@ fn partial_trees_are_normal_citizens() {
 
 #[test]
 fn a_close_tag_declare_body_yields_no_statement() {
-    // Recorded in plan 3 and carried here: a classic `declare` body of
+    // A classic `declare` body of
     // `?>` leaves a bare CloseTag token with no statement-node child,
     // so the typed statement list is empty.
     let parse = support::parse_verified("<?php declare(strict_types=1) ?>");

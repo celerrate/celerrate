@@ -144,8 +144,8 @@ fn known_sets(metadata: &[RuleMetadata]) -> KnownSets<'_> {
 }
 
 /// blake3 over the normalized `[rules]` and `[severity]` sections: the
-/// active-set-and-severity cache key the sub-project 4 spec reserved a
-/// header field for (CLI product spec section 2). The whole sections
+/// active-set-and-severity cache key with its own reserved header
+/// field. The whole sections
 /// are digested, not the derived active set, so future rule options
 /// join the key with no header change. Normalization: entries sorted,
 /// text length-prefixed, sections count-prefixed, spans dropped.
@@ -195,7 +195,7 @@ pub fn configuration_digest(configuration: &celerrate_config::Configuration) -> 
 /// The `[rules]` activation overrides: every table that sets `enabled`,
 /// by rule name. Unknown names ride along inert (no registration
 /// matches them; CEL0046 already reported the typo), and a table
-/// without `enabled` configures nothing, both per spec section 3.
+/// without `enabled` configures nothing, both by design.
 pub fn rule_overrides(loaded: Option<&LoadedConfiguration>) -> BTreeMap<String, bool> {
     let Some(loaded) = loaded else {
         return BTreeMap::new();
@@ -462,7 +462,7 @@ mod tests {
     fn the_project_table_does_not_move_the_digest() {
         // include/exclude change file membership (per-entry keys) and the
         // php override moves the header's own range fields: neither
-        // belongs in this digest, per the spec's normalized-sections rule.
+        // belongs in this digest, under the normalized-sections rule.
         let without = model_of("");
         let with = model_of("[project]\nphp = \"8.2\"\ninclude = [\"src\"]\n");
         assert_eq!(configuration_digest(&without), configuration_digest(&with));

@@ -2,7 +2,7 @@
 //! arm delegates to a cluster module — the member boundary, the call
 //! machinery, iteration, branching, callables, assignment — so this
 //! file is the traversal, not the typing rules. `expression_value`'s
-//! match moves here whole, deliberately unsplit (spec decision 2).
+//! match moves here whole, deliberately unsplit.
 
 use super::assignment::widen_if_literal;
 use super::*;
@@ -22,7 +22,7 @@ impl<'db> Walker<'db, '_, '_> {
                 self.bind_inline_variables(Some(statement), &mut scratch);
                 continue;
             }
-            // Decision 11: an inline `@var` anchored to this statement
+            // An inline `@var` anchored to this statement
             // binds immediately before it runs and re-binds immediately
             // after — the declaration survives the statement's own
             // assignment (the same bracketing idiom `looped` uses
@@ -62,7 +62,7 @@ impl<'db> Walker<'db, '_, '_> {
                     self.expression(level, environment);
                 }
                 // Conservative: the path's bindings are dropped, and
-                // dropped reads as mixed — silence (decision 9).
+                // dropped reads as mixed — silence.
                 environment.mark_unreachable();
             }
             BodyStatement::Global { targets } => {
@@ -157,12 +157,12 @@ impl<'db> Walker<'db, '_, '_> {
                 let subject_type = self.expression(subject, environment);
                 let (key_type, value_type) = self.iteration_types(subject_type, 0);
                 self.looped(environment, |walker, env| {
-                    // Iteration typing follows the protocol chain
-                    // (decision 12): `iteration_types` resolved the
+                    // Iteration typing follows the protocol chain:
+                    // `iteration_types` resolved the
                     // key and value once, above, from the subject's
                     // type before the loop. A by-reference value
                     // binds exactly like a plain value here — no
-                    // write-back (decision 12's recorded stance).
+                    // write-back (a recorded stance).
                     if let Some(key) = key
                         && let Some(subject) = subject_of(walker.context.ir, key)
                     {
@@ -207,7 +207,7 @@ impl<'db> Walker<'db, '_, '_> {
                         // or string literal and the subject already
                         // lies entirely within that scalar family —
                         // loose equality then coincides with strict
-                        // (the design's "strict-safe cases").
+                        // (strict-safe cases).
                         let literal_family = if condition_type.int_literal_value(db).is_some() {
                             Some(TypeId::int(db))
                         } else if condition_type.string_literal_value(db).is_some() {
@@ -309,7 +309,7 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The loop discipline (decision 9): join-ascent passes to a
+    /// The loop discipline: join-ascent passes to a
     /// fixpoint under `LOOP_ITERATION_BUDGET`, deterministic widening
     /// to `mixed` on exhaustion, then one final recording pass from
     /// the fixed environment. The pass closure answers the loop's
@@ -512,7 +512,7 @@ impl<'db> Walker<'db, '_, '_> {
             }
             BodyExpression::ShellExec { parts } => {
                 self.string_parts(&parts, environment);
-                // Decision 10: a shell-exec runs arbitrary code.
+                // A shell-exec runs arbitrary code.
                 self.kill_property_bindings(environment);
                 TypeId::union(
                     db,
@@ -537,7 +537,7 @@ impl<'db> Walker<'db, '_, '_> {
                 self.expression(argument, environment);
                 // eval can rewrite every local, every property
                 // binding, and every call-result fingerprint:
-                // forget them all (decision 10).
+                // forget them all.
                 *environment = {
                     let mut cleared = Environment::new();
                     if !environment.is_reachable() {
@@ -573,13 +573,13 @@ impl<'db> Walker<'db, '_, '_> {
                     self.expression(value, environment);
                 }
                 // A `yield` hands control back to the caller, which may
-                // resume with arbitrary state changes (decision 10).
+                // resume with arbitrary state changes.
                 self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
             BodyExpression::Include { operand, .. } => {
                 self.expression(operand, environment);
-                // An include runs arbitrary code (decision 10).
+                // An include runs arbitrary code.
                 self.kill_property_bindings(environment);
                 TypeId::mixed(db)
             }
@@ -847,7 +847,7 @@ impl<'db> Walker<'db, '_, '_> {
                         // environment above; the kill runs after, and
                         // the write-back — a known postcondition of
                         // this same call — is applied after the kill
-                        // so it survives (decision 10, design section 6).
+                        // so it survives.
                         self.kill_property_bindings(environment);
                         if let Some(signature) = &signature {
                             self.apply_by_reference(&signature.parameters, &arguments, environment);
@@ -855,7 +855,7 @@ impl<'db> Walker<'db, '_, '_> {
                         // The assertion tags apply after the kill too
                         // (they are knowledge about the post-call
                         // state): only when exactly one receiver key
-                        // resolved (Task 8's single-signature channel)
+                        // resolved (the single-signature channel)
                         // does `signature` carry the unambiguous
                         // declared parameters this needs.
                         if let Some(signature) = &signature
@@ -883,11 +883,11 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        // Task 8: the call-site solver, applied to
-                        // whichever tier answered `of` (the provider
-                        // tier is exempt without special-casing — its
-                        // answer is already concrete, so
-                        // `contains_symbolic` is already false for it).
+                        // The call-site solver, applied to whichever
+                        // tier answered `of`. The provider tier is
+                        // exempt without special-casing: its answer is
+                        // already concrete, so `contains_symbolic` is
+                        // already false for it.
                         let computed = match &signature {
                             Some(signature) => self.solved_call_result(
                                 of,
@@ -967,7 +967,7 @@ impl<'db> Walker<'db, '_, '_> {
                                 environment,
                             );
                         }
-                        // Task 8: the call-site solver (see the sibling
+                        // The call-site solver (see the sibling
                         // `MemberAccess` arm above for the provider-tier
                         // exemption's reasoning).
                         match &signature {
@@ -1008,24 +1008,23 @@ impl<'db> Walker<'db, '_, '_> {
                         let of = self
                             .provider_return(claim.clone(), None, &argument_types)
                             .unwrap_or_else(|| self.function_call_result(&key, source_exists));
-                        // Task 10, decision 14: the instrument records
-                        // at the source. The walker already knows both
-                        // facts the recording condition needs —
-                        // `source_exists` from `resolved_function_key`
-                        // just above, and the call's own answer `of` —
-                        // so nothing outside the walker re-implements
-                        // callee resolution to reconstruct them.
+                        // The instrument records at the source. The
+                        // walker already knows both facts the recording
+                        // condition needs, `source_exists` from
+                        // `resolved_function_key` just above and the
+                        // call's own answer `of`, so nothing outside
+                        // the walker re-implements callee resolution to
+                        // reconstruct them.
                         //
-                        // Task-12 debt (owner: the mixed-rate
-                        // instrument, decision 14's stated scope): this
-                        // recording arm exists only on the free-function
-                        // call path. A stub METHOD call (the task-5
-                        // class-refinement channel) still moves the
-                        // global expressions-mixed counter through the
+                        // Known debt, owned by the mixed-rate
+                        // instrument: this recording arm exists only on
+                        // the free-function call path. A stub METHOD
+                        // call, which travels the class-refinement
+                        // channel, still moves the global
+                        // expressions-mixed counter through the
                         // ordinary `record` below, but never reaches
                         // this arm, so it never enters `stub_calls` and
-                        // decision 15's per-callee exit table cannot see
-                        // it.
+                        // the per-callee exit table cannot see it.
                         if !source_exists
                             && celerrate_semantics::stub_symbol_table(
                                 db,
@@ -1076,9 +1075,9 @@ impl<'db> Walker<'db, '_, '_> {
                             &arguments,
                             environment,
                         );
-                        // Task 8: the call-site solver (see the
-                        // `MemberAccess` arm above for the
-                        // provider-tier exemption's reasoning); a named
+                        // The call-site solver (see the `MemberAccess`
+                        // arm above for the provider-tier exemption's
+                        // reasoning); a named
                         // function has no receiver, so `parameters`
                         // (already the declared list, empty when
                         // unresolved) is exactly `solver_pairs`' input.
@@ -1086,12 +1085,12 @@ impl<'db> Walker<'db, '_, '_> {
                     }
                     _ => {
                         // A callable value: a variable, an array
-                        // `[obj, 'method']` shape, an invocation result
-                        // — anything not statically a named or member
-                        // callee. `callable_return` invokes through the
-                        // callable-typed value (Decision 3's final,
-                        // dynamic-shape tier); an opaque or non-callable
-                        // value stays silent.
+                        // `[obj, 'method']` shape, an invocation
+                        // result, anything not statically a named or
+                        // member callee. `callable_return` invokes
+                        // through the callable-typed value, the final
+                        // dynamic-shape tier; an opaque or
+                        // non-callable value stays silent.
                         let callee_type = self.expression(callee, environment);
                         self.typed_arguments(&arguments, environment);
                         self.kill_property_bindings(environment);
@@ -1144,10 +1143,11 @@ impl<'db> Walker<'db, '_, '_> {
                     // `class_type_of_written` (which would qualify them
                     // into bogus class names `self`/`parent`). Their
                     // placeholders resolve immediately below, right here
-                    // in the defining context (decision 1): `self`/`parent`
-                    // answer the owner/its parent concretely, `static`
-                    // stays the forwarding placeholder — `new static()`'s
-                    // identity is only known at the outer call boundary.
+                    // in the defining context: `self`/`parent` answer
+                    // the owner and its parent concretely, `static`
+                    // stays the forwarding placeholder, because
+                    // `new static()`'s identity is only known at the
+                    // outer call boundary.
                     ClassReference::Named { name } => self
                         .scope_keyword_class(name)
                         .unwrap_or_else(|| self.class_type_of_written(name)),
@@ -1181,13 +1181,11 @@ impl<'db> Walker<'db, '_, '_> {
                     self.current_static_type(),
                 );
                 let argument_types = self.typed_arguments(&arguments, environment);
-                // Decision 11 (task 9): `Foo`'s own class-level
-                // templates, when it declares any, solve from the
-                // `__construct` arguments — the same call-site solver
-                // task 8 built for an ordinary call.
+                // `Foo`'s own class-level templates, when it declares
+                // any, solve from the `__construct` arguments, through
+                // the same call-site solver an ordinary call uses.
                 let of = self.constructor_solved_class(of, &arguments, &argument_types);
-                // Instantiation may run arbitrary constructor code
-                // (decision 10).
+                // Instantiation may run arbitrary constructor code.
                 self.kill_property_bindings(environment);
                 of
             }
@@ -1212,11 +1210,10 @@ impl<'db> Walker<'db, '_, '_> {
                     if capture.by_reference {
                         // `use (&$x)`: the local is aliased into the
                         // closure's scope for as long as the closure
-                        // lives, unknowable without alias analysis —
-                        // degrade both sides now (decision 10), and
-                        // kill the fingerprints naming it (issue
-                        // #72): any later closure call may rewrite
-                        // the alias.
+                        // lives, which is unknowable without alias
+                        // analysis. Degrade both sides now, and kill
+                        // the fingerprints naming it (issue #72): any
+                        // later closure call may rewrite the alias.
                         inner.bind(subject.clone(), TypeId::mixed(db));
                         environment.kill_call_results_involving(&capture.name);
                         environment.bind(subject, TypeId::mixed(db));
@@ -1228,7 +1225,7 @@ impl<'db> Walker<'db, '_, '_> {
                 self.seed_written_parameters(&parameters, &mut inner);
                 let (returns, saw_yield, end_reachable) =
                     self.nested_returns(|walker, env| walker.statements(&body, env), &mut inner);
-                // Closure creation may run arbitrary code (decision 10).
+                // Closure creation may run arbitrary code.
                 self.kill_property_bindings(environment);
                 self.closure_type(
                     &parameters,
@@ -1256,7 +1253,7 @@ impl<'db> Walker<'db, '_, '_> {
                     },
                     &mut inner,
                 );
-                // Decision 10: closure creation kills property bindings.
+                // Closure creation kills property bindings.
                 self.kill_property_bindings(environment);
                 self.closure_type(
                     &parameters,

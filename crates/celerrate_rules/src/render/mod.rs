@@ -1,5 +1,5 @@
 //! The rustc-style renderer: a pure function from enriched
-//! diagnostics plus sources to text (design section 9).
+//! diagnostics plus sources to text.
 //!
 //! Everything here runs OUTSIDE salsa queries, at presentation time.
 //! `adapter.rs` is the only module that references `annotate-snippets`;
@@ -62,7 +62,7 @@ pub enum ColorMode {
     Styled,
 }
 
-/// A symbolic label resolved at render time (design section 3): a
+/// A symbolic label resolved at render time: a
 /// concrete location when the declaration is VFS-backed and locatable,
 /// or a degraded form rendered as a note naming the declaration.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -90,7 +90,7 @@ impl SymbolResolver for DegradeEverything {
 
 /// Forces the rich path of matching diagnostics to fail, so the
 /// fallback path is snapshot-tested rather than merely asserted
-/// (design section 9). Always [`FaultInjection::None`] in production.
+/// Always [`FaultInjection::None`] in production.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FaultInjection {
     None,
@@ -157,7 +157,7 @@ pub fn render_report(
 }
 
 /// The report trailer that makes `celerrate explain` discoverable from
-/// the primary output (design section 9): one pointer per distinct
+/// the primary output: one pointer per distinct
 /// identifier reported, in identifier order.
 pub fn explain_pointers(identifiers: impl IntoIterator<Item = DiagnosticId>) -> String {
     let mut seen: Vec<DiagnosticId> = identifiers.into_iter().collect();

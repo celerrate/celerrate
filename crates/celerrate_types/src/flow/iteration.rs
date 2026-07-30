@@ -1,4 +1,4 @@
-//! The iteration protocol (design section 6): what `foreach` yields —
+//! The iteration protocol: what `foreach` yields —
 //! array shapes and lists by their parts, `iterable<K, V>` and
 //! `Traversable` by their arguments, `Iterator`/`IteratorAggregate`
 //! implementors by their `current()`/`key()` signatures.
@@ -6,8 +6,8 @@
 use super::*;
 
 impl<'db> Walker<'db, '_, '_> {
-    /// Element and key types through the iteration protocol chain
-    /// (decision 12). Precedence per subject constituent: array forms
+    /// Element and key types through the iteration protocol chain.
+    /// Precedence per subject constituent: array forms
     /// answer directly (a shape's key/value are eager over
     /// `TypeId::key_of`/`value_of`, an array carries them already); a
     /// class carrying two or more arguments whose own name is one of
@@ -20,7 +20,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// alternative); a template recurses through its bound. Everything
     /// else — including a plain object, whose property iteration is a
     /// recorded stance — answers `mixed`. `depth` is the recursion
-    /// guard (capped at 8, decision 12): the `IteratorAggregate`
+    /// guard (capped at 8): the `IteratorAggregate`
     /// unwrap is the only arm that can recurse on a *different*
     /// subject through a class's own declared return, so it is the one
     /// the guard exists to bound — a `getIterator` returning `$this`,
@@ -72,16 +72,16 @@ impl<'db> Walker<'db, '_, '_> {
     /// Whether `name`'s linearized ancestry genuinely resolves an
     /// `implements`/`extends` edge to one of the iteration protocol
     /// interfaces (`Iterator`, `IteratorAggregate`, `Traversable`).
-    /// Decision 12 gates the `getIterator` unwrap and the
+    /// This gates the `getIterator` unwrap and the
     /// `current`/`key` fallback on the class actually implementing the
     /// protocol — a `getIterator()` helper or a `current()`/`key()`
     /// pair declared on a class that implements nothing is not
     /// iterable in PHP; the language falls back to plain property
-    /// iteration, decision 12's `mixed`/`mixed` default. Answering the
+    /// iteration, the `mixed`/`mixed` default. Answering the
     /// method's element type there would be a guessed concrete answer
     /// where the spec mandates conservative silence.
     ///
-    /// `ancestor_arguments` (task 3) is not usable for this check: it
+    /// `ancestor_arguments` is not usable for this check: it
     /// only records an ancestor when the target's own docblock threads
     /// at least one fixed argument (`inheritance.rs`'s `if
     /// !fixed.is_empty()`), so a class implementing `\Iterator` with no
@@ -108,7 +108,7 @@ impl<'db> Walker<'db, '_, '_> {
     ///
     /// `linearized_class` itself answers `None` for `name` when `name`
     /// has no SOURCE declaration at all — `linearize.rs`'s root fetch
-    /// requires one, by design (plan 6). A genuine stub receiver with
+    /// requires one, by design. A genuine stub receiver with
     /// no user subclass in between (`new \ArrayIterator(...)`) falls
     /// into exactly that gap: it is never the ROOT of any source
     /// ancestry walk, so `ancestry`/`stub_ancestors` never exist for it
@@ -120,7 +120,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// never `name` itself.
     fn implements_iteration_protocol(&mut self, name: &str) -> bool {
         let db = self.db();
-        // Task 3: the walker's own direct `linearized_class`
+        // The walker's own direct `linearized_class`
         // consultation site (the iteration-protocol category).
         self.dependencies.classes.insert(name.to_owned());
         match linearized_class(
@@ -159,10 +159,10 @@ impl<'db> Walker<'db, '_, '_> {
     /// (`method_call_result_for_keys`), substitution included, exactly
     /// as any other call answers, so `self`/`static` and the
     /// receiver's class arguments resolve the same way a direct call
-    /// site would; else the threaded protocol-ancestor arguments (task
-    /// 3's `ancestor_arguments`) when the linearized ancestry actually
+    /// site would; else the threaded protocol-ancestor arguments
+    /// (`ancestor_arguments`) when the linearized ancestry actually
     /// composed one for a protocol interface, substituted against
-    /// `subject` through `member_boundary_type` (decision 1) exactly
+    /// `subject` through `member_boundary_type` exactly
     /// like any other member boundary; else, still gated on genuine
     /// implementation, lacking both, `current`/`key` declared or
     /// inherited answer through the same method result path; else
@@ -203,7 +203,7 @@ impl<'db> Walker<'db, '_, '_> {
             return self.iteration_types(inner, depth + 1);
         }
         // Threaded protocol-ancestor arguments:
-        // `@implements Iterator<string, User>` composed by task 3.
+        // `@implements Iterator<string, User>` composed above.
         let class = ClassQuery::new(db, name.to_owned());
         let threaded = crate::inheritance::ancestor_arguments(
             db,

@@ -9,7 +9,7 @@ use celerrate_source::TextRange;
 /// symbolic form is deliberate and load-bearing: a concrete range of
 /// another file embedded in a per-file artifact goes stale invisibly, and
 /// resolving it inside a query would pierce the range-free invalidation
-/// boundary (design section 3).
+/// boundary.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum LabelTarget {
     Local { range: TextRange },

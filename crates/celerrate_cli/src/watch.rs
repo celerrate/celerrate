@@ -96,9 +96,9 @@ pub fn reconcile(changes: &[ChangedFile], analyzed: &BTreeSet<FileId>) -> Vec<In
 
 /// One complete watch iteration up to and including the persist.
 /// Extracted from the loop so a test can drive exactly what an
-/// iteration does to the packs on disk — the cache spec's "rewritten
+/// iteration does to the packs on disk, the "rewritten
 /// after every completed analysis, including every `--watch` iteration"
-/// clause (audit finding I6) — without needing a channel event to stop
+/// clause, without needing a channel event to stop
 /// the loop.
 ///
 /// Answers the completed outcome alongside a change already queued on
@@ -175,14 +175,14 @@ fn completed_cycle(
     Ok((outcome, pending, shutdown))
 }
 
-/// Plan 9a, task 11, decision 15's per-cycle-persist economics: a real
+/// Per-cycle-persist economics: a real
 /// corpus measurement (symfony/demo, 9341 files, release build) found
 /// persist's own entry-collection cost — `collect_entries` and
 /// `collect_signature_entries` walk every reported file every call, not
 /// just the one a single-line edit touched — holding steady around
 /// 50-60ms per cycle, several times over the ~13ms median warm cycle the
 /// same edits reanalyzed in. That is well past the 10% ceiling, so
-/// per-cycle persist does not keep audit finding I6's property as
+/// per-cycle persist does not keep the crash-window guarantee as
 /// cheaply as hoped, and this is the recorded fallback: skip the write
 /// when a change is already queued on the burst channel, because
 /// `wait_for_a_burst` would not have blocked at all in that case —
@@ -192,7 +192,7 @@ fn completed_cycle(
 /// rather than dropped, so `watch`'s own loop can fold it into the very
 /// next burst.
 ///
-/// This trades away part of I6's crash-window property: any termination
+/// This trades away part of the crash-window guarantee: any termination
 /// mid-burst loses every cycle since the last quiet persist, not just
 /// one. `iteration`'s graceful exit arm (issue #52) persists once more
 /// on its way out, along both the branch reached when the burst channel
@@ -327,7 +327,7 @@ fn iteration(
     // nothing left to collect, and falling through to the graceful exit
     // arm below is the whole of what is left to do.
     //
-    // A change already queued (task 11's fallback in
+    // A change already queued (the fallback in
     // `persist_unless_a_burst_is_already_waiting`) starts the next burst
     // instead of blocking for one that has, in effect, already arrived.
     // A shutdown queued the same way reaches the same graceful exit
@@ -984,8 +984,8 @@ fn wait_for_a_burst(events: &Receiver<WatchEvent>) -> BurstOutcome {
     }
 }
 
-/// Collects the rest of a burst that has already started with `first` —
-/// either `wait_for_a_burst`'s own blocking read, or (task 11) a change
+/// Collects the rest of a burst that has already started with `first`,
+/// either `wait_for_a_burst`'s own blocking read, or a change
 /// `completed_cycle` already found queued on the channel while deciding
 /// whether to persist.
 fn burst_starting_with(events: &Receiver<WatchEvent>, first: PathBuf) -> BurstOutcome {
@@ -1051,7 +1051,7 @@ mod tests {
     ///
     /// For a test that mutates the session directly (`session.absorb`)
     /// rather than through a real filesystem edit, this is what keeps
-    /// task 11's persist-skip check deterministic: a real `Watch::spawn`
+    /// the persist-skip check deterministic: a real `Watch::spawn`
     /// over a temporary directory really does observe the test's own
     /// `std::fs::write` calls, and the OS event's arrival time relative
     /// to `completed_cycle`'s own `try_recv` peek is a race this helper
@@ -2005,8 +2005,8 @@ mod tests {
         );
     }
 
-    /// The cache spec's persist clause at the watch level (audit finding
-    /// I6): after a cycle absorbs an edit, the packs on disk carry the
+    /// The persist clause at the watch level: after a cycle absorbs an
+    /// edit, the packs on disk carry the
     /// cycle's results — proven by decoding the diagnostics pack and
     /// finding the edited content's hash keyed in it, not by reading the
     /// source of `watch`.
@@ -2077,7 +2077,7 @@ mod tests {
         );
     }
 
-    /// Plan 9a, task 11, decision 15's fallback: a measured corpus run
+    /// The persist-skip fallback: a measured corpus run
     /// (symfony/demo, 9341 files, release build) found per-cycle persist
     /// costing several times the ~13ms median warm cycle it was folded
     /// into, well past the 10% ceiling — so a busy cycle, one where a
@@ -2160,8 +2160,8 @@ mod tests {
         );
     }
 
-    /// Plan 9a, task 10, decision 14's no-provisional pin (design section
-    /// 6): "no provisional value served or persisted". `completed_cycle`
+    /// The no-provisional pin: "no provisional value served or
+    /// persisted". `completed_cycle`
     /// calls `crate::cache::persist` exactly once, AFTER `cycle` settles
     /// on a completed `AnalysisOutcome` — `cycle`'s own internal restart
     /// loop, entered whenever a change lands mid-analysis and cancels
@@ -2568,7 +2568,7 @@ mod tests {
         );
     }
 
-    /// The final whole-branch review's finding: `iteration`'s
+    /// `iteration`'s
     /// `BurstOutcome::Shutdown | Disconnected` arm computes the watch
     /// loop's own exit code from a `final_diagnostics` clone it applies
     /// the baseline to itself, independently of the presentation copy

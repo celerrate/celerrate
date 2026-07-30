@@ -1,6 +1,6 @@
 //! The command line. `clap` earns its weight here: real `--help`,
 //! `--version`, subcommand structure, and correct errors on bad flags,
-//! and sub-project 5 grows this surface substantially (baseline, output
+//! and this surface will keep growing substantially (baseline, output
 //! formats, `migrate --from-phpstan`).
 
 use std::path::PathBuf;
@@ -82,15 +82,15 @@ pub enum Command {
         identifier: String,
     },
 
-    /// Internal: the annotation ground-truth records (design section
-    /// 10, harness 1). Consumed by `cargo xtask ground-truth`; hidden
-    /// from help — the product surface is plan 9c's.
+    /// Internal: the annotation ground-truth records. Consumed by
+    /// `cargo xtask ground-truth`, hidden from help since it is not
+    /// part of the public product surface.
     #[command(hide = true)]
     GroundTruth { path: PathBuf },
 
-    /// Internal: the residual mixed-rate counters over a project
-    /// (design sections 7 and 9). Plan 9b publishes the number; this
-    /// stays hidden until then.
+    /// Internal: the residual mixed-rate counters over a project.
+    /// The number is not yet published as a stable metric, so this
+    /// stays hidden until it is.
     #[command(hide = true)]
     MixedRate { path: PathBuf },
 }
@@ -151,9 +151,9 @@ mod tests {
         assert!(fix_suggestions);
     }
 
-    /// Either fix flag combined with `--watch` is a usage error
-    /// (design section 7): applying edits from inside a watch loop
-    /// would race the watcher against its own writes.
+    /// Either fix flag combined with `--watch` is a usage error:
+    /// applying edits from inside a watch loop would race the
+    /// watcher against its own writes.
     #[test]
     fn a_fix_flag_with_watch_is_a_usage_error() {
         assert!(Arguments::try_parse_from(["celerrate", "check", "--fix", "--watch"]).is_err());
@@ -215,7 +215,7 @@ mod tests {
     }
 
     /// The hidden variants must actually stay hidden: `--help` is the
-    /// product surface plan 9c owns, and a subcommand appearing there
+    /// public product surface, and a subcommand appearing there
     /// early would ship an undocumented, unstable channel as if it
     /// were supported.
     #[test]

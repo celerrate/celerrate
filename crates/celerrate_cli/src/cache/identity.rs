@@ -1,7 +1,7 @@
 //! The binary identity the pack header carries: the blake3 hash of the
 //! running executable's own bytes, computed once per process. Two
 //! different binaries never accept each other's packs, mechanically —
-//! no human-remembered version bump involved (audit finding I1: keying
+//! no human-remembered version bump involved (keying
 //! on `CARGO_PKG_VERSION` alone let every development rebuild within
 //! one version serve the previous build's stale packs). When the
 //! executable cannot be found or read, the identity falls back to the

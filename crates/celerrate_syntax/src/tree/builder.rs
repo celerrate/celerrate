@@ -1,8 +1,8 @@
 //! Replays parser events against the full token stream, reinserting
 //! trivia, and materializes the green tree.
 //!
-//! Trivia attachment (spec section 2): pending trivia flush just before
-//! the next node or token starts, into the node open at that point, so
+//! Trivia attachment: pending trivia flush just before the next node
+//! or token starts, into the node open at that point, so
 //! trivia sit between siblings and a node's range starts at its first
 //! significant token. Losslessness is structural (every raw token is
 //! pushed exactly once, in order), and leftovers flush into the root

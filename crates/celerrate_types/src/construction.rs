@@ -556,8 +556,7 @@ impl<'db> TypeId<'db> {
         }
     }
 
-    /// `iterable<K, V>` desugared: `array<K, V>|Traversable<K, V>`
-    /// (spec section 3).
+    /// `iterable<K, V>` desugared: `array<K, V>|Traversable<K, V>`.
     pub fn iterable(db: &'db dyn salsa::Database, key: TypeId<'db>, value: TypeId<'db>) -> Self {
         Self::union(
             db,
@@ -626,7 +625,7 @@ impl<'db> TypeId<'db> {
 
     /// `value-of<subject>`: evaluates shapes (union of field values)
     /// and arrays (the value type); enums need member facts and stay
-    /// symbolic until plan 3.
+    /// symbolic for now.
     pub fn value_of(db: &'db dyn salsa::Database, subject: TypeId<'db>) -> Self {
         match subject.data(db) {
             TypeData::Shape { fields } => Self::shape_as_array(db, fields).1,
@@ -693,12 +692,12 @@ impl<'db> TypeId<'db> {
 
     /// `display`, but a class or enum name tries `resolve` first,
     /// falling back to the folded key when it answers `None` — the
-    /// checks layer's written-spelling recovery (decision 3), never a
+    /// checks layer's written-spelling recovery, never a
     /// new public rendering surface: `resolve` is not looked up
     /// through any registry, just handed straight to the recursive
     /// walk. Its only caller today is `checks::receivers`'s own
     /// `written_type_display`, itself unread from production code
-    /// until tasks 4-6 wire the walkers to call it — hence the
+    /// until the walkers are wired to call it — hence the
     /// `dead_code` allow, the same situation as `checks/mod.rs`'s
     /// `CheckContext` fields.
     #[allow(dead_code)]

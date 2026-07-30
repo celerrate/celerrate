@@ -21,7 +21,7 @@ use super::stored::{StoredItemTree, StoredMemberTree, StoredVerdict};
 pub const ITEM_TREES_PACK: &str = "item_trees.bin";
 pub const MEMBER_TREES_PACK: &str = "member_trees.bin";
 pub const DIAGNOSTICS_PACK: &str = "diagnostics.bin";
-/// Plan 9a, task 7: the fourth pack, one per-body inferred signature
+/// The fourth pack, one per-body inferred signature
 /// keyed by [`StoredSignatureKey`] rather than by content hash — the
 /// defining file's content hash still rides inside
 /// [`StoredInferredSignature::content`], but the pack key must survive

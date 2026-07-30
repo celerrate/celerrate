@@ -51,7 +51,7 @@ pub struct AncestorDeclaration {
 /// One `@template` declaration: `T`, `T of Bound`, `T as Bound`
 /// (the Psalm keyword is a synonym). A `= Default` tail and the
 /// variance of `-covariant`/`-contravariant` variants are dropped
-/// (decision 6; recorded debt).
+/// (recorded debt).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TemplateDeclaration {
     pub name: String,
@@ -59,7 +59,7 @@ pub struct TemplateDeclaration {
 }
 
 /// One assertion tag (`@psalm-assert`, `@phpstan-assert` family):
-/// unresolved type expression pending plan 5's narrowing consumer.
+/// unresolved type expression pending the narrowing consumer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AssertionDeclaration {
     pub subject: String,
@@ -68,7 +68,7 @@ pub struct AssertionDeclaration {
     pub negated: bool,
 }
 
-/// Extracts the member slots under the tier rule (decision 8):
+/// Extracts the member slots under the tier rule:
 /// PHPStan-prefixed over Psalm-prefixed over bare; within a tier the
 /// first parseable tag wins; `@param` resolves per parameter name;
 /// `@throws` and `@assert` family accumulate across tiers; `@template`
@@ -795,7 +795,7 @@ mod tests {
 
     #[test]
     fn the_ignored_divergent_bucket_contributes_nothing_and_disturbs_nothing() {
-        // The enumerated bucket (design section 5): parsed, ignored
+        // The enumerated bucket: parsed, ignored
         // without error, siblings survive.
         let tags = lex_docblock(
             "/**\n * @psalm-pure\n * @psalm-mutation-free\n * @psalm-taint-sink html $output\n * @psalm-taint-source input\n * @psalm-if-this-is Foo\n * @phpstan-pure\n * @return int\n */",
@@ -874,7 +874,7 @@ mod tests {
 
     #[test]
     fn a_named_inline_var_fills_both_variable_values_and_value_type() {
-        // Adjudicated (task 2 review, finding 1): tag extraction cannot
+        // Settled: tag extraction cannot
         // know whether its docblock sits above a property or a local
         // statement, so a named `@var Type $name` must fill BOTH slots
         // — `variable_values` for the later inline-narrowing consumer,

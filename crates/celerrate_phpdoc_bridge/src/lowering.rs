@@ -1,4 +1,4 @@
-//! The total lowering table (decision 3): every parsed construct maps
+//! The total lowering table: every parsed construct maps
 //! to a lattice value or a documented sound widening — a supertype,
 //! never a subtype, so a widening can silence but never mis-report.
 //!
@@ -30,11 +30,11 @@
 //! | sealed shapes | `shape` (keyless tuple fields number sequentially; identifier keys are string keys) |
 //! | unsealed shapes | the general array (`non_empty_array` when a field is required): key `int\|string`, value = the field-and-tail union (`mixed` for a bare `...`) — widening |
 //! | `object{...}` | `object` (widening) |
-//! | callables (`callable`, `Closure`, purity prefixes) | `callable` (purity and Closure classness drop: widening); callable-scoped template names lower to `mixed` (decision 12) |
-//! | `Foo::BAR`, `Foo::*` | `mixed` (constant and enum-case facts arrive with plans 6-7: recorded debt) |
-//! | `$this` | `static` (design section 3) |
+//! | callables (`callable`, `Closure`, purity prefixes) | `callable` (purity and Closure classness drop: widening); callable-scoped template names lower to `mixed` |
+//! | `Foo::BAR`, `Foo::*` | `mixed` (constant and enum-case facts are not resolved yet: recorded debt) |
+//! | `$this` | `static` |
 //! | offset access `T[K]` | `mixed` (widening) |
-//! | conditionals | `conditional` for an in-scope template subject (Task 9); otherwise the undecided branch union (design section 3) |
+//! | conditionals | `conditional` for an in-scope template subject; otherwise the undecided branch union |
 //! | a keyword or dialect atom with a spurious `<...>` list | the atom, arguments dropped |
 //! | any other name | a class type, qualified at the declaring site |
 
@@ -46,7 +46,7 @@ use crate::expression::{ConditionalSubject, ShapeKeyExpression, TypeExpression, 
 use crate::tags::AncestorDeclaration;
 
 /// The name-resolution scope one docblock lowers under: the docblock's
-/// own declared template set (class-level, then own — task 9) and the
+/// own declared template set (class-level first, then its own) and the
 /// callable-scoped names active while lowering one callable signature.
 #[derive(Debug, Default)]
 pub(crate) struct LoweringScope<'db> {
@@ -403,12 +403,11 @@ fn lower_conditional<'db>(
     let otherwise_lowered = lower(site, scope, otherwise_branch);
     // An in-scope template subject resolves to `TypeId::conditional`.
     // For a parameter subject the undecided fallback is the branch
-    // union permanently, not merely until a later plan: no
+    // union permanently, not merely until some later point: no
     // expression-to-template resolution exists at lowering time for a
-    // parameter subject, and none is planned (decision 9, recorded
-    // debt — the fallback is permanent-until-demanded). The same
-    // fallback covers a template name not currently in scope (design
-    // section 3).
+    // parameter subject, and none is planned (recorded debt: the
+    // fallback is permanent-until-demanded). The same fallback covers
+    // a template name not currently in scope.
     if let ConditionalSubject::Template(name) = subject
         && let Some(template) = scope.resolve_template(name)
     {

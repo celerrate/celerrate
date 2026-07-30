@@ -11,7 +11,7 @@ pub trait SyntaxRule: Send + Sync {
 }
 
 /// A rule of the semantic phase: reference resolution outcomes and the
-/// symbol index. Part 4's migrated families arrived as their own
+/// symbol index. The migrated rule families arrived as their own
 /// typed-body phase below (`TypedBodyRule`), not as an extension of
 /// this surface: three typed rule families are registered in
 /// `core_rules()` today (`unknown-members`, `null-dereference`,
@@ -27,13 +27,12 @@ pub trait TypedBodyRule: Send + Sync {
 }
 
 /// A rule of the reporting phase: directives and their match outcomes.
-/// Core-only in this sub-project (design section 4): the registry model
-/// and the ownership gate see the phase, and the facade does not
-/// re-export it. Executed by `phases::reporting_phase_diagnostics`, a
-/// plain function fed by the orchestration layer and never a salsa
-/// query (decision 9 of the part-5 plan): its input is composed above,
-/// from stored per-directive records on a warm cache hit and from the
-/// resolution query on a miss.
+/// Core-only: the registry model and the ownership gate see the phase,
+/// and the facade does not re-export it. Executed by
+/// `phases::reporting_phase_diagnostics`, a plain function fed by the
+/// orchestration layer and never a salsa query: its input is composed
+/// above, from stored per-directive records on a warm cache hit and
+/// from the resolution query on a miss.
 pub trait ReportingRule: Send + Sync {
     fn check(&self, context: &ReportingContext<'_>, sink: &mut FindingSink<'_>);
 }

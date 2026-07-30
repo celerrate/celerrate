@@ -1,7 +1,7 @@
 //! Inline suppressions, end to end: the four written forms extinguish
 //! every diagnostic family on their scope, the report and the exit
 //! code count the same post-filter set, and nothing leaks across
-//! files (design sections 4 and 5).
+//! files.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -85,8 +85,8 @@ fn psalm_suppress_on_a_declaration_docblock_covers_its_whole_span() {
 
 #[test]
 fn suppression_extinguishes_the_syntax_family_too() {
-    // Design section 5: suppression is family-agnostic — exempting the
-    // existing families would re-report exactly what it forbids.
+    // Suppression is family-agnostic: exempting the existing families
+    // would re-report exactly what it forbids.
     let root = project(&[("a.php", "<?php\n$x = ; // @phpstan-ignore-line\n")]);
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::Clean, "{text}");
@@ -117,7 +117,7 @@ fn an_unrelated_line_still_reports_beside_a_suppressed_one() {
 
 #[test]
 fn a_suppression_extinguishes_a_typed_diagnostic() {
-    // Design section 5's family-agnostic rule extends to the typed
+    // The family-agnostic suppression rule extends to the typed
     // families too: a suppression covers whatever family reports on its
     // scope, not just the two that predate them.
     let root = project(&[
@@ -311,7 +311,7 @@ fn co_located_native_and_foreign_directives_union() {
     assert_eq!(outcome, Outcome::Clean, "{text}");
 }
 
-// The per-code semantic-evidence gate (design section 8): the
+// The per-code semantic-evidence gate: the
 // correspondence-table gate (`suppression_correspondence.rs`) only
 // proves the table and the vendored catalogues agree on which
 // identifiers exist, never that a mapped `Codes` entry names the

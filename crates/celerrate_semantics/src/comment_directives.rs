@@ -2,17 +2,17 @@
 //! from comment trivia — today, suppressions ("extinguish every
 //! diagnostic family on this scope").
 //!
-//! Owned by this crate per the design: the registry input lives with
+//! Owned by this crate: the registry input lives with
 //! the consuming layer, implementations are registered at the
 //! composition root, `celerrate_plugin` re-exports the vocabulary.
 //! The vocabulary (what a directive *is*) belongs to this trait; the
 //! written tag table (what `@phpstan-ignore-line` *means*) is
-//! bridge-internal, like the tag precedence table (design section 4).
+//! bridge-internal, like the tag precedence table.
 //! Scopes are symbolic — a provider is a pure function of the comment
 //! and cannot see positions; `suppression_directives` resolves them.
 //! Identifier-level correspondence is resolved here too: `filter_of`
-//! is the single implementation of the correspondence policy (design
-//! section 8), closing the reservation this module used to carry.
+//! is the single implementation of the correspondence policy, closing
+//! the reservation this module used to carry.
 
 use std::sync::Arc;
 
@@ -72,8 +72,8 @@ pub enum DirectiveScope {
 /// One written identifier of a suppression directive and its fate.
 /// Foreign fates come from the bridge's correspondence table; codes
 /// travel as plain strings and are interned downstream through
-/// `celerrate_diagnostics::find_identifier` (design section 8: the
-/// facade grows no identifier vocabulary for this).
+/// `celerrate_diagnostics::find_identifier` (the facade grows no
+/// identifier vocabulary for this).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum SuppressionIdentifier {
@@ -201,11 +201,10 @@ pub struct CommentDirectiveRegistry {
     pub registrations: Vec<CommentDirectiveRegistration>,
 }
 
-/// What a directive's identifier list resolved to: the matcher input.
-/// Design section 8's mechanics - a filter per range, `All` or
-/// `Only(sorted codes)`; co-location merges by union semantically,
-/// because a diagnostic is suppressed exactly when any directive
-/// admits it.
+/// What a directive's identifier list resolved to: the matcher input,
+/// a filter per range, `All` or `Only(sorted codes)`; co-location
+/// merges by union semantically, because a diagnostic is suppressed
+/// exactly when any directive admits it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SuppressionFilter {
     /// Every diagnostic family on the scope.
@@ -219,8 +218,8 @@ pub enum SuppressionFilter {
 /// carrying comment token - where CEL0041/CEL0042 anchor), what it
 /// covers, what it admits, and what the reporting rules need to speak
 /// about it. The reason trailer is deliberately not carried: its only
-/// consumer (a verbose widened-directive channel) is sub-project 5
-/// product surface.
+/// consumer (a verbose widened-directive channel) is not part of the
+/// product surface yet.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedDirective {
     pub anchor: TextRange,
@@ -435,7 +434,7 @@ fn resolve_scope(
                 // through the end-of-file exception, covers exactly
                 // the diagnostics anchored at the text's end, the same
                 // coverage the empty final line of a newline-terminated
-                // file gets (decision 6 of the part-5 plan).
+                // file gets.
                 let next_line = last_line
                     .checked_add(1)
                     .and_then(|next| whole_lines(index, text_end, next, next));
@@ -740,7 +739,7 @@ mod tests {
 
     #[test]
     fn an_end_of_file_anchor_is_suppressible_from_the_last_line() {
-        // Decision 5's exception: a diagnostic anchored exactly at the
+        // An exception: a diagnostic anchored exactly at the
         // text's end (an unexpected-end-of-file parse error) belongs
         // to the last line. `suppressed_at` is needle-based and cannot
         // name a position past the last character, so this probes
@@ -835,7 +834,7 @@ mod tests {
     #[test]
     fn code_following_the_comment_on_its_line_makes_it_trailing() {
         // A block comment can lead its statement: code after the comment
-        // on the comment's last line is adjacency too (decision 6).
+        // on the comment's last line is adjacency too.
         let source = "<?php\n/* @trailing */ $x = 1;\n$y = 2;\n";
         let (db, file) = fixture(source);
         assert!(suppressed_at(&db, file, source, "$x"));
@@ -845,8 +844,8 @@ mod tests {
     #[test]
     fn a_trailing_directive_alone_on_the_last_line_still_resolves() {
         // The next line does not exist: the scope degenerates to the empty
-        // end-of-file range (decision 6). Nothing on an ordinary line is
-        // suppressed, but the directive survives resolution - task 8's
+        // end-of-file range. Nothing on an ordinary line is
+        // suppressed, but the directive survives resolution - the
         // reporting rules must see it - and through the end-of-file
         // exception it covers exactly the end-of-file position, the same
         // coverage the empty final line of a newline-terminated file gets.
@@ -1040,7 +1039,7 @@ mod tests {
 
     #[test]
     fn an_empty_scope_at_the_end_of_file_admits_only_the_end_position() {
-        // The degenerate last-line scope (decision 6): the end-of-file
+        // The degenerate last-line scope: the end-of-file
         // exception is its whole coverage.
         let end = TextSize::from(20);
         let directive = ResolvedDirective {

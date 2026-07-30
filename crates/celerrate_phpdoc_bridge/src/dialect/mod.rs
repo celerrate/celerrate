@@ -1,8 +1,8 @@
 //! Tag classification across the two semantic dialects — the
 //! inter-dialect precedence lives here because the dialects coexist
-//! on one docblock in real code (design section 5).
+//! on one docblock in real code.
 //!
-//! # The conflict table (decision 8; published at `docs/phpdoc-bridge.md`)
+//! # The conflict table (published at `docs/phpdoc-bridge.md`)
 //!
 //! For one slot, the tiers resolve as:
 //!
@@ -15,7 +15,7 @@
 //! | ancestor (per written head name) | `@phpstan-` form | `@psalm-` form | bare form |
 //!
 //! Within one tier the first *parseable* tag wins; an unparseable tag
-//! never consumes a slot (the 4a rule, preserved). `@throws`
+//! never consumes a slot (this behavior is preserved). `@throws`
 //! accumulates across tiers instead of resolving. The enumerated
 //! ignored-divergent bucket (purity, taint, Psalm-specific `this`
 //! refinements) classifies as `Ignored`: recognized, contributing
@@ -50,10 +50,10 @@ pub(crate) enum TagRole {
     /// `@use` and its `@template-use` long form.
     UseTrait,
     /// `@template`, `@template-covariant`, `@template-contravariant`:
-    /// the variance marker is recognized and dropped (decision 6).
+    /// the variance marker is recognized and dropped.
     Template,
     /// Assertion tags: `@psalm-assert`, `@phpstan-assert` family,
-    /// carried for plan 5's narrowing.
+    /// carried for the narrowing consumer.
     Assert(celerrate_plugin::AssertionPolarity),
     /// The enumerated divergent bucket: parsed, ignored without error.
     Ignored,

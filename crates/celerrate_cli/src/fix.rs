@@ -1,4 +1,4 @@
-//! The application engine (design section 7): a single pass in the
+//! The application engine: a single pass in the
 //! total diagnostic order, expressed against the original snapshot
 //! coordinates, planned per file and applied atomically. A fix whose
 //! edits overlap an already-applied fix is skipped and reported —
@@ -16,9 +16,9 @@ use crate::session::{InternalError, Session};
 
 /// What the two flags admit: every suggestion at or below the
 /// threshold in the `Confidence` order (`Safe < NeedsReview`).
-/// `--fix` alone is `Safe` only — and at closure of this sub-project
-/// every shipped fix is `NeedsReview`, so `--fix` applies nothing;
-/// that is the design's owned consequence, stated, not hidden.
+/// `--fix` alone is `Safe` only, and currently every shipped fix is
+/// `NeedsReview`, so `--fix` applies nothing; that is a stated
+/// consequence, not hidden.
 pub fn fix_threshold(fix: bool, fix_suggestions: bool) -> Option<Confidence> {
     if fix_suggestions {
         Some(Confidence::NeedsReview)
@@ -36,7 +36,7 @@ pub enum SkipReason {
     /// fix's own edits overlap each other). The first fix wins.
     Overlap,
     /// An edit targets a file other than the diagnostic's own.
-    /// Cross-file suggestion edits are out of scope (design section 3).
+    /// Cross-file suggestion edits are out of scope.
     ForeignFile,
 }
 

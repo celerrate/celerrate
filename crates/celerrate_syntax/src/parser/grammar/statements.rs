@@ -260,9 +260,9 @@ fn label_statement(parser: &mut Parser) {
 /// The tokens that end a nested statement list. A nested list never
 /// consumes one of these: the construct that owns it eats it, and an
 /// orphan unwinds to the source-file loop, which consumes anything.
-/// This is the plan's contextual recovery set, and the reason every
-/// nested list terminates: unwinding consumes nothing, but the top
-/// level always progresses.
+/// This is the contextual recovery set, and the reason every nested
+/// list terminates: unwinding consumes nothing, but the top level
+/// always progresses.
 fn at_statement_list_terminator(parser: &mut Parser) -> bool {
     matches!(
         parser.current(),

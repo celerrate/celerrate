@@ -9,9 +9,8 @@
 //! spares it, and that a changed declared type reruns dependent
 //! verdicts while an unchanged one spares them.
 //!
-//! The final four pins (task 12) cover the design's harness-2 edit
-//! classes at the inference layer itself, closing the plan: a callee
-//! body edit with an identical inferred return spares the caller, a
+//! The final four pins cover the inference layer's own edit classes:
+//! a callee body edit with an identical inferred return spares the caller, a
 //! prose docblock edit re-runs no typed inference, a default-value
 //! edit invalidates the signature's dependent body, and editing one
 //! member's signature spares a sibling member's body inference.
@@ -44,8 +43,8 @@ use salsa::Setter;
 
 /// Counts how many times a query appears in an executed-query log (the
 /// `celerrate_semantics` invalidation-scope tests' `executions_of`
-/// pattern, duplicated here: no shared test-support module exists per
-/// the design).
+/// pattern, duplicated here: no shared test-support module exists
+/// across these crates).
 ///
 /// Issue #51: the tracked body-inference query was renamed
 /// `inferred_body_types` -> `inferred_body_types_unguarded` (now behind
@@ -53,7 +52,7 @@ use salsa::Setter;
 /// `executions_of` probes name the raw query under its new identity;
 /// the counts are unchanged because the wrapper's warming demands
 /// execute the raw query at most once per body and memoized. Equally
-/// strict, not weakened (fixed decision 4).
+/// strict, not weakened.
 fn executions_of(log: &[String], query: &str) -> usize {
     let prefix = format!("{query}(");
     log.iter()
@@ -75,7 +74,7 @@ fn a_body_edit_does_not_recompute_a_hierarchy_verdict() {
         b"<?php class User extends Entity {}".to_vec(),
     );
     let files = AnalyzedFileSet::new(&db, vec![parent, child]);
-    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // Deliberately empty (issue #36's fix): this suite pins
     // salsa execution counts, where a stub surface adds resolution
     // noise without observing stub behaviour, and a separate
     // compilation unit cannot reach `pub(crate)` test support anyway.
@@ -114,7 +113,7 @@ fn a_body_edit_does_not_recompute_a_hierarchy_verdict() {
 }
 
 /// One source file plus the whole-project inputs: an empty stub index
-/// kept at HIGH durability (issue #36's fixed decision 3, this suite
+/// kept at HIGH durability (issue #36's fix, this suite
 /// pins salsa execution counts rather than stub behaviour) and a fixed
 /// version range at MEDIUM. The file handle is kept so the pins can
 /// edit it with `set_bytes`.
@@ -130,7 +129,7 @@ fn single_file_harness(source: &[u8]) -> Harness {
     let db = TestDatabase::default();
     let file = SourceFile::new(&db, FileId::new(0), source.to_vec());
     let files = AnalyzedFileSet::new(&db, vec![file]);
-    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // Deliberately empty (issue #36's fix): this suite pins
     // salsa execution counts, where a stub surface adds resolution
     // noise without observing stub behaviour, and a separate
     // compilation unit cannot reach `pub(crate)` test support anyway.
@@ -165,7 +164,7 @@ fn method_query<'db>(
     )
 }
 
-/// Pin 1: a method-body edit never reaches `declared_member_signature`.
+/// A method-body edit never reaches `declared_member_signature`.
 /// The member tree is body-blind, so every input the declared signature
 /// reads (the linearization, the item tree, the member tree) backdates
 /// below it. The first computation drains the log and asserts the query
@@ -208,7 +207,7 @@ fn a_body_edit_never_recomputes_a_declared_signature() {
     );
 }
 
-/// Pin 2: a docblock prose edit re-runs `declared_member_signature` (the
+/// A docblock prose edit re-runs `declared_member_signature` (the
 /// member payload carries the docblock text by design), but the result
 /// is byte-identical, so a downstream verdict computed from the declared
 /// return type is spared. This is the early cutoff the declared layer's
@@ -308,10 +307,10 @@ fn a_docblock_prose_edit_recomputes_the_signature_but_spares_the_verdict() {
     );
 }
 
-/// Pin 3: a return-type signature edit (`int` -> `string`) re-runs the
+/// A return-type signature edit (`int` -> `string`) re-runs the
 /// query AND changes both its answer and every dependent verdict. The
-/// counterexample to pin 2: here the declared output genuinely changes,
-/// so the memoized verdict is invalidated and its answer flips from
+/// counterexample to the docblock prose edit above: here the declared
+/// output genuinely changes, so the memoized verdict is invalidated and its answer flips from
 /// Holds to Fails.
 #[test]
 fn a_return_type_edit_recomputes_the_signature_and_flips_the_verdict() {
@@ -385,9 +384,9 @@ fn a_return_type_edit_recomputes_the_signature_and_flips_the_verdict() {
     );
 }
 
-/// Pin 4: a default-value edit (`= null` -> `= 1`) changes the declared
-/// parameter's implicit nullability (design section 2, extended to the
-/// declared level), which is part of the signature projection, so the
+/// A default-value edit (`= null` -> `= 1`) changes the declared
+/// parameter's implicit nullability, extended here to the declared
+/// level, which is part of the signature projection, so the
 /// dependent verdict re-runs. `int $x = null` lowers to `int|null`;
 /// `int $x = 1` lowers to `int`.
 #[test]
@@ -462,7 +461,7 @@ fn a_default_value_edit_changes_parameter_nullability_and_reruns_the_verdict() {
     );
 }
 
-/// Pin 5: editing an UNRELATED member's signature in the same class
+/// Editing an UNRELATED member's signature in the same class
 /// spares a verdict that depends on this member's declared signature.
 /// Editing `g`'s return type mutates the linearized member table, so
 /// `declared_member_signature(f)` re-runs (its ancestor walk reads the
@@ -472,7 +471,7 @@ fn a_default_value_edit_changes_parameter_nullability_and_reruns_the_verdict() {
 /// `take_executed` reports `declared_member_signature` re-running (the
 /// linearization changed) but never `subtype_of`.
 ///
-/// As in pin 2, `f`'s probed verdict is routed through the class
+/// As in the docblock prose edit above, `f`'s probed verdict is routed through the class
 /// hierarchy (`User <: Entity`) rather than a structurally-equal scalar
 /// check, so it carries a real dependency edge into `linearized_class`
 /// and "absent from `take_executed`" is load-bearing rather than
@@ -641,7 +640,7 @@ fn fixture_with_fake_syntax(sources: &[&str]) -> AnnotationFixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
-    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // Deliberately empty (issue #36's fix): this suite pins
     // salsa execution counts, where a stub surface adds resolution
     // noise without observing stub behaviour, and a separate
     // compilation unit cannot reach `pub(crate)` test support anyway.
@@ -690,16 +689,16 @@ fn member_query<'db>(
     )
 }
 
-/// Pin 6 (task 7): the second-stage parsed-annotation cutoff, exercised
+/// The second-stage parsed-annotation cutoff, exercised
 /// through an ACTUALLY REGISTERED, actually parsing `TypeSyntax`,
-/// rather than the no-plugin default pin 2 (above) exercises.
+/// rather than the no-plugin default the docblock prose edit above exercises.
 ///
 /// A prose-only docblock edit changes the raw text, so stage one
-/// (`member_tree`, read through `lookup_member`) re-runs — the spec's
-/// accepted cost. `declared_member_signature` ALSO re-runs (asserted
+/// (`member_tree`, read through `lookup_member`) re-runs, which is
+/// the accepted cost. `declared_member_signature` ALSO re-runs (asserted
 /// below, deliberately, not zero): it independently calls
 /// `lookup_member` for the member's own structural payload (kind,
-/// name, native signature), exactly as pin 2 documents ("the member
+/// name, native signature), exactly as the docblock prose edit above documents ("the member
 /// payload carries the docblock text by design"), and that call sees
 /// the same changed `Member` value regardless of what any registered
 /// `TypeSyntax` does. `member_annotations` also re-runs, for the same
@@ -904,12 +903,12 @@ fn an_annotation_edit_reaches_the_declared_signature() {
     );
 }
 
-/// Pin 8 (task 9): `member_annotations` now ALSO reads the owner
+/// `member_annotations` now ALSO reads the owner
 /// class-like's OWN docblock (`owner_class_docblock`), to expose
 /// class-level `@template` declarations while parsing a member's
 /// annotations — unconditionally, for every registered `TypeSyntax`,
 /// whether or not that implementation ever calls
-/// `AnnotationSite::enclosing_class_docblock`. Before this task, a
+/// `AnnotationSite::enclosing_class_docblock`. Previously, a
 /// CLASS-level docblock edit never reached `member_annotations`: its
 /// only class-docblock-adjacent dependency was the owner's namespace
 /// (via `declaring_site`), unaffected by prose. This pin proves the
@@ -1007,7 +1006,7 @@ fn a_class_docblock_prose_edit_backdates_at_the_member_annotations_stage() {
 }
 
 /// One project's inputs for the inference-layer pins below, without any
-/// registered `TypeSyntax` plugin: the design's harness-2 edit classes
+/// registered `TypeSyntax` plugin: the inference-layer edit classes
 /// reach native declared signatures and `inferred_body_types` directly,
 /// not annotation parsing. File handles are kept so a pin can edit any
 /// one of them with `set_bytes` (the same `AnnotationFixture`/
@@ -1030,7 +1029,7 @@ fn fixture(sources: &[&str]) -> InferenceFixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
-    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // Deliberately empty (issue #36's fix): this suite pins
     // salsa execution counts, where a stub surface adds resolution
     // noise without observing stub behaviour, and a separate
     // compilation unit cannot reach `pub(crate)` test support anyway.
@@ -1067,8 +1066,8 @@ fn function_query<'db>(db: &'db TestDatabase, written: &str) -> FunctionQuery<'d
 }
 
 /// The display of a free function's inferred return, resolved through
-/// `inferred_function_return` by its folded key (task 13's closing
-/// pin needs a caller, mirroring the crate's own `caller_return_display`
+/// `inferred_function_return` by its folded key (needed here for a
+/// caller, mirroring the crate's own `caller_return_display`
 /// test helper in `inference.rs`).
 fn caller_return_display(fixture: &InferenceFixture, key: &str) -> String {
     inferred_function_return(
@@ -1081,12 +1080,11 @@ fn caller_return_display(fixture: &InferenceFixture, key: &str) -> String {
     .display(&fixture.db)
 }
 
-/// Harness-2, pin 1: a callee body edit that leaves the inferred
+/// A callee body edit that leaves the inferred
 /// return identical spares the caller. The callee re-infers (its body
 /// genuinely changed), but the joined return type does not, so
 /// `inferred_function_return`'s early cutoff backdates and the
-/// caller's own inference is never re-demanded transitively (design
-/// section 10, harness 2).
+/// caller's own inference is never re-demanded transitively.
 #[test]
 fn a_body_edit_with_an_identical_inferred_return_spares_callers() {
     // File 0: the caller. File 1: the callee.
@@ -1125,7 +1123,7 @@ fn a_body_edit_with_an_identical_inferred_return_spares_callers() {
     }
     let log = fixture.db.take_executed();
     // The callee re-infers; the identical return backdates; the
-    // caller's inference never re-runs (design section 10, harness 2).
+    // caller's inference never re-runs.
     assert_eq!(
         executions_of(&log, "inferred_body_types_unguarded"),
         1,
@@ -1133,9 +1131,9 @@ fn a_body_edit_with_an_identical_inferred_return_spares_callers() {
     );
 }
 
-/// Harness-2, pin 2: a prose-only docblock edit on the callee re-runs
+/// A prose-only docblock edit on the callee re-runs
 /// no typed inference at all. Unlike the declared layer's own prose
-/// pin (which re-runs `declared_member_signature` and stops there),
+/// edit (which re-runs `declared_member_signature` and stops there),
 /// the inference layer never reads the docblock text, so the body IR
 /// and every input `inferred_body_types` consults are untouched, and
 /// the query is never re-demanded on the caller's account.
@@ -1174,7 +1172,7 @@ fn a_prose_docblock_edit_re_runs_no_inference() {
         );
     }
     let log = fixture.db.take_executed();
-    // The two-stage cutoff (design section 5): the annotation parse
+    // The two-stage cutoff: the annotation parse
     // re-runs and backdates; no typed query above it re-executes.
     assert_eq!(
         executions_of(&log, "inferred_body_types_unguarded"),
@@ -1183,8 +1181,8 @@ fn a_prose_docblock_edit_re_runs_no_inference() {
     );
 }
 
-/// Harness-2, pin 3: a default-value edit (`= null` -> `= 'd'`) is
-/// part of the comparable signature (the 1a contract): the seeded
+/// A default-value edit (`= null` -> `= 'd'`) is
+/// part of the comparable signature: the seeded
 /// parameter type the body's inference reads from changes, so the
 /// member projection changes and the body genuinely re-infers.
 #[test]
@@ -1219,8 +1217,8 @@ fn a_default_value_edit_invalidates_the_signatures_dependents() {
         );
     }
     let log = fixture.db.take_executed();
-    // The default value is part of the comparable signature (the 1a
-    // contract): the member projection changed, so the body re-infers.
+    // The default value is part of the comparable signature: the member
+    // projection changed, so the body re-infers.
     assert_eq!(
         executions_of(&log, "inferred_body_types_unguarded"),
         1,
@@ -1229,7 +1227,7 @@ fn a_default_value_edit_invalidates_the_signatures_dependents() {
 }
 
 /// Demands the inferred return of both of class `A`'s methods through
-/// the method-inferred tier (plan 6's `inferred_method_return`), the
+/// the method-inferred tier (`inferred_method_return`), the
 /// path a real caller takes.
 fn demand_method_returns(fixture: &InferenceFixture) {
     for name in ["edited", "bystander"] {
@@ -1243,13 +1241,12 @@ fn demand_method_returns(fixture: &InferenceFixture) {
     }
 }
 
-/// Harness-2, pin 4: editing one method's signature in a class spares
+/// Editing one method's signature in a class spares
 /// every sibling member's body inference. `member_tree` changes (the
 /// whole class's member table is one query), but the per-body
 /// `body_owner` projection backdates for every body whose own
 /// declaration did not, so only the edited member's body re-infers
-/// (its parameter seed changed) and the bystander is spared (design
-/// section 10, harness 2).
+/// (its parameter seed changed) and the bystander is spared.
 #[test]
 fn editing_one_signature_spares_the_other_members_inference() {
     let source_before = "<?php class A {
@@ -1261,7 +1258,7 @@ fn editing_one_signature_spares_the_other_members_inference() {
         public function bystander() { return 'x'; }
     }";
     let mut fixture = fixture(&[source_before]);
-    // Plan 6 landed the method-inferred tier, so the demand runs
+    // The demand runs
     // through `inferred_method_return` — the path a caller actually
     // takes — rather than reaching for each body identity directly.
     // The scenario and its contract are unchanged.
@@ -1275,9 +1272,8 @@ fn editing_one_signature_spares_the_other_members_inference() {
     // `member_tree` changed, but the per-body `body_owner` projection
     // backdates for every body whose own declaration did not: only
     // `edited`'s body re-infers (its parameter seed changed);
-    // `bystander` is spared. This is the design's "editing one
-    // signature does not invalidate other members' bodies" contract
-    // (section 10, harness 2).
+    // `bystander` is spared. This is the "editing one
+    // signature does not invalidate other members' bodies" contract.
     assert_eq!(
         executions_of(&log, "inferred_body_types_unguarded"),
         1,
@@ -1285,7 +1281,7 @@ fn editing_one_signature_spares_the_other_members_inference() {
     );
 }
 
-/// Task 13's closing pin, harness-2 extended to a method callee: a
+/// The closing pin, extended to a method callee: a
 /// callee METHOD body edit that leaves the inferred return identical
 /// spares the caller, exactly like the free-function pin above, but
 /// through `inferred_method_return` rather than `inferred_body_types`
@@ -1317,9 +1313,9 @@ function caller(Greeter $greeter) { return $greeter->greeting(); }
     );
 }
 
-/// Task 13's closing pin: a trait body edit reaches every using
+/// A trait body edit reaches every using
 /// class's own body inference (each using class analyzes the trait's
-/// body per its own context, decision 5/task 7) and only them — the
+/// body per its own context) and only them — the
 /// bystander class that never uses the trait is untouched.
 #[test]
 fn a_trait_body_edit_reaches_each_using_class_and_only_them() {
@@ -1381,7 +1377,7 @@ class Unrelated {
 /// name that resolves to a template visible either in the docblock
 /// currently being parsed (a class's own `@extends` argument, read
 /// against its own `@template` list) or in the enclosing class's
-/// docblock (a member's `@return`, task 9's `enclosing_class_docblock`
+/// docblock (a member's `@return`, via `enclosing_class_docblock`
 /// exposure), and otherwise to a class qualified at the site.
 /// Deliberately a second, smaller copy of
 /// `inheritance::test_support::FakeSyntax`'s essential notation: that
@@ -1515,7 +1511,7 @@ fn fixture_with_inheritance_syntax(sources: &[&str]) -> InferenceFixture {
     built
 }
 
-/// Issue #37's closing pin, flipping task 13's recorded debt: a
+/// Issue #37's closing pin, resolving a previously recorded gap: a
 /// prose-only edit to ANOTHER class's docblock (Repository's, while
 /// the queried member belongs to UserRepository) now spares
 /// `declared_member_signature` entirely. Every file-granular read the
@@ -1685,8 +1681,8 @@ class User extends Entity {}
     );
 }
 
-/// Issue #37, stage 1: `declaring_site` is now a tracked query of its
-/// own. A prose-only edit to another class's docblock still reaches it
+/// Issue #37's declaring-site fix: `declaring_site` is now a tracked
+/// query of its own. A prose-only edit to another class's docblock still reaches it
 /// (its `member_tree` input changed), but as a tracked query it
 /// appears in the execution log under its own name and its unchanged
 /// answer backdates, which the closing pin of this family turns into a
@@ -1745,8 +1741,8 @@ class User extends Entity {}
     );
 }
 
-/// Issue #37, stage 2: `owner_class_docblock` is now tracked per
-/// class-like, so a prose edit to Repository's docblock re-parses
+/// Issue #37's owner-docblock fix: `owner_class_docblock` is now
+/// tracked per class-like, so a prose edit to Repository's docblock re-parses
 /// Repository's class annotations only. UserRepository's
 /// `class_annotations` sees its own docblock query backdate (its
 /// `@extends` text is untouched) and stays memoized, where before the
@@ -1807,7 +1803,7 @@ class User extends Entity {}
     );
 }
 
-/// Task 13's closing pin, the counterexample to the pin above: editing
+/// The counterexample to the pin above: editing
 /// the `@extends` argument itself (`Repository<User>` ->
 /// `Repository<Admin>`) genuinely changes `class_annotations`'s parsed
 /// ancestors, so the threaded argument changes with it and the next
@@ -1858,16 +1854,17 @@ class Admin {}
     );
 }
 
-/// Task 13's closing pins: harness 2 replayed over the typed-checks
-/// layer itself (`typed_file_verdicts`), the design's central claim
+/// The closing pins: the same interprocedural edit-class pattern
+/// replayed over the typed-checks
+/// layer itself (`typed_file_verdicts`), testing the central claim
 /// that a verdict is keyed range-free by `(AstId, ExpressionId)` and
 /// reconciled to `TextRange` only at the mapping layer.
 /// `checks_fixture` is the plain [`InferenceFixture`] this
 /// suite's inference-layer pins already share (an empty stub index at
-/// HIGH durability, issue #36's fixed decision 3): every scenario below
+/// HIGH durability, issue #36's fix): every scenario below
 /// resolves entirely through source-declared classes and methods, so
-/// no stub surface is needed, and `.handle`/`.set_source` spell this
-/// task's brief onto the fixture's existing shape.
+/// no stub surface is needed, and `.handle`/`.set_source` provide that
+/// same interface on the fixture's existing shape.
 fn checks_fixture(sources: &[&str]) -> InferenceFixture {
     fixture(sources)
 }
@@ -1885,7 +1882,7 @@ impl InferenceFixture {
     }
 }
 
-/// Harness-2 over the typed checks: a body edit re-checks only the
+/// A body edit re-checks only the
 /// editing body. `bystander` calls the exact same method on the exact
 /// same receiver type and is never touched — its own
 /// `body_typed_verdicts` memo is keyed on its own unedited body, so it
@@ -1914,12 +1911,12 @@ function bystander(User $u): void { $u->save(); }
     );
 }
 
-/// Harness-2's load-bearing pin: a comment line prepended above every
+/// The load-bearing pin: a comment line prepended above every
 /// body shifts every subsequent offset without changing the parsed
 /// structure at all. If verdicts were keyed by `TextRange` anywhere
 /// above the mapping layer, this edit would force every body's
 /// `body_typed_verdicts` to re-run (the file bytes genuinely changed).
-/// The design's claim is the opposite: the verdict is keyed by
+/// In fact, the opposite holds: the verdict is keyed by
 /// `(AstId, ExpressionId)`, range-free, so it backdates under the
 /// shift and only the offset-to-range reconciliation redoes its cheap
 /// mapping work; the reported diagnostic still renders, moved to its
@@ -1955,7 +1952,7 @@ function f(?User $u): void { $u->save(); }
     );
 }
 
-/// Harness-2 at the interprocedural edge: a callee's parameter type
+/// At the interprocedural edge: a callee's parameter type
 /// edit genuinely changes what the caller's own argument-type check
 /// sees, so the caller's verdict flips from empty to one CEL0035 — the
 /// non-coercible pair (`Plain`/`Other`, two distinct classes with no
@@ -1990,12 +1987,12 @@ function caller(Plain $p): void { takes($p); }
 }
 
 /// `fixture` with the real embedded stub blob and `StdlibProvider`
-/// registered (task 6's registration idiom; duplicated from
+/// registered (the registration idiom; duplicated from
 /// `tests/fixpoint.rs`'s identical helper — no shared test-support
 /// module spans this crate's integration-test binaries, the same
-/// constraint `executions_of` above already notes). Task 12's closing
+/// constraint `executions_of` above already notes). The closing
 /// pin needs a provider whose answer is a genuine pure function of the
-/// `Invocation` (decision 16), not the empty stub index the rest of
+/// `Invocation`, not the empty stub index the rest of
 /// this suite uses to keep resolution noise out.
 fn fixture_with_embedded_stubs_and_stdlib_provider(sources: &[&str]) -> InferenceFixture {
     let db = TestDatabase::default();
@@ -2045,7 +2042,7 @@ fn body_query(fixture: &InferenceFixture, index: u32) -> BodyQuery<'_> {
     )
 }
 
-/// Task 12's load-bearing invalidation pin (decision 16): "a provider
+/// The load-bearing invalidation pin: "a provider
 /// answer changes only when its `Invocation` changes." A provider's
 /// answer is a pure function of the argument types it is handed
 /// (`json_decode`'s second argument here, an `Invocation` component),
@@ -2105,7 +2102,7 @@ function bystander(string $text) { return strlen($text); }
     );
 }
 
-/// Task 12's second pin (decision 16): a provider answer, once it
+/// The second load-bearing pin: a provider answer, once it
 /// changes, propagates through the ordinary interprocedural path —
 /// nothing special-cased. `json_decode`'s `$associative` literal edit
 /// flips `decoding`'s inferred return from the array branch to the
@@ -2150,7 +2147,7 @@ function caller(string $json) { return decoding($json); }
 }
 
 // ---------------------------------------------------------------------
-// Task 8 (plan 9a): the typed-cache unit seams. A hand-built
+// The typed-cache unit seams. A hand-built
 // `TypedArtifactCache` test double plants a probe record whose return
 // deliberately differs from what real computation would answer (the
 // `cache_seeding` probe convention transposed to this crate's own
@@ -2182,7 +2179,7 @@ fn register_typed_cache(
     .new(db);
 }
 
-/// Task 8, unit seam 1: a record whose content hash still matches the
+/// The first unit seam: a record whose content hash still matches the
 /// defining file is served verbatim — proven by planting a return type
 /// (`string`) the real computation (`return 1;`, an int literal) would
 /// never produce. Editing the file afterward moves its content hash away
@@ -2236,7 +2233,7 @@ fn a_valid_record_is_served_and_a_stale_content_hash_is_not() {
     );
 }
 
-/// Task 8, unit seam 2: a record whose top-level facts (content hash,
+/// The second unit seam: a record whose top-level facts (content hash,
 /// classes, functions) all still validate, but whose ONE recorded
 /// inferred edge no longer matches the live callee's answer, falls
 /// through to real computation. `caller`'s own planted return

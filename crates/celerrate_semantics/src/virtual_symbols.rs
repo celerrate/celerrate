@@ -1,7 +1,7 @@
 //! The virtual-symbol extension point: members declared by annotation
 //! rather than written in code (`@property`, `@method`).
 //!
-//! Owned by this crate per the design: the registry input lives with
+//! Owned by this crate: the registry input lives with
 //! the consuming layer, implementations are registered at the
 //! composition root, `celerrate_plugin` re-exports the vocabulary.
 //! Type expressions travel as **unresolved text** — this layer sits

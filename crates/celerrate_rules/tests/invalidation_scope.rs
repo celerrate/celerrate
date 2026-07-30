@@ -13,16 +13,16 @@
 //! framework's per-body tier, `body_phase_findings`. They used to run
 //! against a fake `TypedBody` rule (`MarkEveryBody`, registered by a
 //! `register_typed_fake` helper) because core carried no typed-body
-//! family at the time these pins were first written (part 3). That is
-//! part 3 history now. Three real typed families
+//! family at the time these pins were first written. That is no longer
+//! the case: three real typed families
 //! (`unknown-members`, `null-dereference`, `argument-checks`) are
-//! registered by `core_rules` and, as of the previous task, are the
-//! product's serving path, so these two pins measure `register`'s real
-//! `core_rules()` composition and a real seeded defect (an unknown
-//! method call), exactly like every other pin in this file.
+//! registered by `core_rules` and are the product's serving path, so
+//! these two pins measure `register`'s real `core_rules()` composition
+//! and a real seeded defect (an unknown method call), exactly like
+//! every other pin in this file.
 //!
-//! The semantic-phase pin below arrived with part 4, once the phase
-//! carried its real families (`unknown-symbols`, `symbol-version-gating`)
+//! The semantic-phase pin below exercises the phase now that it carries
+//! its real families (`unknown-symbols`, `symbol-version-gating`)
 //! and so something real to invalidate: a same-file body edit that
 //! changes reference outcomes re-runs that file's own walk and phase,
 //! while every other file's phase backdates behind the unchanged item
@@ -51,8 +51,8 @@ use celerrate_stubs::{StubIndex, StubIndexInput};
 use salsa::Setter;
 
 /// Copied per-crate, deliberately not shared: each invalidation-scope
-/// suite owns its own execution-log reader (the plan pins one copy per
-/// crate, next to the queries it observes).
+/// suite owns its own execution-log reader, kept next to the queries
+/// it observes.
 fn executions_of(log: &[String], query: &str) -> usize {
     let prefix = format!("{query}(");
     log.iter()
@@ -205,7 +205,7 @@ const SEEDED_TYPED_DEFECT: &[u8] = b"<?php\nclass User { public function save():
 /// Mirrors `celerrate_types`' `a_body_edit_rechecks_only_the_editing_body`
 /// against this framework's own per-body tier, now driven by `register`'s
 /// real `core_rules()` (the fake `MarkEveryBody` rule this pin used to
-/// need is part 3 history): three bodies primed through
+/// need is no longer necessary): three bodies primed through
 /// `typed_body_phase_diagnostics`, a statement appended inside
 /// `second`'s body, then a re-query. `first`'s `body_phase_findings`
 /// memo is keyed on its own unedited `body_ir` and carries no
@@ -261,7 +261,7 @@ fn a_body_edit_reruns_only_the_editing_bodys_phase() {
 /// all. If findings were keyed by `TextRange` anywhere above the
 /// reconciliation tail, this edit would force every body's
 /// `body_phase_findings` (and the `body_typed_verdicts` walk beneath
-/// it) to re-run; the design's claim is the opposite. The finding is
+/// it) to re-run; that is not what actually happens. The finding is
 /// anchored by declaration identity, range-free, so it backdates under
 /// the shift and only `resolved_diagnostic`'s mapping work (through the
 /// aggregate query) redoes anything, the reported diagnostic moving to
@@ -371,7 +371,7 @@ fn a_body_edit_reruns_its_own_semantic_walk_and_never_anothers_phase() {
     // library's method: the item tree is unchanged, so the consumer's
     // resolutions backdate behind the unchanged symbol table and its
     // phase never runs; the library's own per-file walk honestly
-    // re-runs (the design's stated same-file behavior), its outcomes
+    // re-runs (same-file edits always re-run their own walk), its outcomes
     // change, and its phase re-runs over them.
     library.set_bytes(&mut db).to(
         b"<?php namespace Lib; class Helper { public function go(): void { new Ghost(); } }"
@@ -401,7 +401,7 @@ fn a_body_edit_reruns_its_own_semantic_walk_and_never_anothers_phase() {
     );
 }
 
-/// The did-you-mean gate (design sections 7 and 11): the candidate
+/// The did-you-mean gate: the candidate
 /// search runs at presentation time, outside every phase query, so the
 /// global name set never enters a file's dependency graph. The
 /// graph-side proof: file A reports an unknown symbol; renaming a

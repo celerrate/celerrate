@@ -10,11 +10,7 @@ use crate::syntax_kind::SyntaxKind;
 
 use super::{CompletedMarker, Marker, Parser};
 
-// One constant per level of the precedence table (see the plan's
-// authoritative table). Declared as each task consumes them, so the
-// dead-code lint stays green at every commit: this task declares the
-// binary levels; task 4 adds 24 and 26, task 5 adds 9 and 10, task 11
-// adds 28, task 13 adds 4 through 8.
+// One constant per level of the precedence table.
 const LOGICAL_OR_LEVEL: u8 = 1;
 const LOGICAL_XOR_LEVEL: u8 = 2;
 const LOGICAL_AND_LEVEL: u8 = 3;

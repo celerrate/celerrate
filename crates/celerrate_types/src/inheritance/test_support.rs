@@ -3,18 +3,18 @@
 //! `@extends`/`@implements`, `@return` (including the conditional form
 //! `(NAME is NAME ? NAME : NAME)`), and `@param` tags (including
 //! `class-string<NAME>`). Originally `inheritance.rs`'s own test fake;
-//! lifted here so `declared.rs`'s task-4 tests (an inherited signature
+//! lifted here so `declared.rs`'s tests (an inherited signature
 //! must see the same template scoping `ancestor_arguments` threads) can
 //! drive the exact same notation without duplicating it, and extended
-//! by task 8 for the call-site solver's tests (a class-string binder
-//! and a conditional return, task 8's remaining two grammar arms — the
-//! template bound was already there), and further extended by task 8's
-//! review fix for a bound naming another template, `NAME<ARG, ...>`
-//! (e.g. `@template TKey of Collection<TValue>`), and by task 9 for the
+//! for the call-site solver's tests (a class-string binder
+//! and a conditional return, the remaining two grammar arms — the
+//! template bound was already there), and further extended
+//! for a bound naming another template, `NAME<ARG, ...>`
+//! (e.g. `@template TKey of Collection<TValue>`), and for the
 //! named inline `@var NAME $variable` / `@var NAME<ARG, ...> $variable`
 //! form (constructor inference and inline `@var`'s tests), reusing
 //! `@param`'s own generic-argument-aware type lowering, and further
-//! extended by task 11 for the call-site solver's five remaining
+//! extended for the call-site solver's five remaining
 //! structural forms: `array<K, V>`, a callable's empty-parameter-list
 //! return (`callable(): R`), a union (`A|B`), and an intersection
 //! (`A&B`) — and by issue #40 for the declared shape form
@@ -22,7 +22,8 @@
 //! collect arm needs a shape on the *declared* side, which no PHP
 //! value can produce — a real PHP array literal already infers a
 //! genuine `Shape` on the argument side through ordinary body
-//! inference, which is why task 11 could skip this form. Recorded debt: the
+//! inference, which is why this fake never needed that form. Recorded
+//! debt: the
 //! crate has no other shared test-support module, mirroring the
 //! semantic-core crates' own duplicated test fakes. Issue #36 adds
 //! `minimal_stub_index()`, the default stub surface every module
@@ -73,8 +74,8 @@ impl FakeSyntax {
             .collect()
     }
 
-    /// `templates` carries each declared template's OWN parsed bound
-    /// (task 8): a written name matching one answers a `Template`
+    /// `templates` carries each declared template's OWN parsed bound: a
+    /// written name matching one answers a `Template`
     /// carrying that real bound, not a placeholder `mixed` — otherwise
     /// `an_unconstrained_template_falls_to_its_bound_then_mixed`'s
     /// bounded case could never observe anything but `mixed`.
@@ -88,7 +89,7 @@ impl FakeSyntax {
             let bound = template.bound.unwrap_or_else(|| TypeId::mixed(db));
             return TypeId::template(db, site.declaring_scope(), written, bound);
         }
-        // The native keyword table (task 8): a conditional return's
+        // The native keyword table: a conditional return's
         // subject and branches are ordinary written names too, and
         // `int`/`string`/`bool` must lower to the scalar lattice
         // members, never to a class named `int`.
@@ -183,7 +184,7 @@ impl FakeSyntax {
     }
 
     /// A generic-argument-aware type text — shared by the `@param` and
-    /// `@var` arms below (task 9 extends this fake's original
+    /// `@var` arms below (extending the fake's original
     /// `@param`-only helper to the named inline `@var` form, the same
     /// notation either tag writes): `NAME<ARG, ...>` reuses the same
     /// `split_once('<')` / `strip_suffix('>')` shape
@@ -194,7 +195,7 @@ impl FakeSyntax {
     /// branch has no fixture that can drive it. A bare name falls
     /// through to the ordinary class-or-own-template rule.
     ///
-    /// Task 11 extends this further with three forms decision 10's
+    /// This fake also understands three forms the
     /// solver needs and nothing before it exercised: a top-level union
     /// (`A|B`) or intersection (`A&B`), checked first via
     /// `split_top_level` so either recurses back into this same
@@ -202,7 +203,7 @@ impl FakeSyntax {
     /// template, a class, or another connective); `array<K, V>`,
     /// the two-argument form only, since nothing here needs the list
     /// shorthand `array<V>`; and a callable's empty-parameter-list
-    /// return `callable(): R`, since decision 10's `Callable` collect
+    /// return `callable(): R`, since the `Callable` collect
     /// arm recurses on `return_type` alone and never touches
     /// parameters, so a parameter-list grammar would be effort this
     /// fixture has no test to spend.
@@ -236,7 +237,7 @@ impl FakeSyntax {
                     .map(|part| Self::lower_generic_type(site, own_templates, part)),
             );
         }
-        // `class-string<NAME>` (task 8): the primary template binder,
+        // `class-string<NAME>`: the primary template binder,
         // never a class literally named `class-string` — checked
         // before the generic `NAME<ARG, ...>` arm below, which would
         // otherwise swallow it.
@@ -246,7 +247,7 @@ impl FakeSyntax {
             let argument = Self::lower_member_name(site, own_templates, inner.trim());
             return TypeId::class_string(db, Some(argument));
         }
-        // `array<K, V>` (task 11): checked before the generic
+        // `array<K, V>`: checked before the generic
         // `NAME<ARG, ...>` arm below, which would otherwise lower it
         // to a class literally named `array` carrying two arguments.
         if let Some(rest) = written.strip_prefix("array<")
@@ -279,7 +280,7 @@ impl FakeSyntax {
                 .collect();
             return TypeId::shape(db, fields);
         }
-        // `callable(): RETURN` (task 11): an empty parameter list only.
+        // `callable(): RETURN`: an empty parameter list only.
         if let Some(rest) = written.strip_prefix("callable(")
             && let Some(after_parameters) = rest.strip_prefix(')')
         {
@@ -303,8 +304,8 @@ impl FakeSyntax {
         Self::lower_member_name(site, own_templates, written)
     }
 
-    /// The conditional return form `(NAME is NAME ? NAME : NAME)`
-    /// (task 8): `None` when `written` is not shaped like one, so the
+    /// The conditional return form `(NAME is NAME ? NAME : NAME)`:
+    /// `None` when `written` is not shaped like one, so the
     /// caller falls through to the ordinary class-or-template rule.
     /// Every position lowers through [`Self::lower_member_name`], so a
     /// template declared on the same docblock is recognized in any of
@@ -352,7 +353,7 @@ impl TypeSyntax for FakeSyntax {
         let mut parsed = ParsedAnnotations::default();
         for (name, bound_text) in &template_declarations {
             // A bound is an ordinary written name OR `NAME<ARG, ...>`
-            // (task 8's follow-up fix: a bound naming another template
+            // (a bound naming another template
             // declared earlier in the same docblock, e.g. `@template
             // TKey of Collection<TValue>`, is legal Psalm/PHPStan
             // notation and the solver must resolve it rather than leak
@@ -409,7 +410,7 @@ impl TypeSyntax for FakeSyntax {
                 parsed.return_type = Some(
                     Self::parse_conditional_return(site, &parsed.templates, written)
                         .unwrap_or_else(|| {
-                            // Task 10: `@return` reuses the same
+                            // `@return` reuses the same
                             // generic-argument-aware lowering `@param`
                             // and `@var` already share
                             // (`lower_generic_type`), so a protocol
@@ -442,7 +443,7 @@ impl TypeSyntax for FakeSyntax {
                 }
             }
             if let Some(rest) = line.strip_prefix("@var ") {
-                // Task 9: the named inline `@var NAME $variable` or
+                // The named inline `@var NAME $variable` or
                 // `@var NAME<ARG, ...> $variable` form, feeding
                 // `parsed.variables` — same last-space split as
                 // `@param` (a comma-separated argument list may itself

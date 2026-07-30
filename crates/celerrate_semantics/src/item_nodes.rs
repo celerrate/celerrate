@@ -3,15 +3,14 @@
 //! agrees by construction: preorder tree order, the enclosing
 //! namespace tracked as walk state.
 //!
-//! The walk descends into control-flow blocks, function bodies, and —
-//! since the type-engine sub-project — member lists: methods,
-//! properties, constants, and enum cases are numbered items carrying
-//! their owning class-like's index, and nameless class-likes
-//! (anonymous classes) are numbered items whose position is their
-//! synthetic identity. Numbering counts declaration nodes only, so
-//! statement edits renumber nothing; adding a member or an anonymous
-//! class renumbers later declarations in the file — the recorded,
-//! accepted trade-off (spec section 2).
+//! The walk descends into control-flow blocks, function bodies, and
+//! member lists: methods, properties, constants, and enum cases are
+//! numbered items carrying their owning class-like's index, and
+//! nameless class-likes (anonymous classes) are numbered items whose
+//! position is their synthetic identity. Numbering counts declaration
+//! nodes only, so statement edits renumber nothing; adding a member or
+//! an anonymous class renumbers later declarations in the file — a
+//! recorded, accepted trade-off.
 //!
 //! A statement-form `namespace Foo;` nested inside a control-flow
 //! block (error-recovery input, invalid PHP) deliberately switches the

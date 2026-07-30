@@ -1,7 +1,7 @@
 //! Anti-false-positive smoke: realistic PHP over the real embedded
 //! stub index must produce zero semantic diagnostics. A false positive
-//! here is a priority bug (parent spec, section 6); the full pinned
-//! Symfony corpus enters CI in part 8.
+//! here is a priority bug; the full pinned Symfony corpus enters CI
+//! through a separate gate.
 
 #![allow(clippy::unwrap_used)]
 
@@ -160,7 +160,7 @@ fn assert_no_diagnostics(source: &str) {
 
 #[test]
 fn a_define_in_a_method_body_is_not_an_unknown_constant() {
-    // The case that motivated the design: bootstrap code calling
+    // The motivating case: bootstrap code calling
     // `define()` from a static method is not exotic, and an unseen
     // `define()` is a false positive.
     assert_no_diagnostics(

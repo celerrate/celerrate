@@ -142,13 +142,13 @@ fn collect(statements: ast::AstChildren<ast::Statement>, initial_namespace: &str
                         declaration.implements_clause(),
                         declaration.member_list(),
                     );
-                    // Decision 7: every enum implicitly implements
-                    // `UnitEnum`, and a backed one (its declared
-                    // backing type is present) additionally
-                    // `BackedEnum` — real ancestor facts no PHP
-                    // grammar lets a class-like write explicitly.
-                    // Appended after any written heritage, global
-                    // names (no namespace qualification, matching
+                    // Every enum implicitly implements `UnitEnum`,
+                    // and a backed one (its declared backing type is
+                    // present) additionally `BackedEnum` — real
+                    // ancestor facts no PHP grammar lets a class-like
+                    // write explicitly. Appended after any written
+                    // heritage, global names (no namespace
+                    // qualification, matching
                     // `StubClassSurface.parents`'s own convention).
                     surface.parents.push("UnitEnum".to_owned());
                     if declaration.backing_type().is_some() {
@@ -298,7 +298,7 @@ fn qualify(namespace: &str, name: &str) -> String {
     }
 }
 
-/// Decision 7: absolute names (leading `\`) trim the backslash;
+/// Absolute names (leading `\`) trim the backslash;
 /// everything else qualifies into the declaring namespace. Stub-file
 /// `use` imports are deliberately not consulted (recorded debt:
 /// phpstorm-stubs heritage references are almost always global or
@@ -421,7 +421,7 @@ fn extract_member(declaration: ast::MemberDeclaration, members: &mut Vec<StubMem
             });
         }
         // `use TraitA, TraitB;` inside a class body: not a member in
-        // its own right, out of scope for this task.
+        // its own right, so it is skipped here.
         ast::MemberDeclaration::TraitUseClause(_) => {}
     }
 }
@@ -1303,9 +1303,9 @@ mod tests {
 
     #[test]
     fn an_enum_surface_implicitly_carries_unitenum_and_backedenum_parents() {
-        // Decision 7: the stub compiler's enum arm synthesizes the
-        // engine-provided parents no PHP grammar lets a class-like
-        // write. A plain enum only ever gains `UnitEnum`; a backed one
+        // The stub compiler's enum arm synthesizes the engine-provided
+        // parents no PHP grammar lets a class-like write. A plain
+        // enum only ever gains `UnitEnum`; a backed one
         // (its `backing_type()` is present) additionally gains
         // `BackedEnum`.
         let plain = extract("<?php enum Suit {}");

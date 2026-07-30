@@ -1,5 +1,5 @@
-//! The annotation ground-truth harness (design section 10, harness
-//! 1): the hidden CLI channel run over the pinned corpus, gated
+//! The annotation ground-truth harness: the hidden CLI channel run
+//! over the pinned corpus, gated
 //! against a committed baseline classified by divergence class. The
 //! gate is on regressions, never on the baseline's size - a drowning
 //! protocol is no protocol.

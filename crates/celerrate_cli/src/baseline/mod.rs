@@ -23,7 +23,7 @@ pub const BASELINE_FILE_NAME: &str = "celerrate-baseline.toml";
 pub const OBSOLETE_BASELINE_ENTRIES: DiagnosticId = DiagnosticId::new("CEL0050");
 /// The baseline file exists but could not be (fully) read.
 pub const INVALID_BASELINE_FILE: DiagnosticId = DiagnosticId::new("CEL0051");
-/// Checked against the registry by the composition-root guard (task 8).
+/// Checked against the registry by the composition-root guard.
 pub const ALLOCATED_IDENTIFIERS: &[DiagnosticId] =
     &[OBSOLETE_BASELINE_ENTRIES, INVALID_BASELINE_FILE];
 

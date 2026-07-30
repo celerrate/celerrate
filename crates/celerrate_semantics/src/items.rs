@@ -51,7 +51,7 @@ pub enum DeclarationKind {
 
 /// One declared symbol: original spelling, enclosing namespace (`""`
 /// is global), stable identity, and the unresolved inheritance names
-/// exactly as written (sub-project 3 consumes them; they cost one
+/// exactly as written (a later consumer needs them; they cost one
 /// field now).
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Declaration {
@@ -139,8 +139,8 @@ fn names_of(names: Option<ast::AstChildren<ast::Name>>) -> Vec<String> {
 
 /// The trait names a class-like uses, read from its member list. The
 /// traversal never descends into member lists; this projection field
-/// is the one place the tree looks inside one, because the spec names
-/// trait `use` among the inheritance names.
+/// is the one place the tree looks inside one, because inheritance
+/// names include trait `use`.
 fn trait_use_names(member_list: Option<ast::MemberList>) -> Vec<String> {
     member_list
         .into_iter()
@@ -901,7 +901,7 @@ mod tests {
 
     #[test]
     fn original_spelling_is_preserved() {
-        // Case folding is the index's concern (part 5), never the tree's.
+        // Case folding is the index's concern, never the tree's.
         assert_eq!(
             declared("<?php class MiXeDcAsE {}"),
             vec![(

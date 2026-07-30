@@ -1,11 +1,11 @@
-//! Generic-argument threading (design sections 2 and 6): class-level
+//! Generic-argument threading: class-level
 //! annotations parsed at their declaring site, composed transitively
 //! along linearization's ancestry into per-ancestor argument lists.
 //! This is the delivery path of the Doctrine-on-Symfony repository
 //! pattern: `@extends ServiceEntityRepository<User>` reaches
 //! `$repository->find($id)` through these queries.
 //!
-//! **Stub ancestors (decision 8, plan 7 task 5).** A stub target
+//! **Stub ancestors.** A stub target
 //! curated with a class refinement (`celerrate_stubs::RefinedClass`,
 //! compiled from `refinements.celerrate`) threads its generic
 //! arguments through [`ancestor_arguments`] exactly as a source
@@ -21,17 +21,17 @@
 //! ancestor — no `RefinedClass` on file — still contributes nothing,
 //! exactly as before. Curating the phpstorm-stubs surface to carry
 //! its own `@template`/`@extends` annotations, class by class, is
-//! measurement-driven (design section 7, plan 7 task 11): an entry
+//! measurement-driven: an entry
 //! earns its place only when the pinned corpus both names it and a
 //! measured result sharpens, so most stub classes are deliberately
-//! uncurated by that gate, not by omission. As of task 11's exit the
+//! uncurated by that gate, not by omission. Today the
 //! curated class seed is `ArrayIterator` alone (`refinements.celerrate`);
 //! every other stub class — `SplStack`, `ArrayObject`, and the rest —
-//! still contributes no generic ancestors here, task-12 debt (owner:
+//! still contributes no generic ancestors here, recorded debt (owner:
 //! curation) revisited only if a future corpus measurement demands a
 //! new class entry. A receiver reaching an uncurated stub ancestor
 //! still degrades to the protocol-member fallback (`flow.rs`'s
-//! iteration-typing chain, decision 12).
+//! iteration-typing chain).
 
 use std::collections::BTreeMap;
 
@@ -56,7 +56,7 @@ pub struct ClassAnnotations<'db> {
 /// no registered syntax, or an unresolvable class all answer the
 /// default (no templates, no ancestors) — never an error. Runs even
 /// for classes with only a `@template` docblock and no ancestors: the
-/// solver (task 8) and the receiver substitution (task 5) read its
+/// solver and the receiver substitution both read its
 /// template list. `configuration` completes the input quartet the
 /// annotation seam shares with `class_annotations`'s siblings
 /// (`member_annotations`, `function_annotations`) — a uniform query
@@ -65,7 +65,7 @@ pub struct ClassAnnotations<'db> {
 ///
 /// A class key with no source declaration at all (an unresolvable
 /// name, or a genuine stub) never has a docblock to parse: `stubs`
-/// answers for it instead (decision 8, plan 7 task 5) — a stub class
+/// answers for it instead — a stub class
 /// curated with a `RefinedClass` answers ITS templates (declaration
 /// order preserved, bounds lowered under an empty scope, scope key =
 /// the class key, exactly `norm_templates`'s convention for a refined
@@ -133,7 +133,7 @@ pub fn class_annotations<'db>(
 /// Zips `arguments` positionally against `templates` (declaration
 /// order), binding each into a `Substitution` scoped to `scope`: a
 /// missing argument falls to the template's own bound, then `mixed`
-/// (decision 7's conservative-silence rule). The single home for that
+/// (this module's conservative-silence rule). The single home for that
 /// two-step fallback — both `ancestor_arguments` (composing a target's
 /// substitution while walking the ancestry) and `ancestor_substitution`
 /// (re-deriving the same map for a single owner, on demand) zip through
@@ -163,12 +163,13 @@ fn zip_templates<'db>(
 /// transitively along linearization's ancestry, in walk order.
 /// Diamond inheritance resolves first-edge-wins; an uncurated stub or
 /// otherwise unresolved ancestor contributes nothing; a missing
-/// argument falls to the template's bound, then `mixed` (decision 7).
+/// argument falls to the template's bound, then `mixed` (the same
+/// conservative-silence rule).
 ///
 /// A **stub** ancestry edge — `edge.resolved` absent, `edge.stub`
 /// present — threads exactly like a source edge from this point on:
 /// `class_annotations` already answers a curated stub target's own
-/// templates (decision 8), so the same `zip_templates` composition
+/// templates, so the same `zip_templates` composition
 /// applies unmodified. Once composed, [`thread_refined_ancestors`]
 /// contributes that stub target's OWN curated ancestors too — edges
 /// linearization itself never records, since a stub's ancestry lives
@@ -260,7 +261,7 @@ struct RefinementInputs {
     configuration: ProjectConfiguration,
 }
 
-/// Threads a stub owner's own curated ancestors (decision 8): the
+/// Threads a stub owner's own curated ancestors: the
 /// edges [`ancestor_arguments`]'s outer walk never sees, since
 /// `linearized_class` only ever records the DIRECT edge into a stub
 /// boundary (`linearize.rs`'s `AncestorAnswer::Stub` arm) — a curated
@@ -338,7 +339,7 @@ fn thread_refined_ancestors<'db>(
         // can recurse against real bindings rather than an empty
         // substitution — mirroring the outer walk's own composition,
         // not `fixed` itself (that stays the plain positional list
-        // above, decision 8's contract).
+        // above, this function's own contract).
         let ancestor_templates = &class_annotations(
             db,
             files,
@@ -353,7 +354,7 @@ fn thread_refined_ancestors<'db>(
         // ancestor's own template count, and a refined ancestor is
         // typically NOT itself curated: `Iterator` carries no
         // `RefinedClass`, so its template count is zero and the padded
-        // list would be empty, dropping the very answer decision 8
+        // list would be empty, dropping the very answer this function
         // exists to produce. The raw lowered list is the contract.
         //
         // The consequence, recorded rather than fixed: the
@@ -388,7 +389,7 @@ fn thread_refined_ancestors<'db>(
 /// `owner_key`, consulted through `class_key`. `None` when the member
 /// is the class's own or nothing is threaded — callers skip the walk.
 ///
-/// Decision 8's consumer: `declared_member_signature` applies this to
+/// Consumed by `declared_member_signature`, which applies this to
 /// substitute an inherited member's owner-scoped templates with the
 /// receiver class's fixed arguments.
 pub(crate) fn ancestor_substitution<'db>(
@@ -636,11 +637,11 @@ class User {}
         );
     }
 
-    // Task 5 (decision 8): stub-class refinements route through these
+    // Stub-class refinements route through these
     // same two queries rather than around them. `stub_refinement_index`
     // is a synthetic index deliberately smaller than
     // `test_support::minimal_stub_index`: `ArrayIterator` carries the
-    // exact refinement task 3 seeds into `refinements.celerrate`
+    // exact refinement seeded into `refinements.celerrate`
     // (`TKey`/`TValue`, `implements Iterator<TKey, TValue>`), `Iterator`
     // is a genuine compiled surface (so linearization has a real edge
     // to resolve into), and `SplStack` is a genuine stub symbol that
@@ -709,7 +710,7 @@ class User {}
 
     /// [`fixture`], but wired to [`stub_refinement_index`] instead of
     /// `test_support::minimal_stub_index` — the curated `ArrayIterator`
-    /// surface task 5's tests need, which the shared minimal index
+    /// surface this module's tests need, which the shared minimal index
     /// deliberately does not carry (it has no refinements overlay at
     /// all).
     fn stub_refinement_fixture_with_source(sources: &[&str]) -> Fixture {
@@ -796,7 +797,7 @@ class Post {}
 
     #[test]
     fn a_stub_class_without_a_refinement_still_contributes_nothing() {
-        // The plan-6 boundary stays the default: only curation opens
+        // The curation boundary stays the default: only curation opens
         // it. `SplStack` carries no refinement in this fixture;
         // extending it threads nothing.
         //
@@ -808,8 +809,8 @@ class Post {}
         // `extends \SplStack` edge would resolve as UNRESOLVED (the
         // pre-existing, unrelated "no such name" branch), not as a
         // stub-resolved-but-uncurated one, and the same assertion
-        // would still pass while pinning nothing about decision 8 at
-        // all. `ancestor_arguments` also never pushes an entry with an
+        // would still pass while pinning nothing about the curation
+        // boundary at all. `ancestor_arguments` also never pushes an entry with an
         // empty argument list in the first place (`fixed.is_empty()`
         // and "not pushed" are the same condition throughout this
         // module and `flow.rs`'s `implements_iteration_protocol` doc

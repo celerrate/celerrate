@@ -59,9 +59,9 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
     let mut dynamic_providers = Vec::new();
 
     // The native directive provider: core, registered unconditionally,
-    // under the reserved core identity, outside the admitted set - it
+    // under the reserved core identity, outside the admitted set, it
     // never keys the plugin-set digest; binary identity already keys
-    // the cache for core behavior (design sections 2 and 8).
+    // the cache for core behavior.
     comment_directives.push(celerrate_semantics::CommentDirectiveRegistration {
         identity: core_identity(),
         provider: Arc::new(celerrate_semantics::NativeDirectiveProvider),
@@ -140,7 +140,7 @@ pub fn register_plugins(database: &AnalysisDatabase) -> RegisteredPlugins {
 
 /// Registers the core rules under the reserved core identity, outside
 /// the admitted plugin set: core behavior is keyed by binary identity,
-/// never by the plugin-set digest (design section 2). Order here is
+/// never by the plugin-set digest. Order here is
 /// the deterministic dispatch order, like the other four registries.
 ///
 /// Every composition root that composes diagnostics must call this
@@ -157,8 +157,8 @@ pub fn register_core_rules(database: &AnalysisDatabase, overrides: &BTreeMap<Str
         .new(database);
 }
 
-/// The spec's active-set formula (section 2): (`Default`-tier rules
-/// minus disabled) union (nursery rules enabled). An override on the
+/// The active-set formula: (`Default`-tier rules minus disabled)
+/// union (nursery rules enabled). An override on the
 /// tier's own default is a valid no-op, so promotions and demotions
 /// never break existing configurations.
 pub fn rule_is_active(tier: celerrate_rules::Tier, override_enabled: Option<bool>) -> bool {
@@ -218,9 +218,9 @@ fn admit_dynamic_providers(
     (registrations, excluded)
 }
 
-/// The plugin-set cache key (plan 4a decision 1, corrected by issue
-/// #60): a blake3 digest of the **post-admission** effective set — the
-/// admitted identities' `(name, version, configuration)` triples plus
+/// The plugin-set cache key (issue #60): a blake3 digest of the
+/// **post-admission** effective set, the admitted identities'
+/// `(name, version, configuration)` triples plus
 /// the excluded plugin names. Derived from `register_plugins`' output,
 /// so there is no second descriptor list to forget; sorted before
 /// hashing, so registration order does not key the cache. Fields are
@@ -366,8 +366,7 @@ mod tests {
     fn an_api_version_mismatch_excludes_and_reports() {
         // Exercise the dormant check through the internal helper that
         // takes the descriptor as data (the public path cannot mismatch
-        // for compiled-in plugins — the design says so; this pins the
-        // scaffolding anyway).
+        // for compiled-in plugins, this pins the scaffolding anyway).
         let mismatched = celerrate_plugin::PluginDescriptor::new(
             celerrate_phpdoc_bridge::descriptor().identity,
             celerrate_plugin::PLUGIN_API_VERSION + 1,

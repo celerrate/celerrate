@@ -1,7 +1,7 @@
 //! The suppression-directive recognizer: the bridge's implementation
 //! of the comment-directive extension point.
 //!
-//! # The mapping table (bridge-internal, design section 5)
+//! # The mapping table (bridge-internal)
 //!
 //! | Written form                    | Comment kind | Directive                        |
 //! |---------------------------------|--------------|----------------------------------|
@@ -14,11 +14,11 @@
 //! PHPStan 1.11's bare `@phpstan-ignore` targets its own line when the
 //! comment trails code and the next line otherwise; covering both
 //! lines is the superset that under-suppresses neither placement
-//! (design section 5: over-suppression, never under-suppression). A
+//! (over-suppression, never under-suppression). A
 //! docblock-attached `@psalm-suppress` maps to the annotated
 //! declaration's whole span — its Psalm scope, not the docblock's own
 //! line where no diagnostic ever fires. Identifiers are marked through
-//! the correspondence table (design section 8): the bridge marks each
+//! the correspondence table: the bridge marks each
 //! written identifier as mapped to its Celerrate codes, explicitly
 //! scope-wide, or unmapped; the matcher downstream (`celerrate_semantics`)
 //! is where that mark turns into a filter. Malformed content yields
@@ -91,7 +91,7 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
         CommentKind::Line | CommentKind::Block => DirectiveScope::CurrentAndNextLine,
         // A comment kind this bridge does not know yet: the both-lines
         // superset, the same over-suppression-never-under-suppression
-        // resolution the bare form uses (design section 5).
+        // resolution the bare form uses.
         _ => DirectiveScope::CurrentAndNextLine,
     };
     Some(suppress(
@@ -100,8 +100,8 @@ fn psalm_directive(kind: CommentKind, after_tag: &str) -> Option<CommentDirectiv
     ))
 }
 
-/// One written identifier, marked through the correspondence table
-/// (design section 8): mapped with its code strings, explicitly
+/// One written identifier, marked through the correspondence table:
+/// mapped with its code strings, explicitly
 /// scope-wide, or unmapped. This resolves the long-standing "carried,
 /// never matched" reservation: the bridge marks, the matcher
 /// downstream matches.

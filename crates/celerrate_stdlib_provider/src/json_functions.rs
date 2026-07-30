@@ -7,9 +7,9 @@ use celerrate_plugin::{TypeContext, TypeId};
 /// PHP's decode-side flag selecting the array branch.
 pub(crate) const JSON_OBJECT_AS_ARRAY: i64 = 1;
 
-/// `json_decode(json, associative?, depth?, flags?)`: decision 12
-/// (amended). The scalar tail (`bool|float|int|string|null`) is
-/// always present. PHP's `ext/json/json.c` overrides the
+/// `json_decode(json, associative?, depth?, flags?)`. The scalar
+/// tail (`bool|float|int|string|null`) is always present. PHP's
+/// `ext/json/json.c` overrides the
 /// `JSON_OBJECT_AS_ARRAY` flag with a non-`null` `$associative` in
 /// BOTH directions ("for BC reasons"): a `true` associative literal
 /// selects the array branch and a `false` associative literal selects
@@ -211,7 +211,7 @@ mod tests {
     #[test]
     fn an_explicit_null_associative_behaves_like_an_absent_one() {
         // `?bool $associative = null` since PHP 7.4: an explicit `null`
-        // is exactly the absent argument (decision 12).
+        // is exactly the absent argument.
         let db = TestDatabase::default();
         let context = testing_type_context(&db);
         let answer =
@@ -225,8 +225,7 @@ mod tests {
     // fires but is tautological about what the branches actually
     // contain: deleting `null` from `scalar_tail`, or misspelling
     // `"stdclass"`, would leave all of them green. These two tests
-    // pin decision 12's stated invariant directly against the branch
-    // content instead.
+    // pin the branches' actual content directly instead.
 
     #[test]
     fn the_object_branch_carries_stdclass_and_null() {

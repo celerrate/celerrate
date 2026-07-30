@@ -51,7 +51,7 @@
 //! **Rendering.** `TypeId::display` renders class and enum names as
 //! their folded keys (the case-insensitive, backslash-normalized
 //! symbol-table key), on purpose: the lattice's canonical form must
-//! never depend on spelling. Plan 8's checks layer
+//! never depend on spelling. The checks layer
 //! (`checks::receivers::written_type_display`) recovers the originally
 //! written spelling through the symbol table when rendering
 //! diagnostics, via the crate-private `TypeId::display_with_names`
@@ -72,7 +72,8 @@
 //! never a crash, never a silent widening, never a silently dropped
 //! annotation. The annotation layer itself is a seam:
 //! [`member_annotations`] answers `MemberAnnotations::default()` until
-//! plan 4a's bridge fills it through the type-syntax registry — at
+//! a registered `TypeSyntax` implementation fills it through the
+//! type-syntax registry — at
 //! which point source precedence, the trust rule, and the
 //! nearest-ancestor inheritance walk (already wired and unit-tested
 //! against injected readers) change nothing else. Stub signatures
@@ -81,12 +82,12 @@
 //! least restrictive reading of a call's result); a parameter type
 //! takes the most restrictive per-version form that is a proven subtype
 //! of every other, or falls silent (`parameter_type: None`) when no
-//! such form exists — the design's degenerate empty-intersection guard,
+//! such form exists — the degenerate empty-intersection guard,
 //! silencing the check rather than fabricating an uninhabited
 //! intersection. Bare `callable` lowers to `mixed`: no top-of-callables
 //! form exists in the lattice, so `mixed` is a documented sound
 //! widening (silence, never a false positive); the corpus triage
-//! (task 12) measured the silence against a real callable-heavy
+//! measured the silence against a real callable-heavy
 //! codebase and found no false negative. A first-class bare-callable
 //! form stays recorded debt, owner: the type lattice, future, revisited
 //! only if a call-signature-precise diagnostic needs it.

@@ -1,10 +1,10 @@
-//! Render-time resolution of symbolic labels (design section 3): a
+//! Render-time resolution of symbolic labels: a
 //! concrete range of another file must never enter a memoized per-file
 //! artifact, so the stored form is the declaration's display path and
 //! THIS module turns it into a location, at render time, outside
 //! queries.
 //!
-//! Part 7 scope: bare class-like and function symbols resolve; member
+//! Current scope: bare class-like and function symbols resolve; member
 //! symbols (`Class::member`), stub-backed, define-origin, and unknown
 //! symbols degrade to the note form. Member precision arrives with the
 //! first rule that emits a member label.

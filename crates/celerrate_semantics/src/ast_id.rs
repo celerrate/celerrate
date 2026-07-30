@@ -151,9 +151,8 @@ mod tests {
 
     #[test]
     fn anonymous_classes_are_numbered_with_their_members() {
-        // The synthetic identity the spec gives anonymous classes is
-        // their numbered position; their members are owned like any
-        // other class's.
+        // Anonymous classes' synthetic identity is their numbered
+        // position; their members are owned like any other class's.
         let (_parse, map) =
             map_of("<?php function wrapper() { return new class { public function f() {} }; }");
         assert_eq!(
@@ -184,7 +183,7 @@ mod tests {
 
     #[test]
     fn statement_edits_renumber_nothing_and_member_insertion_renumbers_later_nodes() {
-        // The spec's recorded trade-off: numbering counts declaration
+        // A recorded trade-off: numbering counts declaration
         // nodes only, so statement edits still renumber nothing; adding
         // a member (or an anonymous class) renumbers later declarations
         // in the file. Accepted, and pinned here.

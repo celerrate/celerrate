@@ -5,12 +5,12 @@ use celerrate_stubs::StubIndexInput;
 
 use crate::reference_checks::{ReferenceOutcome, reference_resolutions};
 
-/// The semantic-phase context, owned by this crate (design section 4).
+/// The semantic-phase context, owned by this crate.
 /// Sealed: private database, delegating methods, no salsa vocabulary
 /// rule-side. The surface matches what the shipped semantic rules
 /// consume: `reference_resolutions` for the unknown-symbol family and
-/// `php_version_range` for the symbol-version-gating one (the part-3
-/// YAGNI criterion); the symbol index arrives with its first client.
+/// `php_version_range` for the symbol-version-gating one (the YAGNI
+/// criterion); the symbol index arrives with its first client.
 pub struct SemanticContext<'db> {
     db: &'db dyn salsa::Database,
     file: SourceFile,
@@ -28,7 +28,7 @@ impl<'db> SemanticContext<'db> {
     /// Every statically named reference's resolution outcome, in walk
     /// order. Delegates to the same memoized walk that co-produces the
     /// cache's revalidation records, so consulting cannot drift from
-    /// recording (design section 2).
+    /// recording.
     pub fn reference_resolutions(&self) -> &'db [ReferenceOutcome] {
         reference_resolutions(
             self.db,

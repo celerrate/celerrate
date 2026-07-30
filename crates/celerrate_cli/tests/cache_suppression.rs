@@ -1,8 +1,8 @@
 //! Suppression under the persistent cache: the pack stores the
 //! post-filter verdict, a warm run serves it parse-free and equal to
 //! recomputation, and a directive edit is a plain content-hash miss —
-//! stale suppression is structurally impossible (decision 6 of plan
-//! 4c: directives are strictly file-local).
+//! stale suppression is structurally impossible (directives are
+//! strictly file-local).
 
 #![allow(
     clippy::unwrap_used,

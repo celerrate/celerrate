@@ -1,6 +1,6 @@
 //! The structural serialization of the type lattice: [`crate::TypeId`] is
-//! a process-local interner handle and never hits disk (design section
-//! 3); a persisted type is this self-contained mirror, re-interned
+//! a process-local interner handle and never hits disk; a persisted
+//! type is this self-contained mirror, re-interned
 //! through the public constructors on the way back in — which
 //! canonicalize, so a forged or stale value re-canonicalizes instead of
 //! panicking.
@@ -13,7 +13,7 @@ use crate::declared::{DeclaredSignature, Trust};
 use crate::representation::{CallableParameter, ShapeField, ShapeKey, StringConstraint, TypeData};
 
 /// The nesting-depth budget shared by [`StoredType::to_type_id`] and the
-/// manual `Deserialize` implementation (decision 2's decode guard).
+/// manual `Deserialize` implementation (the decode guard below).
 /// Generous headroom above the live lattice's construction-time depth
 /// cap (`crate::widening::STRUCTURAL_DEPTH_CAP`, 16), while remaining
 /// small enough that postcard's per-level recursion on either side of
@@ -133,7 +133,7 @@ pub struct StoredCallableParameter {
     pub by_reference: bool,
 }
 
-/// The structural mirror of [`Trust`] (declared.rs task 4): how one
+/// The structural mirror of [`Trust`]: how one
 /// declared element's final type was obtained. Digested alongside its
 /// type, so an annotation-layer change that only flips the trust verdict
 /// (a `RejectedAnnotation` becoming `Refined` with the SAME resolved
@@ -212,7 +212,7 @@ impl StoredSignature {
     }
 }
 
-/// The persisted key of one inferred signature (plan 9a, task 7): a
+/// The persisted key of one inferred signature: a
 /// free function through its folded Function-space key, or a method
 /// through its enclosing class-like's folded key plus the member's own
 /// folded key — the same two-part identity [`crate::inference::BodyOwner`]
@@ -233,9 +233,9 @@ pub enum StoredSignatureKey {
     },
 }
 
-/// One class a recorded body's flow walk consulted (task 3's
-/// `TypedDependencies::classes`), alongside its class-surface digest at
-/// persist time: task 8 revalidates by recomputing the live digest
+/// One class a recorded body's flow walk consulted
+/// (`TypedDependencies::classes`), alongside its class-surface digest at
+/// persist time: revalidation works by recomputing the live digest
 /// through [`crate::records::class_surface_digest`] and comparing.
 /// `digest` is `None` when the digest query itself answered `None` (the
 /// key no longer names a source class-like) — a recordable fact, not a
@@ -248,7 +248,7 @@ pub struct StoredClassDependency {
 
 /// The free-function sibling of [`StoredClassDependency`]: one
 /// function-space key a recorded body consulted through the DECLARED
-/// tier (task 3's `TypedDependencies::functions`), and its signature
+/// tier (`TypedDependencies::functions`), and its signature
 /// digest at persist time through
 /// [`crate::records::function_signature_digest`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -261,8 +261,8 @@ pub struct StoredFunctionDependency {
 /// callee's own persisted key, and the raw pre-substitution return type
 /// the walk actually consumed. Mirrors
 /// [`crate::records::TypedDependencies`]'s own raw-answer invariant
-/// (its rustdoc) — recorded before any call-site substitution, so task
-/// 8's revalidation re-invokes the same callee query and compares the
+/// (its rustdoc) — recorded before any call-site substitution, so
+/// revalidation re-invokes the same callee query and compares the
 /// same, unsubstituted vocabulary.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredInferredEdge {
@@ -270,11 +270,11 @@ pub struct StoredInferredEdge {
     pub return_type: StoredType,
 }
 
-/// One body's persisted inferred signature (plan 9a, task 7). The
-/// defining file's content hash stands in for body identity — plan 9a
-/// decision 6 keeps the warm serve path from ever reading a body IR —
+/// One body's persisted inferred signature. The
+/// defining file's content hash stands in for body identity — this
+/// keeps the warm serve path from ever reading a body IR —
 /// and every class, function, and inferred-tier callee the body's flow
-/// walk actually consulted is carried verbatim from task 3's
+/// walk actually consulted is carried verbatim from
 /// `TypedDependencies`/`FileDependencies`, never re-derived by a
 /// separate mirror walk.
 ///
@@ -286,15 +286,15 @@ pub struct StoredInferredEdge {
 /// tier, `StoredFunctionDependency`/`StoredClassDependency`, never
 /// `StoredInferredEdge`), never this record's own existence.
 ///
-/// Recorded coarsening: the design's typed-cache section keys a
+/// Recorded coarsening: a finer-grained scheme would key a
 /// signature "by body content"; this record keys by the *defining
 /// file's* content hash instead — any edit anywhere in the file
 /// invalidates every one of its bodies' persisted signatures, not just
 /// the edited body's. Sound (consistent with every other pack key,
 /// which is file-grained) and cheap, and the early-cutoff loss it costs
-/// is bounded by task 8's cross-boundary cutoff (a recomputed body
-/// whose return still matches still validates its callers). Plan 9b's
-/// measured numbers own whether the coarseness matters enough to key
+/// is bounded by the cross-boundary cutoff (a recomputed body
+/// whose return still matches still validates its callers). Measured
+/// corpus numbers own whether the coarseness matters enough to key
 /// per body instead — a pack-only change behind this same record shape.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredInferredSignature {
@@ -872,8 +872,8 @@ mod tests {
 
     #[test]
     fn every_symbolic_shape_round_trips() {
-        // Symbolic forms survive into persisted inferred returns
-        // (plan 6): the serialization cannot assume ground types. Both
+        // Symbolic forms survive into persisted inferred returns: the
+        // serialization cannot assume ground types. Both
         // `key_of` and `value_of` evaluate decidable subjects at
         // construction (a shape, an array), so an undecidable subject
         // (a template) is required to actually exercise the symbolic
@@ -939,8 +939,8 @@ mod tests {
         // fold (the test itself never recurses): to_type_id answers
         // None, never a panic, never a stack overflow. The
         // Deserialize half of the guard is pinned at the byte level
-        // in task 10's adversarial suite; a lightweight sanity check
-        // of that half lives just below.
+        // in a dedicated adversarial test suite elsewhere; a
+        // lightweight sanity check of that half lives just below.
         let db = TestDatabase::default();
         let mut deep = StoredType::Null;
         for _ in 0..=STORED_DEPTH_LIMIT {
@@ -953,7 +953,7 @@ mod tests {
 
     #[test]
     fn an_over_deep_encoded_value_is_a_deserialize_error_never_an_overflow() {
-        // The Deserialize-side guard (decision 2) must reject the same
+        // The Deserialize-side guard must reject the same
         // over-deep shape before it recurses into it, not merely once
         // it is fully materialized: encode the forged value, then
         // decode it back, and expect a clean error.

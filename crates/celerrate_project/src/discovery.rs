@@ -34,8 +34,8 @@ pub struct ProjectDiscovery {
     pub project_walk_roots: Vec<PathBuf>,
     pub vendor_walk_roots: Vec<PathBuf>,
     /// The configuration's `exclude` entries, normalized against the
-    /// root: subtracted from the walk (spec section 3). Empty without a
-    /// configuration file.
+    /// root: subtracted from the walk. Empty without a configuration
+    /// file.
     pub excluded_roots: Vec<PathBuf>,
     pub notices: Vec<ProjectNotice>,
 }
@@ -167,7 +167,7 @@ pub fn discover_from_sources(
     // or the declared rules resolve to no walkable root (for example
     // every directory value was mistyped), the whole root is analyzed.
     // A non-empty `include` replaces the Composer-derived roots
-    // (spec section 3: "default: Composer autoload roots"). The paths
+    // (the default being the Composer autoload roots). The paths
     // are lexical, exactly like autoload walk roots: nothing stats
     // them, so a declared-but-absent directory is ordinary.
     let project_walk_roots = if configuration.include.is_empty() {

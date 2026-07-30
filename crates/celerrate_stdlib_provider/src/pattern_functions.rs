@@ -1,5 +1,5 @@
 //! `preg_match`: the return literals and the pattern-derived
-//! `$matches` shape (decision 11). The group scanner is lexical —
+//! `$matches` shape. The group scanner is lexical —
 //! delimiters, escapes, character classes, non-capturing markers,
 //! the three named-group spellings — not a regex parser:
 //! alternation-aware optionality is a recorded debt, and a
@@ -8,8 +8,8 @@
 //! literal in PCRE but ends the class early for the scanner and
 //! lets the following `(` count as a group.
 //!
-//! Task-12 debt (owner: the pattern scanner). All three items above
-//! are sound-but-imprecise, recorded and unresolved as of this task:
+//! Known limitations of the pattern scanner: all three items above
+//! are sound-but-imprecise, recorded and unresolved:
 //! alternation-aware group optionality (a group inside `a|b` is
 //! unconditionally required by the scanner, though only one branch's
 //! groups actually populate at runtime), the conditional-group

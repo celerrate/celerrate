@@ -27,7 +27,7 @@ pub struct SymbolQuery<'db> {
 }
 
 /// Where a name resolved: a declaration of the analyzed file set, or a
-/// compiled stub with its availability window (part 6's version gating
+/// compiled stub with its availability window (the version-gating rule
 /// reads it).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum SymbolResolution {

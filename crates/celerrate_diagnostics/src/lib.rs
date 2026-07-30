@@ -2,9 +2,9 @@
 //!
 //! Every layer that reports, from the parser up, projects its structured
 //! findings into this model: a stable identifier, a severity, and a
-//! primary span. The rich anatomy (annotated spans, notes, structured
-//! suggestions) arrives with the diagnostics-and-fixes sub-project;
-//! rendering is always an upper layer's business.
+//! primary span, plus the rich anatomy of annotated spans, notes, and
+//! structured suggestions; rendering is always an upper layer's
+//! business.
 
 mod diagnostic;
 mod explain;

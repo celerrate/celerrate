@@ -1,10 +1,10 @@
-//! The call-site template solver (design section 6, generics
+//! The call-site template solver (generics
 //! inference-only): structural constraint collection over
 //! (declared parameter, argument) pairs, least-upper-bound
 //! resolution, and the bound-then-mixed fallback — never the
 //! first-seen constituent, which would leak wrong member sets into
-//! the unknown-members family. Decision 10 is the whole contract:
-//! this module is structural and never guesses, and it never emits a
+//! the unknown-members family. This module's whole contract:
+//! it is structural and never guesses, and it never emits a
 //! generic-mismatch diagnostic — a failed constraint simply
 //! contributes nothing, silently.
 
@@ -60,13 +60,13 @@ pub(crate) fn solve<'db>(
 /// Every arm is pinned in `inference.rs`'s test module: the `Array`
 /// arm (against both an `Array` and a `Shape` argument), `Callable`,
 /// `Union`, and `Intersection` arms were production code with no test
-/// since task 8 first wrote them, because the shared fake type syntax
+/// since they were first written, because the shared fake type syntax
 /// (`test_support::FakeSyntax`) parsed none of `array<K, V>`, `|`,
-/// `&`, or `callable(...)`. Task 11 extended that fake's grammar
+/// `&`, or `callable(...)`. That fake's grammar was later extended
 /// (additively — every previously supported form still lowers exactly
 /// as before) and mutation-verified each arm. The declared-`Shape` arm
-/// arrived later (issue #40): task 11's wording, "the `Shape` arm",
-/// named only the `Array` arm's shape-argument side, and decision 10's
+/// arrived later (issue #40): the earlier wording, "the `Shape` arm",
+/// named only the `Array` arm's shape-argument side, and the
 /// "shapes recurse element-wise" clause was half-implemented until the
 /// declared side landed with its own fake form (`array{key: TYPE}`)
 /// and pin.
@@ -104,8 +104,7 @@ fn collect<'db>(
             argument: Some(inner),
         } => {
             // Binds through a string literal, `Foo::class` (typed
-            // `class-string<Foo>`), or any other `class-string` value
-            // (decision 10).
+            // `class-string<Foo>`), or any other `class-string` value.
             let extracted = match argument.data(db) {
                 TypeData::String {
                     constraint: StringConstraint::Literal(text),
@@ -164,7 +163,7 @@ fn collect<'db>(
             _ => {}
         },
         TypeData::Shape { fields } => {
-            // Decision 10's shape clause (issue #40): field-wise, each
+            // The shape clause (issue #40): field-wise, each
             // declared field matching the argument field with the same
             // key. A key the argument lacks, or a non-shape argument,
             // contributes nothing.
@@ -206,7 +205,7 @@ fn collect<'db>(
 }
 
 /// A call result is concrete: any template the solver left unbound
-/// substitutes to its bound, then `mixed` — the design's fallback,
+/// substitutes to its bound, then `mixed` — this module's fallback,
 /// never a first-seen constituent. Placeholders pass through
 /// untouched (they belong to `member_boundary_type`).
 pub(crate) fn finalize_return<'db>(

@@ -21,7 +21,7 @@
 //! `crate::revalidation::resolution_records` are thin projections over
 //! it: one walk produces outcomes and answers, so drift between them is
 //! structurally impossible, the `composed_diagnostics` closure applied
-//! to the second mirror, plan 9a.
+//! to the second mirror.
 
 use std::collections::HashMap;
 
@@ -38,9 +38,9 @@ use crate::revalidation::{ResolutionRecord, answer_of};
 use crate::symbols::SymbolSpace;
 
 /// How one statically named reference resolved, as plain data: the
-/// outcome the semantic-phase rules consume (design section 2). The
-/// version policy (comparing an availability window against the
-/// supported range) belongs to the rules, mirroring `GatedSyntaxUse`.
+/// outcome the semantic-phase rules consume. The version policy
+/// (comparing an availability window against the supported range)
+/// belongs to the rules, mirroring `GatedSyntaxUse`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ReferenceOutcome {
     pub written: String,

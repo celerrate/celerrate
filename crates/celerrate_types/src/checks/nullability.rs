@@ -2,11 +2,11 @@
 //! property write, or method call, all the same `MemberAccess` arena
 //! node — whose receiver's type explicitly contains `null`.
 //! `contains_null` is the whole predicate: `mixed` and templates
-//! answer `false`, so the design's undecidable-receiver silence is
+//! answer `false`, so this undecidable-receiver silence is
 //! structural. `?->` accesses never report (the chain rule types the
 //! short-circuited suffix non-null; the chain end re-acquires `|null`
 //! and a later real dereference of it reports there). Guarded
-//! property reads never report either (decision 9): `isset()`,
+//! property reads never report either: `isset()`,
 //! `empty()`, and the `??`/`??=` left side evaluate a null property
 //! chain without a fatal error — a method call inside them still
 //! throws and still reports.
@@ -39,7 +39,7 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
         else {
             continue;
         };
-        // The decision-9 exemption covers property positions only:
+        // This exemption covers property positions only:
         // a guarded expression consumed as a callee is a real call.
         if guarded.contains(&id) && !called.contains(&id) {
             continue;
@@ -50,8 +50,7 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
         // type — narrowed where a guard held — decides below like any
         // other receiver. A call outside the fingerprint grammar
         // (property-rooted base, unstable argument) is one the floor
-        // cannot track, so the guillotine stays silent for it (design
-        // 2026-07-19-call-result-narrowing; design section 8: an
+        // cannot track, so the guillotine stays silent for it (an
         // undecidable receiver is never a guess).
         if matches!(
             context.ir.expression(*receiver),
@@ -76,7 +75,7 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
     }
 }
 
-/// The expressions decision 9 exempts: the targets of `isset()` and
+/// The expressions this exemption covers: the targets of `isset()` and
 /// `empty()`, the left operand of `??`, and the target of `??=`,
 /// expanded along their receiver chains — through `MemberAccess`
 /// receivers and `Index` subjects, stopping at anything else (a call
@@ -187,7 +186,7 @@ function f(?User $u, mixed $anything): void {
 
     #[test]
     fn a_chain_end_re_acquires_null_and_a_real_dereference_of_it_reports() {
-        // Plan 5's chain rule: only the final chain result re-acquires
+        // The chain rule: only the final chain result re-acquires
         // `|null`. Dereferencing that end without narrowing is a real
         // possible-null dereference.
         let verdicts = family_verdicts(
@@ -211,7 +210,7 @@ function f(?User $u): void {
 
     #[test]
     fn guarded_property_reads_are_exempt_but_calls_still_report() {
-        // Decision 9: isset(), empty(), and the ??/??= left side are
+        // isset(), empty(), and the ??/??= left side are
         // the idiomatic guards themselves — property reads there are
         // non-fatal and warning-suppressed. A call is a hard boundary:
         // it still throws on a null receiver and still reports.
