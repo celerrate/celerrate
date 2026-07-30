@@ -16,6 +16,9 @@ The command looks for `phpstan.neon` at the project root, then
 the same discovery order PHPStan itself uses. Its `includes` are
 resolved recursively, relative to the file that declares them, with a
 cycle guard against a file that includes itself back into the tree.
+An include is followed wherever it points, including outside the
+project root, exactly as PHPStan itself would follow it. The command
+only ever reads those files.
 
 Only three settings are consumed: `parameters.paths`,
 `parameters.excludePaths`, and `parameters.level`. `excludePaths`
@@ -34,6 +37,13 @@ command refuses to overwrite an existing `celerrate.toml`; pass
 under the new configuration finds something to record. An empty
 baseline file is never written, so a project with a clean generated
 configuration ends the migration with no baseline file at all.
+
+Unlike `celerrate.toml`, the baseline is not protected by `--force`:
+an existing `celerrate-baseline.toml` is replaced wholesale by the one
+the migration records, and that happens even without `--force`. The
+file is regenerable at any time with `celerrate check --baseline`, so
+the cost is low, but keep a copy first if the old entries matter to
+you.
 
 The command never modifies `phpstan.neon`, `phpstan.neon.dist`,
 `phpstan.dist.neon`, or any PHPStan baseline file. Rollback stays
@@ -67,6 +77,18 @@ afterward to raise, lower, or remove any of them.
 
 ## What is not converted, and why
 
+- **Paths `celerrate.toml` cannot express**: `include` and `exclude`
+  under `[project]` take plain relative paths inside the project root,
+  so four kinds of entry are dropped rather than mistranslated:
+  absolute paths, paths carrying a `%parameter%` placeholder, `*` or
+  `?` glob patterns, and paths that escape the project root with `..`.
+  Globs in `excludePaths` are common in real projects, and a dropped
+  exclusion means the analysis sees more code and reports more
+  findings. The report names every dropped path with its reason, and
+  the recorded baseline absorbs the consequence: those extra findings
+  are baselined like any other, so the first `celerrate check` is still
+  clean. Narrow the paths by hand afterward if you would rather not
+  carry them in the baseline.
 - **Message-based `ignoreErrors`**: PHPStan's ignore patterns match
   against PHPStan's own message text, a vocabulary Celerrate does not
   share. There is nothing to translate a regular expression against.

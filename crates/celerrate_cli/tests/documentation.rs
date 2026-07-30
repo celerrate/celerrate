@@ -78,6 +78,14 @@ fn the_migration_page_documents_the_command_and_its_level_table() {
             "docs/migration.md must mention {token}"
         );
     }
+    // The level table's boundaries, so the page cannot drift from
+    // `convert::severity_profile` if the remap boundary ever moves.
+    for boundary in ["0, 1, 2, 3, 4, 5", "6 and above", "`max`", "\"warning\""] {
+        assert!(
+            page.contains(boundary),
+            "the level table must state {boundary}"
+        );
+    }
     for identifier in [
         "CEL0030", "CEL0031", "CEL0032", "CEL0033", "CEL0034", "CEL0035", "CEL0036", "CEL0037",
         "CEL0038",
