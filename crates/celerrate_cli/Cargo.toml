@@ -37,6 +37,7 @@ postcard = { workspace = true }
 rayon = { workspace = true }
 salsa = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 tempfile = { workspace = true }
 terminal_size = { workspace = true }
 toml_edit = { workspace = true }
@@ -45,3 +46,4 @@ toml_edit = { workspace = true }
 blake3 = { workspace = true }
 celerrate_syntax = { path = "../celerrate_syntax" }
 insta = { workspace = true }
+jsonschema = { workspace = true }

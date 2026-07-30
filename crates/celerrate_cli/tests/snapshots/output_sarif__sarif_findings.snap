@@ -1,0 +1,114 @@
+---
+source: crates/celerrate_cli/tests/output_sarif.rs
+expression: text
+---
+{
+  "$schema": "https://docs.oasis-open.org/sarif/sarif/v2.1.0/errata01/os/schemas/sarif-schema-2.1.0.json",
+  "runs": [
+    {
+      "columnKind": "unicodeCodePoints",
+      "invocations": [
+        {
+          "executionSuccessful": true,
+          "exitCode": 1
+        }
+      ],
+      "properties": {
+        "baselinedHidden": 0
+      },
+      "results": [
+        {
+          "level": "note",
+          "message": {
+            "text": "no PHP version configured; assuming 8.5"
+          },
+          "ruleId": "CEL0027"
+        },
+        {
+          "level": "error",
+          "locations": [
+            {
+              "physicalLocation": {
+                "artifactLocation": {
+                  "uri": "src/Example.php"
+                },
+                "region": {
+                  "byteLength": 7,
+                  "byteOffset": 7,
+                  "endColumn": 8,
+                  "endLine": 3,
+                  "startColumn": 1,
+                  "startLine": 3
+                }
+              }
+            }
+          ],
+          "message": {
+            "text": "unknown function `strlenn`"
+          },
+          "properties": {
+            "needsReviewSuggestions": [
+              {
+                "edits": [
+                  {
+                    "artifactLocation": {
+                      "uri": "src/Example.php"
+                    },
+                    "region": {
+                      "byteLength": 7,
+                      "byteOffset": 7,
+                      "endColumn": 8,
+                      "endLine": 3,
+                      "startColumn": 1,
+                      "startLine": 3
+                    },
+                    "replacement": "strlen"
+                  }
+                ],
+                "message": "did you mean `strlen`?"
+              }
+            ]
+          },
+          "ruleId": "CEL0019"
+        }
+      ],
+      "tool": {
+        "driver": {
+          "informationUri": "https://github.com/celerrate/celerrate",
+          "name": "celerrate",
+          "rules": [
+            {
+              "fullDescription": {
+                "text": "The referenced function does not exist under any name the project can\nresolve: it is neither declared in the project, nor autoloadable\nthrough Composer, nor part of the PHP distribution for the supported\nversion range. At runtime the call throws an `Error` (call to\nundefined function), so the code path cannot execute at all."
+              },
+              "help": {
+                "text": "Run `celerrate explain CEL0019` for the full page."
+              },
+              "id": "CEL0019",
+              "properties": {
+                "rule": "unknown-symbols"
+              },
+              "shortDescription": {
+                "text": "unknown function"
+              }
+            },
+            {
+              "fullDescription": {
+                "text": "`composer.json` exists but declares no PHP version at all, neither a\n`config.platform.php` point release nor a `require.php` constraint.\nAnalysis falls back to assuming the latest supported stable PHP\nversion, which is broader than the project's real floor: a symbol\nintroduced between the project's true minimum and the assumed latest\npasses version gating silently, when the project's actual runtime\nwould have rejected it."
+              },
+              "help": {
+                "text": "Run `celerrate explain CEL0027` for the full page."
+              },
+              "id": "CEL0027",
+              "shortDescription": {
+                "text": "PHP version fallback"
+              }
+            }
+          ],
+          "version": "0.0.3"
+        }
+      }
+    }
+  ],
+  "version": "2.1.0"
+}

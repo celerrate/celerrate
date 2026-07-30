@@ -16,6 +16,7 @@ mod explain;
 pub mod fix;
 pub mod ground_truth;
 pub mod mixed_rate;
+pub mod output;
 pub mod plugins;
 pub mod render;
 pub mod session;
@@ -74,12 +75,18 @@ impl Outcome {
         }
     }
 
-    pub fn exit_code(self) -> ExitCode {
+    /// The numeric exit code, the single source `exit_code` wraps. The JSON
+    /// summary embeds this same number, so payload and process cannot drift.
+    pub fn code(self) -> u8 {
         match self {
-            Self::Clean => ExitCode::SUCCESS,
-            Self::DiagnosticsReported => ExitCode::from(1),
-            Self::InternalError | Self::UsageError => ExitCode::from(2),
+            Self::Clean => 0,
+            Self::DiagnosticsReported => 1,
+            Self::InternalError | Self::UsageError => 2,
         }
+    }
+
+    pub fn exit_code(self) -> ExitCode {
+        ExitCode::from(self.code())
     }
 }
 
@@ -106,6 +113,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             fix_suggestions,
             baseline,
             ignore_baseline,
+            output: format,
         } => {
             if let Some(message) = unusable_root(&path) {
                 let _ = writeln!(output, "{message}");
@@ -118,6 +126,24 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                     return Outcome::UsageError;
                 }
             };
+            if let Some(_machine) = crate::output::MachineFormat::of(format) {
+                let incompatible = [
+                    (watch, "--watch"),
+                    (fix, "--fix"),
+                    (fix_suggestions, "--fix-suggestions"),
+                    (baseline, "--baseline"),
+                ]
+                .into_iter()
+                .find_map(|(set, flag)| set.then_some(flag));
+                if let Some(flag) = incompatible {
+                    let _ = writeln!(
+                        output,
+                        "error: --output={} cannot be combined with {flag}",
+                        format.as_argument(),
+                    );
+                    return Outcome::UsageError;
+                }
+            }
             let mode = baseline::Mode::of(baseline, ignore_baseline);
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
@@ -165,6 +191,27 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             // the persisted verdicts cannot absorb them.
             let configuration_diagnostics =
                 configuration::merge_diagnostics(&session, &mut presented);
+            if let Some(machine) = crate::output::MachineFormat::of(format) {
+                // Persist first: a persist-time internal error must be counted in
+                // the verdict the payload embeds. Nothing after serialization can
+                // change the outcome (no rich rendering, no fix on this path).
+                cache::persist(&mut session, &outcome);
+                let verdict = Outcome::of(
+                    outcome
+                        .diagnostics
+                        .len()
+                        .saturating_sub(baseline_outcome.hidden)
+                        + configuration_diagnostics,
+                    session.internal_errors.len(),
+                );
+                let report =
+                    crate::output::model::build(&session, &presented, &baseline_outcome, verdict);
+                if crate::output::write(machine, output, &report).is_err() {
+                    return Outcome::InternalError;
+                }
+                session.statistics.report();
+                return verdict;
+            }
             let failures =
                 match render::render_report(output, &session, &presented, color, &baseline_outcome)
                 {

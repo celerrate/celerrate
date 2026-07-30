@@ -126,6 +126,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Obsolete entries and an unreadable file are each announced by their own
   exit-neutral notice, CEL0050 and CEL0051 respectively; nothing is ever
   pruned silently.
+- Machine output formats: `celerrate check --output=json` emits a stable
+  versioned document (schema committed at
+  `schemas/celerrate-json-report.v1.schema.json`), `--output=sarif` emits
+  SARIF 2.1.0 validated against the official schema, and `--output=github`
+  emits workflow commands for native pull-request annotations. Every
+  format serializes the same final stream as the human report:
+  post-suppression, post-baseline, same order, same exit code. Every
+  format also carries the detail behind an internal-error exit, not just
+  its count: a `kind`, a message, and whether it is a defect in Celerrate
+  or a condition of the run's environment, so tooling never has to
+  re-run the tool on the human channel to learn why. See
+  `docs/output-formats.md`.
 
 ### Changed
 

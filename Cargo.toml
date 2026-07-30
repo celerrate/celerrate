@@ -16,6 +16,7 @@ blake3 = "1"
 clap = { version = "4", features = ["derive"] }
 ctrlc = { version = "3", features = ["termination"] }
 insta = { version = "1", features = ["glob"] }
+jsonschema = { version = "0.49", default-features = false }
 notify = "8"
 postcard = { version = "1", default-features = false, features = ["use-std"] }
 rayon = "1"

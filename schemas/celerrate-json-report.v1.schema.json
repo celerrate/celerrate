@@ -1,0 +1,191 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/celerrate/celerrate/main/schemas/celerrate-json-report.v1.schema.json",
+  "title": "Celerrate JSON report, schema version 1",
+  "description": "The report emitted by `celerrate check --output=json`. Compatibility policy: adding a field is non-breaking and updates this file in the same release; removing a field or changing its meaning increments schema_version and forks a new schema file.",
+  "type": "object",
+  "required": ["schema_version", "summary", "notices", "internal_errors", "diagnostics"],
+  "additionalProperties": false,
+  "properties": {
+    "schema_version": { "const": 1 },
+    "summary": { "$ref": "#/$defs/summary" },
+    "notices": { "type": "array", "items": { "$ref": "#/$defs/notice" } },
+    "internal_errors": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/internalError" }
+    },
+    "diagnostics": { "type": "array", "items": { "$ref": "#/$defs/diagnostic" } }
+  },
+  "$defs": {
+    "identifier": {
+      "type": "string",
+      "description": "A diagnostic identifier. Every identifier Celerrate itself allocates follows the strict form CELxxxx (the letters CEL followed by exactly four digits); the pattern is deliberately broader so a plugin-registered rule using another prefix does not break validation.",
+      "pattern": "^[A-Z][A-Z0-9]*[0-9]{4,}$"
+    },
+    "summary": {
+      "type": "object",
+      "required": [
+        "errors",
+        "warnings",
+        "notices",
+        "baselined_hidden",
+        "internal_errors",
+        "exit_code"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "errors": { "type": "integer", "minimum": 0 },
+        "warnings": { "type": "integer", "minimum": 0 },
+        "notices": { "type": "integer", "minimum": 0 },
+        "baselined_hidden": { "type": "integer", "minimum": 0 },
+        "internal_errors": { "type": "integer", "minimum": 0 },
+        "exit_code": { "enum": [0, 1, 2] }
+      }
+    },
+    "notice": {
+      "type": "object",
+      "required": ["id", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "message": { "type": "string" }
+      }
+    },
+    "internalError": {
+      "type": "object",
+      "required": ["kind", "message", "bug"],
+      "additionalProperties": false,
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$" },
+        "message": { "type": "string" },
+        "bug": { "type": "boolean" }
+      }
+    },
+    "location": {
+      "type": "object",
+      "required": [
+        "path",
+        "start_line",
+        "start_column",
+        "end_line",
+        "end_column",
+        "byte_start",
+        "byte_end"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string" },
+        "start_line": { "type": "integer", "minimum": 1 },
+        "start_column": { "type": "integer", "minimum": 1 },
+        "end_line": { "type": "integer", "minimum": 1 },
+        "end_column": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Exclusive: one past the span's last column."
+        },
+        "byte_start": { "type": "integer", "minimum": 0 },
+        "byte_end": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Exclusive: one past the span's last byte, so `[byte_start, byte_end)` is the exact byte range to slice."
+        }
+      }
+    },
+    "anchor": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["kind"],
+          "additionalProperties": false,
+          "properties": { "kind": { "const": "project" } }
+        },
+        {
+          "type": "object",
+          "required": [
+            "kind",
+            "path",
+            "start_line",
+            "start_column",
+            "end_line",
+            "end_column",
+            "byte_start",
+            "byte_end"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "kind": { "const": "span" },
+            "path": { "type": "string" },
+            "start_line": { "type": "integer", "minimum": 1 },
+            "start_column": { "type": "integer", "minimum": 1 },
+            "end_line": { "type": "integer", "minimum": 1 },
+            "end_column": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Exclusive: one past the span's last column."
+            },
+            "byte_start": { "type": "integer", "minimum": 0 },
+            "byte_end": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Exclusive: one past the span's last byte, so `[byte_start, byte_end)` is the exact byte range to slice."
+            }
+          }
+        }
+      ]
+    },
+    "label": {
+      "type": "object",
+      "required": ["location", "message"],
+      "additionalProperties": false,
+      "properties": {
+        "location": { "$ref": "#/$defs/location" },
+        "message": { "type": "string" }
+      }
+    },
+    "edit": {
+      "type": "object",
+      "required": ["location", "replacement"],
+      "additionalProperties": false,
+      "properties": {
+        "location": { "$ref": "#/$defs/location" },
+        "replacement": { "type": "string" }
+      }
+    },
+    "suggestion": {
+      "type": "object",
+      "required": ["message", "confidence", "edits"],
+      "additionalProperties": false,
+      "properties": {
+        "message": { "type": "string" },
+        "confidence": { "enum": ["safe", "needs-review"] },
+        "edits": { "type": "array", "items": { "$ref": "#/$defs/edit" } }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "required": [
+        "id",
+        "severity",
+        "anchor",
+        "message",
+        "labels",
+        "notes",
+        "suggestions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "$ref": "#/$defs/identifier" },
+        "severity": { "enum": ["error", "warning"] },
+        "rule": { "type": "string" },
+        "anchor": { "$ref": "#/$defs/anchor" },
+        "message": { "type": "string" },
+        "labels": { "type": "array", "items": { "$ref": "#/$defs/label" } },
+        "notes": { "type": "array", "items": { "type": "string" } },
+        "suggestions": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/suggestion" }
+        }
+      }
+    }
+  }
+}

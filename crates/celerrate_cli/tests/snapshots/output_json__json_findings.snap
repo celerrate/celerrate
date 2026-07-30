@@ -1,0 +1,63 @@
+---
+source: crates/celerrate_cli/tests/output_json.rs
+assertion_line: 192
+expression: text
+---
+{
+  "schema_version": 1,
+  "summary": {
+    "errors": 1,
+    "warnings": 0,
+    "notices": 1,
+    "baselined_hidden": 0,
+    "internal_errors": 0,
+    "exit_code": 1
+  },
+  "notices": [
+    {
+      "id": "CEL0027",
+      "message": "no PHP version configured; assuming 8.5"
+    }
+  ],
+  "internal_errors": [],
+  "diagnostics": [
+    {
+      "id": "CEL0019",
+      "severity": "error",
+      "rule": "unknown-symbols",
+      "anchor": {
+        "kind": "span",
+        "path": "src/Example.php",
+        "start_line": 3,
+        "start_column": 1,
+        "end_line": 3,
+        "end_column": 8,
+        "byte_start": 7,
+        "byte_end": 14
+      },
+      "message": "unknown function `strlenn`",
+      "labels": [],
+      "notes": [],
+      "suggestions": [
+        {
+          "message": "did you mean `strlen`?",
+          "confidence": "needs-review",
+          "edits": [
+            {
+              "location": {
+                "path": "src/Example.php",
+                "start_line": 3,
+                "start_column": 1,
+                "end_line": 3,
+                "end_column": 8,
+                "byte_start": 7,
+                "byte_end": 14
+              },
+              "replacement": "strlen"
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

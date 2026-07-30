@@ -14,6 +14,8 @@ use celerrate_source::{FileId, LineIndex, TextRange};
 mod adapter;
 pub mod resolve;
 
+pub use adapter::degraded_note;
+
 /// Read access to the sources a rendered report excerpts. The CLI
 /// implements this over its session; tests implement it over fixtures.
 pub trait SourceAccess {

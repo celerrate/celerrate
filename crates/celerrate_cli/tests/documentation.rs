@@ -34,6 +34,36 @@ fn every_registered_identifier_is_documented() {
 }
 
 #[test]
+fn every_output_format_is_documented() {
+    let page = workspace_page("docs/output-formats.md");
+    for format in ["human", "json", "sarif", "github"] {
+        assert!(
+            page.contains(&format!("`{format}`")),
+            "docs/output-formats.md does not document `{format}`",
+        );
+    }
+    assert!(page.contains("schema_version"));
+    assert!(page.contains("schemas/celerrate-json-report.v1.schema.json"));
+    // The following assertions protect the parts of the page most likely to
+    // drift: the internal-error detail that travels in every machine
+    // format, and the two extra fields the SARIF writer carries beyond the
+    // shared model.
+    for detail in [
+        "internal_errors",
+        "toolExecutionNotifications",
+        "::error::",
+        "baselinedHidden",
+        "properties.rule",
+        "tool.driver.notifications",
+    ] {
+        assert!(
+            page.contains(detail),
+            "docs/output-formats.md does not document `{detail}`",
+        );
+    }
+}
+
+#[test]
 fn the_bridge_page_documents_every_suppression_form() {
     let page = workspace_page("docs/phpdoc-bridge.md");
     for form in [

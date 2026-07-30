@@ -60,8 +60,8 @@ pub(crate) fn render_check(
 
 /// The CLI's view of its sources, for the renderer: display paths from
 /// the VFS, text from the decode query. Both borrow the session.
-struct SessionSources<'a> {
-    session: &'a Session,
+pub(crate) struct SessionSources<'a> {
+    pub(crate) session: &'a Session,
 }
 
 impl SourceAccess for SessionSources<'_> {
@@ -148,16 +148,8 @@ pub(crate) fn render_report_with(
         notices.len() + baseline.notices.len(),
         outcome.diagnostics.len(),
     )?;
-    if baseline.hidden > 0 {
-        writeln!(
-            output,
-            "{} hidden",
-            count(
-                baseline.hidden,
-                "baselined diagnostic",
-                "baselined diagnostics"
-            )
-        )?;
+    if let Some(line) = baselined_hidden_line(baseline.hidden) {
+        writeln!(output, "{line}")?;
     }
     if let Some(recorded) = baseline.recorded {
         writeln!(
@@ -252,6 +244,19 @@ fn build_report(
     render_blocks(&outcome.diagnostics, &sources, &resolver, color, fault)
 }
 
+/// The summary line's exact wording: how many notices, how many
+/// diagnostics. Shared by every render channel that closes with this
+/// sentence, currently the human channel and the GitHub Actions writer,
+/// so the two can never drift, the same `degraded_note` /
+/// `internal_error_message` pattern.
+pub(crate) fn summary_line(notice_count: usize, diagnostic_count: usize) -> String {
+    format!(
+        "{}, {}",
+        count(notice_count, "notice", "notices"),
+        count(diagnostic_count, "diagnostic", "diagnostics"),
+    )
+}
+
 /// The summary line: how many notices, how many diagnostics. Its exact
 /// wording is a contract the plan holds constant across both assemblies,
 /// so there is exactly one place that writes it.
@@ -260,12 +265,19 @@ fn write_summary_line(
     notice_count: usize,
     diagnostic_count: usize,
 ) -> io::Result<()> {
-    writeln!(
-        output,
-        "{}, {}",
-        count(notice_count, "notice", "notices"),
-        count(diagnostic_count, "diagnostic", "diagnostics"),
-    )
+    writeln!(output, "{}", summary_line(notice_count, diagnostic_count))
+}
+
+/// The baselined-hidden line's exact wording, `None` when nothing hid:
+/// shared by every render channel for the same reason `summary_line` is.
+pub(crate) fn baselined_hidden_line(hidden: usize) -> Option<String> {
+    if hidden == 0 {
+        return None;
+    }
+    Some(format!(
+        "{} hidden",
+        count(hidden, "baselined diagnostic", "baselined diagnostics"),
+    ))
 }
 
 /// How many leading blocks fit a line budget, and how many diagnostics
@@ -304,17 +316,8 @@ fn internal_error_rows(session: &Session, new_failures: usize) -> usize {
     if total == 0 {
         return 0;
     }
-    let has_celerrate_bug = new_failures > 0
-        || session.internal_errors.iter().any(|error| {
-            matches!(
-                error,
-                InternalError::StubBlobUndecodable(_)
-                    | InternalError::FilePanicked { .. }
-                    | InternalError::AnalysisPanicked
-                    | InternalError::FixUnappliable { .. }
-                    | InternalError::DiagnosticRenderFailed { .. }
-            )
-        });
+    let has_celerrate_bug =
+        new_failures > 0 || session.internal_errors.iter().any(is_celerrate_bug);
     let trailer = if has_celerrate_bug { 3 } else { 0 };
     1 + total + trailer
 }
@@ -415,16 +418,8 @@ pub fn render_cycle(
         notices.len() + baseline.notices.len(),
         outcome.diagnostics.len(),
     )?;
-    if baseline.hidden > 0 {
-        writeln!(
-            output,
-            "{} hidden",
-            count(
-                baseline.hidden,
-                "baselined diagnostic",
-                "baselined diagnostics"
-            )
-        )?;
+    if let Some(line) = baselined_hidden_line(baseline.hidden) {
+        writeln!(output, "{line}")?;
     }
 
     session.absorb_render_failures(report.failures);
@@ -473,7 +468,7 @@ fn relative_path(session: &Session, path: &std::path::Path) -> String {
     relative.display().to_string()
 }
 
-fn count(total: usize, singular: &str, plural: &str) -> String {
+pub(crate) fn count(total: usize, singular: &str, plural: &str) -> String {
     if total == 1 {
         format!("{total} {singular}")
     } else {
@@ -526,6 +521,71 @@ pub fn render_fix_summary(
 /// lie. The "please report it" trailer therefore only prints when at least
 /// one internal error is a genuine Celerrate bug. When every internal
 /// error is the environment's, the report ends after listing them.
+/// The one-sentence wording for one internal error, shared by the human
+/// channel (which prefixes it with `internal error: `) and the machine
+/// channel (which carries it verbatim as `ReportedInternalError.message`)
+/// so the two can never drift, the same `degraded_note` pattern
+/// `celerrate_rules::render` already uses for symbolic labels.
+pub(crate) fn internal_error_message(session: &Session, error: &InternalError) -> String {
+    match error {
+        InternalError::StubBlobUndecodable(reason) => {
+            format!("the embedded stub index could not be decoded: {reason}")
+        }
+        InternalError::FileUnreadable { path, reason } => {
+            format!(
+                "{} could not be read: {reason}",
+                relative_path(session, path)
+            )
+        }
+        InternalError::DirectoryUnreadable { path, reason } => format!(
+            "the directory {} could not be read: {reason}; nothing under it was analyzed",
+            relative_path(session, path),
+        ),
+        InternalError::PathUnwatchable { path, reason } => {
+            format!(
+                "{} could not be watched: {reason}",
+                relative_path(session, path)
+            )
+        }
+        InternalError::FilePanicked { file } => {
+            format!("analyzing {} panicked", display_path(session, *file))
+        }
+        InternalError::AnalysisPanicked => "the analysis loop panicked".to_owned(),
+        InternalError::FixUnappliable { file, reason } => format!(
+            "the fix for {} could not be applied: {reason}",
+            display_path(session, *file),
+        ),
+        InternalError::FixWriteFailed { path, reason } => format!(
+            "{} could not be written: {reason}; the fix was not applied",
+            relative_path(session, path),
+        ),
+        InternalError::DiagnosticRenderFailed {
+            identifier,
+            location,
+        } => format!(
+            "rendering {identifier} at {location} failed; \
+             the diagnostic was shown in the minimal format",
+        ),
+    }
+}
+
+/// Whether one internal error is a defect in Celerrate (worth the
+/// "please report it" invitation) rather than a condition of the
+/// environment (a permission-denied file, a directory nobody may list,
+/// an exhausted watch budget). Extracted so the human channel's trailer
+/// decision and the machine channel's `ReportedInternalError.bug` field
+/// read the same one match, never two copies drifting apart.
+pub(crate) fn is_celerrate_bug(error: &InternalError) -> bool {
+    matches!(
+        error,
+        InternalError::StubBlobUndecodable(_)
+            | InternalError::FilePanicked { .. }
+            | InternalError::AnalysisPanicked
+            | InternalError::FixUnappliable { .. }
+            | InternalError::DiagnosticRenderFailed { .. }
+    )
+}
+
 pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::Result<()> {
     if session.internal_errors.is_empty() {
         return Ok(());
@@ -533,66 +593,12 @@ pub fn render_internal_errors(output: &mut dyn Write, session: &Session) -> io::
     writeln!(output)?;
     let mut has_celerrate_bug = false;
     for error in &session.internal_errors {
-        match error {
-            InternalError::StubBlobUndecodable(reason) => {
-                has_celerrate_bug = true;
-                writeln!(
-                    output,
-                    "internal error: the embedded stub index could not be decoded: {reason}",
-                )?;
-            }
-            InternalError::FileUnreadable { path, reason } => writeln!(
-                output,
-                "internal error: {} could not be read: {reason}",
-                relative_path(session, path),
-            )?,
-            InternalError::DirectoryUnreadable { path, reason } => writeln!(
-                output,
-                "internal error: the directory {} could not be read: {reason}; nothing under it was analyzed",
-                relative_path(session, path),
-            )?,
-            InternalError::PathUnwatchable { path, reason } => writeln!(
-                output,
-                "internal error: {} could not be watched: {reason}",
-                relative_path(session, path),
-            )?,
-            InternalError::FilePanicked { file } => {
-                has_celerrate_bug = true;
-                writeln!(
-                    output,
-                    "internal error: analyzing {} panicked",
-                    display_path(session, *file),
-                )?;
-            }
-            InternalError::AnalysisPanicked => {
-                has_celerrate_bug = true;
-                writeln!(output, "internal error: the analysis loop panicked")?;
-            }
-            InternalError::FixUnappliable { file, reason } => {
-                has_celerrate_bug = true;
-                writeln!(
-                    output,
-                    "internal error: the fix for {} could not be applied: {reason}",
-                    display_path(session, *file),
-                )?;
-            }
-            InternalError::FixWriteFailed { path, reason } => writeln!(
-                output,
-                "internal error: {} could not be written: {reason}; the fix was not applied",
-                relative_path(session, path),
-            )?,
-            InternalError::DiagnosticRenderFailed {
-                identifier,
-                location,
-            } => {
-                has_celerrate_bug = true;
-                writeln!(
-                    output,
-                    "internal error: rendering {identifier} at {location} failed; \
-                     the diagnostic was shown in the minimal format",
-                )?;
-            }
-        }
+        has_celerrate_bug |= is_celerrate_bug(error);
+        writeln!(
+            output,
+            "internal error: {}",
+            internal_error_message(session, error),
+        )?;
     }
     if !has_celerrate_bug {
         return Ok(());
