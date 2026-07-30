@@ -227,6 +227,16 @@ pub struct ResolvedDirective {
     pub filter: SuppressionFilter,
     /// The written identifiers, verbatim, in written order.
     pub identifiers: Vec<String>,
+    /// The written identifiers whose correspondence fate was
+    /// `SuppressionIdentifier::Unmapped`, in written order: the reason
+    /// this directive's filter widened to `All`. Empty for native
+    /// directives (unknown native identifiers never widen), for fully
+    /// mapped lists, for a bare foreign directive (blanket by design,
+    /// not widened), and for the explicit scope-wide entry
+    /// (`@psalm-suppress all`). Presentation data for the verbose
+    /// channel; deliberately not persisted — `StoredDirective` does not
+    /// carry it, and the channel re-derives it from this query.
+    pub widened_by: Vec<String>,
     pub origin: DirectiveOrigin,
 }
 
@@ -315,6 +325,26 @@ pub(crate) fn filter_of(
     SuppressionFilter::Only(codes)
 }
 
+/// The written identifiers that widened a foreign directive to
+/// scope-wide suppression: the `Unmapped` entries, in written order.
+/// The companion of `filter_of`: whenever this answers non-empty for a
+/// foreign directive, `filter_of` answers `All`.
+pub(crate) fn widened_by(
+    origin: DirectiveOrigin,
+    identifiers: &[SuppressionIdentifier],
+) -> Vec<String> {
+    match origin {
+        DirectiveOrigin::Foreign => identifiers
+            .iter()
+            .filter_map(|identifier| match identifier {
+                SuppressionIdentifier::Unmapped { written } => Some(written.clone()),
+                _ => None,
+            })
+            .collect(),
+        DirectiveOrigin::Native => Vec::new(),
+    }
+}
+
 /// The file's directives, resolved: every comment handed to every
 /// registered provider, symbolic scopes resolved against the line
 /// index, filters computed under the correspondence policy, sorted and
@@ -359,6 +389,7 @@ pub fn suppression_directives(
                             anchor: token.text_range(),
                             scope: resolved,
                             filter: filter_of(origin, &identifiers),
+                            widened_by: widened_by(origin, &identifiers),
                             identifiers: identifiers
                                 .iter()
                                 .map(|identifier| identifier.written().to_owned())
@@ -1002,6 +1033,39 @@ mod tests {
     }
 
     #[test]
+    fn widened_by_answers_the_unmapped_written_identifiers_in_order() {
+        let identifiers = vec![
+            SuppressionIdentifier::mapped("class.notFound".to_owned(), vec!["CEL0018".to_owned()]),
+            SuppressionIdentifier::unmapped("something.else".to_owned()),
+            SuppressionIdentifier::unmapped("another.one".to_owned()),
+        ];
+        assert_eq!(
+            widened_by(DirectiveOrigin::Foreign, &identifiers),
+            vec!["something.else".to_owned(), "another.one".to_owned()],
+        );
+    }
+
+    #[test]
+    fn an_explicit_scope_wide_identifier_is_not_a_widening() {
+        // `@psalm-suppress all` is the user's own decision, not a fallback.
+        let identifiers = vec![SuppressionIdentifier::scope_wide("all".to_owned())];
+        assert!(widened_by(DirectiveOrigin::Foreign, &identifiers).is_empty());
+    }
+
+    #[test]
+    fn a_bare_foreign_directive_is_not_a_widening() {
+        // `@phpstan-ignore-line` is blanket by design, not widened.
+        assert!(widened_by(DirectiveOrigin::Foreign, &[]).is_empty());
+    }
+
+    #[test]
+    fn a_native_directive_never_widens() {
+        // An unknown native identifier suppresses nothing (CEL0041's job).
+        let identifiers = vec![SuppressionIdentifier::native("CEL9999".to_owned())];
+        assert!(widened_by(DirectiveOrigin::Native, &identifiers).is_empty());
+    }
+
+    #[test]
     fn an_only_filter_admits_exactly_its_codes_on_its_scope() {
         let directive = ResolvedDirective {
             anchor: TextRange::new(TextSize::from(10), TextSize::from(30)),
@@ -1010,6 +1074,7 @@ mod tests {
                 celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
             ]),
             identifiers: vec!["class.notFound".to_owned()],
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let text_end = TextSize::from(100);
@@ -1030,6 +1095,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(6), end),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let cel0007 = celerrate_diagnostics::find_identifier("CEL0007").unwrap();
@@ -1047,6 +1113,7 @@ mod tests {
             scope: TextRange::empty(end),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Native,
         };
         let cel0007 = celerrate_diagnostics::find_identifier("CEL0007").unwrap();
@@ -1068,6 +1135,7 @@ mod tests {
         assert_eq!(directive.origin, DirectiveOrigin::Foreign);
         assert_eq!(directive.filter, SuppressionFilter::All);
         assert_eq!(directive.identifiers, vec!["fake.identifier".to_owned()]);
+        assert_eq!(directive.widened_by, vec!["fake.identifier".to_owned()]);
         let comment_start = offset_of(source, "// @fake");
         assert_eq!(directive.anchor.start(), comment_start);
     }

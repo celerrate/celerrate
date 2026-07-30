@@ -999,6 +999,11 @@ impl StoredDirective {
                 ),
                 filter,
                 identifiers: self.identifiers.clone(),
+                // The fates are not persisted: the verbose channel
+                // derives widening fresh from `suppression_directives`,
+                // never from a reconstructed record, so nothing enters
+                // the cache for it.
+                widened_by: Vec::new(),
                 origin: if self.native {
                     DirectiveOrigin::Native
                 } else {
@@ -1452,6 +1457,7 @@ mod tests {
                 celerrate_diagnostics::find_identifier("CEL0018").unwrap(),
             ]),
             identifiers: vec!["CEL0018".to_owned()],
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Native,
         };
         let stored = StoredDirective::of(&directive, true);
@@ -1465,6 +1471,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(6), TextSize::from(41)),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let stored = StoredDirective::of(&directive, false);
@@ -1569,6 +1576,7 @@ mod tests {
                 scope: TextRange::new(TextSize::from(0), TextSize::from(5)),
                 filter: SuppressionFilter::All,
                 identifiers: Vec::new(),
+                widened_by: Vec::new(),
                 origin: DirectiveOrigin::Foreign,
             },
             true,
@@ -1579,6 +1587,7 @@ mod tests {
                 scope: TextRange::new(TextSize::from(10), TextSize::from(15)),
                 filter: SuppressionFilter::All,
                 identifiers: Vec::new(),
+                widened_by: Vec::new(),
                 origin: DirectiveOrigin::Foreign,
             },
             false,
