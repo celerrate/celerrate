@@ -3,11 +3,11 @@
 //! rules per kind. The walk is iterative with a visited set inside one
 //! tracked query — it never demands its own kind recursively, so
 //! `class A extends B; class B extends A` is a detected, flagged
-//! condition, never a salsa cycle (spec section 2's mechanism).
+//! condition, never a salsa cycle.
 //! Ancestry edges are kept for the type engine's generic-argument
 //! threading (`celerrate_types::inheritance`'s `ancestor_arguments`);
 //! stub ancestors are a recorded boundary until the stub signature
-//! payload exists (plan 3).
+//! payload exists.
 //!
 //! Precedence between two *transitive* sources of one member follows
 //! walk order, which is declaration order per level: traits first (they
@@ -352,7 +352,7 @@ pub fn linearized_class<'db>(
             }
         }
 
-        // Decision 7: every enum implicitly implements `UnitEnum`, and
+        // Every enum implicitly implements `UnitEnum`, and
         // a backed one additionally `BackedEnum` — real ancestor facts
         // no PHP grammar lets a class-like write. Only when the
         // compiled stub graph actually answers the parent key: a stub
@@ -780,12 +780,12 @@ fn contains_cycle(ancestry: &[AncestorEdge]) -> bool {
     peeled < in_degree.len()
 }
 
-/// Decision 7's implicit enum parents: `\UnitEnum` always, `\BackedEnum`
+/// The implicit enum parents: `\UnitEnum` always, `\BackedEnum`
 /// additionally — real ancestor facts synthesized because the source
 /// member projection carries no fact distinguishing a backed enum from
 /// a plain one (an enum's backing type is not part of `ClassMembers`),
 /// so both are synthesized uniformly for every source enum:
-/// over-suppression is the conservative direction (decision 5), and
+/// over-suppression is the conservative direction, and
 /// neither parent can ever declare a property (interfaces cannot), so
 /// this can only ever grant methods, never fabricate a property
 /// surface. Only the parents the compiled stub graph actually answers
@@ -868,9 +868,8 @@ fn group_at(db: &dyn salsa::Database, file: SourceFile, ast_id: AstId) -> Option
 /// duplicating it. Crate-private: `celerrate_types`' receiver surface
 /// (`class_kind`) wants only the `kind` field, not the whole group, so
 /// it reads that narrower fact through [`class_declaration_kind`]
-/// instead of this — decision 17 (no new public API beyond the
-/// checks) draws the crate boundary at the narrowest fact a consumer
-/// actually needs.
+/// instead of this: no new public API beyond the checks draws the
+/// crate boundary at the narrowest fact a consumer actually needs.
 fn class_members_of(
     db: &dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -1036,7 +1035,7 @@ mod tests {
     };
 
     /// A provider that answers its fixed member set only when the
-    /// docblock text carries `@fake`. Duplicated from Task 1's test
+    /// docblock text carries `@fake`. Duplicated from the test
     /// module in `virtual_symbols.rs` — the crate has no shared
     /// test-support module yet, which is already recorded debt.
     #[derive(Debug)]
@@ -1726,7 +1725,7 @@ mod tests {
 
     #[test]
     fn a_source_enum_gains_the_implicit_unitenum_and_backedenum_edges() {
-        // Decision 7: the compiled stub graph knows both engine
+        // The compiled stub graph knows both engine
         // interfaces, so a source enum's linearization gains resolved
         // edges to each and the boundary stays fully walked.
         let fixture = fixture_with_stub_classes(

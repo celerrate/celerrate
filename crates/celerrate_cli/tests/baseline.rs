@@ -1,5 +1,5 @@
-//! Baseline integration tests: flags, recording, applying, and the
-//! spec's three invariants.
+//! Baseline integration tests: flags, recording, applying, and its
+//! three invariants.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -381,8 +381,8 @@ fn a_new_suppression_makes_the_baseline_entry_obsolete() {
 
 #[test]
 fn a_partially_parsed_baseline_hides_its_valid_entries_and_reports_cel0051() {
-    // Coverage gap flagged in task 5's review: a baseline file that only
-    // half-parses must not treat its unreadable half as lost capacity --
+    // A baseline file that only half-parses must not treat its
+    // unreadable half as lost capacity --
     // the valid entry still hides its finding, and the broken line is
     // still announced, both at once.
     let root = project(&[

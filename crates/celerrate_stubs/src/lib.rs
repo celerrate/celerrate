@@ -25,7 +25,7 @@
 //! check against the availability-filtered symbol table.
 //!
 //! The blob's `SECTION_OVERLAYS` (section 3) is live for the Celerrate
-//! refinements overlay (design section 7): [`StubRefinements`] carries
+//! refinements overlay: [`StubRefinements`] carries
 //! enriched signatures written in the internal norm, keyed by folded
 //! symbol name and consulted through [`StubIndex::function_refinement`]
 //! and [`StubIndex::class_refinement`]. Refinement texts are opaque

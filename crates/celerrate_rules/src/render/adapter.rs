@@ -1,6 +1,6 @@
 //! The one module that maps the diagnostic anatomy onto
 //! `annotate-snippets` input types. Keeping the mapping here keeps the
-//! library replaceable: nothing else references it (design section 9).
+//! library replaceable: nothing else references it.
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 
@@ -31,7 +31,7 @@ pub(crate) fn rich_block(
     }
     // `annotate-snippets` is not under the workspace zero-panic lints,
     // so one diagnostic's rendering panic must not take the report
-    // down: it falls back to the minimal line (design section 9).
+    // down: it falls back to the minimal line.
     catch_unwind(AssertUnwindSafe(|| {
         build(diagnostic, path, text, file, sources, resolver, color)
     }))

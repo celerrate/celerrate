@@ -1,14 +1,14 @@
-//! Demand-driven inference: the per-body flow walk and (Task 10) the
+//! Demand-driven inference: the per-body flow walk and the
 //! interprocedural fixpoint. One query per body produces the full
 //! expression type table plus the joined return type; nothing here
 //! ever touches a syntax tree — the walker consumes the range-free
 //! body IR, so LRU eviction of parse trees is structurally safe.
 //!
-//! Memory lever, named for plan 9b (design section 6): the full
+//! Memory lever: the full
 //! expression type tables produced by [`inferred_body_types`] remain
 //! the named LRU candidates (`salsa` supports `lru = N` on tracked
 //! functions), while inferred returns stay resident — small, hot, and
-//! the fixpoint's currency. Plan 9b measured the corpus cold peak at
+//! the fixpoint's currency. A corpus measurement found the cold peak at
 //! 709 MiB against the 1536 MiB budget and set no capacity — the lever
 //! stays dormant until a measurement demands it.
 
@@ -30,14 +30,13 @@ use crate::representation::TypeId;
 use crate::stored::StoredSignatureKey;
 
 /// The interprocedural edge classes one body's inference took, as
-/// pure data: the design's residual instrument ("how many results
+/// pure data: the residual instrument ("how many results
 /// depend on *inferred* returns"). Counters never live inside queries
 /// (the workspace rule); this struct is the query-side data the
 /// orchestration layer aggregates into the `CELERRATE_CACHE_STATS`
 /// rendering (`celerrate_cli::analysis` demands `typed_file_verdicts`
 /// and feeds its `edge_counts` into
-/// `celerrate_cli::cache::statistics::CacheStatistics::record_typed`,
-/// decision 13, wired by this plan).
+/// `celerrate_cli::cache::statistics::CacheStatistics::record_typed`).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, salsa::Update)]
 pub struct InterproceduralEdgeCounts {
     /// Call results taken from a declared (native or annotated) return.
@@ -50,10 +49,10 @@ pub struct InterproceduralEdgeCounts {
 
 /// One stub-function call and whether its expression stayed
 /// `mixed` — the residual instrument stub curation measures its
-/// exit with (design sections 7 and 9). Recorded by the walker at
+/// exit with. Recorded by the walker at
 /// the call boundary; nothing re-derives callee resolution.
 ///
-/// Derives `salsa::Update` (beyond the brief's `Debug, Clone,
+/// Derives `salsa::Update` (beyond the minimum `Debug, Clone,
 /// PartialEq, Eq`): it lives inside `InferredBody`'s
 /// `Vec<StubCallRecord>` field, and `InferredBody` derives
 /// `salsa::Update` too, so every field type must satisfy `Update`
@@ -75,13 +74,13 @@ pub struct InferredBody<'db> {
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
     /// One record per stub-function call expression in the body
-    /// (task-14 recording rule, decision 14): free-function calls
+    /// (the stub-call recording rule): free-function calls
     /// whose resolved key exists only in stubs. Stub *method* calls
-    /// (the task-5 class-refinement channel) move
+    /// (the class-refinement channel) move
     /// `edge_counts`/`expression_types`' mixed count but never enter
-    /// this table — scope, stated in decision 14.
+    /// this table — that is intentionally out of scope here.
     pub stub_calls: Vec<StubCallRecord>,
-    /// Plan 9a, task 3: every class, function, and inferred callee
+    /// Every class, function, and inferred callee
     /// return this body's walk consulted, recorded constructively at
     /// `flow.rs`'s own existing consultation sites. Participates in
     /// this struct's `Eq` like every other field — the eq-cutoff
@@ -112,12 +111,12 @@ impl InterproceduralEdgeCounts {
 }
 
 /// The declaration a body belongs to: a free function, or a method of
-/// a class-like. `class_key` stays an `Option` (decision 12's shape:
-/// nothing else in this struct forces a class-like to have a name),
+/// a class-like. `class_key` stays an `Option` (nothing else in this
+/// struct forces a class-like to have a name),
 /// but every class-like now answers `Some` — a named class through its
 /// folded symbol key, an anonymous class through its synthetic
-/// `anonymous_class_key` (plan 8, task 1: closes decision 12's
-/// recorded debt, so `self`/`static`/`$this` resolve inside an
+/// `anonymous_class_key` (closing a previously recorded debt, so
+/// `self`/`static`/`$this` resolve inside an
 /// anonymous class method exactly like inside a named one). `Eq` so
 /// the tracked projection backdates.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -136,8 +135,7 @@ pub(crate) enum BodyOwner {
 /// invalidation story: `member_tree` changes whenever *any* member of
 /// the file changes, but this per-body projection backdates for every
 /// body whose own declaration did not — so editing one signature
-/// re-infers that member's body and no other (the design's harness-2
-/// contract, pinned in Task 12).
+/// re-infers that member's body and no other.
 #[salsa::tracked(returns(ref))]
 pub(crate) fn body_owner<'db>(
     db: &'db dyn salsa::Database,
@@ -176,15 +174,14 @@ pub(crate) fn body_owner<'db>(
     None
 }
 
-/// The class context one body is analyzed *for* (decision 5): the
+/// The class context one body is analyzed *for*: the
 /// using class of a trait body, and `None` everywhere else — so the
 /// memo space of every non-trait body stays exactly one entry wide.
 /// An explicit query parameter rather than ambient state, because
 /// salsa memoizes on the parameter list: the same trait body analyzed
 /// for two using classes must be two memos, not one overwriting the
 /// other. `inferred_method_return`'s trait arm is the only source of a
-/// `Some` value today (task 6 threads the parameter; task 7 owns trait
-/// behavior proper).
+/// `Some` value today.
 #[salsa::interned(debug)]
 pub struct InferenceContext<'db> {
     /// The **pre-folded** ClassLike key of the using class, when this
@@ -243,8 +240,8 @@ mod sealed {
     /// [`Warmed`] proof gates.
     ///
     /// The inference of one body: `None` when the identity carries no
-    /// body in `file` (mirroring `body_ir`). Task 3 replaces the
-    /// all-`mixed` table with the flow walk.
+    /// body in `file` (mirroring `body_ir`). The flow walk replaces the
+    /// all-`mixed` table.
     #[salsa::tracked(returns(ref))]
     #[allow(clippy::too_many_arguments)]
     fn inferred_body_types_unguarded<'db>(
@@ -301,7 +298,7 @@ mod sealed {
                 // The body's *own* scope key — `class_key` here, before the
                 // using-class override just below — matching
                 // `declared.rs`'s `<class key>::<member key>` convention.
-                // A trait method analyzed for a using class (decision 5)
+                // A trait method analyzed for a using class
                 // still binds its own class-level templates under the
                 // trait's key: which class or trait wrote the `@template`
                 // is unaffected by who later `use`s the method, unlike the
@@ -323,7 +320,7 @@ mod sealed {
             None => (String::new(), None, false, Vec::new(), String::new()),
         };
         let tables = UseTables::for_namespace(item_tree(db, file), &namespace);
-        // Decision 5: with a using-class context the walker's owner class
+        // With a using-class context the walker's owner class
         // key *is* the using class — `self`/`static` inside a trait body
         // resolve against the class that uses it, not the trait. Without
         // one, the body's own declaration answers, exactly as before.
@@ -335,7 +332,7 @@ mod sealed {
         // this a static method, what are its parameters) is a fact about
         // the trait method's own declaration, unaffected by which class
         // uses it; only the *receiver* facts (`self`, `static`, `$this`,
-        // `parent`) are the using class's business (decision 5).
+        // `parent`) are the using class's business.
         let flow = FlowContext {
             db,
             files,
@@ -607,8 +604,8 @@ fn defining_file(
     }
 }
 
-/// The recursive memoized revalidation of one persisted signature (plan
-/// 9a decision 9). Every read here is a salsa read — the cache lookup
+/// The recursive memoized revalidation of one persisted signature.
+/// Every read here is a salsa read — the cache lookup
 /// itself reads the `TypedCacheInput` singleton, and every fact checked
 /// afterward (`content_hash`, `class_surface_digest`,
 /// `function_signature_digest`, and the live demand on each recorded
@@ -622,7 +619,7 @@ fn defining_file(
 /// run: a caller that consults the same callee twice pays for the
 /// validation once, "constructive-trace style".
 ///
-/// Decision 9's cyclic-cluster rule sits in the inferred-edge loop below:
+/// The cyclic-cluster rule sits in the inferred-edge loop below:
 /// a live `never` answer on a recorded callee is a mismatch BY RULE, even
 /// when the record itself expects `never` — `never` is the cycle's
 /// provisional bottom, so this keeps a mid-cycle iterate from ever
@@ -755,8 +752,8 @@ pub fn inferred_function_return<'db>(
 /// One method to infer the return of: the receiver-resolution class
 /// and the method, both **pre-folded**. `class_key` is a class
 /// *definition* identity — never a type carrying generic arguments —
-/// so the memo space stays pinned to the finite set of class-likes
-/// (decision 4); the receiver's arguments bind at the call boundary
+/// so the memo space stays pinned to the finite set of class-likes;
+/// the receiver's arguments bind at the call boundary
 /// (`member_boundary_type`), not here.
 #[salsa::interned(debug)]
 pub struct MethodQuery<'db> {
@@ -798,14 +795,14 @@ fn method_return_cycle_recover<'db>(
     ascend(db, cycle.iteration(), *last_provisional, computed)
 }
 
-/// The inferred return of one method, keyed per defining class
-/// (decision 4): an inherited member re-keys to its owner so every
+/// The inferred return of one method, keyed per defining class: an
+/// inherited member re-keys to its owner so every
 /// subclass shares one memo; a trait member analyzes per using class
 /// (the origin's anchor, PHPStan's model); stub and virtual
 /// members answer `mixed` — their types are declared, consulted at the
 /// earlier tier. The second cycle-recovered query in the workspace;
 /// the discipline (join ascent, shared budget, deterministic bailout)
-/// is plan 5's, unchanged, so termination is inherited rather than
+/// is unchanged from the free-function query above, so termination is inherited rather than
 /// re-argued: the participant set is the finite set of (class-like,
 /// member) pairs, the ascent is monotone, and the budget bounds it.
 ///
@@ -855,9 +852,9 @@ pub fn inferred_method_return<'db>(
             // This arm never sees a trait-provided member: a member
             // arrives here only across an `extends`/`implements` edge,
             // so `owner` genuinely declares it and its body needs no
-            // using-class context (which is also what keeps decision 5's
+            // using-class context (which is also what keeps the
             // memo space for non-trait bodies exactly one entry wide).
-            // Task 7b is what makes that true — before the anchor, a
+            // This is what makes that true — before the anchor existed, a
             // trait member reached one `extends` step out was classified
             // `Inherited`, so this arm re-keyed to the *trait* and
             // analyzed its body with no context at all, resolving `$this`
@@ -867,7 +864,7 @@ pub fn inferred_method_return<'db>(
             return inferred_method_return(db, files, stubs, configuration, owner_query);
         }
         MemberOrigin::Own => InferenceContext::new(db, None),
-        // Decision 4's "per using class" key is the origin's anchor, not
+        // The "per using class" key is the origin's anchor, not
         // the queried class: they coincide only for a direct use.
         // Queried through a subclass of the user, or through traits
         // using traits, the anchor still names the class the trait was
@@ -974,8 +971,8 @@ mod tests {
     }
 
     /// `fixture` plus the shared generics-capable docblock fake
-    /// (`inheritance::test_support::FakeSyntax`) registered: task 5's
-    /// class-argument-binding test needs `@template`/`@param
+    /// (`inheritance::test_support::FakeSyntax`) registered: the
+    /// class-argument-binding tests need `@template`/`@param
     /// NAME<ARG>` parsing that `fixture` alone does not provide (no
     /// `TypeSyntax` is registered there at all). A variant rather than
     /// a change to `fixture` itself — registering the fake globally
@@ -989,8 +986,8 @@ mod tests {
 
     /// `fixture` with the real embedded stub blob wired in, instead of
     /// the minimal test-only index: the end-to-end proof that a
-    /// refined stub function's templates solve at a real call site
-    /// (task 4, decision 5 and 7), through the plan-6 solver path
+    /// refined stub function's templates solve at a real call site,
+    /// through the call-site solver path
     /// exactly as any other symbolic stub return would.
     fn fixture_with_embedded_stubs(sources: &[&str]) -> Fixture {
         let db = TestDatabase::default();
@@ -1062,7 +1059,7 @@ mod tests {
     }
 
     /// The display of the inferred return of declaration `index` in
-    /// file 0 — the assertion shape most flow tests use (decision 16).
+    /// file 0 — the assertion shape most flow tests use.
     fn return_display(fixture: &Fixture, index: u32) -> String {
         let file = fixture.handles[0];
         let body = body_query(fixture, index);
@@ -1082,7 +1079,7 @@ mod tests {
 
     /// The display of a free function's inferred return, resolved
     /// straight through `inferred_function_return` by its folded key
-    /// (task 5's receiver-model tests, which call across function
+    /// (the receiver-model tests call across function
     /// boundaries rather than reading one numbered declaration).
     fn caller_return_display(fixture: &Fixture, key: &str) -> String {
         inferred_function_return(
@@ -1097,7 +1094,7 @@ mod tests {
 
     /// The display of one method's own inferred return, found by class
     /// key and method name through `member_tree` rather than by
-    /// declaration index — task 5's tests read a method body's return
+    /// declaration index — some tests read a method body's return
     /// directly (no external caller) to pin the placeholder that
     /// survives inside it.
     fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) -> String {
@@ -1277,9 +1274,9 @@ mod tests {
 
     #[test]
     fn an_anonymous_class_method_owner_keys_by_its_synthetic_class() {
-        // Shipped behavior update (Task 1 of plan 8): an anonymous
-        // class's method used to carry no class key at all (decision
-        // 12's recorded debt); it now keys by the class's synthetic
+        // An anonymous
+        // class's method used to carry no class key at all (this was
+        // recorded debt); it now keys by the class's synthetic
         // folded key, so `self`/`static`/`$this` resolve inside it like
         // any other method.
         let fixture =
@@ -1491,7 +1488,7 @@ function f(Event $e) {
             function assigns(?int $x) { $x ??= 0; return $x; }"]);
         // join(string, 'd') absorbs the literal.
         assert_eq!(return_display(&fixture, 1), "string");
-        // The brief's original expectation transposed the display's
+        // An earlier expectation transposed the display's
         // established null-last convention (`display.rs`'s
         // `composites_render_with_null_last_in_unions`, and the
         // sibling test above at line 380 rendering "1|null"); the
@@ -1511,7 +1508,7 @@ function f(Event $e) {
         // literal widens). The single-value right literal `3` widens
         // to `int`; `union` performs no subsumption, so `1` and `2`
         // are not absorbed under it. The display's structural order
-        // renders the general `int` before the literals (decision 16).
+        // renders the general `int` before the literals.
         assert_eq!(return_display(&fixture, 0), "int|1|2");
     }
 
@@ -1530,13 +1527,13 @@ function f(Event $e) {
                 public function read() { return $this->s; }
             }"]);
         // Numbering: class 0, property 1, own 2, read 3.
-        // Task 5 (the receiver model, decision 1) supersedes this
+        // The receiver model supersedes this
         // expectation: `$this` types as the symbolic `static`
         // placeholder inside the body — substitution is the call
         // site's job, not the body's (see
         // `this_types_as_the_static_placeholder_inside_the_body`).
         assert_eq!(return_display(&fixture, 2), "static");
-        // The brief's original expectation transposed the display's
+        // An earlier expectation transposed the display's
         // established null-last convention (`display.rs`'s
         // `composites_render_with_null_last_in_unions`, already
         // corrected once for the same reason in
@@ -1775,11 +1772,11 @@ function unwrap($b) { return $b->get(); }
         assert_eq!(caller_return_display(&f, "app\\unwrap"), "app\\marker");
     }
 
-    // Task 8: the call-site template solver (decision 10). Every test
+    // The call-site template solver. Every test
     // below registers the shared generics-capable fake
     // (`fixture_with_generics`), the same fixture
     // `a_receiver_s_class_arguments_bind_its_class_level_templates`
-    // uses above — the brief's own pseudocode calls plain `fixture`,
+    // uses above — an earlier illustrative sketch called plain `fixture`,
     // but this module's docblock-bearing tests only ever get
     // `@template`/`@param`/`@return` parsed through the registered
     // fake, and only `fixture_with_generics` registers it.
@@ -1930,8 +1927,8 @@ function on_string() { return flip('text'); }
         assert_eq!(caller_return_display(&f, "app\\on_string"), "bool");
     }
 
-    // Review follow-up (task 8): three findings, each pinning a gap the
-    // original seven tests left untested.
+    // Follow-up coverage: three cases, each pinning a gap the
+    // original tests left untested.
 
     #[test]
     fn a_template_bound_naming_another_template_resolves_rather_than_leaking() {
@@ -1966,7 +1963,7 @@ function caller() { return make(); }
 
     #[test]
     fn a_generic_class_parameter_binds_directly_when_names_match() {
-        // Decision 10's FIRST `Class` rule: when the declared and
+        // The FIRST `Class` rule: when the declared and
         // argument class names match, recurse argument-wise directly
         // rather than through the ancestry. No existing test drives
         // this: `a_generic_class_parameter_recurses_through_the_ancestry`
@@ -1999,12 +1996,12 @@ function caller(Collection $collection) { return first_item($collection); }
 
     #[test]
     fn a_raw_string_literal_binds_the_template_through_class_string() {
-        // Decision 10's FIRST `class-string` binder: a plain string
+        // The FIRST `class-string` binder: a plain string
         // literal argument against a declared `class-string<T>`
         // parameter. `class_string_binds_the_template_through_class_constants`
         // only reaches the SECOND binder (`Foo::class`, already typed
         // `class-string<Foo>`); no test reached this arm, the one line
-        // task 8 altered from the brief's prescribed code (dropping the
+        // this changed from an earlier version of the code (dropping the
         // caller-side `.to_lowercase()`, since `TypeId::class` already
         // strips a leading `\` and folds through `folded_symbol_key`).
         // The literal here is both mixed-case and backslash-prefixed so
@@ -2023,10 +2020,10 @@ function caller() { return make('\App\User'); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\user");
     }
 
-    // Task 9: constructor inference and inline `@var` deliver class
-    // generics (decision 11). Docblock-bearing, so these use
-    // `fixture_with_generics` for the same reason every task 8 test
-    // above does — the brief's own pseudocode calls plain `fixture`,
+    // Constructor inference and inline `@var` deliver class
+    // generics. Docblock-bearing, so these use
+    // `fixture_with_generics` for the same reason every earlier test
+    // above does — an earlier illustrative sketch called plain `fixture`,
     // but plain `fixture` registers no `TypeSyntax` at all, so
     // `@template`/`@param`/`@var` would all silently parse to nothing.
 
@@ -2072,7 +2069,7 @@ function read() { return (new Box())->get(); }
 
     #[test]
     fn a_constructor_argument_that_binds_nothing_stays_the_plain_class() {
-        // The brief's own four tests never drive the `any_bound`
+        // None of the earlier tests drive the `any_bound`
         // guard's `false` branch with an argument actually present:
         // `a_constructorless_generic_new_stays_a_plain_class`'s
         // `new Box()` has none at all (an earlier, cheaper guard
@@ -2127,17 +2124,17 @@ function caller($input) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "int");
     }
 
-    // Task 11: decision 10's five structural collect arms
+    // The five structural collect arms
     // (`Array`, `Shape`, `Callable`, `Union`, `Intersection`) were
-    // production code with no test since task 8 first wrote them —
+    // production code with no test since they were first written —
     // the shared fake docblock syntax (`test_support::FakeSyntax`)
-    // parsed none of `array<K, V>`, `|`, `&`, or `callable(...)`. Task
-    // 11 extends that fake (additively — every existing form still
+    // parsed none of `array<K, V>`, `|`, `&`, or `callable(...)`. This
+    // extends that fake (additively — every existing form still
     // lowers exactly as before) and pins each arm here.
 
     #[test]
     fn the_array_arm_recurses_into_key_and_value_against_an_array_argument() {
-        // Decision 10's `Array` rule, argument side `Array`: both `K`
+        // The `Array` rule, argument side `Array`: both `K`
         // and `V` bind from the argument array's own key and value,
         // not from each other or from the whole array — the two
         // assertions below (`int` and `string`) are different types
@@ -2171,7 +2168,7 @@ function caller_value($items) { return first_value($items); }
 
     #[test]
     fn the_array_arm_evaluates_key_of_and_value_of_against_a_shape_argument() {
-        // Decision 10's `Array` rule, argument side `Shape`: an actual
+        // The `Array` rule, argument side `Shape`: an actual
         // PHP array literal infers a `Shape` through ordinary body
         // inference (no fixture grammar needed for the argument), and
         // the declared `array<K, V>` recurses against `key-of`/`value-of`
@@ -2204,7 +2201,7 @@ function caller_value() { return first_value(['id' => 42]); }
 
     #[test]
     fn the_callable_arm_recurses_into_the_return_type() {
-        // Decision 10's `Callable` rule: `T` binds from the argument
+        // The `Callable` rule: `T` binds from the argument
         // closure's own inferred return type (a native `: int` return
         // hint, no fixture grammar needed on the argument side), never
         // from the closure's parameters (the arm does not look at
@@ -2224,7 +2221,7 @@ function caller() { return invoke(function (): int { return 1; }); }
 
     #[test]
     fn the_union_arm_collects_from_every_constituent() {
-        // Decision 10's `Union` rule: a declared `T|Fallback` recurses
+        // The `Union` rule: a declared `T|Fallback` recurses
         // the SAME argument into every constituent — `T` binds to the
         // argument's own type (the int literal `1`, displayed `"1"`),
         // while `Fallback` (an unrelated class) matches nothing against
@@ -2246,7 +2243,7 @@ function caller() { return first(1); }
 
     #[test]
     fn the_intersection_arm_collects_from_every_constituent() {
-        // Decision 10's `Intersection` rule: the dual of the `Union`
+        // The `Intersection` rule: the dual of the `Union`
         // test above — a declared `T&Constraint` recurses the same
         // argument into every intersectand, `T` binds to the int
         // literal `1` (displayed `"1"`), and `Constraint` contributes
@@ -2267,7 +2264,7 @@ function caller() { return first(1); }
 
     #[test]
     fn the_shape_arm_recurses_field_wise_against_a_shape_argument() {
-        // Issue #40: decision 10's prose says "arrays, shapes, and
+        // Issue #40: the documented rule says "arrays, shapes, and
         // callables recurse element-wise", but `collect` had no
         // declared-`Shape` arm — a shape-typed parameter contributed
         // no constraint and the return fell to `mixed`. The argument
@@ -2364,8 +2361,8 @@ function caller() { return make(); }
 
     #[test]
     fn new_types_as_the_class_named_or_the_synthetic_anonymous_key() {
-        // Shipped behavior update (Task 1 of plan 8): an anonymous
-        // receiver used to stay `mixed` (decision 14's recorded debt);
+        // An anonymous
+        // receiver used to stay `mixed` (this was recorded debt);
         // it now types precisely, rendered coordinate-free.
         let fixture = fixture(&["<?php class A {}
             function named() { return new A(); }
@@ -2385,7 +2382,7 @@ function caller() { return make(); }
             }"]);
         // Numbering: Base 0, Child 1, makeSelf 2, makeParent 3,
         // makeStatic 4, makeStaticInStatic 5.
-        // Task 5 (the receiver model, decision 1) supersedes the
+        // The receiver model supersedes the
         // original expectations here: `self` and `parent` resolve
         // immediately in the defining context (both are structurally
         // known right here, no forwarding needed), so `new self()` and
@@ -2397,7 +2394,7 @@ function caller() { return make(); }
         // (`this_types_as_the_static_placeholder_inside_the_body`), and
         // resolves only at the outer call boundary
         // (`a_native_static_return_substitutes_to_the_receiver`). The
-        // class type renders as its folded (lowercase) key (decision 16).
+        // class type renders as its folded (lowercase) key.
         assert_eq!(return_display(&fixture, 2), "child");
         assert_eq!(return_display(&fixture, 3), "base");
         assert_eq!(return_display(&fixture, 4), "static");
@@ -2520,7 +2517,7 @@ function caller() { return make(); }
         // the by-reference write-back binds `$this->count` to `&$out`'s
         // declared `int` — so the final read is the write-back type,
         // NOT the wider declared property type `int|null`. This guards
-        // the kill-then-write-back order against Task 9's rewrite of
+        // the kill-then-write-back order against a later rewrite of
         // this same Call arm (which reuses `apply_by_reference`).
         assert_eq!(return_display(&fixture, 3), "int");
     }
@@ -2611,7 +2608,7 @@ function caller() { return make(); }
         assert_eq!(inferred.edge_counts.declared_return_edges, 0);
     }
 
-    /// The instrument's end-to-end pin (task 12): one body's calls span
+    /// The instrument's end-to-end pin: one body's calls span
     /// all three tiers at once. `declared_edge` has a native return, so
     /// it counts as a declared edge; `inferred_edge` has none, so it
     /// counts as an inferred edge; `maker` has BOTH a declared `: string`
@@ -2645,7 +2642,7 @@ function caller() { return make(); }
         assert_eq!(inferred.edge_counts.provider_edges, 1);
     }
 
-    /// Plan 9a, task 3: one body calling an annotated free function
+    /// One body calling an annotated free function
     /// (declared tier), an unannotated free function (inferred tier),
     /// and a method on a class (class surface + inferred method tier) —
     /// every one of `TypedDependencies`' four fields gets at least one
@@ -2768,7 +2765,7 @@ function caller() { return make(); }
         assert_eq!(first, second);
     }
 
-    /// Plan 9a, task 3 fix wave, IMPORTANT #1: a first-class callable of
+    /// A first-class callable of
     /// a FREE function (`someFunc(...)`) must record a dependency at the
     /// same site `function_call_result` (the direct-call path) already
     /// does — `projected_callable_of_function` was previously counting
@@ -2776,7 +2773,8 @@ function caller() { return make(); }
     /// dependency, a silent revalidation gap on first-class-callable
     /// syntax. Declared tier -> `dependencies.functions`; inferred tier
     /// -> `dependencies.inferred_functions` with the RAW pre-
-    /// substitution `inferred_function_return` answer (decision 4; a
+    /// substitution `inferred_function_return` answer (the same
+    /// raw-answer invariant; a
     /// free function has no member boundary to substitute against, so
     /// the raw value is exactly what gets pushed).
     #[test]
@@ -2812,12 +2810,12 @@ function caller() { return make(); }
         );
     }
 
-    /// Decision 4, the load-bearing invariant: the recorded inferred
+    /// The load-bearing raw-answer invariant: the recorded inferred
     /// method edge carries the RAW pre-substitution callee answer, not
     /// the call site's substituted class type. A callee returning
     /// `static` (unannotated, so it resolves through the inferred tier)
     /// must record the placeholder-carrying raw answer — the exact
-    /// value task 8's live-demand validator re-derives by calling
+    /// value the live-demand validator re-derives by calling
     /// `inferred_method_return` itself — never `C` (the substituted
     /// concrete class `member_boundary_type` would otherwise bake in).
     #[test]
@@ -3004,7 +3002,7 @@ function caller() { return make(); }
     fn a_nested_argument_calls_condition_fact_does_not_leak() {
         // `helper($y)` is only an argument to the tested call `ok(...)`;
         // its truthiness is never tested, so its `IfTrue` fact must not
-        // narrow `$y` in the true branch (decision 17). `$y` stays
+        // narrow `$y` in the true branch. `$y` stays
         // mixed, so the body returns mixed (mixed absorbs the `1`).
         let fixture = fixture(&["<?php
             /** @fake-if-true-string */
@@ -3034,7 +3032,7 @@ function caller() { return make(); }
     /// (the `celerrate_semantics` invalidation-scope tests'
     /// `executions_of` pattern, duplicated here exactly as
     /// `tests/invalidation_scope.rs` duplicates it: no shared
-    /// test-support module exists per the design).
+    /// test-support module exists yet).
     fn executions_of(log: &[String], query: &str) -> usize {
         let prefix = format!("{query}(");
         log.iter()
@@ -3154,7 +3152,7 @@ class RightChild extends Base {}
             "one body, inferred once: {log:?}",
         );
 
-        // The re-key itself (decision 4), pinned so that removing it
+        // The re-key itself, pinned so that removing it
         // fails *this* assertion: both subclasses answered *through*
         // the defining class's query, so the defining class's own memo
         // is already populated and demanding it now executes nothing.
@@ -3219,7 +3217,7 @@ function caller($anything) { return $anything->whatever(); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
-    /// The Stub arm of decision 4 — the one origin the test above does
+    /// The Stub arm — the one origin the test above does
     /// *not* reach (an opaque receiver resolves to no key at all, so
     /// the query is never asked). A stub method with no declared
     /// return fails the declared gate and does reach the tier; it has
@@ -3282,15 +3280,15 @@ function caller($anything) { return $anything->whatever(); }
         assert_eq!(answer.display(&db), "mixed");
     }
 
-    /// The Trait arm of decision 4 and the context of decision 5,
-    /// together: a trait member analyzes *per using class* — the
+    /// The Trait arm, together with the using-class context: a trait
+    /// member analyzes *per using class* — the
     /// query's own `class_key` — so `self` inside the trait body is
     /// the using class, which is what PHP means by `self` in a trait
     /// (PHPStan's model). Mutation-checked: threading `None` here
     /// instead of the using class answers `app\speaks`, the trait
-    /// itself, and fails this test alone. Task 7 owns trait behavior
-    /// proper; this pins what task 6's mechanical threading already
-    /// decides.
+    /// itself, and fails this test alone. This pins the mechanical
+    /// threading of that context; trait-boundary behavior proper is
+    /// pinned elsewhere.
     #[test]
     fn a_trait_method_infers_for_the_using_class() {
         let f = fixture(&[r#"<?php
@@ -3413,12 +3411,12 @@ function caller(WithHelper $subject) { return $subject->invoke(); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "'helped'");
     }
 
-    /// The trait boundary owner mismatch (task 7's flagged latent
-    /// defect): `member_owner` (`flow.rs`) answers `lookup_member`'s
+    /// The trait boundary owner mismatch: `member_owner` (`flow.rs`)
+    /// answers `lookup_member`'s
     /// `owner`, which for a `Trait`-origin resolution names the trait
-    /// itself, not the using class — even though decision 5 already
-    /// analyzes the trait body *for* the using class. None of the
-    /// brief's five pinning tests exercises this: they all reach the
+    /// itself, not the using class — even though the trait body is
+    /// already analyzed *for* the using class. None of the earlier
+    /// pinning tests exercises this: they all reach the
     /// trait body through `$this` (a `StaticPlaceholder`, substituted
     /// against the *receiver*, never the owner) or through members the
     /// using class declares itself (`Own` origin, no trait involved).
@@ -3452,8 +3450,8 @@ function other(OtherFactory $o) { return $o->make(); }
         assert_eq!(caller_return_display(&f, "app\\other"), "app\\otherfactory");
     }
 
-    /// Task 7b, shape 1: the trait boundary survives one `extends` step
-    /// out of the using class. Task 7's fix answered `key` — the class
+    /// The trait boundary survives one `extends` step
+    /// out of the using class. The fix answered `key` — the class
     /// the lookup was queried against — which is the using class only
     /// for a *direct* use. Queried through a subclass, `self` in the
     /// trait method still means the class that wrote `use`, because PHP
@@ -3482,7 +3480,7 @@ function other(OtherSub $o) { return $o->make(); }
         assert_eq!(caller_return_display(&f, "app\\other"), "app\\otherfactory");
     }
 
-    /// Task 7b, shape 2: a trait using a trait. The anchor is carried
+    /// A trait using a trait: the anchor is carried
     /// forward across every trait-use step, so the innermost trait's
     /// `self` still names the class that used the outermost trait —
     /// `app\c`, never `app\inner` (the innermost trait, the pre-fix
@@ -3505,8 +3503,8 @@ function d_caller(D $d) { return $d->make(); }
         assert_eq!(caller_return_display(&f, "app\\d_caller"), "app\\d");
     }
 
-    /// Task 7b's residual-risk probe, and the anchored `InferenceContext`
-    /// it justifies. The investigation left `$this->helper()` inside a
+    /// A residual-risk probe, and the anchored `InferenceContext`
+    /// it justifies. Earlier, `$this->helper()` inside a
     /// trait body degrading to `mixed` one `extends` step out, because
     /// the `Inherited` re-key threaded no context and the trait body
     /// resolved `$this` against the trait itself. That is conservative
@@ -3587,8 +3585,8 @@ function caller(Sub $subject) { return $subject->build(); }
         assert_eq!(caller_return_display(&f, "app\\caller"), "42");
     }
 
-    // Task 10: iteration typing through the protocol chain (decision
-    // 12). `foreach` resolves key and value through
+    // Iteration typing through the protocol chain.
+    // `foreach` resolves key and value through
     // `Walker::iteration_types`: array forms answer directly; the
     // protocol interfaces (`Generator`, `Iterator`, `IteratorAggregate`,
     // `Traversable`) carrying two or more arguments answer them
@@ -3597,7 +3595,7 @@ function caller(Sub $subject) { return $subject->build(); }
     // arguments answers them, else its `current`/`key` returns; a
     // union joins its constituents, skipping `null` and `false`; a
     // template recurses through its bound; everything else is `mixed`.
-    // Review fix: the `getIterator`/`current`-`key` arms additionally
+    // The `getIterator`/`current`-`key` arms additionally
     // gate on the class genuinely implementing an iteration protocol
     // interface (`Walker::implements_iteration_protocol`), never on
     // method presence alone.
@@ -3612,8 +3610,8 @@ function caller(Sub $subject) { return $subject->build(); }
     /// `lookup_class_declaration` before the stub lookup), so a
     /// fixture that prepends this source pins its implementors
     /// against these source-declared interfaces rather than the
-    /// default surface: `Walker::implements_iteration_protocol` (the
-    /// review's Finding 1 fix) walks `linearized_class`'s ancestry,
+    /// default surface: `Walker::implements_iteration_protocol`
+    /// walks `linearized_class`'s ancestry,
     /// which only records a resolved edge (`AncestorEdge::resolved`/
     /// `stub`) when the name actually resolves to a known class-like.
     /// Every fixture below that exercises a genuine implementor
@@ -3624,20 +3622,20 @@ interface Iterator extends Traversable {}
 interface IteratorAggregate extends Traversable {}
 "#;
 
-    /// Deviation from the brief's illustrative expectations, verified
+    /// Deviation from an earlier illustrative expectation, verified
     /// against this crate's actual, deterministic behavior rather than
     /// taken on faith: a bare literal `[1, 2]` (`flow.rs`'s
     /// `array_literal`) types as a `Shape` with literal integer keys
-    /// `0`/`1`, not a widened `Array`/list — decision 12's "a list
+    /// `0`/`1`, not a widened `Array`/list — the "a list
     /// answers `int` keys" rule is for the already-widened `Array`
     /// form (`representation.rs`: "a list always stores the general
     /// int key"), which this literal never becomes before the
     /// `foreach` on the very same expression reads it. So `keys()`
-    /// answers the shape's own literal key union (`"0|1"`, decision
-    /// 12's other clause: "a shape answers its key union"), not
-    /// `"int|0"` as the brief's pseudocode assumed. `values()`
-    /// similarly answers `"0|1|2"` — the sorted literal union, not the
-    /// brief's insertion-ordered `"1|2|0"` (`ordering.rs`'s
+    /// answers the shape's own literal key union (`"0|1"`, per the
+    /// "a shape answers its key union" clause), not
+    /// `"int|0"` as that earlier expectation assumed. `values()`
+    /// similarly answers `"0|1|2"` — the sorted literal union, not an
+    /// insertion-ordered `"1|2|0"` (`ordering.rs`'s
     /// `structural_order` sorts `Int` literals by value, the same
     /// deterministic rule every other union in this crate already
     /// follows).
@@ -3761,8 +3759,8 @@ function keys(Numbers $numbers) {
     }
 
     /// Same ordering deviation as
-    /// `foreach_over_an_array_literal_types_key_and_value` above: the
-    /// brief's illustrative `"1|2|0"` is insertion-ordered, but
+    /// `foreach_over_an_array_literal_types_key_and_value` above: an
+    /// earlier illustrative `"1|2|0"` is insertion-ordered, but
     /// `TypeId::union`'s canonical sort places `Int` literals by value
     /// (`ordering.rs`), so the verified, deterministic answer is
     /// `"0|1|2"`.
@@ -3779,7 +3777,7 @@ function caller(bool $flag) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "0|1|2");
     }
 
-    /// The other half of decision 12's skip rule: `false` contributes
+    /// The other half of the skip rule: `false` contributes
     /// no alternative either (a falsy subject iterates nothing). Not
     /// exercised by `a_union_subject_joins_and_skips_its_null_constituent`
     /// above (which only ever puts `null` through the union arm) — this
@@ -3801,7 +3799,7 @@ function caller(bool $flag) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "0|1|2");
     }
 
-    /// Decision 12's template arm, untested by the brief: a generic
+    /// The template arm, untested until now: a generic
     /// parameter's own `foreach` (no call site involved — the solver
     /// never runs, so `$items` stays a raw, unresolved `Template`
     /// inside `each`'s own body) recurses through its bound, a class
@@ -3913,7 +3911,7 @@ function caller(Both $both) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "app\\typea|null");
     }
 
-    /// The depth guard (decision 12: capped at 8) is load-bearing, not
+    /// The depth guard (capped at 8) is load-bearing, not
     /// decorative: a `getIterator` returning `$this` recurses on the
     /// exact same subject forever without it. The guard makes the walk
     /// terminate deterministically, answering `mixed` — the reachable
@@ -3939,7 +3937,7 @@ function caller(Loopy $loopy) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
-    /// The guard's other shape (decision 12's own wording): two classes
+    /// The guard's other shape: two classes
     /// whose `getIterator`s return each other. Not a self-loop, so it
     /// would not terminate even if the guard only ever checked for the
     /// exact same `TypeId` recurring; the guard's plain depth count
@@ -3965,11 +3963,11 @@ function caller(A $a) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
-    /// Review Finding 1: the `getIterator` unwrap must gate on the
+    /// The `getIterator` unwrap must gate on the
     /// class genuinely implementing `IteratorAggregate` (or another
     /// protocol interface), never on the method's mere presence.
     /// `Duck` declares a `getIterator` but implements nothing at all —
-    /// decision 12's own default (a plain object's property iteration)
+    /// the default (a plain object's property iteration)
     /// applies, so the correct answer is `mixed`. `Duck::getIterator`
     /// is deliberately typed `\Generator<int, Wrong>` (via docblock) —
     /// a docblock override the "protocol interface's own arguments"
@@ -3995,7 +3993,7 @@ function caller(Duck $duck) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
-    /// Review Finding 1's other arm: `current`/`key` must gate the
+    /// The other arm of that same gate: `current`/`key` must gate the
     /// same way. `Cursor` declares both but implements nothing —
     /// `mixed` is correct; the un-gated answer would be the declared
     /// `current(): int` joined with the trailing `return 0`
@@ -4020,10 +4018,10 @@ function values(Cursor $cursor) {
         assert_eq!(caller_return_display(&f, "app\\values"), "mixed");
     }
 
-    /// Review Finding 2: decision 12's `mixed`/`mixed` default (the
+    /// The `mixed`/`mixed` default (the
     /// match's `_ => mixed` arm in `iteration_types`) is itself a step
-    /// of the chain, not an incidental fallback, and the plan's own
-    /// binding constraint demands a direct-hit test — verified none of
+    /// of the chain, not an incidental fallback, and deserves a
+    /// direct-hit test — verified none of
     /// the other fixtures exercise this arm (every other subject is an
     /// array, a shape, a union, a template, or a class). `foreach` over
     /// a plain `int` reaches no other arm at all: not an array/shape,
@@ -4040,8 +4038,8 @@ function caller(int $number) {
         assert_eq!(caller_return_display(&f, "app\\caller"), "mixed");
     }
 
-    /// Decision 12's depth guard is stated as an exact value ("capped
-    /// at 8"), not merely "some cap exists" — the review verified that
+    /// The depth guard is stated as an exact value ("capped
+    /// at 8"), not merely "some cap exists" — verified that
     /// mutating `depth > 8` to `depth > 100` leaves both existing
     /// guard tests green, since a self-loop and a mutual pair never
     /// terminate on their own regardless of the bound. Only a
@@ -4269,10 +4267,10 @@ function caller(Users $users) { return $users->getIterator(); }
         assert_eq!(caller_return_display(&f, "caller"), "arrayiterator");
     }
 
-    /// Task 4's end-to-end proof: `array_keys`'s refinement
+    /// An end-to-end proof: `array_keys`'s refinement
     /// (`array<TKey, TValue> -> list<TKey>`) reaches the declared
     /// tier through `declared_function_signature`'s stub path, and
-    /// the plan-6 solver (`solver_pairs`/`solve`/`finalize_return`,
+    /// the call-site solver (`solver_pairs`/`solve`/`finalize_return`,
     /// already run wherever a call result `contains_symbolic`) binds
     /// `TKey` from the shape argument with no new wiring.
     #[test]
@@ -4287,7 +4285,7 @@ function consume() { return array_keys(['a' => 1, 'b' => 2]); }
         assert_eq!(inferred.display(&f.db), "list<'a'|'b'>");
     }
 
-    // Task 5 (decision 8): stub-class refinements settle plan 6's
+    // Stub-class refinements settle previously
     // recorded stub-generics debt on the curated classes. Both tests
     // below use the real embedded blob (`fixture_with_embedded_stubs`),
     // exactly like the refined-function test above, so they exercise
@@ -4340,9 +4338,9 @@ function consume() {
         assert!(display.contains("1|2"), "{display}");
     }
 
-    /// Blind-spot proof (the plan-6 `member_owner`/`$obj::class`
-    /// shape): `implements_iteration_protocol`'s new stub fallback
-    /// (`flow.rs`'s `stub_implements_iteration_protocol`, task 5) must
+    /// A blind-spot proof (the `member_owner`/`$obj::class`
+    /// shape): `implements_iteration_protocol`'s stub fallback
+    /// (`flow.rs`'s `stub_implements_iteration_protocol`) must
     /// resolve PER CONSTITUENT class key when the receiver is a union,
     /// never a verdict computed once and shared across every
     /// constituent. `\ArrayIterator` (a genuine stub, no source
@@ -4393,7 +4391,7 @@ function consume(bool $flag) {
         assert!(display.contains("bool"), "{display}");
     }
 
-    /// Decision 8's named mechanism, end to end against the REAL
+    /// The named threading mechanism, end to end against the REAL
     /// curated stub ancestor: `foreach` over a class extending
     /// `\ArrayIterator` types through iteration typing's
     /// **threaded-ancestors step** — `ancestor_arguments`' composition
@@ -4404,7 +4402,7 @@ function consume(bool $flag) {
     /// A source subclass is what makes the threaded step reachable at
     /// all: `ancestor_arguments` calls `linearized_class`, which
     /// answers only for a class with a SOURCE declaration
-    /// (`linearize.rs`'s root fetch, plan 6). `RecentPosts` supplies
+    /// (`linearize.rs`'s root fetch). `RecentPosts` supplies
     /// that source root; the curated stub ancestry behind it is the
     /// part under test.
     ///
@@ -4461,7 +4459,7 @@ function consume(RecentPosts $posts) {
         assert!(!display.contains("bool"), "{display}");
     }
 
-    /// Task 10, decision 14: a free-function call resolved to a stub
+    /// A free-function call resolved to a stub
     /// symbol (`source_exists == false`, the stub table has it) is
     /// recorded with its verdict — `array_keys` answers a refined,
     /// non-mixed `array` (its native return, `declared_present`
@@ -4497,7 +4495,7 @@ function consume(): void {
         assert!(callees.contains(&("unserialize", true)), "{callees:?}",);
     }
 
-    /// The boundary at the other side of decision 14's condition: a
+    /// The boundary at the other side of the recording condition: a
     /// call resolved to a SOURCE function (`source_exists == true`)
     /// must never enter `stub_calls`, even though the callee is a
     /// perfectly ordinary function call the walker types normally.
@@ -4520,7 +4518,7 @@ function consume(): void { $x = helper(); }
         assert!(inferred.stub_calls.is_empty());
     }
 
-    /// The other conjunct of decision 14's recording condition: a call
+    /// The other conjunct of the recording condition: a call
     /// to a name that exists in neither source nor the stub symbol
     /// table (`source_exists == false` AND `lookup(...).is_none()`)
     /// must never enter `stub_calls`. `fixture` wires up

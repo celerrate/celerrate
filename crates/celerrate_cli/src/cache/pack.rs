@@ -26,19 +26,19 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// like any other header mismatch: there is no migration, only a cold
 /// rebuild.
 ///
-/// 3: the stub blob gains SECTION_SIGNATURES (plan 3).
+/// 3: the stub blob gains SECTION_SIGNATURES.
 ///
-/// 4: verdict diagnostics are stored post-suppression (plan 4c). The
+/// 4: verdict diagnostics are stored post-suppression. The
 /// shapes are unchanged; their meaning is not — a pack written before
 /// the directive filter existed carries findings the filter would have
 /// extinguished, and must not speak. In practice the binary self-hash
 /// already discards it; this is the named, reviewable record.
 ///
 /// 5 = typed artifacts: member-tree pack, inferred-signature pack,
-/// typed verdict fields, plugin-set header digest (plan 9a).
+/// typed verdict fields, plugin-set header digest.
 ///
-/// 6: `StoredDiagnostic` carries the enriched anatomy — anchor, labels,
-/// notes, and suggestions (design section 3) — rather than a bare span.
+/// 6: `StoredDiagnostic` carries the enriched anatomy: anchor, labels,
+/// notes, and suggestions, rather than a bare span.
 ///
 /// 7: `StoredVerdict` gains `directives`, and `StoredTypedVerdict` gains
 /// `matched_directives`: the per-directive match records the
@@ -46,8 +46,7 @@ pub const CACHE_MAGIC: [u8; 8] = *b"CELCACHE";
 /// without re-parsing (this crate's `cache::stored` module doc).
 ///
 /// 8: the header gains `configuration`, the active-set-and-severity
-/// digest the diagnostics-and-fixes spec reserved a field for (CLI
-/// product spec, section 2).
+/// digest with its own reserved field.
 pub const CACHE_SCHEMA_VERSION: u32 = 8;
 
 /// What must match for a pack to be readable at all: the schema, the
@@ -66,12 +65,12 @@ pub struct PackHeader {
     /// the sorted admitted identities' `(name, version, configuration)`
     /// triples plus the sorted excluded plugin names, each field
     /// length-prefixed and each section count-prefixed. The plugin-set
-    /// cache key the `PluginIdentity` rustdoc promised (plan 4a
-    /// decision 1), keyed on the set actually active.
+    /// cache key the `PluginIdentity` rustdoc promised, keyed on the
+    /// set actually active.
     pub plugins: [u8; 32],
     /// blake3 over the normalized `[rules]` and `[severity]` sections of
     /// `celerrate.toml` (`configuration::configuration_digest`): the
-    /// field sub-project 4 reserved. A configuration change discards the
+    /// field reserved for it. A configuration change discards the
     /// pack wholesale, which is what keeps a warm run under a new
     /// configuration honest.
     pub configuration: [u8; 32],
@@ -279,7 +278,7 @@ mod tests {
         assert_eq!(std::fs::read(&path).unwrap(), b"second");
     }
 
-    /// Audit finding I1: keying the header on `CARGO_PKG_VERSION` alone
+    /// Keying the header on `CARGO_PKG_VERSION` alone
     /// let development rebuilds within one version accept each other's
     /// packs — stale messages served byte-for-byte, newly added rules
     /// silently missing. The header now carries the executable's own
@@ -289,7 +288,7 @@ mod tests {
         assert_eq!(header().binary, super::super::identity::binary_identity());
     }
 
-    /// The atomicity clause is about concurrency (audit finding I5):
+    /// The atomicity clause is about concurrency:
     /// "a reader never sees a torn file and a concurrent writer's last
     /// rename wins whole". One writer alternates two payloads while
     /// this thread reads; every observed read must be byte-for-byte one

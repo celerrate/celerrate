@@ -1,9 +1,9 @@
-//! Lowering the Celerrate norm's written form into lattice types
-//! (norm draft, sections 2 and 3). First consumer: the stub
-//! refinements overlay (design section 7). Internal by design: the
+//! Lowering the Celerrate norm's written form into lattice types.
+//! First consumer: the stub
+//! refinements overlay. Internal by design: the
 //! norm is not a plugin notation, so this module is `pub(crate)`
 //! and never crosses the facade. Tolerant: anything outside the v0
-//! subset answers `None`, never a panic (decision 13). The subset
+//! subset answers `None`, never a panic. The subset
 //! boundary is exact and tested, not merely aspirational: forms that
 //! once parsed as sound-but-undocumented over-approximations (bare
 //! `array`/`list`/`iterable`/`non-empty-array`/`non-empty-list`, bare
@@ -14,13 +14,13 @@
 //! `array<V>`/`iterable<V>` sugars, and single `?T`) still lower
 //! (`the_documented_conveniences_lower`).
 //!
-//! Task-12 debt (owner: the norm v0 subset, recorded in the norm
-//! draft's own mapping table). Conditional types (`(T is int ? A :
+//! Recorded debt (owner: the norm v0 subset). Conditional types
+//! (`(T is int ? A :
 //! B)`) are excluded from v0 and answer `None`
 //! (`everything_outside_the_subset_answers_none_never_a_panic`
 //! pins the exact text below): the lattice has no conditional-type
 //! constructor to lower into, and no refinement has needed one to
-//! date. Refinements are version-agnostic by design (decision 6):
+//! date. Refinements are version-agnostic by design:
 //! `NormScope` carries no PHP-version parameter, so a curated
 //! signature cannot express a per-version delta the way the base
 //! phpstorm-stubs surface (outside this module) does; revisit only if
@@ -43,7 +43,7 @@ pub(crate) struct NormScope<'db, 'a> {
 }
 
 /// Lowers one norm type expression. `None` on anything outside the
-/// v0 subset (decision 13), tolerant of arbitrary bytes. The subset
+/// v0 subset, tolerant of arbitrary bytes. The subset
 /// boundary is tested, not just documented (issue #48): see
 /// `forms_outside_the_documented_subset_are_rejected` and
 /// `the_documented_conveniences_lower`.
@@ -335,7 +335,7 @@ fn intersection_type<'db>(
     })
 }
 
-/// Guards `atom_type_body`'s recursion depth (decision 13's global
+/// Guards `atom_type_body`'s recursion depth (the tolerant-input
 /// constraint: hostile input answers `None`, never crashes). See
 /// `MAX_ATOM_NESTING_DEPTH`.
 fn atom_type<'db>(
@@ -359,9 +359,9 @@ fn atom_type_body<'db>(
     cursor: &mut Cursor<'_>,
 ) -> Option<TypeId<'db>> {
     match cursor.advance()? {
-        // `?T` binds tighter than `|` and `&` (decision 13). Stacked
-        // nullable (`??T`) is outside the v0 subset (issue #48, design
-        // rule 1: one spelling per constructor): peek for a second
+        // `?T` binds tighter than `|` and `&`. Stacked
+        // nullable (`??T`) is outside the v0 subset (issue #48: one
+        // spelling per constructor): peek for a second
         // `?` and reject rather than silently double-wrapping.
         Token::Question => {
             if cursor.peek() == Some(&Token::Question) {
@@ -512,9 +512,9 @@ fn int_type<'db>(db: &'db dyn salsa::Database, cursor: &mut Cursor<'_>) -> Optio
     }
     // An inverted range (`int<5..1>`) is outside the v0 subset: hand
     // it to `TypeId::int_range` and it canonicalizes to `never`, the
-    // most dangerous wrong answer this module can give (decision 13's
-    // global constraint forbids fabricating `never`). Reject it here
-    // instead.
+    // most dangerous wrong answer this module can give (the
+    // tolerant-input constraint forbids fabricating `never`). Reject it
+    // here instead.
     if let (Some(low), Some(high)) = (minimum, maximum)
         && low > high
     {
@@ -576,7 +576,7 @@ fn iterable_type<'db>(
     // `None` (issue #48). The single-argument sugar stays documented.
     let (key, value) = match generic_arguments(db, scope, cursor)??.as_slice() {
         // Iterable keys are unconstrained: the array-key default
-        // is only correct for arrays (decision 13).
+        // is only correct for arrays.
         [value] => (TypeId::mixed(db), *value),
         [key, value] => (*key, *value),
         _ => return None,
@@ -1113,8 +1113,8 @@ mod tests {
     #[test]
     fn forms_outside_the_documented_subset_are_rejected() {
         // Issue #48: each of these parsed to a sound over-approximation
-        // with no test pinning it; the documented subset (norm draft
-        // §3.1, design rule 1: one spelling per constructor) does not
+        // with no test pinning it; the documented subset (one spelling
+        // per constructor) does not
         // name them, and an undocumented accepted spelling is
         // compatibility debt in a grammar that intends to freeze.
         for rejected in [
@@ -1135,7 +1135,7 @@ mod tests {
 
     #[test]
     fn the_documented_conveniences_lower() {
-        // Norm draft §3.1: the three v0 conveniences, positively pinned.
+        // The three documented v0 conveniences, positively pinned.
         assert_lowers("array-key", "int|string");
         assert_lowers("array<string>", "array<int|string, string>");
         assert_lowers(

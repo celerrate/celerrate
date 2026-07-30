@@ -26,8 +26,8 @@ impl PhpdocBridge {
 
 impl TypeSyntax for PhpdocBridge {
     fn can_parse(&self, _docblock: &str) -> bool {
-        // The bridge owns the inherited notation and registers first
-        // (decision 8): it claims every docblock it is offered.
+        // The bridge owns the inherited notation and registers first:
+        // it claims every docblock it is offered.
         true
     }
 

@@ -1,4 +1,4 @@
-//! Fixpoint determinism fixtures (design section 10, harness 3): the
+//! Fixpoint determinism fixtures: the
 //! same mutual-recursion cluster queried from every entry point and
 //! across thread counts answers identically, and an edit landing
 //! mid-fixpoint unwinds cleanly with no provisional value served.
@@ -43,7 +43,7 @@ fn fixture(sources: &[&str]) -> Fixture {
         })
         .collect();
     let files = AnalyzedFileSet::new(&db, handles.clone());
-    // Deliberately empty (issue #36's fixed decision 3): this suite pins
+    // Deliberately empty (issue #36's fix): this suite pins
     // fixpoint budgets, where a stub surface adds resolution noise
     // without observing stub behaviour, and a separate compilation unit
     // cannot reach `pub(crate)` test support anyway.
@@ -99,7 +99,7 @@ fn return_of(fixture: &Fixture, key: &str) -> String {
 
 /// The display of one method's inferred return, resolved through
 /// `inferred_method_return` — the method-cycle analog of [`return_of`]
-/// (task 6's second cycle-recovered query, extended here to the same
+/// (the second cycle-recovered query, extended here to the same
 /// determinism harness the free-function fixpoint already pins).
 fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) -> String {
     inferred_method_return(
@@ -115,11 +115,11 @@ fn method_return_display(fixture: &Fixture, class_key: &str, method_name: &str) 
 /// The fixture with the real embedded stub blob (so provider-claimed
 /// functions like `json_decode` and `preg_match` resolve against a
 /// real declared signature) plus `StdlibProvider` registered through
-/// `DynamicTypeProviderRegistry` (task 6's registration idiom,
+/// `DynamicTypeProviderRegistry` (the registration idiom,
 /// `tests/by_reference.rs`'s own `fixture`, duplicated here: no
 /// shared test-support module spans this crate's integration-test
 /// binaries — `invalidation_scope.rs`'s own `executions_of` doc notes
-/// the same constraint). Task 12's determinism and invalidation pins
+/// the same constraint). The determinism and invalidation pins
 /// need the real provider wired up, not the empty stub index the
 /// fixpoint suite otherwise uses to keep resolution noise out.
 fn fixture_with_embedded_stubs_and_stdlib_provider(sources: &[&str]) -> Fixture {
@@ -203,14 +203,14 @@ fn every_entry_point_converges_to_the_same_fixpoint() {
 }
 
 /// The method-cycle counterpart of
-/// `every_entry_point_converges_to_the_same_fixpoint` (design section
-/// 10, harness 3, extended to method cycles per decision 15): the same
+/// `every_entry_point_converges_to_the_same_fixpoint`, extended to
+/// method cycles: the same
 /// two-class mutual-recursion cluster, queried in two orders -- ping
 /// then pong, and pong then ping, both method-first -- over fresh
 /// databases answers identically regardless of entry order.
 /// Entry-point independence for the method fixpoint is already pinned
-/// at the unit level (task 6's
-/// `a_mutual_method_cluster_converges_the_same_from_either_entry_point`,
+/// at the unit level
+/// (`a_mutual_method_cluster_converges_the_same_from_either_entry_point`,
 /// a single-class cluster asking `left`/`right` on the same class);
 /// this fixture is a genuine two-class cluster. The comparison is
 /// pairwise by key, mirroring `every_entry_point_converges_to_the_same_fixpoint`
@@ -284,11 +284,10 @@ fn thread_fan_out_answers_identically() {
     }
 }
 
-/// The method-cycle counterpart of `thread_fan_out_answers_identically`
-/// (design section 10, harness 3, extended to method cycles per
-/// decision 15): the same two-class mutual-recursion cluster, warmed
-/// once, answers identically to every one of several threads fanning
-/// out over snapshots of the warmed database.
+/// The method-cycle counterpart of `thread_fan_out_answers_identically`,
+/// extended to method cycles: the same two-class mutual-recursion
+/// cluster, warmed once, answers identically to every one of several
+/// threads fanning out over snapshots of the warmed database.
 #[test]
 fn thread_fan_out_answers_identically_for_a_method_cluster() {
     let source = r#"<?php
@@ -519,10 +518,9 @@ fn an_edit_mid_fixpoint_unwinds_cleanly_and_serves_no_provisional_value() {
 }
 
 /// The method-cycle counterpart of
-/// `an_edit_mid_fixpoint_unwinds_cleanly_and_serves_no_provisional_value`
-/// (design section 10, harness 3, extended to method cycles per
-/// decision 15): identical scaffolding, only the queried cluster
-/// changes — a self-recursive method reaching the same blocking
+/// `an_edit_mid_fixpoint_unwinds_cleanly_and_serves_no_provisional_value`,
+/// extended to method cycles: identical scaffolding, only the queried
+/// cluster changes — a self-recursive method reaching the same blocking
 /// provider instead of a self-recursive function.
 #[test]
 fn an_edit_mid_method_fixpoint_unwinds_cleanly_and_serves_no_provisional_value() {
@@ -627,7 +625,7 @@ fn an_edit_mid_method_fixpoint_unwinds_cleanly_and_serves_no_provisional_value()
     assert_eq!(after, method_return_display(&fresh, "app\\entry", "run"));
 }
 
-/// A body exercising every provider channel this plan built: the
+/// A body exercising every provider channel built so far: the
 /// array-family return channel (`array_map`), the computation-dependent
 /// return channel (`json_decode`), and the by-reference channel
 /// (`preg_match`'s `$matches`).
@@ -641,8 +639,8 @@ function consume(string $json, string $subject): void {
 }
 "#;
 
-/// Task 12's determinism pin (decision 16): a body exercising every
-/// provider channel this plan built types identically across two
+/// The determinism pin: a body exercising every
+/// provider channel built so far types identically across two
 /// fresh, unrelated databases. Interner handles may differ across
 /// databases (each database owns its own `salsa` interner), so the
 /// comparison renders through `display` rather than comparing `TypeId`
@@ -674,12 +672,12 @@ fn provider_answers_are_identical_across_fresh_databases() {
     assert_eq!(render(), render());
 }
 
-/// Task 12's fall-through pin (decision 16): every registered
+/// The fall-through pin: every registered
 /// `StdlibProvider` handler answers `None` for arguments that are
 /// themselves `mixed` (`array_map`'s callback and subject, `current`'s
 /// subject), so the declared tier's answer stands and no provider edge
 /// is ever counted — the residual instrument's `provider_edges` field
-/// (untested since task 10 introduced it, per its own doc comment)
+/// (untested since it was introduced, per its own doc comment)
 /// stays honest at zero rather than over-counting a claim that never
 /// actually contributed a type.
 #[test]
@@ -704,7 +702,7 @@ function consume(mixed $anything): void {
     assert_eq!(inferred.edge_counts.provider_edges, 0);
 }
 
-/// Task 13's closing determinism pin: the typed checks layer over a
+/// The closing determinism pin: the typed checks layer over a
 /// body exercising the unknown-method and nullability families
 /// answers identically across two fresh, unrelated databases. The
 /// rendering layer moved up into the rule framework's typed-body
@@ -714,9 +712,8 @@ function consume(mixed $anything): void {
 /// its own `salsa` interner) and so compare directly across two
 /// databases. The rendered form's own determinism is pinned by the
 /// rules-side tests, and the thread-count byte-identity over the full
-/// product is the corpus/equivalence harness's job (extended in task
-/// 10); this pin is the single-database, single-thread baseline the
-/// checks layer itself owns.
+/// product is the corpus/equivalence harness's job; this pin is the
+/// single-database, single-thread baseline the checks layer itself owns.
 #[test]
 fn typed_verdicts_are_identical_across_fresh_databases() {
     let compute = || {

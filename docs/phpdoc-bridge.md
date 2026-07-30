@@ -159,10 +159,10 @@ widening. Transcribed from the rustdoc of
 | sealed shapes | `shape` (keyless tuple fields number sequentially; identifier keys are string keys) |
 | unsealed shapes | the general array (`non_empty_array` when a field is required): key `int\|string`, value = the field-and-tail union (`mixed` for a bare `...`) — widening |
 | `object{...}` | `object` (widening) |
-| callables (`callable`, `Closure`, purity prefixes) | `callable` (purity and Closure classness drop: widening); callable-scoped template names lower to `mixed` (decision 12) |
-| `Foo::BAR`, `Foo::*` | `mixed` (constant and enum-case facts arrive with plans 6-7: recorded debt) |
-| `$this` | `static` (design section 3) |
+| callables (`callable`, `Closure`, purity prefixes) | `callable` (purity and Closure classness drop: widening); callable-scoped template names lower to `mixed` |
+| `Foo::BAR`, `Foo::*` | `mixed` (constant and enum-case facts are not modeled yet: recorded debt) |
+| `$this` | `static` |
 | offset access `T[K]` | `mixed` (widening) |
-| conditionals | `conditional` for an in-scope template subject (Task 9); otherwise the undecided branch union (design section 3) |
+| conditionals | `conditional` for an in-scope template subject; otherwise the undecided branch union |
 | a keyword or dialect atom with a spurious `<...>` list | the atom, arguments dropped |
 | any other name | a class type, qualified at the declaring site |

@@ -1,6 +1,6 @@
 //! CEL0041: a typo in a CEL code must not silently suppress nothing.
 //! Native directives only; a known but inactive identifier is not
-//! unknown (design section 8).
+//! unknown.
 
 use std::collections::BTreeSet;
 

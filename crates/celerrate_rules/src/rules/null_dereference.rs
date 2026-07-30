@@ -1,4 +1,4 @@
-//! The nullability family, migrated (design section 5): the guard
+//! The nullability family, migrated: the guard
 //! analysis and the null-containment predicate live below in
 //! `celerrate_types::checks::nullability`; this rule consumes the
 //! per-body outcome records and constructs the diagnostics.

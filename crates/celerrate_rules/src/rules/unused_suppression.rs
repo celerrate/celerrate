@@ -1,7 +1,7 @@
 //! CEL0042: a native directive that suppressed nothing. Exempt (not
 //! evaluable) when any identifier belongs to an inactive rule - the
 //! nursery-demotion storm guard - or is unknown (CEL0041 already
-//! reports that mistake; decision 11 of the part-5 plan).
+//! reports that mistake).
 
 use celerrate_diagnostics::{DiagnosticId, Severity};
 use celerrate_semantics::DirectiveOrigin;

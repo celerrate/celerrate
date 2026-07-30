@@ -27,8 +27,7 @@ pub(crate) fn classify(name: &str) -> Option<ClassifiedTag> {
         "assert-if-false" if tier == TagTier::PhpstanPrefixed => {
             TagRole::Assert(AssertionPolarity::IfFalse)
         }
-        // Purity is out of this sub-project's scope end to end
-        // (design section 1): ignored without error.
+        // Purity is out of scope end to end: ignored without error.
         "pure" | "impure" => TagRole::Ignored,
         _ => return None,
     };

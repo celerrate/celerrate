@@ -152,7 +152,7 @@ impl Session {
         let database = AnalysisDatabase::default();
         let mut vfs = Vfs::default();
         // Loaded before discovery, deliberately: include/exclude and the
-        // `php` override are discovery inputs now (spec section 2).
+        // `php` override are discovery inputs now.
         // `celerrate.toml` therefore takes the first file identifier;
         // nothing reads the interning order, and rendering resolves
         // display paths through the VFS by identity.
@@ -224,10 +224,10 @@ impl Session {
         })))
         .durability(salsa::Durability::HIGH)
         .new(&database);
-        // The typed-cache sibling (plan 9a, task 8): the same
-        // `SnapshotCache`, registered a second time under the
-        // `celerrate_types`-owned trait, at the same HIGH durability —
-        // reading it never invalidates anything either.
+        // The typed-cache sibling: the same `SnapshotCache`, registered
+        // a second time under the `celerrate_types`-owned trait, at the
+        // same HIGH durability, reading it never invalidates anything
+        // either.
         let _ = TypedCacheInput::builder(TypedCacheHandle(Arc::new(SnapshotCache {
             snapshot: cache.clone(),
             statistics: statistics.clone(),

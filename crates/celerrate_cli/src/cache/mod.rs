@@ -3,15 +3,15 @@
 //! re-seed a fresh database at startup. Nothing here is ever fatal:
 //! every failure mode of a cache file answers by recomputation.
 //!
-//! The typed families (CEL0030-CEL0038) are plan 9a's own artifact
-//! class: `StoredVerdict.typed` (task 9) carries their post-suppression
+//! The typed families (CEL0030-CEL0038) are their own artifact
+//! class: `StoredVerdict.typed` carries their post-suppression
 //! diagnostics alongside the class, function, and inferred-edge records
 //! `crate::cache::verdict`'s layered validation replays against the live
-//! project — the file-level counterpart of the fourth pack's per-body
-//! `StoredInferredSignature` (task 7). `PERSIST_TYPED_ARTIFACTS` gates
+//! project, the file-level counterpart of the fourth pack's per-body
+//! `StoredInferredSignature`. `PERSIST_TYPED_ARTIFACTS` gates
 //! both: off, `StoredVerdict.typed` stays `None` and the typed portion
 //! is recomputed fresh on every path, cold or warm, exactly as before
-//! task 9.
+//! these families existed.
 
 pub mod identity;
 pub mod pack;
@@ -56,23 +56,22 @@ type MemberTreeEntries = Vec<(ContentHash, StoredMemberTree)>;
 type VerdictEntries = Vec<(ContentHash, StoredVerdict)>;
 type SignatureEntries = Vec<(StoredSignatureKey, StoredInferredSignature)>;
 
-/// Plan 9a's persist lever for the typed-artifact families (task 7,
-/// extended by task 9): `true` persists the inferred-signature pack
-/// ([`collect_signature_entries`]) AND populates `StoredVerdict.typed`
-/// ([`composed_verdict`]'s typed half); `false` drops both. Fixed at
-/// `true` today (task 12's closing memo: the lever was never pulled) —
-/// no runtime toggle exists yet; until one does, this is the named,
-/// reviewable hook a future flip lands on, and the const is threaded
-/// into [`composed_verdict_with_lever`] so its two branches stay
-/// unit-testable without one.
+/// The persist lever for the typed-artifact families: `true` persists
+/// the inferred-signature pack ([`collect_signature_entries`]) AND
+/// populates `StoredVerdict.typed` ([`composed_verdict`]'s typed
+/// half); `false` drops both. Fixed at `true` today (the lever has
+/// never been pulled); no runtime toggle exists yet; until one does,
+/// this is the named, reviewable hook a future flip lands on, and the
+/// const is threaded into [`composed_verdict_with_lever`] so its two
+/// branches stay unit-testable without one.
 ///
 /// What pulling it to `false` would mean: every typed warm serve falls
 /// back to fresh interprocedural inference, so the warm number for the
 /// typed families converges toward cold-with-inference rather than
-/// staying near the untyped warm floor — design section 9's tracked
-/// trade-off. Escalating that flip past this const into a real release
-/// decision (a CLI flag, a project setting) is out of this plan's
-/// scope; it is plan 9c's call, informed by plan 9b's measured numbers.
+/// staying near the untyped warm floor, a tracked trade-off.
+/// Escalating that flip past this const into a real release decision
+/// (a CLI flag, a project setting) is a separate call, informed by
+/// measured numbers.
 pub(crate) const PERSIST_TYPED_ARTIFACTS: bool = true;
 
 /// How one pack write ended.
@@ -105,7 +104,7 @@ enum PackWrite {
 /// raw abort. The old snapshot stays and the next pass retries, exactly
 /// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
-    // Wall-clock read, legal here and only here (task 11): this is the
+    // Wall-clock read, legal here and only here: this is the
     // persist orchestration layer, never a salsa query, and the reading
     // feeds only `CacheStatistics` — telemetry for the stats line, never
     // analysis or the rendered diagnostics.
@@ -307,7 +306,7 @@ fn collect_entries(
     (trees, member_trees, verdicts)
 }
 
-/// The inferred-signature pack's entries (plan 9a, task 7): one per
+/// The inferred-signature pack's entries: one per
 /// eligible body — every REPORTED file's free functions and
 /// `MemberKind::Method` members — save for whatever `panicked` names,
 /// mirroring `collect_entries`'s own panic guard exactly (this reads
@@ -321,7 +320,7 @@ fn collect_entries(
 /// interprocedural inference over `inputs.reported` alone (`analyze`'s
 /// own rustdoc — dependency files exist to resolve names against, never
 /// to be inferred themselves). Persist may only READ a result the
-/// analysis pass already computed (this module's own decision-8
+/// analysis pass already computed (this module's own read-only
 /// invariant); widening this loop to `sources` would force a FRESH,
 /// unbounded interprocedural inference of every vendor body the pass
 /// never touched — thousands of them on a real Composer project — and
@@ -332,7 +331,7 @@ fn collect_entries(
 /// rather than persisting a wrong answer:
 /// - a vendor (non-reported) file's own bodies (above) — recorded
 ///   debt: persisting the vendor callees a reported file's own
-///   inferred edges transitively reach is a possible plan 9b
+///   inferred edges transitively reach is a possible future
 ///   optimization, revisited only if the numbers show the
 ///   cross-boundary vendor cutoff matters;
 /// - a `DeclarationKind::Trait` class-like's own methods (a trait's
@@ -388,7 +387,7 @@ fn collect_signature_entries(
         }
 
         for class in &tree.classes {
-            // Decision 8's trait exclusion: a trait's memo key includes
+            // The trait exclusion: a trait's memo key includes
             // the using class's context, which this file-local walk has
             // no way to enumerate.
             if class.kind == DeclarationKind::Trait {
@@ -559,16 +558,16 @@ fn composed_verdict_with_lever(
     }
 }
 
-/// The typed half of one reported file's persisted verdict (plan 9a,
-/// task 9): `typed_portion`'s post-suppression diagnostics, stored,
+/// The typed half of one reported file's persisted verdict:
+/// `typed_portion`'s post-suppression diagnostics, stored,
 /// alongside the class, function, and inferred-edge records
-/// `typed_file_verdicts(...).dependencies` recorded — the file-level
+/// `typed_file_verdicts(...).dependencies` recorded, the file-level
 /// mirror of [`stored_signature_of`] above, reading the exact same
 /// `FileDependencies` shape `analyze_one`'s recompute path already
 /// produces (never a separate walk), digests stamped through the same
-/// task-2 queries [`stored_signature_of`] stamps them through, and every
+/// queries [`stored_signature_of`] stamps them through, and every
 /// inferred edge's `StoredType` carried as `FileDependencies` already
-/// recorded it (no re-derivation, no `TypeId` involved: task 3's
+/// recorded it (no re-derivation, no `TypeId` involved:
 /// `FileDependencies::extend_from_body` already mirrored it at the
 /// walk's own boundary).
 fn composed_typed_verdict(
@@ -646,8 +645,8 @@ fn composed_typed_verdict(
 }
 
 /// Deterministic pack order: by key, one entry per key. Generic over the
-/// key type (plan 9a, task 7: the signature pack keys by
-/// `StoredSignatureKey`, not by `ContentHash`) — `dedup_by` keeps the
+/// key type (the signature pack keys by `StoredSignatureKey`, not by
+/// `ContentHash`), `dedup_by` keeps the
 /// FIRST of any run of equal keys, which is what lets a duplicate
 /// definition (two files declaring the same function name, an
 /// already-diagnosed unknown-symbol condition upstream) resolve
@@ -660,13 +659,13 @@ fn sort_entries<Key: Ord, Entry>(entries: &mut Vec<(Key, Entry)>) {
 
 /// Creates the cache directory and its self-ignoring `.gitignore`, and
 /// sweeps crash debris from both `.celerrate/cache/` and its parent
-/// `.celerrate/`. The `.gitignore` goes through the atomic write (audit
-/// finding M8): a plain write torn by a crash left a half-written file
-/// that was never repaired, since only existence is checked. Its
-/// temporary lands in `.celerrate/` (the `.gitignore`'s own parent), not
-/// in `.celerrate/cache/`, so the parent gets the same best-effort sweep
-/// or a crash during first-time `.gitignore` creation leaves a `.tmp*`
-/// orphan forever (whole-branch review finding, closing the M2/M8 seam).
+/// `.celerrate/`. The `.gitignore` goes through the atomic write: a
+/// plain write torn by a crash left a half-written file that was
+/// never repaired, since only existence is checked. Its temporary
+/// lands in `.celerrate/` (the `.gitignore`'s own parent), not in
+/// `.celerrate/cache/`, so the parent gets the same best-effort sweep
+/// or a crash during first-time `.gitignore` creation leaves a
+/// `.tmp*` orphan forever.
 fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     std::fs::create_dir_all(cache_directory)?;
     sweep_crash_debris(cache_directory);
@@ -680,8 +679,8 @@ fn prepare_directory(cache_directory: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
-/// Best-effort removal of temporary files a crash mid-write left behind
-/// (audit finding M2): `write_atomically`'s temporaries carry
+/// Best-effort removal of temporary files a crash mid-write left
+/// behind: `write_atomically`'s temporaries carry
 /// `pack::TEMPORARY_FILE_PREFIX`, survive SIGKILL and power loss, and
 /// nothing else ever removes them. A concurrent process mid-persist can
 /// lose its temporary to this sweep; its rename then fails, that persist
@@ -790,17 +789,17 @@ mod tests {
         );
     }
 
-    /// Plan 9a's persist lever (task 7): `PERSIST_TYPED_ARTIFACTS` is
-    /// fixed `true` today, so this pins the ON branch — the
-    /// inferred-signature pack IS written and the snapshot IS
-    /// populated from it. The OFF branch (`StoredVerdict.typed` staying
-    /// `None`) is `the_lever_persists_untyped_only_verdicts` just below
-    /// (task 9): no runtime toggle exists yet to drive it end to end
-    /// from `persist`, and a `const` cannot be mutated from a test, so
+    /// The persist lever: `PERSIST_TYPED_ARTIFACTS` is fixed `true`
+    /// today, so this pins the ON branch, the inferred-signature pack
+    /// IS written and the snapshot IS populated from it. The OFF
+    /// branch (`StoredVerdict.typed` staying `None`) is
+    /// `the_lever_persists_untyped_only_verdicts` just below: no
+    /// runtime toggle exists yet to drive it end to end from
+    /// `persist`, and a `const` cannot be mutated from a test, so
     /// that test pins `composed_verdict_with_lever`'s two branches
     /// directly instead. `PERSIST_TYPED_ARTIFACTS` and
-    /// `collect_signature_entries` are `pub(crate)`/private — invisible
-    /// to the external `tests/cache_seeding.rs` integration crate — so
+    /// `collect_signature_entries` are `pub(crate)`/private, invisible
+    /// to the external `tests/cache_seeding.rs` integration crate, so
     /// this lever test lives here instead of there.
     #[test]
     fn the_persist_lever_drops_the_typed_artifacts() {
@@ -832,12 +831,12 @@ mod tests {
         assert_eq!(session.cache.signatures.len(), 1, "one free function");
     }
 
-    /// Plan 9a, task 9's own persist lever test: `composed_verdict_with_
+    /// The persist lever test for the typed half: `composed_verdict_with_
     /// lever`'s two branches, pinned directly since `composed_verdict`
-    /// and the lever are both private/`pub(crate)` — invisible to the
+    /// and the lever are both private/`pub(crate)`, invisible to the
     /// external `tests/cache_seeding.rs` integration crate, exactly the
     /// same visibility seam `the_persist_lever_drops_the_typed_artifacts`
-    /// above already worked around for task 7's own lever. Off,
+    /// above already worked around for its own lever. Off,
     /// `StoredVerdict.typed` stays `None`; on, it is populated — the two
     /// branches a runtime toggle would otherwise flip, exercised here as
     /// a plain function argument instead.
@@ -1015,11 +1014,11 @@ mod tests {
         );
     }
 
-    /// Audit finding M2: `write_atomically`'s temporary files (the
+    /// `write_atomically`'s temporary files (the
     /// `.tmp` prefix `tempfile` uses) survive SIGKILL and power loss in
     /// `.celerrate/cache/`, and nothing ever swept them. `persist` now
     /// sweeps them best-effort; anything not matching the prefix is
-    /// someone else's file and stays. Whole-branch review finding M2/M8:
+    /// someone else's file and stays. On the same whole-branch review:
     /// `write_atomically(&gitignore, ...)`'s temporary lands in
     /// `.celerrate/`, the target's parent, not in `.celerrate/cache/`, so a
     /// crash during first-time `.gitignore` creation left a `.tmp*` orphan
@@ -1067,7 +1066,7 @@ mod tests {
         );
     }
 
-    /// Audit finding M5 through I8's counters: a persist that writes, a
+    /// A persist that writes, a
     /// persist that skips, and a persist that fails are each counted, so
     /// a permanently unwritable cache directory is at least observable.
     #[test]

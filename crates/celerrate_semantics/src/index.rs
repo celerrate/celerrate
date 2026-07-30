@@ -30,7 +30,7 @@ pub enum SymbolOrigin {
 }
 
 /// One declared symbol: its lookup key, the original spelling (the
-/// "did you mean" diagnostics of sub-project 4 will need it), and the
+/// "did you mean" diagnostics will need it), and the
 /// declaration it names.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct SymbolEntry {
@@ -129,7 +129,7 @@ pub fn source_symbol_table(db: &dyn salsa::Database, files: AnalyzedFileSet) -> 
 }
 
 /// One stub symbol under its lookup key. The whole `StubSymbol` rides
-/// along: part 6's version gating reads its availability window.
+/// along: the version-gating rule reads its availability window.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StubSymbolEntry {
     pub space: SymbolSpace,

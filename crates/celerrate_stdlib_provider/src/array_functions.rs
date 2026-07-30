@@ -52,8 +52,8 @@ pub(crate) fn array_value_of<'db>(
 /// subject, keeping its key type (`array_key_of`, which unions a
 /// non-list shape's key literals through the lattice).
 ///
-/// Task-12 debt (owner: `array_map`, recorded above): a
-/// callable-STRING callback (`'strtoupper'`) has no lattice
+/// Recorded debt: a callable-STRING callback (`'strtoupper'`) has no
+/// lattice
 /// constructor for "the return type of the named function" today, so
 /// `callable_return` answers `None` for it exactly like an opaque
 /// `mixed` callback does, and the call falls through to the declared
@@ -92,16 +92,15 @@ pub(crate) fn array_map<'db>(
 /// type passes through unchanged (the predicate is opaque). An
 /// unknown subject is `None`.
 ///
-/// Task-12 debt (owner: `array_filter`, task-11 finding M36): the
-/// `arguments.len() == 1` gate below only recognizes the bare
+/// The `arguments.len() == 1` gate below only recognizes the bare
 /// single-argument call as "no callback". PHP's own `null` callback
 /// (`array_filter($a, null, $mode)`, three arguments, mode selecting
 /// keys/both) is the SAME falsy-drop form as the bare call, but this
 /// handler falls into the "has a callback" branch for it and passes
 /// the value type through unchanged instead of dropping falsy
 /// constituents — a PRECISION miss (widening, sound), not exercised
-/// by the pinned corpus (verified at task 11: none of its three
-/// `array_filter` call sites use this form).
+/// by the pinned corpus (none of its three `array_filter` call sites
+/// use this form).
 pub(crate) fn array_filter<'db>(
     context: TypeContext<'db>,
     arguments: &[TypeId<'db>],

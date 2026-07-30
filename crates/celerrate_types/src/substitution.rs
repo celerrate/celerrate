@@ -1,11 +1,11 @@
-//! The structural substitution primitive (design section 6): template
+//! The structural substitution primitive: template
 //! maps solved at call sites, late-static-binding resolution against
 //! an owner and a receiver, and conditional-type evaluation once a
 //! subject becomes decidable. A plain function, not a query — every
 //! caller is already inside one. The recursion mirrors
 //! [`crate::widening::widened_literals`]: every composite rebuilds
 //! through the capped constructors, so the structural depth cap
-//! bounds every value this module can produce (decision 15).
+//! bounds every value this module can produce.
 
 use std::collections::BTreeMap;
 
@@ -40,7 +40,7 @@ impl<'db> Substitution<'db> {
     }
 }
 
-/// The late-static-binding targets of one call site (decision 1):
+/// The late-static-binding targets of one call site:
 /// `self` resolves to the declaring owner, `parent` to the owner's
 /// first `Extends` ancestor (the caller walks the ancestry — this
 /// module stays lattice-pure), `static` to the receiver. A `None`
@@ -400,7 +400,7 @@ mod tests {
         // `self::create()` inside a method: the receiver for
         // substitution is the current `static` type — the placeholder
         // itself — so a `static` return survives substitution and
-        // forwards to the outer caller (decision 2).
+        // forwards to the outer caller.
         let f = fixture();
         let db = &f.db;
         let resolution = PlaceholderResolution {

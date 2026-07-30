@@ -1,5 +1,5 @@
 //! `celerrate.toml` parsing and validation: the pure configuration
-//! model of the CLI product design (spec section 2).
+//! model the command-line product builds on.
 //!
 //! Two functions, one boundary: [`parse`] turns file text into a
 //! [`Configuration`] plus structural diagnostics, and [`validate`]

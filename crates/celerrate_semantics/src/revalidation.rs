@@ -10,8 +10,7 @@
 //! outcomes and answers together, so drift between this module's
 //! records and the outcomes the semantic-phase rules construct their
 //! diagnostics from is structurally impossible, the
-//! `composed_diagnostics` closure applied to the second mirror,
-//! plan 9a.
+//! `composed_diagnostics` closure applied to the second mirror.
 
 use celerrate_db::{AnalyzedFileSet, SourceFile};
 use celerrate_project::ProjectConfiguration;

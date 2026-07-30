@@ -124,7 +124,7 @@ fn closures_nest_statements_and_inline_html() {
 #[test]
 fn a_parameter_missing_its_variable_is_diagnosed() {
     // `int` is deliberately avoided here: `(int)` alone lexes as a cast
-    // token (task 5's rule matches a bare `(`, a cast word, and `)`
+    // token (the rule matches a bare `(`, a cast word, and `)`
     // with only whitespace between), so it would never reach the
     // parameter grammar at all. `Foo` is not a cast word.
     assert!(

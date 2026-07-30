@@ -16,20 +16,19 @@ use crate::symbol::{StubAvailability, StubDeprecation, StubSymbol, StubSymbolKin
 pub const BLOB_MAGIC: [u8; 8] = *b"CELSTUBS";
 
 /// Version 2 marks the overlays section (`SECTION_OVERLAYS`) going
-/// live: the schema bump the design's section 9 mandates whenever a
-/// reserved section starts being written. Otherwise additive
-/// evolution goes through new sections, which old readers skip
-/// without a version bump.
+/// live: a reserved section starting to be written always requires a
+/// schema bump. Otherwise additive evolution goes through new
+/// sections, which old readers skip without a version bump.
 pub const BLOB_FORMAT_VERSION: u32 = 2;
 
 /// The top-level symbol table: the one live section.
 pub const SECTION_SYMBOL_TABLE: u32 = 1;
 
-/// Reserved: per-version signature deltas (sub-project 3).
+/// Reserved: per-version signature deltas.
 pub const SECTION_SIGNATURES: u32 = 2;
 
-/// The overlay merge point: live for the Celerrate refinements payload
-/// (design section 7); still reserved for plugin stubs.
+/// The overlay merge point: live for the Celerrate refinements payload;
+/// still reserved for plugin stubs.
 pub const SECTION_OVERLAYS: u32 = 3;
 
 /// Why a blob failed to decode. Every variant is a clean rejection:
@@ -855,11 +854,10 @@ mod tests {
     fn a_blob_without_the_overlays_section_decodes_with_empty_refinements() {
         // Build a two-section, version-2 blob by hand: magic + version
         // 2 + checksum patch + a symbol-table entry + a signatures
-        // entry, but no overlays entry. This is the exact tolerance
-        // rule decision 4 relies on: the signatures section already
-        // has it (see
-        // `a_blob_without_the_signature_section_decodes_with_empty_payloads`),
-        // and the overlays section must have it too.
+        // entry, but no overlays entry. This is the same tolerance
+        // rule already covered for the signatures section (see
+        // `a_blob_without_the_signature_section_decodes_with_empty_payloads`):
+        // the overlays section must have it too.
         let old_index = sample_index();
         let symbol_table = encode_symbol_table(&old_index);
         let signatures = encode_signatures(&old_index);

@@ -67,7 +67,7 @@ const UNKNOWN_SYMBOL_IDENTIFIERS: [&str; 3] = ["CEL0018", "CEL0019", "CEL0020"];
 
 /// The identifiers of the unknown-member family (`CEL0030` method,
 /// `CEL0031` property, `CEL0032` class constant, `CEL0033` enum case).
-/// Task 12's triage landed them at zero occurrences on the corpus, so
+/// These identifiers sit at zero occurrences on the corpus, so
 /// they join the hard-refusal list: like an unknown symbol, an
 /// unknown member on this correct code is a priority bug, refused even
 /// under `--bless`, never a snapshot entry. The nullability and
@@ -201,7 +201,7 @@ mod tests {
         let pin = super::pin().unwrap();
         assert!(
             pin.repository.contains("symfony/demo"),
-            "the corpus is symfony/demo, per the design: {}",
+            "the corpus is symfony/demo: {}",
             pin.repository,
         );
     }

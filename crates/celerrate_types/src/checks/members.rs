@@ -1,9 +1,10 @@
 //! The unknown-member family (CEL0030-CEL0033): every member access —
 //! called (`$x->m()`, `Foo::m()`, `$x->m(...)`) or not (`$x->p`,
 //! `Foo::$p`, `Foo::CONST`, `Foo::Case`) — judged through the ternary
-//! receiver surface (task 3). `Missing` reports; `Exists` and
+//! receiver surface. `Missing` reports; `Exists` and
 //! `PossiblyExists` are silence (the guillotine). A nullable receiver's
-//! own null-dereference beat (`NullDereference`) is task 6's.
+//! own null-dereference beat (`NullDereference`) belongs to the
+//! nullability family.
 
 use std::collections::HashSet;
 
@@ -66,7 +67,7 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
 }
 
 /// Every expression consumed as a callee: `Call.callee` and
-/// `CallableReference.callee`, so task 5 can treat the remaining
+/// `CallableReference.callee`, so callers can treat the remaining
 /// `MemberAccess`/`ScopedAccess` expressions as property/constant
 /// reads rather than calls.
 pub(crate) fn called_member_accesses(ir: &BodyIr) -> HashSet<ExpressionId> {
@@ -140,7 +141,7 @@ fn check_instance_property(
 /// `Foo::m()`/`Foo::m(...)`: the scoped subject folds to a set of
 /// class keys (rarely more than one, but a placeholder resolution
 /// keeps the shape uniform with the union rule below); missing on
-/// every one of them reports. An unresolvable subject (decision 5: an
+/// every one of them reports. An unresolvable subject (an
 /// unknown class name is `CEL0018`'s beat, a dynamic subject is always
 /// silent) never reaches the judgment at all.
 fn check_scoped_method(
@@ -256,12 +257,12 @@ fn check_scoped_constant(
 }
 
 /// The folded class keys of a scoped subject: `self`/`static` resolve
-/// to the owner, `parent` to the owner's parent (task 3's
-/// `parent_key`), any other `NamedReference` through `resolve_name` in
+/// to the owner, `parent` to the owner's parent (`parent_key`), any
+/// other `NamedReference` through `resolve_name` in
 /// the body's namespace and use tables (`None` when unknown — an
 /// unresolved class name is `CEL0018`'s beat, silence here); any
 /// non-`NamedReference` subject (a variable, an expression) answers
-/// `None` (decision 5: dynamic subjects are silent). Debt ledger: a
+/// `None` (dynamic subjects are silent by design). Debt ledger: a
 /// variable typed `class-string<Foo>` is a non-`NamedReference`
 /// subject too, so a scoped call through it (`$class::method()`) is
 /// silent even though the class is statically known.
@@ -283,7 +284,7 @@ pub(crate) fn scoped_subject_keys(
 
 /// A written class name resolved through the global symbol index, the
 /// same candidate set `resolve_name` consults: `None` when it resolves
-/// to no declaration. `pub(crate)`: task 8's `New { class: Named }`
+/// to no declaration. `pub(crate)`: `New { class: Named }`
 /// constructor resolution (`checks::arguments`) resolves its written
 /// class name through this exact same lookup.
 pub(crate) fn resolve_scoped_class_key(
@@ -343,7 +344,7 @@ mod tests {
     /// `StubIndex::from_symbols` carrying a single `stdClass` class
     /// symbol — the shared `fixture_with_stub_class` idiom, so a source
     /// class can `extends \stdClass` and record it as a stub ancestor
-    /// (design section 2: `json_decode`'s dynamic-property surface).
+    /// (`json_decode`'s dynamic-property surface).
     fn method_verdicts_with_stub_stdclass(source: &str) -> Vec<TypedVerdictKind> {
         let fixture = fixture_with_stub_class(&[source], "stdClass");
         typed_file_verdicts(
@@ -360,7 +361,7 @@ mod tests {
     }
 
     /// `family_verdicts` over the shared `fixture_with_stub_enum_interfaces`
-    /// fixture, carrying `UnitEnum`/`BackedEnum` surfaces so decision 7's
+    /// fixture, carrying `UnitEnum`/`BackedEnum` surfaces so the
     /// implicit enum edges are synthesized end to end through this walk.
     fn method_verdicts_with_stub_enum_interfaces(source: &str) -> Vec<TypedVerdictKind> {
         let fixture = fixture_with_stub_enum_interfaces(&[source]);
@@ -473,7 +474,7 @@ function f(A|B $either, ?A $nullable): void {
                     member: "nowhere".to_owned(),
                     receiver: "A".to_owned(),
                 },
-                // Task 6's nullability walker: `$nullable->nowhere()`'s
+                // The nullability walker: `$nullable->nowhere()`'s
                 // receiver carries `null`, so the same `MemberAccess`
                 // node also earns a `NullDereference` beat, appended
                 // after every members-family verdict (`body_typed_verdicts`
@@ -488,7 +489,7 @@ function f(A|B $either, ?A $nullable): void {
 
     #[test]
     fn trait_owned_bodies_are_not_checked() {
-        // Decision 3: plan 6 analyzes trait bodies per using class;
+        // Trait bodies are analyzed per using class;
         // judged against the trait's own surface, this call would be a
         // false positive.
         let verdicts = family_verdicts(
@@ -581,9 +582,9 @@ function f(User $u, Getter $g, Bag $b, Annotated $a): void {
 
     #[test]
     fn stdclass_descendants_accept_dynamic_properties() {
-        // `json_decode` alone makes this mandatory on any real corpus
-        // (design section 2). `method_verdicts_with_stub_stdclass` is
-        // the task-4 helper over a fixture whose stub input is a
+        // `json_decode` alone makes this mandatory on any real corpus.
+        // `method_verdicts_with_stub_stdclass` is
+        // the helper over a fixture whose stub input is a
         // synthetic `StubIndex::from_symbols` carrying a `stdClass`
         // class — mirror the synthetic-stub fixtures the member-lookup
         // tests already build.

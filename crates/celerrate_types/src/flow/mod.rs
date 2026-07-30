@@ -2,8 +2,8 @@
 //! of narrowing subjects threaded through statements. Branches join,
 //! divergence (return, throw, break, goto) marks the path
 //! unreachable, and loops run an inner join-ascent fixpoint with a
-//! budget — the interprocedural discipline in miniature (design
-//! section 6). Absence is silence: a subject missing from the
+//! budget — the interprocedural discipline in miniature.
+//! Absence is silence: a subject missing from the
 //! environment reads as its wide type, `mixed` for locals.
 
 use std::collections::BTreeMap;
@@ -55,7 +55,7 @@ pub(crate) struct FlowContext<'db, 'body> {
     pub namespace: String,
     pub tables: UseTables,
     /// The defining class's folded key; `None` for free functions and
-    /// anonymous-class methods (decision 12).
+    /// anonymous-class methods.
     pub owner_class_key: Option<String>,
     pub method_is_static: bool,
     /// Parameter names with their seeded (declared) types.
@@ -64,7 +64,7 @@ pub(crate) struct FlowContext<'db, 'body> {
     /// (`TypeId::template`'s scope convention, `declared.rs`'s own
     /// `<class key>::<member key>` for a method or the bare function
     /// key for a free function): the body's *own* declaration, never
-    /// the using-class override decision 5 applies to
+    /// the using-class override applied to
     /// `owner_class_key` for a trait body — a class-level template's
     /// scope is a fact about which class or trait actually wrote the
     /// `@template`, not about which class later borrows the method
@@ -76,10 +76,10 @@ pub(crate) struct FlowResult<'db> {
     pub expression_types: Vec<TypeId<'db>>,
     pub return_type: TypeId<'db>,
     pub edge_counts: InterproceduralEdgeCounts,
-    /// Task 10, decision 14: every stub-function call this body made,
+    /// Every stub-function call this body made,
     /// with its mixed verdict — drained from `Walker::stub_calls`.
     pub stub_calls: Vec<StubCallRecord>,
-    /// Task 3 (plan 9a): every class, function, and inferred callee
+    /// Every class, function, and inferred callee
     /// return this walk consulted — drained from `Walker::dependencies`,
     /// already sorted and deduped (the eq-cutoff contract).
     pub dependencies: TypedDependencies<'db>,
@@ -226,23 +226,23 @@ pub(crate) struct Walker<'db, 'body, 'context> {
     returns: Vec<TypeId<'db>>,
     saw_yield: bool,
     edge_counts: InterproceduralEdgeCounts,
-    /// Task 10, decision 14: one record per free-function call this
+    /// One record per free-function call this
     /// body made whose resolved key exists only in stubs, appended at
     /// the call boundary and drained into `InferredBody.stub_calls`.
     stub_calls: Vec<StubCallRecord>,
-    /// Task 3 (plan 9a, decision 4): every class, function, and
+    /// Every class, function, and
     /// inferred callee return this walk consults, appended at the
     /// existing `edge_counts`/`lookup_member`/`linearized_class`
     /// consultation sites — constructive, never a second traversal.
     dependencies: TypedDependencies<'db>,
     /// Set while typing inside a `NullSafeChain` when a `?->` link's
     /// receiver was possibly null: the wrapper re-acquires `|null`
-    /// once, at the end (the design's whole-chain rule).
+    /// once, at the end (the whole-chain rule).
     null_safe_reacquires: bool,
     /// The most recently typed call's conditional assertions, drained
     /// by `branch_environments`' default arm.
     pending_condition_facts: Vec<PendingAssertion<'db>>,
-    /// Inline `@var` docblock texts (task 9, decision 11), grouped by
+    /// Inline `@var` docblock texts, grouped by
     /// anchor once at entry: `None` for a comment trailing every
     /// statement of the body (bound once, at body entry), `Some(id)`
     /// for one anchored to statement `id` (bound immediately before
@@ -303,7 +303,7 @@ pub(crate) fn walk_body<'db>(context: &FlowContext<'db, '_>) -> FlowResult<'db> 
             (None, false) => TypeId::never(db),
         }
     };
-    // The eq-cutoff contract (decision 4, `TypedDependencies`'s own
+    // The eq-cutoff contract (`TypedDependencies`'s own
     // rustdoc): deterministic order regardless of the walk's own
     // traversal, so two inference-identical bodies backdate.
     walker.dependencies.sort_and_dedup();
@@ -350,7 +350,7 @@ impl<'db> Walker<'db, '_, '_> {
 
     /// The current type of a subject: its binding, or the wide type —
     /// `mixed` for a local, the declared type for a property subject
-    /// (decision 9's fallback; a dropped or never-narrowed property
+    /// (a dropped or never-narrowed property
     /// still reads as its declaration).
     fn subject_type(
         &mut self,
@@ -387,9 +387,9 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// `$this`: the symbolic late-static-binding placeholder in a
-    /// non-static method (decision 1); `mixed` (silence) everywhere
-    /// else — a free function, an anonymous-class method (decision
-    /// 12), or a static method (no `$this` value there). Substitution
+    /// non-static method; `mixed` (silence) everywhere
+    /// else — a free function, an anonymous-class method, or a static
+    /// method (no `$this` value there). Substitution
     /// happens only at a member boundary the placeholder later
     /// crosses (`member_boundary_type`), never here.
     fn this_type(&self) -> TypeId<'db> {
@@ -399,7 +399,7 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The current `static` type in the defining context (decision 2):
+    /// The current `static` type in the defining context:
     /// the forwarding placeholder when an owner class exists, `mixed`
     /// otherwise. Unlike [`Self::this_type`] this carries no
     /// static-method gate: the `self`/`static` *class keyword* is
@@ -414,7 +414,7 @@ impl<'db> Walker<'db, '_, '_> {
 
     /// The class-like keys a receiver type addresses; `None` when any
     /// part is opaque (mixed, object, a scalar, an unresolvable
-    /// shape) — the silent stance of decision 11. Union constituents
+    /// shape) — a recorded silent stance. Union constituents
     /// must all resolve (null skipped: the nullability family's
     /// business); intersection contributes every resolving part.
     fn receiver_parts(&mut self, of: TypeId<'db>) -> Option<Vec<String>> {
@@ -487,7 +487,7 @@ impl<'db> Walker<'db, '_, '_> {
                     }
                 };
                 self.record(subject, TypeId::mixed(db));
-                // Decision 2 (forwarding): the receiver for
+                // Forwarding: the receiver for
                 // substitution at a `self::`/`static::`/`parent::` call
                 // subject is the *current* `static` type — the
                 // placeholder itself — so a `static` return stays

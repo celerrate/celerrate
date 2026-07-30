@@ -1,6 +1,6 @@
-//! Widening and the deterministic caps: fixpoint termination (plan 5)
+//! Widening and the deterministic caps: fixpoint termination
 //! depends on these being pure lattice operations, identical regardless
-//! of a cycle's entry point (spec section 3). An arity overrun collapses
+//! of a cycle's entry point. An arity overrun collapses
 //! to the pairwise join (a common supertype, `mixed` at worst), never a
 //! truncated subset, which would make the value depend on accumulation
 //! order.

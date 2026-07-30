@@ -1,4 +1,4 @@
-//! Presentation-time did-you-mean (design section 7): computed at
+//! Presentation-time did-you-mean: computed at
 //! render and fix time, for the reported diagnostics only, never
 //! inside a memoized query. Nothing computed here is persisted: a
 //! candidate goes stale the moment a nearer name appears, and no
@@ -82,13 +82,13 @@ fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usiz
         .filter(|&distance| distance <= bound)
 }
 
-/// The bound the design calls "bounded edit distance": tight for short
+/// The "bounded edit distance" bound: tight for short
 /// names (almost anything is within 2 of a 3-letter name), 2 otherwise.
 fn distance_bound(name: &str) -> usize {
     if name.chars().count() <= 4 { 1 } else { 2 }
 }
 
-/// The ambiguity discipline (design section 7): a unique
+/// The ambiguity discipline: a unique
 /// minimal-distance candidate becomes an applicable suggestion; a tie
 /// is listed in a note instead, because bulk `--fix-suggestions` must
 /// never apply a guess the engine itself knows is ambiguous.
@@ -319,7 +319,7 @@ impl<'a> CandidatePools<'a> {
 /// Every declared qualified name of `space`, source and stub halves
 /// alike. Unlike the old terminal-segment pool, the qualified name is
 /// kept whole: comparing keys rather than bare terminal segments is
-/// the whole point of this design (see the module's task-2 report).
+/// the whole point of this design.
 fn declared_pool(session: &Session, space: SymbolSpace) -> Vec<String> {
     let db = &session.database;
     let mut names: Vec<String> = Vec::new();
@@ -666,7 +666,7 @@ fn resolved_receiver_key(
 /// edges (or from the key itself when the class is no source class),
 /// breadth-first over parent links exactly like `lookup_member`'s stub
 /// walk. Virtual (annotation-declared) members are deliberately not in
-/// the pool in this sub-project. `class_key` must already be resolved
+/// the pool here. `class_key` must already be resolved
 /// (see `receiver_class_key`): a display the folded key cannot
 /// round-trip (a union type, an anonymous class) is filtered out
 /// there, never reaching here.
@@ -830,7 +830,7 @@ mod tests {
     }
 
     /// Analyzes a fixture project and enriches its report, exactly as
-    /// the single-pass path will (task 4).
+    /// the single-pass path will.
     fn enriched(files: &[(&str, &str)]) -> (tempfile::TempDir, Vec<Diagnostic>) {
         let root = project(files);
         let session = Session::start(root.path());

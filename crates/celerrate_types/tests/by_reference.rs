@@ -1,4 +1,4 @@
-//! Task 9's by-reference channel, end to end: `preg_match`'s declared
+//! The by-reference channel, end to end: `preg_match`'s declared
 //! signature (the real embedded phpstorm-stubs blob) gives `$matches`
 //! the general write-back first; `StdlibProvider`'s
 //! `by_reference_types` then overrides it with the pattern-derived,
@@ -103,8 +103,8 @@ function consume(string $subject) {
 /// (`apply_provider_by_reference` mirrors `apply_by_reference`'s spread
 /// rule): the contribution's index has no positional argument to land
 /// on, so binding is skipped rather than panicking. The load-bearing
-/// assertion is completion without a panic; task 10 re-covers the same
-/// body with a recording assertion once `stub_calls` exists.
+/// assertion is completion without a panic; the same body will be
+/// re-covered with a recording assertion once `stub_calls` exists.
 #[test]
 fn a_spread_argument_stops_the_by_reference_application() {
     let f = fixture(&[r#"<?php

@@ -1,18 +1,16 @@
-//! Cache observability (audit findings I8 and M5): cheap process-wide
-//! counters, printed to stderr when `CELERRATE_CACHE_STATS=1`. The
-//! counters never feed analysis — salsa's determinism is untouched —
-//! and the stderr line is not a contractual surface; it exists so the
-//! parent spec's economics rule ("an artifact class that does not pay
-//! for itself is dropped") is measurable without a profiler: hit rate,
-//! revalidation acceptance, and persist health, per class. The
-//! environment variable is read here, at the orchestration layer,
-//! never inside a query.
+//! Cache observability: cheap process-wide counters, printed to stderr
+//! when `CELERRATE_CACHE_STATS=1`. The counters never feed analysis —
+//! salsa's determinism is untouched — and the stderr line is not a
+//! contractual surface; it exists so the economics rule ("an artifact
+//! class that does not pay for itself is dropped") is measurable
+//! without a profiler: hit rate, revalidation acceptance, and persist
+//! health, per class. The environment variable is read here, at the
+//! orchestration layer, never inside a query.
 //!
-//! Recorded ledger note (task 12): whether an in-memory LRU capacity
-//! belongs on top of these counters remains plan 9b's decision — this
-//! plan's task 11 measured persist wall-clock only, never peak memory,
-//! and set no `lru` anywhere in this module. Plan 9b's peak-memory
-//! measurement owns that call.
+//! Whether an in-memory LRU capacity belongs on top of these counters
+//! is not yet decided: only persist wall-clock is measured here, never
+//! peak memory, and no `lru` field exists anywhere in this module. A
+//! future peak-memory measurement would own that call.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -41,8 +39,8 @@ pub struct CacheStatistics {
     pub verdicts_discarded: AtomicU64,
     /// Verdicts absent: no entry under the file's content hash.
     pub verdicts_absent: AtomicU64,
-    /// Bodies the typed families walked this run. Never cached: plan
-    /// 5's decision 13 keeps these counters at the orchestration layer,
+    /// Bodies the typed families walked this run. Never cached: these
+    /// counters are kept at the orchestration layer,
     /// aggregated once per file regardless of cache hit or miss.
     pub typed_bodies: AtomicU64,
     /// Interprocedural edges the walked bodies consumed, declared tier.
@@ -55,16 +53,16 @@ pub struct CacheStatistics {
     pub persist_written: AtomicU64,
     /// Pack writes skipped because nothing changed.
     pub persist_skipped: AtomicU64,
-    /// Pack writes that failed — the silent failure of audit finding
-    /// M5, now at least countable.
+    /// Pack writes that failed, a silent failure now at least
+    /// countable.
     pub persist_failed: AtomicU64,
     /// Wall-clock milliseconds `cache::persist` spent, accumulated
-    /// across every call in the session (plan 9a, task 11). Read with
+    /// across every call in the session. Read with
     /// `std::time::Instant` at the persist orchestration layer only,
     /// never inside a salsa query: this is telemetry for the stats
     /// line, and never feeds analysis or the rendered diagnostics.
     pub persist_milliseconds: AtomicU64,
-    /// Typed-signature lookups (plan 9a, task 8) that found a recorded
+    /// Typed-signature lookups that found a recorded
     /// entry under the queried key — presence alone, counted at
     /// `SnapshotCache`, never the query-layer validation outcome
     /// (counters are forbidden inside a salsa query).
@@ -72,7 +70,7 @@ pub struct CacheStatistics {
     /// Typed-signature lookups with no recorded entry under the queried
     /// key.
     pub signatures_absent: AtomicU64,
-    /// Files whose typed half (plan 9a, task 9) was served from the
+    /// Files whose typed half was served from the
     /// cache: present, every class and function digest unchanged, every
     /// inferred edge's live return unchanged — no body walked, no
     /// inference ran.
@@ -88,11 +86,11 @@ pub struct CacheStatistics {
 impl CacheStatistics {
     /// The one-line summary the environment variable asks for.
     ///
-    /// The persist clause carries its accumulated duration (task 11)
-    /// only when `persist_milliseconds` is positive: a session that
-    /// never persisted (or ran before the instrument, for any stored
+    /// The persist clause carries its accumulated duration only when
+    /// `persist_milliseconds` is positive: a session that never
+    /// persisted (or ran before the instrument, for any stored
     /// baseline) prints exactly the clause it always did, and the
-    /// figure never becomes a clause of its own (decision 13).
+    /// figure never becomes a clause of its own.
     pub fn render(&self) -> String {
         let load = |counter: &AtomicU64| counter.load(Ordering::Relaxed);
         let persist_milliseconds = load(&self.persist_milliseconds);
@@ -131,8 +129,8 @@ impl CacheStatistics {
         )
     }
 
-    /// Aggregates one file's typed instrument (plan 5's decision 13:
-    /// counters live at the orchestration layer, never inside queries).
+    /// Aggregates one file's typed instrument (counters live at the
+    /// orchestration layer, never inside queries).
     pub fn record_typed(&self, result: &TypedFileResult) {
         self.typed_bodies
             .fetch_add(u64::from(result.bodies), Ordering::Relaxed);

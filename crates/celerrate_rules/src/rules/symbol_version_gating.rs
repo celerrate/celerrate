@@ -1,4 +1,4 @@
-//! The symbol version-gating family, migrated (design section 5): the
+//! The symbol version-gating family, migrated: the
 //! resolution walk lives below as
 //! `celerrate_semantics::reference_outcomes`; this rule judges each
 //! stub outcome's availability window against the project's supported
@@ -24,8 +24,7 @@ pub const SYMBOL_DEPRECATED: DiagnosticId = DiagnosticId::new("CEL0023");
 pub struct SymbolVersionGating;
 
 /// The family's declarative unit. Severity is per identifier: the two
-/// hard gates are errors, the deprecation is a warning (the mixed
-/// severities design section 4 names).
+/// hard gates are errors, the deprecation is a warning.
 pub fn metadata() -> RuleMetadata {
     RuleMetadata {
         name: "symbol-version-gating".to_owned(),
@@ -245,8 +244,8 @@ mod tests {
         assert_eq!(diagnostics, vec![]);
     }
 
-    /// The CEL0022 seeded-defect fixture (design section 1's recall
-    /// gate). It lives here, not in `seeded_defects.rs`, because the
+    /// The CEL0022 seeded-defect fixture, part of the detection-recall
+    /// regression gate. It lives here, not in `seeded_defects.rs`, because the
     /// shipped stub blob carries no removal inside the supported
     /// window 8.1 to 8.5, so no product-pipeline source can fire it;
     /// this drives the full framework path (core rules, the phase

@@ -1,4 +1,4 @@
-//! The unknown-symbol family, migrated (design section 5): the
+//! The unknown-symbol family, migrated: the
 //! resolution walk lives below as
 //! `celerrate_semantics::reference_outcomes`; this rule consumes the
 //! per-reference outcomes and constructs the diagnostics.

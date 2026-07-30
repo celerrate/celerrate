@@ -1,4 +1,4 @@
-//! The ground-truth channel (design section 10, harness 1): a hidden,
+//! The ground-truth channel: a hidden,
 //! internal record stream that confronts the inference engine with the
 //! docblock annotations it is not allowed to see while inferring.
 //!
@@ -7,9 +7,9 @@
 //! measured against the annotated one under the compatibility
 //! relation: `Proof::Fails` is a divergence (printed), `Proof::
 //! CannotProve` passes in silence (inference-only generics make
-//! precision asymmetric by design, per decision 13). This never ships
+//! precision asymmetric by design). This never ships
 //! a diagnostic: no `CEL####` identifier, no rendering change. `cargo
-//! xtask ground-truth` (task 12) pins the exact record format below
+//! xtask ground-truth` pins the exact record format below
 //! against a committed baseline, so nothing here may change it
 //! casually.
 //!
@@ -32,8 +32,9 @@
 //! (`\n`) and carriage return (`\r`) become their familiar
 //! two-character escapes. This guarantees one record is always
 //! exactly one line and every field always splits cleanly on a
-//! literal tab, deterministically and stably, since task 12 commits
-//! the output to a baseline file and diffs against it.
+//! literal tab, deterministically and stably, since `cargo xtask
+//! ground-truth` commits the output to a baseline file and diffs
+//! against it.
 
 use std::io::{self, Write};
 

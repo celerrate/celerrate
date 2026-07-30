@@ -88,8 +88,8 @@ fn write_member_trees_pack(
     write_atomically(&directory.join(MEMBER_TREES_PACK), &bytes).unwrap();
 }
 
-/// Task 10's own addition, in the same style as the three helpers
-/// above: the fourth pack's own writer, for the adversarial suite over
+/// The fourth pack's own writer, in the same style as the three
+/// helpers above, for the adversarial suite over
 /// `inferred_signatures.bin`.
 fn write_signatures_pack(
     root: &Path,
@@ -218,10 +218,10 @@ fn a_range_mismatch_ignores_the_pack() {
     );
 }
 
-/// A pack written under another stub snapshot is ignored whole (audit
-/// finding I3): the field's whole purpose is "a new snapshot changes
-/// availability answers", and it was the one header field no test
-/// proved discards the pack.
+/// A pack written under another stub snapshot is ignored whole: the
+/// field's whole purpose is "a new snapshot changes availability
+/// answers", and it was the one header field no test proved discards
+/// the pack.
 #[test]
 fn a_stub_blob_mismatch_ignores_the_pack() {
     let source = "<?php class Marker {}";
@@ -501,7 +501,7 @@ fn reported_over_planted_matches(matched_directives: Vec<u32>) -> Vec<String> {
 /// Without that ordering requirement the binary search in
 /// `directive_outcomes` would answer over an unsorted or over-long
 /// list, and a hostile pack could silence any directive diagnostic it
-/// liked (decision 8's sharp edge (a); the checksum proves transport,
+/// liked (a sharp edge: the checksum proves transport,
 /// never honesty). `[1]` and `[u32::MAX]` prove a different property:
 /// they miss the binary search whether or not validation runs, so what
 /// they pin is that an out-of-range index never panics the reporting
@@ -660,7 +660,7 @@ fn persist_does_not_re_persist_a_verdict_the_pass_refused_to_serve() {
     );
 }
 
-/// The spec's boundary, checkable on disk (audit finding I4): an
+/// A boundary, checkable on disk: an
 /// installed dependency is indexed — its item tree is in the pack,
 /// which is what makes its symbols resolve on a warm start — but never
 /// reported: no diagnostics entry may exist under its content hash.
@@ -738,7 +738,7 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
 }
 
 // ---------------------------------------------------------------------
-// The checksum-valid adversarial matrix (audit finding I7): entries
+// The checksum-valid adversarial matrix: entries
 // that pass the checksum but could not come from any real computation.
 // This is the only hostile class that reaches the post-decode
 // conversion code. The contract for every row: never a panic, never a
@@ -747,7 +747,7 @@ fn a_vendor_file_has_a_tree_entry_and_no_diagnostics_entry() {
 // ---------------------------------------------------------------------
 
 /// A span reaching past the file's end is discarded and the file
-/// recomputed (pins the M4 fix at integration level).
+/// recomputed (pins that fix at integration level).
 #[test]
 fn a_verdict_with_a_span_past_the_files_end_is_discarded() {
     let source = "<?php new Missing();";
@@ -955,7 +955,7 @@ fn persist_records_every_referencing_files_lookups() {
     );
 }
 
-/// Audit finding I8: hit rate, revalidation acceptance, and persist
+/// Hit rate, revalidation acceptance, and persist
 /// health were unobservable without a profiler. A warm session over an
 /// unchanged project counts tree hits and served verdicts and nothing
 /// discarded.
@@ -997,22 +997,22 @@ fn a_cold_session_counts_misses_and_absences() {
     assert_eq!(statistics.verdicts_served.load(Ordering::Relaxed), 0);
 }
 
-/// Plan 9a, task 7: one inferred-signature entry per eligible body.
-/// `a.php` carries a declared-return function and an unannotated one —
-/// both get an entry, because the artifact is unconditional; only the
-/// EDGES a declared return cuts, never the callee's own record. `b.php`
+/// One inferred-signature entry per eligible body. `a.php` carries a
+/// declared-return function and an unannotated one, both get an
+/// entry, because the artifact is unconditional; only the EDGES a
+/// declared return cuts, never the callee's own record. `b.php`
 /// carries a trait a class `use`s: the trait's own method gets no
-/// entry under the trait's key (decision 8's exclusion), the class's
-/// own method does. `c.php` carries an anonymous class: its method
-/// gets no entry either (no stable folded key for a caller elsewhere
-/// to cite). `annotated` calls `plain` — no declared return exists for
+/// entry under the trait's key (excluded by design), the class's own
+/// method does. `c.php` carries an anonymous class: its method gets
+/// no entry either (no stable folded key for a caller elsewhere to
+/// cite). `annotated` calls `plain`, no declared return exists for
 /// `plain`, so the call resolves through the INFERRED tier, giving
 /// `annotated`'s own entry a concrete `StoredInferredEdge` to check.
-/// Plan 9a task 10: the call ALSO records `plain` itself as a
-/// declared-signature-guarding `functions` dependency (so a later
-/// docblock `@return` appearing on `plain` is visible to
-/// revalidation), even though the call resolved through the inferred
-/// tier — `plain` itself has neither (it calls nothing).
+/// The call ALSO records `plain` itself as a declared-signature-
+/// guarding `functions` dependency (so a later docblock `@return`
+/// appearing on `plain` is visible to revalidation), even though the
+/// call resolved through the inferred tier, `plain` itself has
+/// neither (it calls nothing).
 #[test]
 fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
     let source_a = "<?php function plain() { return 'hello'; } function annotated(): int { return plain() === 'hello' ? 1 : 2; }";
@@ -1107,7 +1107,7 @@ fn persist_writes_an_inferred_signature_entry_per_eligible_body() {
             .map(|dependency| dependency.key.clone())
             .collect::<Vec<_>>(),
         vec!["plain".to_owned()],
-        "plan 9a task 10: the inferred-tier call to plain() also records plain \
+        "the inferred-tier call to plain() also records plain \
          as a declared-signature-guarding dependency, so a later docblock \
          @return on plain is visible to revalidation",
     );
@@ -1171,7 +1171,7 @@ fn the_signature_pack_is_sorted_and_deterministic() {
 /// `collect_signature_entries` widened its own loop to that broader
 /// set, it would force a FRESH interprocedural inference of every
 /// vendor body the analysis pass never touched — this is exactly the
-/// persist-may-only-read invariant (decision 8) the fourth pack must
+/// persist-may-only-read invariant the fourth pack must
 /// not violate. The vendor class here (`Lib\Helper`) is referenced
 /// from the project file, so its class surface IS consulted (through
 /// `resolve_candidates`/name resolution), but its own method body is
@@ -1223,7 +1223,7 @@ fn a_vendor_files_body_has_no_signature_entry() {
 }
 
 // ---------------------------------------------------------------------
-// Plan 9a, task 8: the recursive memoized revalidation. Every scenario
+// The recursive memoized revalidation. Every scenario
 // below builds a project, runs `check` once cold (persisting the fourth
 // pack), mutates the project on disk exactly as the scenario names, then
 // compares a WARM run's rendering (a fresh process, seeded from the
@@ -1236,9 +1236,9 @@ fn a_vendor_files_body_has_no_signature_entry() {
 // ---------------------------------------------------------------------
 
 /// One warm pass over `root`, exposing the session's own cache counters
-/// alongside the rendered `check` output — `run_check` alone only
+/// alongside the rendered `check` output: `run_check` alone only
 /// returns the rendered text, and the `signatures_found`/
-/// `signatures_absent` instrument (task 8) is a `Session`-level counter,
+/// `signatures_absent` instrument is a `Session`-level counter,
 /// not part of the rendering.
 fn warm_signatures_found(root: &Path) -> u64 {
     use std::sync::atomic::Ordering;
@@ -1289,7 +1289,7 @@ fn a_warm_run_serves_inferred_returns_without_reinference() {
 fn an_edited_callee_with_an_unchanged_return_still_validates_the_caller() {
     // `helper`'s body changes (a fresh local variable), but its
     // inferred return stays the literal `1`: the early-cutoff property
-    // across the process boundary, the design's flagship claim.
+    // across the process boundary, the cache's central claim.
     let helper_before = "<?php function helper() { return 1; }";
     let helper_after = "<?php function helper() { $noise = 'x'; return 1; }";
     let caller_source =
@@ -1349,11 +1349,11 @@ fn a_cyclic_cluster_recomputes_and_stays_deterministic() {
     // exact topology that used to panic through `body_typed_verdicts`'s
     // direct `inferred_body_types` walk before the cycle-safe wrapper
     // (`celerrate_types::inference`, issue #51) landed. This test now
-    // pins that fix as well as decision 9's stance below.
+    // pins that fix as well as the general stance below.
     //
     // The cluster's fixpoint is a plain `string` (the base case returns
     // a string literal), never `never`: the stance under test here is
-    // decision 9's general one — a cyclic cluster always falls through
+    // general: a cyclic cluster always falls through
     // to the fixpoint on a warm run, served or recomputed unspecified,
     // but the rendering must equal fresh. (The never-returning
     // provisional-mismatch rule is the next test's concern.) Passing
@@ -1468,7 +1468,7 @@ fn a_never_returning_cycle_participant_never_validates_warm() {
     // caller declared ahead of the recursive pair.
     //
     // `first` and `second` call each other with no non-throwing base
-    // case: the whole cluster's fixpoint is `never`. Decision 9's
+    // case: the whole cluster's fixpoint is `never`. The
     // provisional-mismatch rule fires on every live demand inside this
     // cluster (a live `never` is always a mismatch, even against a
     // record that itself expects `never`), so neither participant ever
@@ -1528,7 +1528,7 @@ fn a_never_returning_cycle_participant_never_validates_warm() {
 #[test]
 fn a_static_returning_callee_serves_warm() {
     // `Builder::make` is unannotated and returns `$this`: its inferred
-    // return is the symbolic `static` placeholder (task 3's raw,
+    // return is the symbolic `static` placeholder (the raw,
     // pre-substitution answer), never resolved against a receiver at
     // the walk site. The caller's own file is edited (a body change
     // that keeps its own diagnostics recomputable); `make`'s entry is
@@ -1543,9 +1543,9 @@ fn a_static_returning_callee_serves_warm() {
     assert!(
         warm_signatures_found(root.path()) > 0,
         "the warm run must consult the persisted signature cache: \
-         make()'s raw `static` return is served, proving the task-3 \
-         record carries the pre-substitution answer the live demand \
-         (inferred_method_return) itself answers",
+         make()'s raw `static` return is served, proving the persisted \
+         inferred-signature record carries the pre-substitution answer \
+         the live demand (inferred_method_return) itself answers",
     );
 
     let fresh_root = project(&[("helper.php", helper_source), ("caller.php", caller_after)]);
@@ -1557,7 +1557,7 @@ fn a_static_returning_callee_serves_warm() {
 }
 
 // ---------------------------------------------------------------------
-// Plan 9a, task 9: the typed families' own persistent artifact class.
+// The typed families' own persistent artifact class.
 // `StoredVerdict.typed` joins the untyped half, with its own layered
 // revalidation (`crate::cache::verdict::TypedOutcome`) — a partial hit
 // (untyped served, typed recomputed) is a first-class outcome.
@@ -1717,9 +1717,9 @@ fn a_stale_typed_record_recomputes_only_the_typed_portion() {
 /// `analyze_one`'s orchestration layer — outside any active salsa
 /// cycle — so it only ever observes the CONVERGED fixpoint, never a
 /// mid-iteration provisional `never`. That is why, unlike
-/// `celerrate_types::inference::validated_stored_return` (task 8, which
-/// runs recursively INSIDE the query graph and therefore needs its own
-/// `is_never` mismatch rule, decision 9), `validate_typed` carries no
+/// `celerrate_types::inference::validated_stored_return` (which runs
+/// recursively INSIDE the query graph and therefore needs its own
+/// `is_never` mismatch rule), `validate_typed` carries no
 /// such guard: this pins that asymmetry is correct rather than an
 /// oversight. Cold + persist, then a warm run over the UNCHANGED
 /// project must render byte-identical both to the cold run and to an
@@ -1783,15 +1783,15 @@ fn a_mutually_recursive_typed_callee_validates_correctly_warm() {
 }
 
 // ---------------------------------------------------------------------
-// Plan 9a, task 10: the adversarial suite extended over the typed
-// artifacts (decision 14 — "or the net silently stops guarding"). Every
+// The adversarial suite extended over the typed
+// artifacts ("or the net silently stops guarding"). Every
 // row below hand-writes a v5 pack whose entry deliberately violates the
 // exactness contract, and every row's contract is: no panic, no
 // user-visible internal error, and the run's rendering equals a fresh
 // (cache-free) recomputation over the same files — never merely "it ran".
 // ---------------------------------------------------------------------
 
-/// Decision 2's decode guard, exercised for real at the pack level: one
+/// The decode guard, exercised for real at the pack level: one
 /// signature entry whose return nests past `STORED_DEPTH_LIMIT`, forged
 /// AT THE BYTE LEVEL through the same iterative fold
 /// `celerrate_types::stored`'s own unit tests use (a repeated `KeyOf`
@@ -1883,7 +1883,7 @@ fn an_absurd_stored_type_never_panics() {
     );
 }
 
-/// The typed half's own layered outcome (task 9), corrupted
+/// The typed half's own layered outcome, corrupted
 /// independently of the untyped half: a persisted verdict whose UNTYPED
 /// records still hold (so the untyped half serves) but whose TYPED
 /// class dependency carries a digest that can never match a live
@@ -2114,8 +2114,8 @@ fn duplicate_signature_keys_never_panic() {
 
 /// The header-mismatch matrix (`a_range_mismatch_ignores_the_pack`,
 /// `a_stub_blob_mismatch_ignores_the_pack`), extended over every pack at
-/// once through a mismatched `plugins` field (plan 9a's own header
-/// addition, task 6): all FOUR packs are written honestly (a real cold
+/// once through a mismatched `plugins` field: all FOUR packs are
+/// written honestly (a real cold
 /// run's own output, byte-copied), then re-headered under a flipped
 /// plugin-set digest. A fresh session must ignore every one of them
 /// whole — cold-run statistics on every counter — and render exactly
@@ -2230,7 +2230,7 @@ fn a_plugin_digest_mismatch_ignores_every_pack() {
     );
 }
 
-/// Decision 1's pin, made an explicit regression witness rather than a
+/// An explicit regression witness rather than a
 /// compile-time-only truth: the fourth pack carries per-SIGNATURE
 /// records, never a per-EXPRESSION table. `many.php` declares a
 /// function whose body is 100 independent integer-literal statements
@@ -2278,9 +2278,9 @@ fn the_packs_carry_no_expression_type_tables() {
                     }
             })
             .expect("the entry must exist");
-        // The type is `StoredInferredSignature`, decision 1's own pin:
-        // the pack's payload class, verified by the successful typed
-        // decode above rather than restated here.
+        // The type is `StoredInferredSignature`, the pack's payload
+        // class, verified by the successful typed decode above rather
+        // than restated here.
         postcard::to_allocvec(entry).unwrap().len()
     };
     let many_bytes = entry_bytes("many");

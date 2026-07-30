@@ -1,4 +1,4 @@
-//! The seeded-defect recall suite (design section 9): the gate a
+//! The seeded-defect recall suite: the gate a
 //! silent engine cannot pass. One known defect per identifier; each
 //! MUST be reported through the full product pipeline. These
 //! fixtures are the family's substance contract; never weaken an

@@ -1,5 +1,5 @@
 //! The typed check families: unknown members, nullability, argument
-//! types (design section 8). Verdicts are range-free — keyed by
+//! types. Verdicts are range-free — keyed by
 //! `(AstId, ExpressionId)` — and reconcile to `TextRange` through the
 //! body source map only in the rule framework's typed-body phase, so an
 //! edit above a body backdates every verdict and re-runs only the
@@ -90,13 +90,13 @@ pub enum TypedVerdictKind {
 }
 
 /// One file's typed findings plus the inference instrument the
-/// orchestration layer aggregates (plan 5's decision 13 lands here).
+/// orchestration layer aggregates.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct TypedFileResult {
     pub verdicts: Vec<TypedVerdict>,
     pub bodies: u32,
     pub edge_counts: InterproceduralEdgeCounts,
-    /// Plan 9a, task 3: every body's [`crate::records::TypedDependencies`]
+    /// Every body's [`crate::records::TypedDependencies`]
     /// (converted to [`FileDependencies`]'s `TypeId`-free shape) unioned
     /// with the checks' own consulted-class set
     /// (`CheckContext::dependencies`) — recorded even for a body that
@@ -129,7 +129,7 @@ pub(crate) struct CheckContext<'db, 'body> {
     pub owner: Option<&'body BodyOwner>,
     pub namespace: String,
     pub tables: UseTables,
-    /// Plan 9a, task 3: every class whose surface the checks family
+    /// Every class whose surface the checks family
     /// consulted (`member_existence`/`atom_existence`,
     /// `resolved_call_signature`, the coercion family's own
     /// `lookup_member`). A `RefCell`, not a plain field: `CheckContext`
@@ -138,8 +138,8 @@ pub(crate) struct CheckContext<'db, 'body> {
     /// read-only-context idiom every check function already uses), so
     /// interior mutability is the only way to thread a mutable
     /// recording set through without rewriting every one of those
-    /// signatures to `&mut CheckContext` — a change task 3 does not
-    /// otherwise call for. Each recording site only ever inserts into
+    /// signatures to `&mut CheckContext` — a change not otherwise
+    /// called for. Each recording site only ever inserts into
     /// this set (never reads it back mid-walk), so a borrow is never
     /// held across a call into another function: no risk of the
     /// `RefCell`'s own panic-on-conflict path.
@@ -149,7 +149,7 @@ pub(crate) struct CheckContext<'db, 'body> {
 /// One body's typed findings plus the classes the checks family
 /// consulted reaching them — [`body_typed_verdicts`]'s return shape.
 /// Drained from `CheckContext::dependencies` once the three check
-/// families finish (task 3): recorded even when `verdicts` stays empty,
+/// families finish: recorded even when `verdicts` stays empty,
 /// because absence is a verdict too, and its revalidation needs the
 /// record just as much as a reported one's does.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -159,7 +159,7 @@ pub(crate) struct BodyTypedResult {
 }
 
 /// The typed findings of one body. Tracked per body on purpose:
-/// editing one body never re-checks its siblings (harness 2).
+/// editing one body never re-checks its siblings.
 #[salsa::tracked(returns(ref))]
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn body_typed_verdicts<'db>(
@@ -212,7 +212,7 @@ pub(crate) fn body_typed_verdicts<'db>(
 /// order, then the methods of its non-trait class-likes, again in
 /// member-tree order.
 ///
-/// Trait-owned bodies are skipped (decision 3: plan 6 analyzes them
+/// Trait-owned bodies are skipped (they are analyzed
 /// per using class; checking one against the trait's own surface is a
 /// false-positive class).
 ///
@@ -254,10 +254,10 @@ pub fn checked_body_ast_ids(db: &dyn salsa::Database, file: SourceFile) -> Vec<A
 /// [`checked_body_ast_ids`] names, in that order (traits excluded, and
 /// documented there), plus the summed inference instrument.
 /// Debt ledger: typed checks never run inside trait-owned
-/// bodies — owner: a per-using-class walk over plan 6's
+/// bodies — owner: a per-using-class walk over the
 /// `InferenceContext` seam, future. Top-level statement code has no
 /// member-tree body and stays unchecked by the typed families — owner:
-/// the rule framework of sub-project 4, or earlier if the corpus
+/// a future rule-framework extension, or earlier if the corpus
 /// demands it.
 #[salsa::tracked(returns(ref))]
 pub fn typed_file_verdicts(
@@ -342,12 +342,12 @@ function beta(): void {}
         );
     }
 
-    /// Plan 9a, task 3: a file whose body dereferences `$user->name`
+    /// A file whose body dereferences `$user->name`
     /// (`User` defined in a SEPARATE file, resolved through the
     /// project's global symbol index) — `typed_file_verdicts` must
     /// record `App\User`'s folded key in `dependencies.classes` even
     /// though the property genuinely exists and no diagnostic fires.
-    /// Absence is a verdict too, and its revalidation (tasks 7 and 9)
+    /// Absence is a verdict too, and its revalidation
     /// needs the record exactly as much as a reported unknown-member
     /// finding's does — otherwise a later edit to `User` (e.g. removing
     /// `$name`) would leave this file's stale "no defect" verdict

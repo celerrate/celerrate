@@ -229,7 +229,7 @@ fn a_composer_project_replays_consistently() {
 /// fixture's "before" and "after" states genuinely produce different
 /// typed diagnostics — `assert_cached_matches_fresh` below is what
 /// proves cache correctness; this is what proves the fixture is not
-/// vacuous (task 10's genuineness requirement).
+/// vacuous.
 fn fresh_render(files: &[(&str, &str)]) -> String {
     let root = tempfile::tempdir().unwrap();
     for (path, contents) in files {
@@ -243,18 +243,18 @@ fn fresh_render(files: &[(&str, &str)]) -> String {
 }
 
 // ---------------------------------------------------------------------
-// Plan 9a, task 10: the consistency harness extended over the new typed
+// The consistency harness extended over the new typed
 // edit classes. Every test below drives the SAME cross-process harness
 // (`assert_cached_matches_fresh`) the untyped edit classes above already
 // use, so a cache-seeded warm run must render exactly what a from-scratch
 // run over the same on-disk state renders, at every step — including the
 // step where the typed verdict actually flips.
 //
-// Scope note: the spec's default-value edit class (a parameter's default
+// Scope note: the default-value edit class (a parameter's default
 // changing the DECLARED signature, e.g. `= null` -> `= 1`) belongs to
-// harness 2's IN-PROCESS invalidation scope and is already pinned by
+// the in-process invalidation-scope suite and is already pinned by
 // `celerrate_types/tests/invalidation_scope.rs` (`a_default_value_edit_
-// changes_the_declared_signature` and its neighbors, pin 3/pin 4); it is
+// changes_the_declared_signature` and its neighbors); it is
 // deliberately left OUT of this cross-process suite to avoid duplicating
 // that coverage under a slower harness.
 // ---------------------------------------------------------------------
@@ -317,16 +317,15 @@ fn a_signature_edit_replays_consistently() {
 /// callers from the inferred tier to the declared tier. The caller's
 /// typed verdict must follow on the warm run exactly as on fresh.
 ///
-/// **Fixed by plan 9a task 10.** This test used to FAIL and was
-/// `#[ignore]`d rather than adjusted (report a genuine tasks-8/9 bug as
-/// a stop signal, never weaken the test that found it). The root cause
-/// traced to `crates/celerrate_types/src/flow.rs`: `function_call_
-/// result` (the free-function call site, decision 4) recorded a
-/// `StoredFunctionDependency` (`dependencies.functions.insert(key)`)
-/// ONLY when `declared_present(signature)` already held at persist
-/// time; when it did not (a `Trust::NativeOnly` signature with a
-/// `mixed` value type — exactly an undocumented, unannotated function),
-/// only the INFERRED edge was recorded (`dependencies.
+/// This test used to FAIL and was `#[ignore]`d rather than adjusted
+/// (report a genuine bug as a stop signal, never weaken the test that
+/// found it). The root cause traced to `crates/celerrate_types/src/
+/// flow.rs`: `function_call_result` (the free-function call site)
+/// recorded a `StoredFunctionDependency` (`dependencies.functions.
+/// insert(key)`) ONLY when `declared_present(signature)` already held
+/// at persist time; when it did not (a `Trust::NativeOnly` signature
+/// with a `mixed` value type, exactly an undocumented, unannotated
+/// function), only the INFERRED edge was recorded (`dependencies.
 /// inferred_functions.push((key, raw))`), carrying no fact about
 /// whether the callee has a declared signature at all. Revalidation
 /// only re-checks what was recorded, and `inferred_function_return`
@@ -396,8 +395,8 @@ fn a_class_member_addition_replays_consistently() {
 /// another file sees: `Repository`'s class docblock `@method User
 /// find()` becomes `@method Order find()`, and `Order` has no `save`
 /// method, so the caller's chained `->save()` flips from silent to
-/// CEL0030 — the digest's virtual-member payload (decision 3) followed
-/// end to end, warm exactly as fresh.
+/// CEL0030, the digest's virtual-member payload followed end to end,
+/// warm exactly as fresh.
 #[test]
 fn a_virtual_member_type_edit_replays_consistently() {
     let repository_before = "<?php namespace App; /** @method User find() */ class Repository {}";
@@ -472,7 +471,7 @@ fn corrupted_packs_never_change_the_rendering() {
 }
 
 /// The invariant that makes two concurrent `celerrate check` processes
-/// safe today, named and pinned (audit finding I5): both packs' entries
+/// safe today, named and pinned: both packs' entries
 /// are independently content-keyed and revalidated, so packs from two
 /// different generations of the project may be mixed freely — a stale
 /// pack beside a fresh one must render exactly what a fresh run

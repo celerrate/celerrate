@@ -5,7 +5,7 @@
 //! per-name lookups the checks use, so a pass that validates many
 //! entries pays each name once.
 //!
-//! **Layered validation (plan 9a, task 9).** The untyped half validates
+//! **Layered validation.** The untyped half validates
 //! first, exactly as it always has: any record whose answer moved
 //! discards the WHOLE entry (`VerdictLookup::Discarded`), typed half
 //! included — an untyped miss has nothing left to layer over. Only once
@@ -14,7 +14,7 @@
 //! class's and function's digest unchanged, and every recorded inferred
 //! edge's callee still answering the same return through the LIVE
 //! `inferred_function_return`/`inferred_method_return` queries — which
-//! themselves serve warm through task 8's per-signature cache when
+//! themselves serve warm through the per-signature cache when
 //! their own entries validate, so a served typed half costs
 //! microseconds, not a body walk. A partial hit (untyped served, typed
 //! recomputed) is a first-class outcome, not a fallback: the two halves
@@ -35,7 +35,7 @@ use crate::analysis::AnalysisInputs;
 
 use super::stored::StoredVerdict;
 
-/// The typed half's own layered outcome (plan 9a, task 9), computed only
+/// The typed half's own layered outcome, computed only
 /// once the untyped half already validated. `Served` when
 /// `StoredVerdict.typed` is present and every one of its records
 /// re-checks clean against the live project; `Recompute` otherwise — no
@@ -111,12 +111,12 @@ pub fn lookup_verdict(inputs: &AnalysisInputs, file: SourceFile) -> VerdictLooku
     }
 }
 
-/// The typed half's own validation (plan 9a, task 9): absent when
-/// nothing was persisted for it, otherwise every class digest, function
-/// digest, and inferred edge re-checked against the live project. Every
-/// read here is a salsa-tracked query call, exactly like
-/// `celerrate_types::inference::validated_stored_return`'s own recursive
-/// revalidation (task 8) this reuses for the inferred-edge check — a
+/// The typed half's own validation: absent when nothing was persisted
+/// for it, otherwise every class digest, function digest, and
+/// inferred edge re-checked against the live project. Every read here
+/// is a salsa-tracked query call, exactly like
+/// `celerrate_types::inference::validated_stored_return`'s own
+/// recursive revalidation this reuses for the inferred-edge check, a
 /// live inferred return that itself serves warm through the fourth
 /// pack's per-signature cache costs microseconds, not a body walk.
 fn validate_typed(inputs: &AnalysisInputs, stored: &StoredVerdict) -> TypedOutcome {

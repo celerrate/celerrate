@@ -9,7 +9,7 @@
 /// version bump or a reconfiguration invalidates exactly like an
 /// implementation change would, and the persistent cache's plugin-set
 /// key reads the same fact — `celerrate_cli::plugins::plugin_set_digest`
-/// (plan 9a) sorts every registered identity's `(name, version,
+/// sorts every registered identity's `(name, version,
 /// configuration)` triple into the pack header, fulfilling this
 /// promise.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]

@@ -6,8 +6,8 @@ use celerrate_project::ProjectConfiguration;
 
 use crate::checks::TypedVerdict;
 
-/// The typed-body-phase context, owned by this crate (design section
-/// 4). One context per checked body, the per-body tracked tier's unit.
+/// The typed-body-phase context, owned by this crate.
+/// One context per checked body, the per-body tracked tier's unit.
 /// Sealed on the `InvocationSite` model: private database, delegating
 /// methods, no salsa vocabulary rule-side.
 pub struct TypedBodyContext<'db> {
@@ -31,7 +31,7 @@ impl<'db> TypedBodyContext<'db> {
     /// whose consulted-class set the cache revalidation consumes
     /// (`typed_file_verdicts` aggregates the identical memo), so a
     /// rule cannot consult outcomes without their dependency records
-    /// having been produced in the same pass (design section 2).
+    /// having been produced in the same pass.
     pub fn verdicts(&self) -> &'db [TypedVerdict] {
         let body = BodyQuery::new(self.db, self.body);
         &crate::checks::body_typed_verdicts(

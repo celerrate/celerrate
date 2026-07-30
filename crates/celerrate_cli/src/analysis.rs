@@ -59,7 +59,7 @@ pub struct AnalysisInputs {
     /// never inside a query: `persistable_diagnostics` and `typed_portion`
     /// remap right where they filter suppressions, so the exit-code count,
     /// the printed report, and the persisted verdict carry the same
-    /// severities by construction (spec section 2).
+    /// severities by construction.
     pub severity_remap: Arc<std::collections::BTreeMap<String, celerrate_diagnostics::Severity>>,
 }
 
@@ -143,7 +143,7 @@ pub fn isolated<T>(pass: impl FnOnce() -> T) -> Result<T, Panicked> {
 /// `suppression_directives(db, file)`) of every directive that
 /// admitted at least one diagnostic - any-match attribution: a
 /// diagnostic admitted by several co-located directives marks them
-/// all used (design section 4). Shared by `persistable_diagnostics`
+/// all used. Shared by `persistable_diagnostics`
 /// and `typed_portion` so the two composers apply the exact same
 /// filter.
 fn retain_unsuppressed(
@@ -210,15 +210,15 @@ pub struct FilteredPortion {
 }
 
 /// The cache-servable portion: syntax, decode, and semantic families,
-/// suppression applied. Exactly what `StoredVerdict` persists — the
-/// typed families stay out of the packs until plan 9a designs their own
+/// suppression applied. Exactly what `StoredVerdict` persists, the
+/// typed families stay out of the packs until they get their own
 /// revalidation records as a separate artifact class.
 ///
 /// This is the previous `composed_diagnostics` body, moved rather than
 /// paraphrased: `persist`'s `composed_verdict` re-composes through it,
 /// and the equivalence harness recomputes through the union that wraps
-/// it, so the composers cannot drift (audit finding I2's first
-/// hand-maintained mirror). Filtering here, below the verdict, is sound
+/// it, so the composers cannot drift (the first hand-maintained mirror
+/// of this duplication). Filtering here, below the verdict, is sound
 /// because directives are strictly file-local: the verdict's
 /// content-hash key covers every directive edit, and it keeps the
 /// exit-code count, the printed report, and the persisted verdict the
@@ -260,7 +260,7 @@ pub fn persistable_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Fil
 /// (`celerrate_rules::typed_body_phase_diagnostics`) renders them,
 /// suppression applied, computed fresh from the live project: the
 /// recompute-path building block, never called on a typed-serve hit.
-/// Plan 9a (task 9) gave the typed families their own persistent
+/// The typed families have their own persistent
 /// artifact class (`crate::cache::stored::StoredTypedVerdict`,
 /// validated by `crate::cache::verdict::TypedOutcome`); this function is
 /// what every recompute path calls once its outcome is `Recompute`:
@@ -301,8 +301,8 @@ pub fn typed_portion(inputs: &AnalysisInputs, file: SourceFile) -> FilteredPorti
 /// through this one constructor so the union cannot drift. On a
 /// partial hit the stored records and the fresh typed indexes align
 /// because a verdict hit implies identical content and the pack is
-/// keyed on binary identity - the one load-time property taken on
-/// faith from the content hash (decision 8's sharp edge (b)).
+/// keyed on binary identity, the one load-time property taken on
+/// faith from the content hash (a sharp edge).
 ///
 /// `matched_typed` is binary-searched here, so every caller must have
 /// established that it is strictly increasing and in range first. A
@@ -333,7 +333,7 @@ pub fn directive_outcomes(
 
 /// The reporting portion of one file: the directive rules' output,
 /// computed from final match outcomes on both the warm and the cold
-/// path (design section 4). Shared by `analyze_one`,
+/// path. Shared by `analyze_one`,
 /// `composed_diagnostics`, and the equivalence harness.
 pub fn reporting_portion(
     inputs: &AnalysisInputs,
@@ -399,9 +399,9 @@ fn fresh_directive_records(
 /// of the two halves' match outcomes. The single composition point -
 /// `analyze_one` serves it on a cache miss, `persist`'s
 /// `composed_verdict` re-composes through its `persistable_diagnostics`
-/// half, and the equivalence harness recomputes through it - so the
-/// composers cannot drift (audit finding I2's first hand-maintained
-/// mirror).
+/// half, and the equivalence harness recomputes through it, so the
+/// composers cannot drift (the first hand-maintained mirror of this
+/// duplication).
 ///
 /// The reporting portion is never persisted: both paths recompute it
 /// from the match records, which is what makes a warm run and a cold
@@ -418,8 +418,8 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
     diagnostics
 }
 
-/// The typed half of one file's diagnostics on a cache hit (plan 9a,
-/// task 9's fork): served from `typed_source` when it is present and
+/// The typed half of one file's diagnostics on a cache hit: served
+/// from `typed_source` when it is present and
 /// every one of its diagnostics still re-interns (no body walked, no
 /// inference ran — the substance
 /// `a_warm_run_serves_typed_verdicts_without_inference` pins), a fresh
@@ -433,11 +433,10 @@ pub fn composed_diagnostics(inputs: &AnalysisInputs, file: SourceFile) -> Vec<Di
 ///
 /// Public and called from both `analyze_one`'s hit path and the
 /// equivalence harness (`tests/cache_equivalence.rs`), so the two
-/// compositions cannot independently drift (audit finding I2's own
-/// concern, extended to task 9's typed half — "the equivalence harness
+/// compositions cannot independently drift ("the equivalence harness
 /// keeps ONE truth"). The counters this increments
 /// (`typed_served`/`typed_recomputed`) are the orchestration layer's own
-/// (plan 5's decision 13: never inside a query), so calling this from a
+/// (never inside a query), so calling this from a
 /// test also nudges them; harmless, since no test asserts an exact
 /// count without first driving every file through this same fork.
 pub fn served_typed_diagnostics(
@@ -491,9 +490,9 @@ pub fn served_typed_diagnostics(
 
 /// One file's total: decode and syntax, then references and gating,
 /// then the typed families. On a cache hit the untyped half is served
-/// from the pack and the typed half is layered on top independently
-/// (plan 9a, task 9): served from the cache when its own records
-/// validate, recomputed fresh otherwise — a partial hit (untyped served,
+/// from the pack and the typed half is layered on top independently:
+/// served from the cache when its own records validate, recomputed
+/// fresh otherwise, a partial hit (untyped served,
 /// typed recomputed) is a first-class outcome, not a fallback. On a miss
 /// `composed_diagnostics` already produces the full union. Either way
 /// the result is the exact same composed set, sorted once at the end.

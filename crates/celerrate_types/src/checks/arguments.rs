@@ -1,23 +1,23 @@
-//! The argument family (design section 8): per-argument assignability
+//! The argument family: per-argument assignability
 //! against exactly one resolved declared signature, under the calling
 //! file's coercion posture. `Proof::Fails` reports; `Holds` and
 //! `CannotProve` are silence — which is how weak-mode coercions stay
-//! unreported (task 7 upgrades a coercible `Fails` to `CannotProve`).
+//! unreported (a coercible `Fails` upgrades to `CannotProve`).
 //! `mixed` and partially fitting unions are guarded **before** the
-//! judgment (decision 10): the shipped `judge`/`subtype_of` refutes
+//! judgment: the shipped `judge`/`subtype_of` refutes
 //! them set-theoretically (a `mixed` candidate answers `Fails`, a union
 //! candidate folds through `Proof::all` so one failing constituent
 //! fails the whole union), so their silence is this walk's own
 //! structural job, never the `Proof` value's.
 //!
-//! Resolution (decision 11) answers `None` unless exactly one declared
+//! Resolution answers `None` unless exactly one declared
 //! signature resolves: a named free function or stub function; a
 //! method, static call, or constructor whose receiver decomposes to
 //! exactly one class or enum-case atom (a union receiver, or a
 //! genuinely undecidable one, is silent — a recorded stance). The
 //! **declared tier only** — providers compute returns, never parameter
 //! contracts. `ResolvedCall`/`resolved_call_signature` is the interface
-//! task 9's arity and named-argument checks reuse, `source_body` in
+//! the arity and named-argument checks reuse, `source_body` in
 //! particular for its `func_get_args` probe. Debt ledger: a union
 //! receiver is silent for the whole argument family (no signature
 //! resolves), owner: a "possibly wrong argument" refinement, future.
@@ -43,9 +43,10 @@ use super::members::{resolve_scoped_class_key, scoped_subject_keys};
 use super::receivers::{ReceiverAtom, atoms_of, written_type_display};
 use super::{ArgumentLabel, CheckContext, TypedVerdict, TypedVerdictKind};
 
-/// Exactly one declared signature for a call's callee, or `None`
-/// (decision 11), plus enough to reach into that callee's own body when
-/// it is source code. `pub(crate)`: task 9 reuses both. `source_body`
+/// Exactly one declared signature for a call's callee, or `None`,
+/// plus enough to reach into that callee's own body when
+/// it is source code. `pub(crate)`: the arity and named-argument
+/// checks reuse both. `source_body`
 /// feeds `captures_arguments`'s `func_get_args` probe, which silences
 /// the excess-arguments check (CEL0037) for a source callee that reads
 /// its arguments dynamically.
@@ -79,7 +80,7 @@ pub(crate) fn check(context: &CheckContext<'_, '_>, verdicts: &mut Vec<TypedVerd
     }
 }
 
-/// The arity family (design section 8, decision 12): a required
+/// The arity family: a required
 /// parameter bound neither positionally nor by name (CEL0036), a
 /// positional argument past a non-variadic parameter list (CEL0037),
 /// and a named argument matching no declared parameter (CEL0038). Any
@@ -99,9 +100,9 @@ fn check_arity(
     arguments: &[CallArgument],
 ) {
     if arguments.iter().any(|argument| argument.spread) {
-        // Undecidable in both directions (decision 12): silences every
-        // spread, not only a spread of a non-shape value (design
-        // section 8 qualifies only that narrower case). Debt ledger:
+        // Undecidable in both directions: silences every
+        // spread, not only a spread of a non-shape value (the arity
+        // family qualifies only that narrower case). Debt ledger:
         // arity-through-known-array-shapes (a spread of a literal
         // `array{}` shape whose keys are statically known) is future
         // work.
@@ -115,7 +116,7 @@ fn check_arity(
         .is_some_and(|parameter| parameter.variadic);
     // Unknown names first: each is its own verdict. A trailing
     // variadic accepts any named argument (PHP 8.0 collects unknown
-    // names into it; decision 12), so the whole loop is silenced.
+    // names into it), so the whole loop is silenced.
     if !variadic {
         for name in &named {
             if !parameters.iter().any(|parameter| parameter.name == **name) {
@@ -230,33 +231,33 @@ fn check_argument_types<'db>(
             Some(name) => {
                 let Some(parameter) = parameters.iter().find(|parameter| parameter.name == *name)
                 else {
-                    continue; // task 9 reports the unknown name
+                    continue; // the arity check reports the unknown name
                 };
                 (parameter, ArgumentLabel::Named(name.clone()))
             }
             None => {
                 position += 1;
                 let Some(parameter) = parameter_at(parameters, position) else {
-                    continue; // task 9 reports the excess
+                    continue; // the arity check reports the excess
                 };
                 (parameter, ArgumentLabel::Positional(position))
             }
         };
         if parameter.by_reference {
-            continue; // the `preg_match` exemption (design section 6)
+            continue; // the `preg_match` by-reference exemption
         }
         let Some(parameter_type) = parameter.parameter_type else {
-            continue; // the empty-intersection stub guard (plan 3)
+            continue; // the empty-intersection stub guard
         };
         let Some(argument_type) = context.inferred.expression_type(argument.value) else {
             continue;
         };
-        // Decision 10's pre-judgment guards, structural rather than
+        // Pre-judgment guards, structural rather than
         // `Proof`-based: `mixed` passes everywhere, and a union reports
         // only when every constituent fails assignability on its own
         // (a non-union scalar source is the one-constituent case of the
         // same fold). A constituent that shares an unenforced container
-        // kind with the parameter (design section 8's guillotine: PHP
+        // kind with the parameter (the guillotine: PHP
         // checks only the outer `array`/`callable` at the boundary,
         // never the phpdoc type arguments or the callable's inner
         // signature) never counts as failing — a genuine
@@ -308,7 +309,7 @@ fn check_argument_types<'db>(
 /// declared inner signature. So an argument that is an array against
 /// an array parameter (or a callable against a callable parameter)
 /// raises no runtime `TypeError`, whatever the type arguments say;
-/// the guillotine stays silent (design section 8). A cross-kind
+/// the guillotine stays silent. A cross-kind
 /// mismatch (an array where an `int` is declared, a scalar where a
 /// `callable` is declared) shares no kind and still reports.
 fn shares_unenforced_container_kind<'db>(
@@ -356,7 +357,7 @@ fn parameter_at<'a, 'db>(
 }
 
 /// Exactly one declared signature for a call's or instantiation's
-/// callee (decision 11); `None` otherwise. `expression` is the `Call`
+/// callee; `None` otherwise. `expression` is the `Call`
 /// or `New` expression itself, not its callee sub-expression.
 pub(crate) fn resolved_call_signature<'db>(
     context: &CheckContext<'db, '_>,
@@ -449,7 +450,7 @@ fn source_function_body<'db>(
 /// `$receiver->name(...)`: the receiver's inferred type must decompose
 /// to exactly one class or enum-case atom, non-null constituents
 /// dropped (a union receiver, or an otherwise undecidable one, is
-/// silent — decision 11's recorded stance).
+/// silent — a recorded stance).
 fn resolved_method_call<'db>(
     context: &CheckContext<'db, '_>,
     receiver: ExpressionId,
@@ -480,7 +481,7 @@ fn single_class_atom_key<'db>(
     }
 }
 
-/// `Subject::name(...)`: `scoped_subject_keys` (task 4) must answer
+/// `Subject::name(...)`: `scoped_subject_keys` must answer
 /// exactly one key (`self`/`static`/`parent` already fold to the
 /// owner's key there; any other name resolves through the global
 /// symbol index) — a union or unresolvable subject is silent.
@@ -506,7 +507,7 @@ fn resolved_member_call<'db>(
     name: &str,
 ) -> Option<ResolvedCall<'db>> {
     let db = context.db;
-    // Plan 9a, task 3: `resolved_call_signature`'s method/scoped-call
+    // `resolved_call_signature`'s method/scoped-call
     // consultation of `key`'s declared surface.
     context.dependencies.borrow_mut().insert(key.to_owned());
     let query = MemberQuery::new(
@@ -540,7 +541,7 @@ fn source_method_body<'db>(
     name: &str,
 ) -> Option<(SourceFile, BodyQuery<'db>)> {
     let db = context.db;
-    // Plan 9a, task 3: the coercion/argument family's own direct
+    // The coercion/argument family's own direct
     // `lookup_member` consultation site.
     context.dependencies.borrow_mut().insert(key.to_owned());
     let query = MemberQuery::new(
@@ -569,9 +570,9 @@ fn source_method_body<'db>(
 
 /// `new Name(...)`/`new class { }(...)`: the named class resolved
 /// through the same global lookup a scoped subject uses, or the
-/// anonymous class's own synthetic key (task 1); no constructor at all
+/// anonymous class's own synthetic key; no constructor at all
 /// (`declared_member_signature` answers `None`) silences the whole call
-/// (decision 12) rather than reporting on an assumed empty signature.
+/// rather than reporting on an assumed empty signature.
 /// `new self()`/`new static()`/`new $dynamic()` are not covered:
 /// resolving them needs the defining context's own placeholders, out of
 /// this family's declared-tier-only scope, so they stay silent.
@@ -592,7 +593,7 @@ fn resolved_constructor_signature<'db>(
         }
     };
     let db = context.db;
-    // Plan 9a, task 3: `resolved_call_signature`'s constructor-call
+    // `resolved_call_signature`'s constructor-call
     // consultation of `key`'s declared surface.
     context.dependencies.borrow_mut().insert(key.clone());
     let query = MemberQuery::new(
@@ -725,7 +726,7 @@ function f(A|B $either): void {
 
     #[test]
     fn a_constructor_less_class_is_silent_but_a_declared_constructor_still_reports() {
-        // Decision 12: a class with no `__construct` at all makes the
+        // A class with no `__construct` at all makes the
         // whole `new` call silent (`resolved_constructor_signature`
         // answers `None`), rather than checking against an assumed
         // empty parameter list. `Typed`'s own mismatched constructor
@@ -783,8 +784,8 @@ function f(array $rest): void {
 
     /// A one-parameter stub signature whose forms across the
     /// configured range have no most-restrictive member: `int` at 8.1,
-    /// `string` from 8.2 — the design's empty-intersection guard
-    /// (plan 3) silences the parameter entirely
+    /// `string` from 8.2 — the empty-intersection guard
+    /// silences the parameter entirely
     /// (`DeclaredParameter::parameter_type` is `None`), mirroring
     /// `declared.rs`'s own `disjoint_signature` fixture.
     fn disjoint_stub_signature() -> StubSignature {
@@ -807,7 +808,7 @@ function f(array $rest): void {
 
     #[test]
     fn a_disjoint_stub_parameter_is_silently_unchecked() {
-        // The empty-intersection stub guard (plan 3, consumed here for
+        // The empty-intersection stub guard (consumed here for
         // the first time by `check_argument_types`'s `let Some(parameter_type)
         // = parameter.parameter_type else { continue; }`): a parameter
         // with no single most-restrictive type across the configured
@@ -1098,7 +1099,7 @@ function f(Plain $p): void {
     #[test]
     fn a_variadic_signature_accepts_any_named_argument() {
         // PHP 8.0 collects unknown named arguments into a trailing
-        // variadic (decision 12); reporting CEL0038 here would flag
+        // variadic; reporting CEL0038 here would flag
         // working code.
         let verdicts = family_verdicts(&format!(
             "{STRICT}{}",

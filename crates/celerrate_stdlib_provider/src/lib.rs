@@ -1,4 +1,4 @@
-//! The stdlib type provider (design section 7): a first-party
+//! The stdlib type provider: a first-party
 //! plugin computing the computation-dependent stdlib signatures no
 //! declarative stub can express — the declarative long tail lives
 //! in the refinements overlay instead. Stateless and pure: every
@@ -202,8 +202,8 @@ mod tests {
         );
     }
 
-    /// The adjudicated resolution (tasks 6/7 defect, closed): an
-    /// empty shape (the literal `[]`) is NOT an unknown subject.
+    /// The adjudicated resolution: an empty shape (the literal `[]`)
+    /// is NOT an unknown subject.
     /// `array_value` already answers `never` for it (the union of
     /// zero field values), so `current([])` answers the concrete
     /// `false` literal — matching real PHP semantics for `current`
@@ -220,8 +220,7 @@ mod tests {
         assert_eq!(answer, TypeId::bool_literal(&db, false));
     }
 
-    /// Totality gate over `CLAIMED_FUNCTIONS` (task 6 review, Minor
-    /// 2), mirroring `celerrate_types`'s
+    /// Totality gate over `CLAIMED_FUNCTIONS`, mirroring `celerrate_types`'s
     /// `every_embedded_refinement_text_lowers`: every key the
     /// provider claims must actually answer `Some` through
     /// `function_return`. Without this, a typo in a match arm would
@@ -229,8 +228,7 @@ mod tests {
     /// would swallow the call and fall through to the declared tier
     /// with nothing failing.
     ///
-    /// Task-12 debt (owner: this totality gate, task-9/11 finding
-    /// M45). This gate covers `return_type`'s dispatch only. The
+    /// This gate covers `return_type`'s dispatch only. The
     /// by-reference channel (`by_reference_types`, above) has no
     /// analogous totality check: today it has exactly one claimant
     /// (`preg_match`), covered end to end by

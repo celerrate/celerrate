@@ -1,7 +1,7 @@
-//! The hidden `ground-truth` channel (design section 10, harness 1):
-//! its record format is a contract `cargo xtask ground-truth` (task
-//! 12) pins against a committed baseline, so these tests drive it
-//! exactly as that consumer will, through `celerrate_cli::run`.
+//! The hidden `ground-truth` channel: its record format is a
+//! contract `cargo xtask ground-truth` pins against a committed
+//! baseline, so these tests drive it exactly as that consumer will,
+//! through `celerrate_cli::run`.
 
 #![allow(clippy::unwrap_used, clippy::panic)]
 
@@ -81,7 +81,7 @@ function unannotated() { return 1; }
 /// The compatibility relation between a genuinely unresolvable
 /// annotation and any inferred return is `Proof::CannotProve`, never
 /// `Proof::Fails`: a class-level `@template T` with no call-site
-/// argument to bind it is undecidable, not refuted, and decision 13
+/// argument to bind it is undecidable, not refuted, and this rule
 /// requires it to pass in silence (inference-only generics make
 /// precision asymmetric by design). Without this test, swapping the
 /// harness's `Proof::Fails` check for "anything but `Holds`" would
@@ -176,6 +176,6 @@ fn the_subcommand_is_hidden_from_help() {
     let printed = String::from_utf8(output).unwrap();
     assert!(
         !printed.contains("ground-truth"),
-        "internal channel, plan 9c owns the product surface: {printed}",
+        "the ground-truth channel is internal and must not appear in --help: {printed}",
     );
 }

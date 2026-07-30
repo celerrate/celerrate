@@ -16,7 +16,7 @@
 //! edit's range — because a blake3 checksum proves only that a pack's bytes
 //! were not corrupted in transit, never that whoever wrote them was honest.
 //!
-//! **The suppression note (plan 9a, task 9).** `StoredVerdict.diagnostics`
+//! **The suppression note.** `StoredVerdict.diagnostics`
 //! and `StoredTypedVerdict.diagnostics` are both stored POST-suppression
 //! (schema 4's convention, unchanged): every persisted diagnostic has
 //! already survived `celerrate_semantics::suppression_directives`'s filter.
@@ -667,7 +667,7 @@ pub enum StoredConfidence {
 }
 
 /// A stored edit carries no file identity: a suggestion's edits target
-/// the diagnostic's own file (design section 3), and the stored form
+/// the diagnostic's own file, and the stored form
 /// enforces that structurally by having nowhere to write another file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StoredTextEdit {
@@ -756,7 +756,7 @@ impl StoredDiagnostic {
     /// is inverted or reaches past `content_length`. The blake3 checksum
     /// a pack carries proves only that its bytes were not corrupted in
     /// transit, never that whoever wrote them was honest, so every range
-    /// is checked here rather than trusted (design section 3).
+    /// is checked here rather than trusted.
     pub fn to_diagnostic(&self, file: FileId, content_length: u32) -> Option<Diagnostic> {
         let in_bounds = |start: u32, end: u32| start <= end && end <= content_length;
         let anchor = match self.anchor {
@@ -924,8 +924,8 @@ pub enum StoredSuppressionFilter {
 }
 
 /// One resolved directive with its untyped-half match outcome: what
-/// the `Reporting` phase replays on the warm path without re-parsing
-/// (design section 4). The typed half's own outcomes live in
+/// the `Reporting` phase replays on the warm path without re-parsing.
+/// The typed half's own outcomes live in
 /// `StoredTypedVerdict.matched_directives`, indexes into this list, so
 /// a recomputed typed half never serves a stale union.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -1010,11 +1010,11 @@ impl StoredDirective {
     }
 }
 
-/// One reported file's typed portion, persisted (plan 9a, task 9): the
+/// One reported file's typed portion, persisted: the
 /// CEL0030-CEL0038 families' diagnostics alongside the revalidation
 /// records `crate::cache::verdict`'s layered validation checks before
-/// serving them again — the file-level counterpart of
-/// [`celerrate_types::StoredInferredSignature`] (task 7's per-body
+/// serving them again, the file-level counterpart of
+/// [`celerrate_types::StoredInferredSignature`] (the per-body
 /// artifact), shaped the same way (a digest per consulted class and
 /// function, an inferred edge's callee key and raw pre-substitution
 /// return type) but scoped to a whole file's typed findings rather than
@@ -1027,11 +1027,11 @@ pub struct StoredTypedVerdict {
     pub functions: Vec<StoredFunctionDependency>,
     pub inferred: Vec<StoredInferredEdge>,
     /// The typed half's own admitting directive indexes, into
-    /// `StoredVerdict.directives` (schema 7, task 7): a directive's
+    /// `StoredVerdict.directives` (schema 7): a directive's
     /// stored `matched` flag is the UNTYPED half's own outcome, so a
     /// recomputed typed half never serves it as if it were the typed
     /// half's own. Indexes here must be strictly increasing on load
-    /// (decision 8's sharp edge (a)): `StoredVerdict::directives_convert`
+    /// (a sharp edge (a)): `StoredVerdict::directives_convert`
     /// discards the whole verdict otherwise.
     pub matched_directives: Vec<u32>,
 }
@@ -1043,12 +1043,12 @@ pub struct StoredVerdict {
     pub diagnostics: Vec<StoredDiagnostic>,
     pub records: Vec<StoredRecord>,
     /// Every resolved directive on this file, with the untyped half's
-    /// own `matched` outcome (schema 7, task 7). The typed half's own
+    /// own `matched` outcome (schema 7). The typed half's own
     /// outcomes live separately, as indexes into this list
     /// (`StoredTypedVerdict.matched_directives`), so a recomputed typed
     /// half never serves a stale union of the two.
     pub directives: Vec<StoredDirective>,
-    /// The typed half (plan 9a, task 9): `None` when the persist lever
+    /// The typed half: `None` when the persist lever
     /// (`crate::cache::PERSIST_TYPED_ARTIFACTS`) is off, `Some` otherwise
     /// — never a partial `StoredTypedVerdict`, since `composed_verdict`
     /// computes both fields of the option together.
@@ -1065,7 +1065,7 @@ impl StoredVerdict {
     /// indexes computed elsewhere are never cross-checked against each
     /// other here: their alignment rests on the content hash plus the
     /// binary-identity pack key, the same trust every other stored half
-    /// already extends (decision 8's sharp edge (b)).
+    /// already extends (a sharp edge (b)).
     pub fn directives_convert(
         &self,
         content_length: u32,
@@ -1084,7 +1084,7 @@ impl StoredVerdict {
             // Strictly increasing: `directive_outcomes` binary-searches
             // this list; unsorted or duplicated indexes in a
             // checksum-valid pack must discard, not misattribute
-            // (decision 8's sharp edge (a)).
+            // (a sharp edge (a)).
             let sorted = typed
                 .matched_directives
                 .is_sorted_by(|left, right| left < right);
@@ -1293,7 +1293,7 @@ mod tests {
         );
     }
 
-    /// Audit finding M4: a crafted span past the file's end was accepted
+    /// A crafted span past the file's end was accepted
     /// and rendered with an oversized column — a hit that is not
     /// byte-for-byte anything the computation could produce. The content
     /// the entry's key hashes is available at both call sites, so the
@@ -1527,7 +1527,7 @@ mod tests {
     fn a_stored_filter_is_canonicalized_on_load() {
         // A hand-crafted, checksum-valid pack could store an unsorted or
         // duplicated list; `admits` binary-searches, so load canonicalizes
-        // (decision 8's sharp edge (a)).
+        // (a sharp edge (a)).
         let stored = StoredDirective {
             anchor_start: 0,
             anchor_end: 5,
@@ -1559,7 +1559,7 @@ mod tests {
     /// duplicated) and the in-range rule (an index beyond the stored
     /// list, and separately a non-empty index list against an empty
     /// stored list). Every case must discard the whole verdict
-    /// (decision 8's sharp edge (a)); a sorted, in-range control proves
+    /// (a sharp edge (a)); a sorted, in-range control proves
     /// the rule is actually enforced rather than nothing ever loading.
     #[test]
     fn unsorted_typed_match_indexes_discard_the_verdict() {

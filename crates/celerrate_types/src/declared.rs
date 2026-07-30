@@ -3,7 +3,7 @@
 //! grammar; unknown names lower to class types (the judgment layer
 //! answers `CannotProve` for unresolvable classes). Bare `callable`
 //! lowers to `mixed`: a documented sound widening (no top-of-callables
-//! form exists in the lattice; the corpus triage (task 12) measured
+//! form exists in the lattice; the corpus triage measured
 //! the silence and found it sound — a first-class bare-callable form
 //! stays future work, owner: the type lattice, if a call-signature
 //! diagnostic ever needs one).
@@ -73,8 +73,8 @@ fn lower_name<'db>(db: &'db dyn salsa::Database, site: &NameSite<'_>, name: &str
     TypeId::class(db, &qualified_class_name(site, name), vec![])
 }
 
-/// The keyword table: total over the native grammar (decision 3 for
-/// `callable`). `None` means "an ordinary class name". `pub(crate)`:
+/// The keyword table: total over the native grammar (`callable`
+/// included). `None` means "an ordinary class name". `pub(crate)`:
 /// the type-syntax extension point's `AnnotationSite::keyword_type`
 /// shares this table so the native and annotation paths can never
 /// disagree.
@@ -99,9 +99,9 @@ pub(crate) fn lower_keyword<'db>(db: &'db dyn salsa::Database, name: &str) -> Op
             TypeId::mixed(db),
         ),
         "iterable" => TypeId::iterable(db, TypeId::mixed(db), TypeId::mixed(db)),
-        // Decision 3: no top-of-callables form exists; `mixed` is the
+        // No top-of-callables form exists; `mixed` is the
         // documented sound widening, measured sound by the corpus
-        // triage (task 12) and left as recorded debt (see the module
+        // triage and left as recorded debt (see the module
         // doc above).
         "callable" => TypeId::mixed(db),
         "self" => TypeId::self_placeholder(db),
@@ -149,7 +149,7 @@ pub enum Trust {
 pub struct DeclaredParameter<'db> {
     pub name: String,
     /// `None` silences every check on this parameter (the stub range
-    /// rule's degenerate case, decision 6). An untyped parameter is
+    /// rule's degenerate case). An untyped parameter is
     /// `Some(mixed)`, never `None`.
     pub parameter_type: Option<TypeId<'db>>,
     pub trust: Trust,
@@ -180,7 +180,7 @@ pub struct MemberAnnotations<'db> {
     pub parameters: Vec<(String, TypeId<'db>)>,
     /// `@throws`: annotated exception types.
     pub throws: Vec<TypeId<'db>>,
-    /// `@assert` family: carried for plan 5's narrowing.
+    /// `@assert` family: carried for use by narrowing.
     pub assertions: Vec<crate::type_syntax::ParsedAssertion<'db>>,
 }
 
@@ -230,7 +230,7 @@ pub fn member_annotations<'db>(
     }
 }
 
-/// The source-precedence rule of the design's section 3: an
+/// The source-precedence rule: an
 /// annotation refines the native declaration under the three-valued
 /// judgment. Holds refines; Fails is ignored (native wins);
 /// CannotProve refines and is traced. Never a crash, never a silent
@@ -258,7 +258,7 @@ pub(crate) fn refine<'db>(
 /// bound that fails to lower falls to `mixed` (`TypeId::template`'s
 /// own fallback for a boundless template) — the totality test
 /// (`every_embedded_refinement_text_lowers`) keeps this the dead
-/// branch it should be. `pub(crate)`: task 5's class refinements
+/// branch it should be. `pub(crate)`: class refinements
 /// reuse this to build the same per-class scope.
 pub(crate) fn norm_templates<'db>(
     db: &'db dyn salsa::Database,
@@ -281,18 +281,18 @@ pub(crate) fn norm_templates<'db>(
         .collect()
 }
 
-/// One refined element (a stub return or parameter) under decision
-/// 5's three-valued rule: `text` lowers through the norm, then
+/// One refined element (a stub return or parameter) under the
+/// three-valued rule: `text` lowers through the norm, then
 /// [`refine`] decides the trust against the native fold — `Holds` ->
 /// `Trust::Refined`, `CannotProve` -> `Trust::RefinedUnproven`,
 /// `Fails` -> the native fold wins with `Trust::RejectedAnnotation`.
-/// `native == None` (the stub range rule's silenced parameter, design
-/// section 3) trusts against `mixed`, so a refinement can rescue a
+/// `native == None` (the stub range rule's silenced parameter)
+/// trusts against `mixed`, so a refinement can rescue a
 /// silenced parameter. Absent text, or text that fails to lower
 /// (`lower_norm_text` answers `None`), never produces a worse answer
 /// than having no refinement at all: `native` stands, untouched, with
-/// `Trust::NativeOnly`. `pub(crate)`: task 5 reuses this for class
-/// refinements too.
+/// `Trust::NativeOnly`. `pub(crate)`: class refinements reuse this
+/// too.
 pub(crate) fn refined_element<'db>(
     db: &'db dyn salsa::Database,
     files: AnalyzedFileSet,
@@ -460,13 +460,13 @@ pub fn declared_member_signature<'db>(
             // key (the owner class key): a method text like
             // `current(): TValue` names a class-scoped template, so
             // both must resolve names in the same lowering pass
-            // (decision 5). The parse-time collision check of task 3
+            // The parse-time collision check
             // makes merging them safe (a class and its own method can
             // never redeclare the same template name).
             let member_key = query.member_key(db);
             let class_refinement = stubs.index(db).class_refinement(&owner);
             // Methods only: property and constant refinements are out
-            // of scope for task 4 (decision 5's note). Guarding on
+            // of scope for now. Guarding on
             // kind, rather than only on a key match, also keeps a
             // same-spelling property and method from ever cross-
             // attaching each other's refinement.
@@ -606,9 +606,8 @@ pub fn declared_member_signature<'db>(
         &member,
         &annotations,
     );
-    // Design section 3, "declared types inherit", completed by the
-    // threading of task 3: a member declared on a generic ancestor is
-    // answered with the receiver class's fixed arguments applied. Each
+    // "Declared types inherit": a member declared on a generic ancestor
+    // is answered with the receiver class's fixed arguments applied. Each
     // field substitutes through the map of the class whose docblock
     // supplied it (`AnnotationOrigins`), so the map's scope always
     // matches the template's scope; a field the receiver itself declared
@@ -787,9 +786,10 @@ pub(crate) fn declares_member<'db>(
 }
 
 /// Resolves one member's written signature at its declaring site.
-/// Own annotations refine the native declaration through [`refine`]
-/// (task 5); the inheritance walk that folds in ancestor annotations
-/// lands in task 6. Enum cases skip refinement: their type is their
+/// Own annotations refine the native declaration through [`refine`];
+/// the inheritance walk that folds in ancestor annotations happens in
+/// the caller, via ancestor substitution. Enum cases skip refinement:
+/// their type is their
 /// identity, never annotated.
 #[allow(clippy::too_many_arguments)]
 fn resolve_member_signature<'db>(
@@ -854,7 +854,7 @@ fn declared_parameter<'db>(
     annotation: Option<TypeId<'db>>,
 ) -> DeclaredParameter<'db> {
     let mut native_parameter_type = lowered_or_mixed(db, site, parameter.type_text.as_deref());
-    // Implicit nullability (design section 2): `Type $x = null`.
+    // Implicit nullability: `Type $x = null`.
     if parameter
         .default_text
         .as_deref()
@@ -984,9 +984,9 @@ fn parameter_type_across_range<'db>(
 /// value type is the union across the range, parameters check against
 /// their most restrictive form or fall silent, and everything is
 /// `Trust::NativeOnly` — except a refined method, which consults
-/// `refinement` under `scope` (decision 5); properties, constants,
-/// and enum cases carry no refinement (task 4 scope, `refinement` is
-/// unconsulted for them).
+/// `refinement` under `scope`; properties, constants,
+/// and enum cases carry no refinement (currently out of scope,
+/// `refinement` is unconsulted for them).
 #[allow(clippy::too_many_arguments)]
 fn resolve_stub_member_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -1041,13 +1041,14 @@ fn resolve_stub_member_signature<'db>(
 
 /// One stub callable signature (a function or a method) under the
 /// range rule; shared by the member arm and the function query.
-/// `scope` is built by the caller (task 4, decision 5): the function
+/// `scope` is built by the caller: the function
 /// path scopes to the function's own refined templates; the method
 /// path merges the owner class's templates with the method's own
 /// under one scope key (the owner class key). `refinement` is the
 /// element's own signature refinement, when one exists; `None` for an
-/// unrefined stub element leaves the plan-3 delta fold exactly as it
-/// stood before this task (`refined_element`'s `None`-text arm).
+/// unrefined stub element leaves the version-range delta fold exactly
+/// as it stood before refinements existed (`refined_element`'s
+/// `None`-text arm).
 #[allow(clippy::too_many_arguments)]
 fn resolve_stub_signature<'db>(
     db: &'db dyn salsa::Database,
@@ -1460,7 +1461,7 @@ mod tests {
                 TypeId::mixed(&db)
             )),
         );
-        // Decision 3: bare `callable` is a documented sound widening.
+        // Bare `callable` is a documented sound widening.
         assert_eq!(lower(&db, "callable"), Some(TypeId::mixed(&db)));
     }
 
@@ -1621,8 +1622,8 @@ mod tests {
     /// else in `ParsedAnnotations` stays default. Its bare-expression
     /// path answers "int" -> int and refuses anything else, covering
     /// both the parsed and unparseable virtual-member cases. Duplicated
-    /// from `type_syntax`'s test module `FakeSyntax` (recorded debt: no
-    /// shared test-support module per the design).
+    /// from `type_syntax`'s test module `FakeSyntax` (recorded debt:
+    /// no shared test-support module exists yet).
     fn register_fake_syntax(fixture: &Fixture) {
         let _ = TypeSyntaxRegistry::builder(vec![TypeSyntaxRegistration {
             identity: fake_identity("fake-return"),
@@ -2492,7 +2493,7 @@ mod tests {
     #[test]
     fn a_disjoint_parameter_across_the_range_is_silenced() {
         // `int` at 8.1, `string` from 8.2: no most-restrictive form
-        // exists — the design's degenerate guard silences the parameter.
+        // exists — the degenerate-intersection guard silences the parameter.
         let fixture = fixture_with_stub_payload(
             &["<?php"],
             vec![("disjoint".to_owned(), disjoint_signature())],
@@ -3080,8 +3081,7 @@ class User {}
         }
     }
 
-    /// `array_keys`'s refinement: `array<TKey, TValue> -> list<TKey>`,
-    /// the design's running example (decisions 5 and 7).
+    /// `array_keys`'s refinement: `array<TKey, TValue> -> list<TKey>`.
     fn array_keys_refinement() -> RefinedSignature {
         RefinedSignature {
             templates: vec![
@@ -3119,7 +3119,7 @@ class User {}
         );
         // `list<TKey> <: array` holds: a template candidate proves
         // through its `mixed` bound against the fold's `mixed` value,
-        // and every list is an array (the Holds arm, decision 5).
+        // and every list is an array (the Holds arm of the three-valued rule).
         assert_eq!(signature.value_trust, Trust::Refined);
     }
 
@@ -3162,7 +3162,7 @@ class User {}
             )),
         );
         // `TKey <: int|string` cannot be decided through the `mixed`
-        // bound: the genuine CannotProve arm (decision 5).
+        // bound: the genuine CannotProve arm of the three-valued rule.
         assert_eq!(parameter.trust, Trust::RefinedUnproven);
 
         // The unrefined `limit` parameter keeps the native fold
@@ -3179,7 +3179,7 @@ class User {}
     #[test]
     fn a_failing_refinement_is_rejected_and_the_native_fold_wins() {
         // A refined `int` against a native `string`: Proof::Fails — the
-        // curation-typo containment (decision 5).
+        // curation-typo containment of the three-valued rule.
         let f = refined_stub_fixture(
             "getcwd",
             "string",
@@ -3203,7 +3203,7 @@ class User {}
 
     #[test]
     fn an_unlowerable_refined_return_falls_back_to_the_native_fold_untouched() {
-        // Conservative silence (design section 7): a refined text that
+        // Conservative silence: a refined text that
         // FAILS TO LOWER must fall back to the native fold exactly as
         // if no refinement existed at all. This is a different branch
         // from the pre-existing "no refinement" coverage (`text: None`,
@@ -3316,7 +3316,7 @@ class User {}
 
     #[test]
     fn a_refined_stub_method_resolves_through_the_merged_class_and_method_scope() {
-        // The seed's motivating case for decision 5's merged scope
+        // The seed's motivating case for the merged scope
         // (`class ArrayIterator<TKey, TValue> { method current():
         // TValue }`): the method text `TValue` names a CLASS-scoped
         // template, so it can only lower if the member arm merges the
@@ -3391,7 +3391,7 @@ class User {}
 
     #[test]
     fn every_embedded_refinement_text_lowers() {
-        // Decision 3's totality gate: a typo in refinements.celerrate is
+        // This totality gate: a typo in refinements.celerrate is
         // a test failure here, never a silent fallback.
         let db = TestDatabase::default();
         let index = celerrate_stubs::embedded_stub_index().unwrap();
@@ -3430,7 +3430,8 @@ class User {}
                 // `"{key}::{name}"` (e.g. `"arrayiterator::current"`),
                 // while production (`declared_member_signature`) scopes
                 // a refined stub method under the owner class key alone
-                // (e.g. `"arrayiterator"`), per decision 5's merge. That
+                // (e.g. `"arrayiterator"`), per the class+method merge
+                // above. That
                 // mismatch is harmless HERE because only `.is_some()` is
                 // asserted and lowering success does not depend on the
                 // scope key's spelling — but it means this test cannot

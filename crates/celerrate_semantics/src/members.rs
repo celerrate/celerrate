@@ -1,6 +1,6 @@
 //! The member projection: the sibling of the item tree at member
 //! granularity. Per class-like declaration of one file, its direct
-//! members — kind, name, flags, identity, and (Task 4) signature as
+//! members — kind, name, flags, identity, and signature as
 //! unresolved names plus docblock text. Range-free and
 //! `Eq`-comparable: a method body edit produces an identical value,
 //! salsa backdates it, and member consumers are spared, while the
@@ -122,8 +122,8 @@ pub struct FreeFunction {
 }
 
 /// One class-like declaration and its direct members, in tree order.
-/// `name` is `None` for anonymous class-likes; their `ast_id` is the
-/// synthetic identity the spec gives them.
+/// `name` is `None` for anonymous class-likes; their `ast_id` is
+/// their synthetic identity.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ClassMembers {
     pub kind: DeclarationKind,
@@ -851,7 +851,7 @@ mod tests {
 
     #[test]
     fn a_docblock_edit_changes_the_member_tree_a_body_comment_does_not() {
-        // The spec's accepted cost, pinned: docblock text is a field,
+        // An accepted cost, pinned: docblock text is a field,
         // so editing it changes the value; a comment inside a body is
         // still invisible.
         let before = tree_of("<?php class A { /** @return int */ function f() { return 1; } }");
@@ -1007,7 +1007,7 @@ mod tests {
         // A `@var` docblock directly ahead of a promoted parameter is
         // valid, common PHPDoc (symfony/demo's own AppExtension writes
         // exactly this to type an untyped-by-native-syntax array
-        // property). Ground-truth harness triage (task 12) found this
+        // property). Ground-truth harness triage found this
         // dropped silently: the promoted property carried no docblock
         // at all, so its element type never reached inference.
         let tree = tree_of(

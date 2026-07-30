@@ -29,7 +29,7 @@ pub trait ArtifactCache: Send + Sync {
 
     /// The member projection, same contract as `item_tree`. Default
     /// `None`: an implementation that has no member pack simply
-    /// misses (plan 9a).
+    /// misses.
     fn member_tree(&self, _file: FileId, _content: ContentHash) -> Option<MemberTree> {
         None
     }

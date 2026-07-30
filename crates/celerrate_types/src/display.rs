@@ -4,7 +4,7 @@
 //! and canonical form must never depend on spelling); the checks layer
 //! recovers the originally written spelling by threading a name
 //! resolver through `display_type_resolved` (`TypeId::display_with_names`,
-//! plan 8's `written_type_display` in `checks/receivers.rs`).
+//! `written_type_display` in `checks/receivers.rs`).
 
 use crate::representation::{StringConstraint, TypeData, TypeId};
 
@@ -25,7 +25,7 @@ pub(crate) fn display_type<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -
 /// caller of the match below, and it always passes `None`); `Some`
 /// tries the resolver first and falls back to the folded key when it
 /// answers nothing. An anonymous class's coordinate-stripped rendering
-/// is unconditional either way (decision 3): a resolver is never even
+/// is unconditional either way: a resolver is never even
 /// consulted for it.
 pub(crate) fn display_type_resolved<'db>(
     db: &'db dyn salsa::Database,

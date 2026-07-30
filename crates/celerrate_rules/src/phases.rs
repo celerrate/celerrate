@@ -46,8 +46,7 @@ pub fn syntax_phase_diagnostics(
 
 /// The semantic phase: one query per file, draining the active
 /// semantic rules against the sealed context. The inputs are exactly
-/// what the context's facade methods read (part 3 reserved this
-/// extension).
+/// what the context's facade methods read.
 #[salsa::tracked(returns(ref))]
 pub fn semantic_phase_diagnostics(
     db: &dyn salsa::Database,
@@ -160,7 +159,7 @@ pub fn typed_body_phase_diagnostics(
 
 /// The reporting phase: runs the registered `Reporting` rules from
 /// per-directive match outcomes - never from the tree, so the warm
-/// path serves the same records parse-free (design section 4). A plain
+/// path serves the same records parse-free. A plain
 /// function, not a salsa query: its input is composed by the
 /// orchestration layer, which is also why the output is recomputed on
 /// both paths rather than persisted. Deterministic by construction (a
@@ -169,7 +168,7 @@ pub fn typed_body_phase_diagnostics(
 /// The one additional, non-iterated suppression pass: (a) rules emit
 /// findings, every directive finding naming its subject directive;
 /// (b) one pass drops every finding some directive OTHER than its own
-/// subject admits (self-cloaking is forbidden, decision 10) and marks
+/// subject admits (self-cloaking is forbidden) and marks
 /// every admitting directive used; (c) CEL0042 findings whose subject
 /// became used in (b) are dropped. Uses recorded in (b) never re-open
 /// (b), and drops in (c) never un-use anything: no fixpoint.
@@ -230,7 +229,7 @@ pub fn reporting_phase_diagnostics(
         let mut suppressed = false;
         for (index, outcome) in outcomes.iter().enumerate() {
             // A directive never admits a finding that reports on
-            // itself: self-cloaking is forbidden (decision 10);
+            // itself: self-cloaking is forbidden;
             // cross-suppression between distinct directives stays
             // legal.
             if u32::try_from(index).is_ok_and(|index| finding.subject == Some(index)) {
@@ -847,7 +846,7 @@ mod tests {
     #[test]
     fn an_unknown_identifier_makes_the_directive_not_evaluable_for_unused() {
         // CEL0041 already reports the typo; CEL0042 must not stack a
-        // second warning on the same mistake (decision 11).
+        // second warning on the same mistake.
         let db = reporting_setup();
         let diagnostics = report(&db, &[native_unused((10, 40), &["CEL9999"])]);
         assert_eq!(diagnostics.len(), 1);
@@ -920,7 +919,7 @@ mod tests {
     fn a_directive_cannot_suppress_its_own_reports() {
         // A trailing directive whose scope covers its own anchor and
         // whose filter admits CEL0042 must not cloak its own unused
-        // warning: self-admission is forbidden (decision 10), so the
+        // warning: self-admission is forbidden, so the
         // warning survives.
         let db = reporting_setup();
         let outcome = DirectiveOutcome {
@@ -946,7 +945,7 @@ mod tests {
         // its anchor. Directive B admits CEL0042 on a scope covering
         // A's anchor: A's warning is dropped, B counts as used, and
         // B's own CEL0042 is dropped by the subject rule in step (c) -
-        // never by self-admission, which decision 10 forbids - one
+        // never by self-admission, which is forbidden - one
         // pass, no iteration.
         let db = reporting_setup();
         let a = native_unused((10, 40), &["CEL0030"]);
@@ -995,14 +994,14 @@ mod tests {
         // (subject 0, at A's anchor) and B's finding (subject 1, at
         // B's anchor).
         // Pass (b): for A's finding, the admission loop skips A itself
-        // (self-cloaking is forbidden, decision 10) and checks B; B's
+        // (self-cloaking is forbidden) and checks B; B's
         // scope covers A's anchor and B's filter admits CEL0042, so
         // A's finding is dropped and B is marked used. Symmetrically,
         // B's finding is checked only against A (B is skipped as its
         // own subject); A's scope covers B's anchor and admits
         // CEL0042, so B's finding is dropped and A is marked used.
         // Cross-suppression between distinct directives is legal
-        // (decision 10 forbids only self-admission), so both drops
+        // (only self-admission is forbidden), so both drops
         // happen within this single pass.
         // Pass (c): would drop a surviving CEL0042 finding whose
         // subject became used, but both findings were already dropped

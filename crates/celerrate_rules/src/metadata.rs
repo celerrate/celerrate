@@ -1,7 +1,7 @@
 use celerrate_diagnostics::{DiagnosticId, Severity};
 
-/// The rule groups of the parent design. Only `correctness` exists
-/// until the style group arrives.
+/// The rule groups. Only `correctness` exists until the style group
+/// arrives.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RuleGroup {
     Correctness,
@@ -26,8 +26,7 @@ pub struct RuleIdentifier {
 
 /// A rule's declarative unit: a coherent family, not a single
 /// identifier. Owned data, not `&'static` — plugin-registered rules
-/// will travel their metadata as registration data (design section 8
-/// pins that shape now).
+/// will travel their metadata as registration data.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RuleMetadata {
     /// Stable kebab-case name, e.g. `syntax-version-gating`.

@@ -1,4 +1,4 @@
-//! The executable explain-page harness (design section 10): every
+//! The executable explain-page harness: every
 //! written page's failing example must fire its identifier through
 //! the full product pipeline, and its fixed example must not.
 //! Identifiers on the declared exemption list keep the page
@@ -118,8 +118,8 @@ fn every_written_page_example_is_honest() {
     assert!(failures.is_empty(), "{}", failures.join("\n---\n"));
 }
 
-/// The spec's harness requirement (section 2): explain pages stay
-/// executable for every tier, because the harness forces each rule
+/// Explain pages stay executable for every tier, because the harness
+/// forces each rule
 /// active through the same `[rules]` mechanism a user would. This
 /// pins that the generated configuration names every core rule and is
 /// itself silent, so no page's report can be polluted by it.

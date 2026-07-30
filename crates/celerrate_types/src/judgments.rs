@@ -1,4 +1,4 @@
-//! The three-valued judgments (spec section 3): `Holds`, `Fails`
+//! The three-valued judgments: `Holds`, `Fails`
 //! (value-set inclusion refuted), `CannotProve` (undecidable with
 //! available information). Every consumer states its posture toward
 //! `CannotProve`; nothing here or above silently discards it.
@@ -98,7 +98,7 @@ pub fn subtype_of<'db>(
     )
 }
 
-/// The calling file's coercion posture (design section 8): strict
+/// The calling file's coercion posture: strict
 /// under `declare(strict_types=1)`, weak otherwise.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CoercionMode {
@@ -148,7 +148,7 @@ pub fn assignable_to<'db>(
 /// hand (the shipped `judge` refutes `mixed` candidates on purpose),
 /// and `is_coercible_scalar`/`is_scalar_target` answer `false` for it
 /// (and for `null`) so it is never silently un-failed here. The
-/// argument family's walk (`checks::arguments`, decision 10) guards
+/// argument family's walk (`checks::arguments`) guards
 /// `mixed` and per-constituent union fits before ever calling the
 /// judgment.
 fn coercion_could_apply<'db>(
@@ -508,13 +508,11 @@ fn is_single_valued<'db>(db: &'db dyn salsa::Database, of: TypeId<'db>) -> bool 
 /// never another `ValueOf`, so recursion cannot re-trigger expansion on
 /// its own output.
 ///
-/// This deliberately exceeds plan 3 task 13's "top-level only" wording.
-/// That restriction was the plan's original intent, but the shipped
-/// code expands at every `judge` entry point including the structural
-/// recursion; review adjudicated the broader, more precise shipped
-/// behavior as the keeper and directed that the documentation (and the
-/// task report) be corrected to match it instead of narrowing the
-/// code. See `a_nested_value_of_also_expands_through_structural_recursion`
+/// This deliberately goes beyond a "top-level only" restriction: the
+/// shipped code expands at every `judge` entry point including the
+/// structural recursion, which is the broader, more precise, and
+/// intended behavior. See
+/// `a_nested_value_of_also_expands_through_structural_recursion`
 /// below, which pins this behavior.
 fn expand_value_of<'db>(
     db: &'db dyn salsa::Database,
@@ -1358,7 +1356,7 @@ mod tests {
         let user = TypeId::class(db, "User", vec![]);
         assert_eq!(judge(&f, user, TypeId::object(db)), Proof::Holds);
         assert_eq!(judge(&f, TypeId::object(db), user), Proof::Fails);
-        // Different names answer CannotProve in this task; Task 9 tightens.
+        // Different names answer CannotProve for now; this may tighten later.
         assert_eq!(
             judge(&f, user, TypeId::class(db, "Entity", vec![])),
             Proof::CannotProve

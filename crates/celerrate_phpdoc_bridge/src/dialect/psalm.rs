@@ -1,6 +1,6 @@
 //! The Psalm dialect: tags with PHPStan-coincident semantics are
 //! synonyms, fully honored; the genuinely divergent behaviors are the
-//! enumerated ignored bucket (design section 5) — parsed, ignored
+//! enumerated ignored bucket: parsed, ignored
 //! without error, traced as debt toward a later complement.
 
 use super::{ClassifiedTag, TagRole, TagTier};

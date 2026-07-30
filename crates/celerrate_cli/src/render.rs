@@ -1,7 +1,7 @@
 //! The check screen: the report, and the internal errors under it.
 //!
-//! The report body itself is the rules crate's rustc-style renderer
-//! (design section 9). This module owns only what the CLI owns: the
+//! The report body itself is the rules crate's rustc-style renderer.
+//! This module owns only what the CLI owns: the
 //! notice block, the block separators, the summary line, the
 //! `celerrate explain` trailer, and the internal-error report. The
 //! session is the renderer's source of text and display paths, and the
@@ -478,9 +478,8 @@ pub(crate) fn count(total: usize, singular: &str, plural: &str) -> String {
 
 /// The fix trailer: what was applied, what was skipped and why.
 /// Prints only under a fix flag. `applied 0 fixes to 0 files` is the
-/// honest line the design requires: at closure of this sub-project
-/// every shipped fix is `NeedsReview`, so `--fix` alone applies
-/// nothing, visibly.
+/// honest line today: every shipped fix is `NeedsReview`, so `--fix`
+/// alone applies nothing, visibly.
 pub fn render_fix_summary(
     output: &mut dyn Write,
     session: &Session,
@@ -984,10 +983,10 @@ mod tests {
             .unwrap_or(0)
     }
 
-    /// Review finding 1 (task 10): `render_internal_errors` can emit an
-    /// unbounded number of rows -- one per internal error, plus its own
-    /// fixed surrounding lines -- and the pre-fix overhead never budgeted
-    /// for them, so a cycle carrying internal errors could still overrun
+    /// `render_internal_errors` can emit an unbounded number of rows
+    /// -- one per internal error, plus its own fixed surrounding lines
+    /// -- and the pre-fix overhead never budgeted for them, so a cycle
+    /// carrying internal errors could still overrun
     /// the terminal height it was supposedly capped against. Reserving
     /// those rows shrinks the block budget by exactly as much: the same
     /// height, chosen to fit exactly three of the five blocks with
@@ -1072,7 +1071,7 @@ mod tests {
         );
     }
 
-    /// The same review finding, applied to the baseline's own two
+    /// The same row-reservation fix, applied to the baseline's own two
     /// additions: the notice block `write_notice_block(output,
     /// &baseline.notices)` writes, and the "N baselined diagnostics
     /// hidden" line. Neither was reserved for in the overhead calculation

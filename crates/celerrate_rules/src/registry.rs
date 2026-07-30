@@ -10,7 +10,7 @@ use crate::traits::{ReportingRule, SemanticRule, SyntaxRule, TypedBodyRule};
 /// The reserved registration identity of core rules. Core
 /// registrations never enter the admitted plugin set, so they never
 /// key the plugin-set digest — binary identity already keys the cache
-/// for core behavior (design section 2). The composition root refuses
+/// for core behavior. The composition root refuses
 /// a plugin descriptor carrying this name.
 pub const CORE_IDENTITY_NAME: &str = "celerrate-core";
 
@@ -46,7 +46,7 @@ impl std::fmt::Debug for RuleImplementation {
 /// One registered rule: who registered it, whether it is in the active
 /// set, its declarative unit, and its implementation. `active` is
 /// computed at the composition root (`Default`-tier rules are active,
-/// `Nursery` rules are not); sub-project 5's configuration adjusts
+/// `Nursery` rules are not); the CLI's rule configuration adjusts
 /// that computation and nothing else.
 #[derive(Clone)]
 pub struct RuleRegistration {
@@ -78,7 +78,7 @@ pub struct RuleRegistry {
 
 /// Why a rule set does not validate. A core-versus-core conflict is a
 /// bug and fails the composition-root test in CI, never a runtime
-/// degradation (design section 4); plugin conflicts reuse the
+/// degradation; plugin conflicts reuse the
 /// whole-plugin exclusion model when plugin rules become registrable.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum RuleConflict {

@@ -44,7 +44,7 @@ fn test_configuration(db: &TestDatabase) -> ProjectConfiguration {
     .new(db)
 }
 
-/// A stand-in for part 5's consumers: any query that reads the item
+/// A stand-in for a downstream consumer: any query that reads the item
 /// tree and nothing else syntactic. If the tree backdates, this must
 /// never re-run.
 #[salsa::tracked]
@@ -230,7 +230,7 @@ fn a_new_file_does_not_reanalyze_existing_files() {
     assert_eq!(executions_of(&log, "declared_names"), 1, "{log:?}");
 }
 
-/// A stand-in for part 6's checks: the inheritance names of one file
+/// A stand-in for inheritance checks: the inheritance names of one file
 /// that do not resolve. It reads the file's item tree and the
 /// per-name lookups, nothing else; the firewall must spare it from
 /// every unrelated change.
@@ -347,7 +347,7 @@ impl ResolutionFixture {
 
 #[test]
 fn adding_an_unrelated_symbol_spares_every_consumer() {
-    // The spec's firewall sentence, observed directly: adding a symbol
+    // The firewall guarantee, observed directly: adding a symbol
     // in one file does not invalidate the checks of files that never
     // reference it.
     let mut fixture = ResolutionFixture::new(&[
@@ -540,7 +540,7 @@ fn an_unrelated_declaration_spares_other_files_reference_checks() {
 
     let log = db.take_executed();
     // `reference_resolutions` is a thin, independently backdating
-    // projection over `reference_outcomes` (plan 9a task 4): the walk
+    // projection over `reference_outcomes`: the walk
     // itself, and therefore the query whose re-execution this test
     // observes, now lives in `reference_outcomes`.
     assert_eq!(
@@ -580,7 +580,7 @@ fn a_comment_only_edit_elsewhere_spares_the_consumer() {
     // See the comment on the same assertion above: the walk
     // (`reference_outcomes`) is what re-executes; `reference_resolutions`
     // is a projection that backdates independently once the walk's
-    // output is unchanged (plan 9a task 4).
+    // output is unchanged.
     assert_eq!(
         executions_of(&log, "reference_outcomes"),
         1,
@@ -842,10 +842,10 @@ fn a_member_signature_edit_never_reaches_item_tree_consumers() {
 
 #[test]
 fn a_docblock_prose_edit_reaches_member_consumers_by_design() {
-    // The spec's accepted cost, observed at the query level: the raw
+    // An accepted cost, observed at the query level: the raw
     // docblock is a member-tree field. The second-stage cutoff (the
-    // parsed-annotation query) is plan 4's; until then the member tree
-    // is the only stage.
+    // parsed-annotation query) does not exist yet; until then the
+    // member tree is the only stage.
     let mut db = TestDatabase::default();
     let file = SourceFile::new(
         &db,
@@ -904,7 +904,7 @@ fn adding_a_member_to_an_unrelated_class_spares_the_asker() {
     );
 }
 
-/// A stand-in for plan 5's inference: any query that reads one body's
+/// A stand-in for type inference: any query that reads one body's
 /// IR and nothing else syntactic. If the IR backdates, this must never
 /// re-run.
 #[salsa::tracked]

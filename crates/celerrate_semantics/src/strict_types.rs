@@ -1,4 +1,4 @@
-//! The per-file coercion mode (design section 8): whether the file
+//! The per-file coercion mode: whether the file
 //! declares `strict_types=1`. An own-tree read for strictly-local
 //! output — the syntax-gating precedent (`syntax_gating.rs`) — so
 //! nothing above the file is invalidated by the directive, and

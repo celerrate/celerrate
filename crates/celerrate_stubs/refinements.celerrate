@@ -1,17 +1,17 @@
-# The Celerrate refinements overlay (design section 7): enriched
-# stub signatures in the internal norm, compiled into stubs.bin by
-# `cargo xtask compile-stubs`. Validated at compile time (existence)
-# and by the lowering-totality test in celerrate_types (grammar).
+# The Celerrate refinements overlay: enriched stub signatures in the
+# internal norm, compiled into stubs.bin by `cargo xtask compile-stubs`.
+# Validated at compile time (existence) and by the lowering-totality
+# test in celerrate_types (grammar).
 #
-# Curation is measurement-driven (plan 7, task 11): an entry earns its
-# place only when it both names a callee the pinned corpus exercises and
-# demonstrably sharpens a measured result (the ground-truth or mixed-rate
-# baseline). array_slice and array_unique carry the element type through
+# Curation is measurement-driven: an entry earns its place only when it
+# both names a callee the pinned corpus exercises and demonstrably
+# sharpens a measured result (the ground-truth or mixed-rate baseline).
+# array_slice and array_unique carry the element type through
 # to array_map/array_filter, resolving real precision-gap records;
 # inert-but-in-table returns (count, implode, in_array) moved no
 # instrument and only duplicate the base fold, so they stay out.
 #
-# Task-12 debt (owner: this overlay).
+# Recorded debt (owner: this overlay).
 #
 # - By-reference stdlib mutators (array_shift, usort, sort, and their
 #   family) carry no refinement here and are not claimed by
@@ -20,15 +20,16 @@
 #   already gives their by-reference parameter. Curation revisits only
 #   if the corpus's per-callee mixed-rate table ever demands it —
 #   unmeasured today, not by omission.
-# - Decision-15 top-ten exit, named exceptions (task 11's measured
-#   exit, verbatim): array_pop stays mixed (rank 10, mixed 3/3) —
-#   caller opacity, its sole corpus call site feeds it an untyped
-#   `array` (element type `mixed`) from an untyped method return, and
-#   no signature on array_pop itself can fix a caller's opacity.
-#   max (mixed 2/2) and min (mixed 1/1), both below the top ten: the
-#   return is the join of the argument types, computation-dependent
-#   and provider territory, not a declarative refinement — combined
-#   demand of 3 calls, not a genuine case for a new provider handler.
+# - Top-ten exit, named exceptions, figures exact from measurement:
+#   array_pop stays mixed (rank 10, mixed 3/3) — caller opacity, its
+#   sole corpus call site feeds it an untyped `array` (element type
+#   `mixed`) from an untyped method return, and no signature on
+#   array_pop itself can fix a caller's
+#   opacity. max (mixed 2/2) and min (mixed 1/1), both below the top
+#   ten: the return is the join of the argument types,
+#   computation-dependent and provider territory, not a declarative
+#   refinement — combined demand of 3 calls, not a genuine case for a
+#   new provider handler.
 
 function array_keys<TKey, TValue>(array<TKey, TValue> $array): list<TKey>
 function array_slice<TKey, TValue>(array<TKey, TValue> $array): array<TKey, TValue>

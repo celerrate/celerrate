@@ -141,8 +141,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The shared diagnostic model carries the rich anatomy the
-  diagnostics-and-fixes design specifies: an anchor that admits
+- The shared diagnostic model carries a rich anatomy: an anchor that
+  admits
   project-level findings, labeled secondary spans (concrete in the same
   file, symbolic across files), notes, and structured suggestions with
   confidence and finalized text edits. The persistent-cache verdict

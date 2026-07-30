@@ -1,5 +1,5 @@
-//! The correspondence-table triage gate (design section 8's closure
-//! gate): both dialects' published catalogues fully triaged - table
+//! The correspondence-table triage gate (the closure gate): both
+//! dialects' published catalogues fully triaged - table
 //! and catalogue are the same set, both directions - and every mapped
 //! code re-interns, so silent widening through table incompleteness is
 //! bounded by review, never by accident. Lives at the composition root

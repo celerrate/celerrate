@@ -4,7 +4,7 @@ use celerrate_semantics::GatedSyntaxUse;
 
 /// The syntax-phase context. Owned by `celerrate_rules` — its contents
 /// span `celerrate_db` and `celerrate_project` with no single domain
-/// owner (design section 4's stated exception). Sealed on the
+/// owner, a deliberate exception to that rule. Sealed on the
 /// `InvocationSite` model: the database is private, methods delegate,
 /// and no salsa vocabulary appears in any rule-facing signature. The
 /// surface is exactly what the shipped syntax rules consume (the
@@ -60,8 +60,8 @@ pub struct DirectiveOutcome {
     pub matched: bool,
 }
 
-/// The `Reporting` phase context: directives and their match outcomes
-/// (design section 4). Core-only - never re-exported by the facade.
+/// The `Reporting` phase context: directives and their match outcomes.
+/// Core-only - never re-exported by the facade.
 /// Plain outcome data plus two registry questions; no database handle,
 /// no tree, no parse: the same context serves the warm path.
 pub struct ReportingContext<'run> {
@@ -85,7 +85,7 @@ impl<'run> ReportingContext<'run> {
 
     /// Whether the written form names a registered identifier - the
     /// CEL0041 knownness question, asked through the single lookup
-    /// seam (`find_identifier`; design section 8's two-tier shape).
+    /// seam (`find_identifier`, itself a two-tier lookup).
     pub fn is_known(&self, written: &str) -> bool {
         celerrate_diagnostics::find_identifier(written).is_some()
     }

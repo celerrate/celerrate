@@ -69,11 +69,11 @@ fn member_query<'db>(
     )
 }
 
-/// A projection of `ParsedAnnotations`'s new fields (task 2), captured
+/// A projection of `ParsedAnnotations`'s new fields, captured
 /// as owned data so it outlives the `'db`-scoped call that produced
 /// it. `MemberAnnotations` (the tracked wrapper `member_annotations`
-/// returns) does not forward `templates`/`ancestors`/`variables` yet —
-/// that wiring is task 3's — so this recording wrapper is the only way
+/// returns) does not forward `templates`/`ancestors`/`variables` yet:
+/// that wiring has not landed, so this recording wrapper is the only way
 /// to observe them, by capturing them as a side effect of triggering
 /// the real seam.
 #[derive(Debug, Default, Clone)]
@@ -85,8 +85,8 @@ struct Captured {
     template_names: Vec<String>,
     /// Each `@template`'s lowered bound, `display`-rendered, in the
     /// same order as `template_names`; `None` when the template
-    /// declares no bound (task 2 review, finding 2 — the bound
-    /// lowering was otherwise unpinned by any test).
+    /// declares no bound (the bound lowering was otherwise unpinned by
+    /// any test).
     template_bounds: Vec<Option<String>>,
     /// Named inline `@var` entries' variable names.
     variable_names: Vec<String>,
@@ -95,7 +95,7 @@ struct Captured {
 /// Wraps the real [`celerrate_phpdoc_bridge::PhpdocBridge`], delegates
 /// every call to it unchanged, and records a projection of what it
 /// returns for EVERY `parse_docblock` call, keyed by the call's raw
-/// docblock text (task 2 review, finding 3): a single overwritten slot
+/// docblock text: a single overwritten slot
 /// would silently read whichever docblock parsed last if a fixture
 /// ever carried both a class-level and a member-level docblock.
 /// Registering this instead of the bare bridge lets a test observe
@@ -182,7 +182,7 @@ fn register_recording_bridge(
 }
 
 /// Finds the captured projection for the one recorded parse whose raw
-/// docblock text contains `needle` (task 2 review, finding 3): lets a
+/// docblock text contains `needle`: lets a
 /// test select the parse it means by content instead of assuming
 /// there is exactly one `parse_docblock` call, or that it is the last
 /// one.
@@ -558,7 +558,7 @@ fn shapes_callables_and_the_documented_widenings_lower() {
             TypeId::bool(db),
         ),
     );
-    // `@return $this` collapses into `static` (design section 3).
+    // `@return $this` collapses into `static`.
     assert_eq!(value("f"), TypeId::static_placeholder(db));
     // Constant fetches await member facts: `mixed`, documented.
     assert_eq!(value("g"), TypeId::mixed(db));
@@ -754,7 +754,7 @@ fn a_variance_marked_template_still_declares_and_a_template_conditional_lowers()
 
 #[test]
 fn assertions_are_carried_through_the_annotation_seam() {
-    // The webmozart/assert pattern (design section 5).
+    // The webmozart/assert pattern.
     let fixture = fixture(&[
         "<?php class Assert { /** @psalm-assert string $value */ public static function string($value) {} }",
     ]);
@@ -824,8 +824,8 @@ fn templates_lower_in_declaration_order_with_their_bounds() {
     );
     let captured = captured_containing(&recording, "@template");
     assert_eq!(captured.template_names, vec!["TKey", "TValue"]);
-    // Finding 2: the bound lowering (`syntax.rs`'s `declare_into`) was
-    // otherwise unpinned by any test — a dropped bound (Task 3 zips
+    // The bound lowering (`syntax.rs`'s `declare_into`) was otherwise
+    // unpinned by any test: a dropped bound (needed when zipping
     // missing arguments against "the template's bound then mixed") is
     // a real future bug.
     assert_eq!(
@@ -855,14 +855,13 @@ fn named_variables_lower_into_the_variables_field() {
 
 #[test]
 fn a_named_var_on_a_property_still_types_the_property() {
-    // Regression (task 2 review, finding 1, human-adjudicated): the
-    // named `@var Type $name` form is a standard property idiom (both
-    // PHPStan and Psalm accept it). Tag extraction cannot know whether
-    // the docblock sits above a property or above a statement, so the
-    // named form must fill BOTH `variable_values` (for the later
-    // inline-narrowing consumer) AND `value_type` (for `declared.rs`,
-    // which reads `value_type` for `MemberKind::Property`). Before the
-    // fix, the named form only filled `variable_values`, so this
+    // Regression: the named `@var Type $name` form is a standard
+    // property idiom (both PHPStan and Psalm accept it). Tag extraction
+    // cannot know whether the docblock sits above a property or above
+    // a statement, so the named form must fill BOTH `variable_values`
+    // (for the later inline-narrowing consumer) AND `value_type` (for
+    // `declared.rs`, which reads `value_type` for `MemberKind::Property`).
+    // Before the fix, the named form only filled `variable_values`, so this
     // untyped-native property silently fell back to `mixed`.
     let fixture = fixture(&["<?php class C { /** @var string $name */ private $name; }"]);
     register_bridge(&fixture.db);

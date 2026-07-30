@@ -1,4 +1,4 @@
-//! The argument-check family, migrated (design section 5): arity
+//! The argument-check family, migrated: arity
 //! matching and assignability judgments live below in
 //! `celerrate_types::checks::arguments`; this rule consumes the
 //! per-body outcome records and constructs the diagnostics.

@@ -28,8 +28,8 @@ impl VersionedTypeText {
 
     /// The text effective at `version`: the last override whose
     /// version is not later, else the default. Overrides are kept
-    /// sorted ascending by the constructors (Task 9's extractor sorts;
-    /// Task 8's decoder preserves order).
+    /// sorted ascending by the constructors: the extractor sorts them,
+    /// and the decoder preserves that order.
     pub fn at(&self, version: PhpVersion) -> Option<&str> {
         self.overrides
             .iter()

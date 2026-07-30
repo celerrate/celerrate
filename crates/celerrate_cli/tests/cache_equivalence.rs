@@ -1,4 +1,4 @@
-//! The revalidation-sufficiency net (audit finding I2): for every file
+//! The revalidation-sufficiency net: for every file
 //! whose records all revalidate, the diagnostics the pack serves must
 //! equal, value for value, what a full recomputation produces. Sound
 //! today because every reference check is a pure function of the
@@ -74,9 +74,9 @@ fn served_equals_recomputed(files: &[(&str, &str)]) -> BTreeSet<String> {
             .map(|diagnostic| diagnostic.to_diagnostic(file_id, content_length))
             .collect();
         let mut served = served.expect("a revalidated verdict's diagnostics all convert");
-        // The typed half is layered independently (plan 9a, task 9): a
-        // served typed outcome speaks from `stored.typed`, a recomputed
-        // one falls through to a fresh `typed_portion` — through
+        // The typed half is layered independently: a served typed
+        // outcome speaks from `stored.typed`, a recomputed one falls
+        // through to a fresh `typed_portion`, through
         // `served_typed_diagnostics`, the exact function `analyze_one`
         // itself calls on a hit, so the two compositions cannot
         // independently drift.
@@ -167,7 +167,7 @@ fn cross_file_source_answers_replay_equal() {
 
 /// A native directive that suppressed nothing: the served CEL0042
 /// must equal the recomputed one, byte for byte, from the persisted
-/// match records (the design's warm/cold Reporting gate).
+/// match records (the warm/cold reporting gate).
 #[test]
 fn directive_diagnostics_replay_equal() {
     let identifiers = served_equals_recomputed(&[(
@@ -177,21 +177,21 @@ fn directive_diagnostics_replay_equal() {
     assert!(identifiers.contains("CEL0042"), "{identifiers:?}");
 }
 
-/// Task 10's own extension: a typed fixture firing all three of the
-/// typed families' representative identifiers in one project. The pack
-/// now persists typed findings too (plan 9a, task 9), so a warm second
-/// pass over an unchanged project must serve them back rather than
-/// recompute — the net still covers the full union (untyped plus
-/// typed), the same way `analyze_one` does on a warm hit, through
+/// A typed fixture firing all three of the typed families'
+/// representative identifiers in one project. The pack now persists
+/// typed findings too, so a warm second pass over an unchanged
+/// project must serve them back rather than recompute, the net still
+/// covers the full union (untyped plus typed), the same way
+/// `analyze_one` does on a warm hit, through
 /// `served_typed_diagnostics`. `Consumer.php` carries all three:
 /// `$user->svae()` (a typo, CEL0030, resolved against `User`'s
 /// cross-file declaration in `Widget.php`), `$maybe->save()` (CEL0034,
 /// a possibly-null dereference through the nullable parameter type),
 /// and `takes($plain)` (CEL0035, an argument mismatch against the
-/// annotated `takes(int $n)` signature under `strict_types`). If tasks
-/// 8-9 are sound this passes immediately, exactly as it did before this
-/// task widened the fixture; a failure here is a bug in them, not in
-/// this test — treat it as a stop signal, not a test to adjust.
+/// annotated `takes(int $n)` signature under `strict_types`). If the
+/// typed layering is sound this passes immediately; a failure here is
+/// a bug in that layering, not in this test, treat it as a stop
+/// signal, not a test to adjust.
 #[test]
 fn typed_answers_replay_equal() {
     let identifiers = served_equals_recomputed(&[
@@ -218,8 +218,8 @@ fn typed_answers_replay_equal() {
 
 /// The severity remap rides the persisted verdicts: a warm run must
 /// serve the remapped severity, equal to what recomputation under the
-/// same remap produces (spec section 2's "persisted verdict equals the
-/// printed report").
+/// same remap produces, the "persisted verdict equals the printed
+/// report" property.
 #[test]
 fn remapped_severities_replay_equal() {
     let identifiers = served_equals_recomputed(&[

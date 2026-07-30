@@ -1,6 +1,6 @@
 //! The CEL0041/CEL0042 product matrix: the directive rules through
 //! the full pipeline, native directives only, one-pass suppression
-//! discipline (design sections 8 and 11).
+//! discipline.
 
 #![allow(clippy::unwrap_used)]
 
@@ -110,8 +110,8 @@ fn a_bare_native_directive_reports_cel0042() {
 #[test]
 fn a_native_directive_alone_on_the_last_line_reports_cel0042() {
     // No next line exists: the scope degenerates to the empty
-    // end-of-file range (decision 6), nothing is suppressed, and the
-    // directive is still visible to the reporting rules.
+    // end-of-file range, nothing is suppressed, and the directive
+    // is still visible to the reporting rules.
     let root = project(&[("a.php", "<?php\n$x = 1;\n// @celerrate-ignore CEL0018")]);
     let (outcome, text) = check(root.path());
     assert_eq!(outcome, Outcome::DiagnosticsReported, "{text}");

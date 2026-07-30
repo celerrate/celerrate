@@ -1,7 +1,7 @@
 //! The `refinements.celerrate` source format: enriched stub signatures
 //! written in the internal norm, parsed into [`StubRefinements`] and
 //! validated for structure and existence before it is attached to the
-//! compiled [`crate::StubIndex`] (design section 7, decision 3).
+//! compiled [`crate::StubIndex`].
 //!
 //! This module never lowers norm text: it treats every type text,
 //! bound, and argument as an opaque string. Lowering totality is
@@ -66,7 +66,7 @@ struct ClassContext {
 /// Parses the whole `refinements.celerrate` source text into a
 /// [`StubRefinements`] payload. Never panics: every malformed line
 /// reports `"line {number}: {message}"` instead. Structure only — no
-/// norm text is lowered or otherwise inspected here (decision 3).
+/// norm text is lowered or otherwise inspected here.
 pub fn parse_refinement_source(text: &str) -> Result<StubRefinements, String> {
     let mut functions = Vec::new();
     let mut classes = Vec::new();
@@ -490,8 +490,8 @@ fn folded(name: &str) -> String {
 
 /// Validates that every refined function, class, method, and
 /// parameter names something that actually exists in the compiled
-/// snapshot (decision 3's compiler-side half; lowering totality is
-/// validated upstairs in `celerrate_types`). The error names the
+/// snapshot (existence only; lowering totality is validated upstairs
+/// in `celerrate_types`). The error names the
 /// offending entry so a contributor can find it without hunting.
 pub fn validate_refinements(
     refinements: &StubRefinements,
@@ -638,8 +638,8 @@ mod tests {
     #[test]
     fn by_reference_and_variadic_sigils_are_trimmed_off_the_type_not_the_name() {
         // The `$` split leaves `&` and `...` sitting in the type text
-        // (`"int &"`, `"int ..."`), never in the name (Fix 3): the
-        // sigils must be trimmed from the type side.
+        // (`"int &"`, `"int ..."`), never in the name: the sigils
+        // must be trimmed from the type side.
         let parsed =
             parse_refinement_source("function f(int &$ref, int ...$items): void\n").unwrap();
         let (_, signature) = parsed.functions.first().unwrap();
@@ -678,13 +678,13 @@ mod tests {
 
     #[test]
     fn an_ancestor_name_containing_whitespace_is_rejected() {
-        // Fix 4: `split_before_implements` finds only the first
-        // occurrence of "implements" and its word-boundary guard bails
-        // out when a real trailing `implements` clause is glued onto a
-        // name (`Aimplements`), folding it all into one ancestor whose
-        // "name" contains whitespace. That must be rejected rather than
-        // silently accepted, since decision 3 forbids an ancestor
-        // existence check that would otherwise catch it downstream.
+        // `split_before_implements` finds only the first occurrence of
+        // "implements" and its word-boundary guard bails out when a
+        // real trailing `implements` clause is glued onto a name
+        // (`Aimplements`), folding it all into one ancestor whose
+        // "name" contains whitespace. That must be rejected rather
+        // than silently accepted, since nothing downstream checks
+        // ancestor existence to catch it.
         let error = parse_refinement_source("class Foo extends Aimplements implements B {\n}\n")
             .unwrap_err();
         assert!(error.starts_with("line 1"), "{error}");
@@ -751,7 +751,7 @@ mod tests {
     fn a_duplicate_function_key_is_a_parse_error() {
         // The parser rejects a duplicate entry outright, and folding
         // means `Array_Keys` collides with `array_keys` too.
-        // `StubRefinements::new` now also dedups first-wins (#47), so
+        // `StubRefinements::new` now also dedups first-wins, so
         // even if a duplicate slipped past the parser it would collapse
         // to a single row instead of reaching the blob as two
         // identically-keyed rows — this test pins the parser's own
@@ -900,12 +900,13 @@ mod tests {
 
     #[test]
     fn validation_names_the_class_on_a_refined_method_parameter() {
-        // Pins Fix 1: a mistyped parameter on a method must report the
-        // full `Class::method` entry, not the bare method name, since
+        // A mistyped parameter on a method must report the full
+        // `Class::method` entry, not the bare method name, since
         // method names like `current` or `__construct` recur across
-        // dozens of classes. Before the fix, `validate_parameters` was
-        // called with only `method_name` as the target, so this
-        // assertion on the class key fails against the old code.
+        // dozens of classes. Before this behavior was added,
+        // `validate_parameters` was called with only `method_name` as
+        // the target, so this assertion on the class key fails
+        // against the old code.
         let classes = vec![(
             "arrayiterator".to_owned(),
             StubClassSurface {

@@ -1,10 +1,10 @@
-//! The Celerrate refinements overlay (design section 7): enriched
-//! stub signatures written in the internal norm, compiled into the
-//! blob's third section at build time and consulted upstairs by
-//! `celerrate_types` at the stub-signature fold. Texts are opaque
-//! strings here — this crate sits below the lattice and never
-//! lowers them (decision 3: the compiler validates existence, the
-//! types crate validates lowering totality).
+//! The Celerrate refinements overlay: enriched stub signatures
+//! written in the internal norm, compiled into the blob's third
+//! section at build time and consulted upstairs by `celerrate_types`
+//! at the stub-signature fold. Texts are opaque strings here — this
+//! crate sits below the lattice and never lowers them (the compiler
+//! validates existence, the types crate validates lowering
+//! totality).
 
 use crate::blob::{Reader, StubBlobError};
 
@@ -18,7 +18,7 @@ pub struct RefinedTemplate {
 
 /// A per-element signature override: only the named parameters and
 /// (when present) the return are replaced; everything else keeps the
-/// base stub's delta fold. Version-agnostic by decision 6.
+/// base stub's delta fold. Version-agnostic.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
 pub struct RefinedSignature {
     pub templates: Vec<RefinedTemplate>,
@@ -425,10 +425,10 @@ mod tests {
 
     #[test]
     fn an_empty_byte_slice_is_malformed_not_a_missing_section() {
-        // Decision 4's tolerance rule ("no overlays section at all
-        // decodes as empty refinements") lives in `blob::decode`, not
-        // here: an empty *section payload* is still missing its
-        // mandatory counts, so it is a decode error.
+        // The tolerance rule ("no overlays section at all decodes as
+        // empty refinements") lives in `blob::decode`, not here: an
+        // empty *section payload* is still missing its mandatory
+        // counts, so it is a decode error.
         assert!(super::decode_refinements(&[]).is_err());
     }
 

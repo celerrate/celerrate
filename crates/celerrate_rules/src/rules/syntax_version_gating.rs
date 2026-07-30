@@ -1,4 +1,4 @@
-//! The first migrated family (design section 5): the walk lives below
+//! The first migrated family: the walk lives below
 //! as `celerrate_semantics::gated_syntax_uses`; this rule consumes the
 //! outcomes and constructs the diagnostics.
 

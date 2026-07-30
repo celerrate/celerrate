@@ -18,7 +18,7 @@ use super::*;
 /// key (like `FunctionQuery`'s) is pre-folded, and `resolve_candidates`
 /// itself answers case-preserved spellings.
 ///
-/// A free function, not a `Walker` method: task 8's argument-type
+/// A free function, not a `Walker` method: the argument-type
 /// family (`checks::arguments`) resolves a call's `NamedReference`
 /// callee through this exact same candidate order, so both call
 /// boundaries agree on one implementation rather than two that could
@@ -86,7 +86,7 @@ impl<'db> Walker<'db, '_, '_> {
             .collect()
     }
 
-    /// Decision 10: any call, instantiation, closure creation,
+    /// Any call, instantiation, closure creation,
     /// `yield`, `eval`, `include`, or shell-exec may run arbitrary
     /// code that rewrites object state: every property binding dies.
     /// Over-killing is the conservative direction — a dropped binding
@@ -96,8 +96,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// survive too: their v1 bases are `$this` and locals (both
     /// call-stable), and their validity is the purity assumption
     /// itself — an intervening call does not undermine "this method
-    /// keeps answering the same value" (design
-    /// 2026-07-19-call-result-narrowing).
+    /// keeps answering the same value".
     pub(super) fn kill_property_bindings(&mut self, environment: &mut Environment<'db>) {
         for subject in environment.subjects() {
             if !matches!(
@@ -109,9 +108,9 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The by-reference rules (design section 6): an argument bound to
+    /// The by-reference rules: an argument bound to
     /// a by-reference parameter takes the parameter's declared type
-    /// after the call (the general write-back; plan 7's stdlib
+    /// after the call (the general write-back; the stdlib
     /// provider refines `$matches`), which also invalidates its
     /// narrowing. Named labels resolve by name; a spread ends the
     /// positional mapping (conservative).
@@ -151,7 +150,7 @@ impl<'db> Walker<'db, '_, '_> {
     }
 
     /// The (declared parameter type, argument type) pairs the call-site
-    /// solver (task 8, decision 10) matches constraints against. The
+    /// solver matches constraints against. The
     /// same alignment `apply_by_reference` and `apply_call_assertions`
     /// already use: a labeled argument matches the parameter of that
     /// name; an unlabeled argument matches positionally by its own
@@ -194,15 +193,15 @@ impl<'db> Walker<'db, '_, '_> {
 
     /// Solves any template still present in `result` from the call's
     /// (declared parameter, argument) pairs, then finalizes whatever
-    /// the solver left unbound to its bound, then `mixed` (task 8,
-    /// decision 10). The provider tier needs no special-cased exemption
+    /// the solver left unbound to its bound, then `mixed`. The
+    /// provider tier needs no special-cased exemption
     /// here: by convention every `DynamicTypeProvider` answers a
     /// concrete type, already widened at the consumption boundary, so
     /// `contains_symbolic` is already false for it and this is a
     /// costless no-op in the ordinary case. That convention is not
     /// enforced at the trait boundary, though — nothing stops an
-    /// implementation from answering something symbolic. Task 11 pins
-    /// what happens if one ever does
+    /// implementation from answering something symbolic. A dedicated
+    /// test pins what happens if one ever does
     /// (`a_symbolic_provider_answer_still_finalizes_to_its_bound_then_mixed`
     /// in `inference.rs`): the same solve/substitute/finalize pipeline
     /// below runs over it exactly as it would an ordinary symbolic
@@ -332,7 +331,7 @@ impl<'db> Walker<'db, '_, '_> {
 
     /// The folded Function-space key a written callee resolves to, and
     /// whether a source declaration exists. Delegates to
-    /// [`resolved_function_key`], the free-function form task 8's
+    /// [`resolved_function_key`], the free-function form the
     /// argument-type family (`checks::arguments`) shares, so both the
     /// flow walk's call boundary and the checks layer's callee
     /// resolution agree on exactly one implementation.
@@ -348,7 +347,7 @@ impl<'db> Walker<'db, '_, '_> {
         )
     }
 
-    /// Decision 3, first tier: a provider that claims the callee
+    /// The provider tier: a provider that claims the callee
     /// answers, widened at the consumption boundary — a plugin never
     /// controls termination.
     pub(super) fn provider_return(
@@ -420,7 +419,7 @@ impl<'db> Walker<'db, '_, '_> {
     /// is positional); a spread ends the mapping, like
     /// `apply_by_reference`.
     ///
-    /// Task-12 debt (owner: the by-reference channel). Only the
+    /// Recorded debt (owner: the by-reference channel). Only the
     /// free-function call site above wires `provider_by_reference`/
     /// `apply_provider_by_reference` in; the method-call arm has no
     /// analogous wiring, so a provider's by-reference contribution
@@ -452,8 +451,8 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// Decision 3, tiers two and three, for a named function call.
-    /// Task 10 replaces the `mixed` fallback with the fixpoint.
+    /// The declared and inferred tiers, for a named function call.
+    /// The fixpoint replaces the `mixed` fallback.
     pub(super) fn function_call_result(&mut self, key: &str, source_exists: bool) -> TypeId<'db> {
         let db = self.db();
         let declared = declared_function_signature(
@@ -472,9 +471,9 @@ impl<'db> Walker<'db, '_, '_> {
         }
         if source_exists {
             self.edge_counts.inferred_return_edges += 1;
-            // Decision 4: `raw` is the callee-query answer as-is — a
+            // `raw` is the callee-query answer as-is — a
             // free function has no `self`/`static`/receiver boundary to
-            // substitute against, so this IS already the value task 8's
+            // substitute against, so this IS already the value the
             // live validator re-derives; recorded verbatim.
             let raw = crate::inference::inferred_function_return(
                 db,
@@ -486,7 +485,7 @@ impl<'db> Walker<'db, '_, '_> {
             self.dependencies
                 .inferred_functions
                 .push((key.to_owned(), raw));
-            // Plan 9a task 10: also record the callee's declared-
+            // Also record the callee's declared-
             // signature-guarding dependency, keyed on `function_
             // signature_digest`, even though only the inferred tier
             // answered this call. Without this, a docblock `@return`
@@ -501,7 +500,7 @@ impl<'db> Walker<'db, '_, '_> {
         TypeId::mixed(db)
     }
 
-    /// Task 9(f): a provider consulted for a method call before the
+    /// A provider consulted for a method call before the
     /// declared tier, when the receiver resolves to exactly one key
     /// (an ambiguous union receiver never reaches a provider — the
     /// same conservative stance the by-reference write-back channel
@@ -556,27 +555,27 @@ impl<'db> Walker<'db, '_, '_> {
         }
     }
 
-    /// The declared-return path (decision 3's middle tier): a
+    /// The declared-return path: a
     /// declared return per resolving key, preserved as alternatives
     /// with `TypeId::union` — not `crate::widening::join` — because a
     /// union receiver's keys are exclusive control-flow alternatives
     /// (exactly one applies at runtime), the same shape the branch and
     /// loop joins in this module already preserve rather than widen
-    /// (the brief's own pseudocode reduces with `join`, but that
+    /// (a naive reduction with `join` would work too, but that
     /// collapses e.g. `int` and `string` straight to `mixed`, which
     /// contradicts `union_receivers_join_and_opaque_receivers_stay_silent`'s
     /// expected `"int|string"`). The gate failing on a key drops that
-    /// key to the method-inferred tier (decision 3's fourth tier,
-    /// `inferred_method_return`): the callee's body answers, and
+    /// key to the method-inferred tier (`inferred_method_return`): the
+    /// callee's body answers, and
     /// `mixed` remains only when even that is silent.
     /// Placeholders substitute against each signature's *own*
     /// declaring owner and the receiver through `member_boundary_type`
-    /// (decision 1) — the owner is resolved per key, not once for the
+    /// — the owner is resolved per key, not once for the
     /// whole call: for a union receiver `A|B` where both declare the
     /// member, a hoisted single owner would substitute both keys'
     /// `self` against whichever key resolved first, e.g. `app\a|app\a`
     /// instead of `app\a|app\b` — a wrong concrete answer, not the
-    /// conservative silence the design otherwise holds to (Finding 3).
+    /// conservative silence otherwise held to.
     pub(super) fn method_call_result_for_keys(
         &mut self,
         keys: &[String],
@@ -596,13 +595,13 @@ impl<'db> Walker<'db, '_, '_> {
                 let owner = self.member_owner(key, MemberKind::Method, name);
                 self.member_boundary_type(signature.value_type, owner.as_deref(), receiver)
             } else {
-                // Decision 3's fourth tier: no usable declared return,
+                // No usable declared return,
                 // so the callee's own body answers, through the
                 // fixpoint. The result is a *body-relative* type — its
                 // `self`/`static` placeholders and the owner's class
                 // templates are unresolved — so it funnels through the
                 // one member boundary exactly like a declared return
-                // does (decision 1), against this key's own declaring
+                // does, against this key's own declaring
                 // owner and the call's receiver.
                 self.edge_counts.inferred_return_edges += 1;
                 let method = crate::inference::MethodQuery::new(
@@ -617,13 +616,13 @@ impl<'db> Walker<'db, '_, '_> {
                     self.context.configuration,
                     method,
                 );
-                // Decision 4, the load-bearing capture: `inferred` here
+                // The load-bearing capture: `inferred` here
                 // is the RAW callee-query answer — a `static`-typed
                 // callee still carries the placeholder at this point.
                 // Recorded BEFORE `member_boundary_type` below
                 // substitutes it against this call's own owner and
                 // receiver, so the recorded edge matches exactly what
-                // task 8's live validator re-derives by calling
+                // the live validator re-derives by calling
                 // `inferred_method_return` itself, never the call-site-
                 // relative value substitution produces.
                 self.dependencies.inferred_methods.push((
@@ -631,8 +630,8 @@ impl<'db> Walker<'db, '_, '_> {
                     inferred,
                 ));
                 let owner = self.member_owner(key, MemberKind::Method, name);
-                // Plan 9a task 10: also record the owning class as a
-                // dependency, keyed on `class_surface_digest` (task 2's
+                // Also record the owning class as a
+                // dependency, keyed on `class_surface_digest` (the
                 // surface digest resolves each member's declared
                 // signature), even though only the inferred tier
                 // answered this call. Without this, a docblock

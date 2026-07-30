@@ -8,7 +8,7 @@
 //! (incomplete `<...>`, `{...}`, `(...)`, or conditional expressions), and
 //! nesting past the depth guard (per construct, never per annotation).
 //!
-//! The parser is a recursive descent over the token stream (Task 1) with
+//! The parser is a recursive descent over the token stream, with
 //! a depth guard: adversarial nesting must not overflow the stack.
 //! Entry points `parse_type_expression_text` consumes a whole input;
 //! `parse_type_expression_prefix` reports the consumed byte length so
@@ -40,7 +40,7 @@ pub enum TypeExpression {
     },
     Callable {
         base: String,
-        /// Callable-scoped template names — decision 12: their
+        /// Callable-scoped template names: their
         /// occurrences inside the signature lower to `mixed`.
         templates: Vec<String>,
         parameters: Vec<CallableParameterExpression>,
@@ -99,7 +99,7 @@ pub enum ConditionalSubject {
     Template(String),
     /// `$param` — permanently undecided at lowering time: no
     /// expression-to-template resolution exists for a parameter
-    /// subject (decision 9's recorded debt; see `lowering.rs`'s
+    /// subject (recorded debt; see `lowering.rs`'s
     /// `lower_conditional`), so it always falls to the branch union.
     Parameter(String),
 }
@@ -139,7 +139,7 @@ mod tests {
     #[test]
     fn nullable_binds_inside_the_array_suffix() {
         // The reference parses `?int[]` as an array of nullable int
-        // ((?int)[]), not a nullable array — decision 4.
+        // ((?int)[]), not a nullable array.
         use TypeExpression::*;
         assert_eq!(
             parse_type_expression_text("?int[]"),

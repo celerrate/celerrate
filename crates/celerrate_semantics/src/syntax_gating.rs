@@ -1,5 +1,5 @@
 //! The syntax version-gating walk: a construct-to-minimum-version table
-//! over the file's own typed AST. This is the design's deliberate
+//! over the file's own typed AST. This is a deliberate
 //! boundary exception: an output strictly local to the file may read
 //! its own tree. The parser always parses the newest grammar; using a
 //! construct the range minimum predates is a semantic diagnostic, never
@@ -16,7 +16,7 @@ use celerrate_syntax::{SyntaxKind, SyntaxNode};
 
 /// One use of a version-gated construct, in tree order: the outcome
 /// the syntax-version-gating rule consumes. The walk stays below; the
-/// rule turns outcomes into diagnostics (design section 2).
+/// rule turns outcomes into diagnostics.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct GatedSyntaxUse {
     pub label: &'static str,

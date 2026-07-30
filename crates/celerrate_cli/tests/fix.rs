@@ -1,5 +1,5 @@
 //! The autofix engine, end to end: flags, application, the trailer,
-//! and the design's honesty pins (design sections 7 and 11).
+//! and its own honesty pins.
 
 #![allow(clippy::unwrap_used, clippy::indexing_slicing)]
 
@@ -44,7 +44,7 @@ fn typo_project() -> tempfile::TempDir {
     ])
 }
 
-/// The design's central promise: `--fix-suggestions` patches the file,
+/// The central promise: `--fix-suggestions` patches the file,
 /// and re-checking the patched project no longer reports the fixed
 /// diagnostic (the fix-closes-the-diagnostic property).
 #[test]

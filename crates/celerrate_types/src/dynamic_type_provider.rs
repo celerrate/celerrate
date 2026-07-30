@@ -1,5 +1,5 @@
 //! The dynamic-type-provider extension point: contribute return types
-//! at call sites. Owned by this crate per the design; the registry
+//! at call sites. Owned by this crate; the registry
 //! input lives here too, or the DAG would break upward. Dispatch rule,
 //! fixed now: providers claim symbols; overlapping claims are a
 //! registration-time error unless resolved by documented precedence at
@@ -103,7 +103,7 @@ pub fn testing_invocation_site<'db, 'call>(
 
 /// An implementation contributes return types at call sites for claimed
 /// symbols. Contributions are widened at the consumption boundary inside
-/// `celerrate_types` (the fixpoint of plan 5) — a provider never
+/// `celerrate_types` (the crate's own fixpoint) — a provider never
 /// controls termination. Implementations must be deterministic and
 /// monotone; `None` falls back to the declared or inferred type.
 ///
@@ -115,10 +115,10 @@ pub fn testing_invocation_site<'db, 'call>(
 /// `mixed`, the deterministic bailout: a plugin never controls
 /// termination.
 ///
-/// **The persisted-cache purity obligation (plan 9a, decision 5).** A
+/// **The persisted-cache purity obligation.** A
 /// provider's answer must be a pure function of its `InvocationSite`
 /// and its `PluginIdentity`: the persistent cache records no
-/// per-answer dependency (plan 9a decision 5), so a provider that
+/// per-answer dependency, so a provider that
 /// reads cross-file state would silently break warm revalidation —
 /// extend the record vocabulary in `celerrate_types::records` before
 /// shipping one.

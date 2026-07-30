@@ -45,7 +45,7 @@ impl FloatBits {
     }
 }
 
-/// The string subtypes the PHPStan dialect carries (spec section 3).
+/// The string subtypes the PHPStan dialect carries.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum StringConstraint {
     General,
@@ -106,7 +106,7 @@ pub enum TypeData<'db> {
         fields: Vec<ShapeField<'db>>,
     },
     /// `class-string` / `class-string<T>`: the primary template binder,
-    /// never lowered to `string` (spec section 3). Rank 7.
+    /// never lowered to `string`. Rank 7.
     ClassString {
         argument: Option<TypeId<'db>>,
     },
@@ -145,7 +145,7 @@ pub enum TypeData<'db> {
         subject: TypeId<'db>,
     },
     /// A conditional return type, evaluated at the call site by the
-    /// call-site solver (`solver.rs`, decision 10) and by direct
+    /// call-site solver (`solver.rs`) and by direct
     /// substitution (`substitution.rs`'s `substitute`) once the
     /// subject is decidable; an undecidable or still-symbolic subject
     /// falls back to the branch union. Rank 18.
@@ -157,7 +157,7 @@ pub enum TypeData<'db> {
         negated: bool,
     },
     /// The late-static-binding placeholders, symbolic until call-site
-    /// substitution through `member_boundary_type` (decision 1). Ranks
+    /// substitution through `member_boundary_type`. Ranks
     /// 19, 20, 21.
     SelfPlaceholder,
     ParentPlaceholder,
@@ -167,7 +167,7 @@ pub enum TypeData<'db> {
 /// The opaque interned handle of one canonical type: cheap `Eq`/`Hash`
 /// for early cutoff. Handle equality is structural equality because
 /// every constructor canonicalizes bottom-up before interning. The id
-/// never escapes the process — [`crate::stored::StoredType`] (plan 9a)
+/// never escapes the process — [`crate::stored::StoredType`]
 /// is the structural form that does, produced by `StoredType::of` and
 /// converted back by `StoredType::to_type_id`.
 #[salsa::interned(debug)]
@@ -176,7 +176,7 @@ pub struct TypeId<'db> {
     pub data: TypeData<'db>,
 }
 
-/// The element-level mixed metric (design decision 12, issue #45): how
+/// The element-level mixed metric (issue #45): how
 /// many structural constituent slots a type carries, and how many of
 /// those slots are exactly `mixed`. See [`TypeId::element_positions`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -187,7 +187,7 @@ pub struct ElementPositions {
 
 impl<'db> TypeId<'db> {
     /// Walks the structural constituent slots of a type, counting each
-    /// as one position and how many are exactly `mixed` (decision 12):
+    /// as one position and how many are exactly `mixed`:
     /// an array or list's key and value slots, a shape field's value
     /// slot, each counted as one position and then recursed into; a
     /// union's constituents are recursed into but the union node itself

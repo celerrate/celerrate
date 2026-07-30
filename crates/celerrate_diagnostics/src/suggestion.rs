@@ -11,8 +11,8 @@ pub enum Confidence {
 
 /// One structured suggestion: a message, a confidence, and the finalized
 /// same-file text edits that realize it. Edits target the diagnostic's
-/// own file in this sub-project (design section 3); the stored form
-/// enforces that structurally by carrying no file identity.
+/// own file; the stored form enforces that structurally by carrying
+/// no file identity.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Suggestion {
     pub message: String,

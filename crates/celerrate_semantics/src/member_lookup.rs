@@ -111,7 +111,7 @@ pub fn lookup_member<'db>(
     }
 
     // Virtual members answer last: a real member of the same key,
-    // source or stub, always wins (decision 4 of the plan header).
+    // source or stub, always wins.
     let virtual_kind = match kind {
         MemberKind::Method => Some(VirtualMemberKind::Method),
         MemberKind::Property => Some(VirtualMemberKind::Property),

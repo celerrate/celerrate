@@ -235,7 +235,7 @@ fn parse_atom(parser: &mut Parser<'_>, depth: u32) -> Option<TypeExpression> {
         TokenKind::Question => {
             parser.advance();
             // The nullable marker binds to the atom; array suffixes
-            // wrap outside (`?int[]` is `(?int)[]`) — decision 4.
+            // wrap outside (`?int[]` is `(?int)[]`).
             let inner = parse_atom(parser, depth + 1)?;
             Some(TypeExpression::Nullable(Box::new(inner)))
         }
@@ -402,7 +402,7 @@ fn parse_constant_name(parser: &mut Parser<'_>) -> Option<String> {
 }
 
 /// The `<T, U of Bound>` list of a callable. Bounds are parsed and
-/// dropped (decision 12); the caller has already consumed the `<`.
+/// dropped; the caller has already consumed the `<`.
 fn parse_callable_templates(parser: &mut Parser<'_>, depth: u32) -> Option<Vec<String>> {
     if depth >= MAXIMUM_DEPTH {
         return None;
