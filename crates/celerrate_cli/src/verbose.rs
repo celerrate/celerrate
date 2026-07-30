@@ -1,10 +1,10 @@
 //! The verbose channel: meta-reporting about the analysis, on stderr,
 //! behind the global `--verbose` flag. Two kinds of lines: one per
-//! widened foreign directive (the sub-project 4 debt: a foreign
-//! directive with any unmapped identifier falls back to scope-wide
-//! suppression, and the user now sees it), and one run summary of
-//! already-available meta-information (files analyzed, cache verdict
-//! traffic).
+//! widened foreign directive (a foreign directive with any identifier
+//! the bridge's correspondence table does not map falls back to
+//! scope-wide suppression, silently; the user now sees it), and one
+//! run summary of already-available meta-information (project files
+//! reported, cache verdict traffic).
 //!
 //! Stderr because this is meta-reporting about the analysis, not an
 //! analysis result: the machine formats stay byte-identical with or
@@ -15,7 +15,8 @@
 //! derived fresh from `suppression_directives`, so the lines are
 //! independent of which files the cache happened to serve this run.
 //! The module follows the `cache::statistics` convention: pure render
-//! functions, unit tested, plus a thin `eprintln!` emitter.
+//! functions, unit tested, plus a thin emitter that never lets a
+//! stderr write failure change the run's outcome.
 
 use std::sync::atomic::Ordering;
 
@@ -84,27 +85,49 @@ pub fn render_widened(directive: &WidenedDirective) -> String {
 
 /// The run summary: already-available meta-information, no format
 /// commitment. Not a stable surface.
-pub fn render_run_summary(statistics: &CacheStatistics, analyzed: usize) -> String {
+///
+/// `reported` counts the project's own files (`Session::inputs`'s
+/// `reported` set), not every file the analysis touched: an installed
+/// dependency's files are analyzed too, to resolve symbols, but never
+/// reported on. See `reported_files`'s doc comment in `session.rs`.
+pub fn render_run_summary(statistics: &CacheStatistics, reported: usize) -> String {
     let load = |counter: &std::sync::atomic::AtomicU64| counter.load(Ordering::Relaxed);
     format!(
-        "verbose: {analyzed} files analyzed; verdicts {} served / {} \
-         discarded / {} absent from the cache",
+        "verbose: {} reported; verdicts {} served / {} discarded / {} \
+         absent from the cache",
+        crate::render::count(reported, "project file", "project files"),
         load(&statistics.verdicts_served),
         load(&statistics.verdicts_discarded),
         load(&statistics.verdicts_absent),
     )
 }
 
-/// Prints every verbose line to stderr. The caller gates on the flag;
-/// this function only speaks (the `cache::statistics::report` model:
-/// the render functions above carry the tests, this wrapper stays
-/// thin).
+/// Prints every verbose line to stderr. The caller gates on the flag.
+/// A failure to write meta-information must never change the run's
+/// outcome, so this wrapper deliberately drops the write error;
+/// `report_to` is where the logic and the error live.
 pub fn report(session: &Session) {
+    let stderr = std::io::stderr();
+    let _ = report_to(session, &mut stderr.lock());
+}
+
+/// Writes every verbose line to `output`, propagating the first write
+/// error instead of panicking on it (stderr can be a pipe to a
+/// truncating consumer, and this channel emits one line per widened
+/// directive). The render functions above carry the tests; this
+/// function carries the wiring, which `report_to`'s own test drives
+/// directly.
+pub(crate) fn report_to(session: &Session, output: &mut dyn std::io::Write) -> std::io::Result<()> {
     for directive in widened_directives(session) {
-        eprintln!("{}", render_widened(&directive));
+        writeln!(output, "{}", render_widened(&directive))?;
     }
-    let analyzed = session.inputs().reported.len();
-    eprintln!("{}", render_run_summary(&session.statistics, analyzed));
+    let reported = session.inputs().reported.len();
+    writeln!(
+        output,
+        "{}",
+        render_run_summary(&session.statistics, reported)
+    )?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -233,14 +256,45 @@ mod tests {
 
     #[test]
     fn the_run_summary_carries_the_counters() {
-        use std::sync::atomic::Ordering;
         let statistics = crate::cache::statistics::CacheStatistics::default();
         statistics.verdicts_served.fetch_add(3, Ordering::Relaxed);
         statistics.verdicts_absent.fetch_add(2, Ordering::Relaxed);
         assert_eq!(
             render_run_summary(&statistics, 5),
-            "verbose: 5 files analyzed; verdicts 3 served / 0 discarded / \
-             2 absent from the cache",
+            "verbose: 5 project files reported; verdicts 3 served / 0 \
+             discarded / 2 absent from the cache",
+        );
+    }
+
+    #[test]
+    fn the_run_summary_singularizes_one_reported_file() {
+        let statistics = crate::cache::statistics::CacheStatistics::default();
+        assert_eq!(
+            render_run_summary(&statistics, 1),
+            "verbose: 1 project file reported; verdicts 0 served / 0 \
+             discarded / 0 absent from the cache",
+        );
+    }
+
+    #[test]
+    fn report_to_writes_the_widened_line_then_the_run_summary() {
+        let root = project(&[(
+            "a.php",
+            "<?php\nnew MissingOne(); // @phpstan-ignore some.unknownIdentifier\n",
+        )]);
+        let session = Session::start(root.path());
+        let mut output = Vec::new();
+        report_to(&session, &mut output).unwrap();
+        let output = String::from_utf8(output).unwrap();
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(
+            lines,
+            vec![
+                "verbose: a.php:2: unmapped identifier `some.unknownIdentifier`: \
+                 the directive widens to scope-wide suppression",
+                "verbose: 1 project file reported; verdicts 0 served / 0 \
+                 discarded / 0 absent from the cache",
+            ],
         );
     }
 }

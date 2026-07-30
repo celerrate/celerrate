@@ -141,10 +141,11 @@ A wrapped identifier list (one that continues past the tag's own line)
 reports the synthetic reason
 `<identifier list continues on the next line>`.
 
-`--verbose` also prints a run summary (files analyzed, cache verdict
-traffic). Everything the flag adds goes to stderr: the machine formats
-(`--output=json`, `sarif`, `github`) are byte-identical with or
-without it. Verbose content is not a stable surface; do not parse it.
+`--verbose` also prints a run summary (project files reported, cache
+verdict traffic). Everything the flag adds goes to stderr: the machine
+formats (`--output=json`, `sarif`, `github`) are byte-identical with
+or without it. Verbose content is not a stable surface; do not parse
+it.
 
 Widening is deliberately not a diagnostic. A CEL code here would turn
 every suppression of a code Celerrate does not emit yet into a warning

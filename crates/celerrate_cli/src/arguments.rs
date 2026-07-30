@@ -15,7 +15,8 @@ pub struct Arguments {
     pub command: Command,
 
     /// Report analysis meta-information on stderr: widened foreign
-    /// directives, files analyzed, cache traffic. Not a stable surface.
+    /// directives, project files reported, cache traffic. Not a stable
+    /// surface.
     #[arg(long, short = 'v', global = true)]
     pub verbose: bool,
 }
