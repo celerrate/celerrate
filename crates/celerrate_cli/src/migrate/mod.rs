@@ -6,5 +6,6 @@
 // module is library-only.
 #![allow(dead_code)]
 
+pub(crate) mod convert;
 pub(crate) mod neon;
 pub(crate) mod settings;
