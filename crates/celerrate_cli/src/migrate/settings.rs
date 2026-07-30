@@ -447,12 +447,15 @@ mod tests {
     fn a_long_include_chain_is_a_problem_line_not_a_stack_overflow() {
         // Every link is a distinct file, so the cycle guard never fires:
         // this descent is legal and acyclic, and only the depth budget
-        // stops it. Measured against this loader before the budget
-        // existed: 1500 links already overflowed a default test-thread
-        // stack, so 2000 keeps the margin comfortable. A stack overflow
-        // is a SIGSEGV, not a catchable panic, so the only proof is that
-        // this returns.
-        let links = 2000;
+        // stops it. The guard refuses once the chain passes
+        // MAXIMUM_INCLUDE_DEPTH, so a chain a little longer than that is
+        // all this test needs to reach the refusal. An unguarded
+        // resolver was measured to overflow the stack at roughly 1500
+        // distinct files in a debug build, which is why the guard
+        // exists in the first place; but the test below asserts the
+        // guard's behavior, the permanent contract, rather than trying
+        // to outrun a stack whose size varies by build profile.
+        let links = MAXIMUM_INCLUDE_DEPTH + 8;
         let mut files: Vec<(String, String)> = (0..links)
             .map(|index| {
                 let name = if index == 0 {
