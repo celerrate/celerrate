@@ -125,6 +125,32 @@ Celerrate's own `@celerrate-ignore` does not widen this way: its
 one-line grammar is documented in
 [Diagnostics](diagnostics.md#suppressing-diagnostics).
 
+## The verbose channel
+
+A foreign directive that names an identifier the correspondence table
+does not map falls back to scope-wide suppression: the existing
+decision in the code is honored rather than re-reported. By default
+that widening is silent. The global `--verbose` flag (alias `-v`)
+makes it visible: each widened directive produces one line on stderr
+naming the file, the directive's line, the unmapped written
+identifiers, and the consequence:
+
+    verbose: src/Service.php:42: unmapped identifier `some.futureCode`: the directive widens to scope-wide suppression
+
+A wrapped identifier list (one that continues past the tag's own line)
+reports the synthetic reason
+`<identifier list continues on the next line>`.
+
+`--verbose` also prints a run summary (files analyzed, cache verdict
+traffic). Everything the flag adds goes to stderr: the machine formats
+(`--output=json`, `sarif`, `github`) are byte-identical with or
+without it. Verbose content is not a stable surface; do not parse it.
+
+Widening is deliberately not a diagnostic. A CEL code here would turn
+every suppression of a code Celerrate does not emit yet into a warning
+storm on imported codebases. The verbose channel informs whoever asks,
+without judging.
+
 ## The lowering table
 
 Every parsed construct maps to a lattice value or a documented sound
