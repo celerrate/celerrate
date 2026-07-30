@@ -156,6 +156,10 @@ fn explanation(key: &str) -> &'static str {
 /// into the recorded slice, so they cannot be baselined).
 fn record_clean_slate(root: &Path, output: &mut dyn Write) -> Outcome {
     let mut session = Session::start(root);
+    // A degraded run must say so before it bakes a baseline: an excluded
+    // plugin produces fewer findings, so fewer entries are recorded, and
+    // the next healthy `check` reports the missing ones as new problems.
+    crate::report_excluded_plugins(&session);
     let inputs = session.inputs();
     let outcome = crate::single_pass(&mut session, || crate::analysis::analyze(&inputs));
     session.absorb_outcome(&outcome);
