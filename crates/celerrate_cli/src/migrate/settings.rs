@@ -1,10 +1,11 @@
 //! From a `phpstan.neon` entry file to one merged settings value:
-//! includes resolved recursively (cycle-guarded, relative to the
-//! including file), parameters merged with NEON semantics (lists
-//! concatenate in include order, the including file's scalars win),
-//! paths rebased onto the project root, and everything that does not
-//! carry recorded for the report. Resilient throughout: a missing or
-//! unparseable include is a report line, never a failure.
+//! includes resolved recursively (cycle-guarded, depth-bounded,
+//! relative to the including file), parameters merged with NEON
+//! semantics (lists concatenate in include order, the including file's
+//! scalars win), paths rebased onto the project root, and everything
+//! that does not carry recorded for the report. Resilient throughout:
+//! a missing include, an unparseable one, and a chain too long to
+//! follow are all report lines, never failures.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
@@ -29,6 +30,14 @@ pub(crate) struct Untransposed {
     pub(crate) origin: String,
 }
 
+/// Bounds the include recursion. The cycle guard bounds repetition but
+/// not depth: ten thousand distinct files each including the next is a
+/// legal, acyclic, unbounded descent, and one frame per file would
+/// overflow the stack. Real trees are a handful of files deep (an entry
+/// file, an extension installer's aggregate, an extension's own
+/// configuration), so 32 is far beyond any honest project.
+const MAXIMUM_INCLUDE_DEPTH: usize = 32;
+
 /// Load and merge a PHPStan configuration tree from its entry file.
 /// The only hard failure is an unreadable entry file; everything else
 /// degrades into report lines.
@@ -42,17 +51,19 @@ pub(crate) fn load(source: &Path, root: &Path) -> Result<Settings, String> {
     let mut settings = Settings::default();
     let mut visited = BTreeSet::new();
     visited.insert(celerrate_vfs::normalize_path(source, root));
-    absorb(&text, source, &origin, root, &mut visited, &mut settings);
+    absorb(&text, source, &origin, root, 0, &mut visited, &mut settings);
     Ok(settings)
 }
 
 /// Absorb one file: its includes first (NEON merge semantics make the
-/// including file win), then its own parameters.
+/// including file win), then its own parameters. `depth` counts how many
+/// includes deep this file sits, so the descent stays bounded.
 fn absorb(
     text: &str,
     file: &Path,
     origin: &str,
     root: &Path,
+    depth: usize,
     visited: &mut BTreeSet<PathBuf>,
     settings: &mut Settings,
 ) {
@@ -64,7 +75,7 @@ fn absorb(
     }
     for (key, value) in &parsed.root {
         if key == "includes" {
-            absorb_includes(value, file, origin, root, visited, settings);
+            absorb_includes(value, file, origin, root, depth, visited, settings);
         }
     }
     for (key, value) in &parsed.root {
@@ -81,9 +92,16 @@ fn absorb_includes(
     file: &Path,
     origin: &str,
     root: &Path,
+    depth: usize,
     visited: &mut BTreeSet<PathBuf>,
     settings: &mut Settings,
 ) {
+    if depth >= MAXIMUM_INCLUDE_DEPTH {
+        settings.problems.push(format!(
+            "{origin}: include chain deeper than {MAXIMUM_INCLUDE_DEPTH} files, not followed"
+        ));
+        return;
+    }
     let neon::Value::List(items) = value else {
         settings
             .problems
@@ -112,7 +130,15 @@ fn absorb_includes(
         }
         let child_origin = join_relative(parent_of(origin), target);
         match std::fs::read_to_string(&resolved) {
-            Ok(text) => absorb(&text, &resolved, &child_origin, root, visited, settings),
+            Ok(text) => absorb(
+                &text,
+                &resolved,
+                &child_origin,
+                root,
+                depth + 1,
+                visited,
+                settings,
+            ),
             Err(error) => settings.problems.push(format!(
                 "{origin}: include {target} could not be read: {error}"
             )),
@@ -415,6 +441,66 @@ mod tests {
         )]);
         let settings = load_from(root.path());
         assert_eq!(settings.paths, ["/somewhere/absolute", "%rootDir%/../src"]);
+    }
+
+    #[test]
+    fn a_long_include_chain_is_a_problem_line_not_a_stack_overflow() {
+        // Every link is a distinct file, so the cycle guard never fires:
+        // this descent is legal and acyclic, and only the depth budget
+        // stops it. Measured against this loader before the budget
+        // existed: 1500 links already overflowed a default test-thread
+        // stack, so 2000 keeps the margin comfortable. A stack overflow
+        // is a SIGSEGV, not a catchable panic, so the only proof is that
+        // this returns.
+        let links = 2000;
+        let mut files: Vec<(String, String)> = (0..links)
+            .map(|index| {
+                let name = if index == 0 {
+                    "phpstan.neon".to_owned()
+                } else {
+                    format!("link{index}.neon")
+                };
+                (name, format!("includes:\n\t- link{}.neon\n", index + 1))
+            })
+            .collect();
+        files.push((
+            format!("link{links}.neon"),
+            "parameters:\n\tlevel: 7\n".to_owned(),
+        ));
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(name, contents)| (name.as_str(), contents.as_str()))
+            .collect();
+        let root = project(&borrowed);
+        let settings = load_from(root.path());
+        assert_eq!(settings.problems.len(), 1, "{:?}", settings.problems);
+        assert!(
+            settings.problems[0].contains("include chain deeper than"),
+            "{:?}",
+            settings.problems
+        );
+        // The refused tail is never read, so its level never arrives.
+        assert_eq!(settings.level, None);
+    }
+
+    #[test]
+    fn a_real_include_chain_is_untouched_by_the_budget() {
+        // The depth a real project reaches: an entry file, an aggregate,
+        // and one extension's own configuration.
+        let root = project(&[
+            ("phpstan.neon", "includes:\n\t- vendor/aggregate.neon\n"),
+            (
+                "vendor/aggregate.neon",
+                "includes:\n\t- extension/extension.neon\n",
+            ),
+            (
+                "vendor/extension/extension.neon",
+                "parameters:\n\tlevel: 4\n",
+            ),
+        ]);
+        let settings = load_from(root.path());
+        assert!(settings.problems.is_empty(), "{:?}", settings.problems);
+        assert_eq!(settings.level.as_deref(), Some("4"));
     }
 
     #[test]

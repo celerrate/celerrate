@@ -4,7 +4,10 @@
 //! `parameters.excludePaths`, `parameters.level`. This reader parses
 //! indentation-structured mappings, `- ` sequences, and inline `[...]`
 //! lists into a generic value tree. It is total: every line it does
-//! not understand becomes a `Skipped` entry, never a failure.
+//! not understand becomes a `Skipped` entry, never a failure. That
+//! includes degenerate input: recursive descent is bounded by
+//! `MAXIMUM_NESTING_DEPTH`, so nesting past the budget is reported and
+//! skipped rather than growing the stack until it breaks.
 
 /// A NEON value, restricted to what the migration consumes.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -38,6 +41,17 @@ struct Line {
     content: String,
 }
 
+/// Bounds recursive descent: degenerate nesting (`a:` then `b:` then
+/// `c:`, each one column deeper, for tens of thousands of lines) must
+/// stay a report line, never a stack overflow. A real `phpstan.neon`
+/// nests four levels at most (`parameters`, `excludePaths`, `analyse`,
+/// a list item), so 64 is far beyond any honest configuration file and
+/// well inside default stacks.
+const MAXIMUM_NESTING_DEPTH: usize = 64;
+
+/// The reason recorded when the nesting budget refuses a block.
+const NESTING_TOO_DEEP: &str = "nesting deeper than the reader supports, block skipped";
+
 /// Parse a NEON document. Total: unknown constructs become `skipped`
 /// entries and the rest of the document still parses.
 pub(crate) fn parse(text: &str) -> Parsed {
@@ -45,7 +59,7 @@ pub(crate) fn parse(text: &str) -> Parsed {
     let mut skipped = Vec::new();
     let mut cursor = 0;
     let indent = lines.first().map_or(0, |line| line.indent);
-    let root = parse_map(&lines, &mut cursor, indent, &mut skipped);
+    let root = parse_map(&lines, &mut cursor, indent, 0, &mut skipped);
     while let Some(line) = lines.get(cursor) {
         skipped.push(Skipped {
             line: line.number,
@@ -92,6 +106,7 @@ fn parse_map(
     lines: &[Line],
     cursor: &mut usize,
     indent: usize,
+    depth: usize,
     skipped: &mut Vec<Skipped>,
 ) -> Vec<(String, Value)> {
     let mut entries = Vec::new();
@@ -118,7 +133,7 @@ fn parse_map(
         let number = line.number;
         *cursor += 1;
         let value = if rest.is_empty() {
-            parse_block(lines, cursor, indent, skipped)
+            parse_block(lines, cursor, indent, depth, skipped)
         } else {
             inline_value(&rest, number, skipped)
         };
@@ -129,23 +144,47 @@ fn parse_map(
 
 /// Parse the child block that follows a `key:` (or bare `-`) line: a
 /// sequence or a mapping, decided by the first deeper line. No deeper
-/// line means the value was an empty scalar.
+/// line means the value was an empty scalar. This is the single
+/// recursion point of the reader, so it is where the nesting budget is
+/// spent and enforced.
 fn parse_block(
     lines: &[Line],
     cursor: &mut usize,
     parent_indent: usize,
+    depth: usize,
     skipped: &mut Vec<Skipped>,
 ) -> Value {
     match lines.get(*cursor) {
         Some(child) if child.indent > parent_indent => {
+            if depth >= MAXIMUM_NESTING_DEPTH {
+                skipped.push(Skipped {
+                    line: child.number,
+                    reason: NESTING_TOO_DEEP,
+                });
+                skip_deeper_block(lines, cursor, parent_indent);
+                return Value::Scalar(String::new());
+            }
             let indent = child.indent;
             if child.content.starts_with('-') {
-                Value::List(parse_list(lines, cursor, indent, skipped))
+                Value::List(parse_list(lines, cursor, indent, depth + 1, skipped))
             } else {
-                Value::Map(parse_map(lines, cursor, indent, skipped))
+                Value::Map(parse_map(lines, cursor, indent, depth + 1, skipped))
             }
         }
         _ => Value::Scalar(String::new()),
+    }
+}
+
+/// Consume, whole, a block the nesting budget refused: one report line
+/// covers the refusal and parsing resumes at the parent's next sibling.
+/// The caller only calls this with a first line deeper than
+/// `parent_indent`, so the cursor always advances at least once.
+fn skip_deeper_block(lines: &[Line], cursor: &mut usize, parent_indent: usize) {
+    while lines
+        .get(*cursor)
+        .is_some_and(|line| line.indent > parent_indent)
+    {
+        *cursor += 1;
     }
 }
 
@@ -153,6 +192,7 @@ fn parse_list(
     lines: &[Line],
     cursor: &mut usize,
     indent: usize,
+    depth: usize,
     skipped: &mut Vec<Skipped>,
 ) -> Vec<Value> {
     let mut items = Vec::new();
@@ -175,18 +215,30 @@ fn parse_list(
         let number = line.number;
         *cursor += 1;
         if rest.is_empty() {
-            items.push(parse_block(lines, cursor, indent, skipped));
-        } else if rest.starts_with('{') {
-            // A bare inline mapping as a whole list item (`- {a: b}`) is
-            // outside the subset; without this check the `:` inside the
-            // braces would be mistaken for a `key: value` separator.
+            items.push(parse_block(lines, cursor, indent, depth, skipped));
+        } else if rest.starts_with('{') || rest.starts_with('[') {
+            // A bare inline structure as a whole list item (`- {a: b}`,
+            // `- [a, b]`) is outside the subset. Without this check a
+            // braced item's inner `:` would be mistaken for a
+            // `key: value` separator, and a bracketed item would reach
+            // the scalar arm below and be carried verbatim as the literal
+            // text `[a, b]`. The value-after-a-key position agrees: see
+            // `inline_value`, which rejects both openers too.
+            //
+            // This branch drops the item instead of pushing an empty
+            // placeholder the way `inline_value` does, because it runs
+            // before any list item has been validated, exactly like the
+            // other "line I do not understand" skip sites here, whereas
+            // `inline_value` runs after a key has already been consumed
+            // into a `Vec<(String, Value)>` and so structurally owes that
+            // key a value slot.
             skipped.push(Skipped {
                 line: number,
-                reason: "inline structures beyond `[a, b]` are outside the subset",
+                reason: "an inline structure as a `- item` is outside the subset",
             });
         } else if let Some((key, value_text)) = split_key(&rest) {
             let value = if value_text.is_empty() {
-                parse_block(lines, cursor, indent, skipped)
+                parse_block(lines, cursor, indent, depth, skipped)
             } else {
                 inline_value(&value_text, number, skipped)
             };
@@ -495,6 +547,62 @@ mod tests {
             parameters[0],
             ("level".to_owned(), Value::Scalar("5".to_owned()))
         );
+    }
+
+    #[test]
+    fn an_inline_list_as_a_dash_item_is_reported_never_carried_verbatim() {
+        let parsed = parse("parameters:\n\tpaths:\n\t\t- [src, tests]\n");
+        assert_eq!(parsed.skipped.len(), 1, "{:?}", parsed.skipped);
+        assert_eq!(parsed.skipped[0].line, 3);
+        let Value::Map(parameters) = root_value(&parsed, "parameters") else {
+            panic!("parameters should be a map");
+        };
+        // Dropped, not smuggled through as the scalar `[src, tests]`.
+        assert_eq!(parameters[0].1, Value::List(Vec::new()));
+    }
+
+    /// `key:` then `key:` one column deeper, repeated: the cheapest way
+    /// to demand one recursive frame per line.
+    fn deeply_nested(levels: usize) -> String {
+        let mut text = String::with_capacity(levels * levels / 2 + levels * 8);
+        for level in 0..levels {
+            for _ in 0..level {
+                text.push(' ');
+            }
+            text.push_str("key:\n");
+        }
+        text
+    }
+
+    #[test]
+    fn nesting_past_the_budget_is_reported_and_the_document_still_parses() {
+        let mut text = deeply_nested(MAXIMUM_NESTING_DEPTH + 8);
+        text.push_str("level: 5\n");
+        let parsed = parse(&text);
+        assert_eq!(parsed.skipped.len(), 1, "{:?}", parsed.skipped);
+        assert_eq!(parsed.skipped[0].reason, NESTING_TOO_DEEP);
+        // The refused block is consumed whole, so the root's next
+        // sibling is still read.
+        assert_eq!(root_value(&parsed, "level"), &Value::Scalar("5".to_owned()));
+    }
+
+    #[test]
+    fn the_nesting_a_real_configuration_file_reaches_is_untouched() {
+        // The deepest shape a `phpstan.neon` reaches: `parameters`, then
+        // `excludePaths`, then `analyse`, then a list item.
+        let parsed = parse("parameters:\n\texcludePaths:\n\t\tanalyse:\n\t\t\t- src/Generated\n");
+        assert!(parsed.skipped.is_empty(), "{:?}", parsed.skipped);
+    }
+
+    #[test]
+    fn degenerate_nesting_is_a_report_line_not_a_stack_overflow() {
+        // Measured against this reader before the budget existed: 3000
+        // levels already overflowed a default test-thread stack, so 8000
+        // keeps the margin comfortable. A stack overflow is a SIGSEGV,
+        // not a catchable panic, so the only proof is that this returns.
+        let parsed = parse(&deeply_nested(8000));
+        assert_eq!(parsed.skipped.len(), 1, "{:?}", parsed.skipped);
+        assert_eq!(parsed.skipped[0].reason, NESTING_TOO_DEEP);
     }
 
     #[test]
