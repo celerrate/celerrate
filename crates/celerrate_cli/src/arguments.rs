@@ -13,6 +13,11 @@ use clap::{Parser, Subcommand};
 pub struct Arguments {
     #[command(subcommand)]
     pub command: Command,
+
+    /// Report analysis meta-information on stderr: widened foreign
+    /// directives, files analyzed, cache traffic. Not a stable surface.
+    #[arg(long, short = 'v', global = true)]
+    pub verbose: bool,
 }
 
 /// The report's serialization. The machine formats consume the same
@@ -271,6 +276,21 @@ mod tests {
             panic!("expected Command::MixedRate");
         };
         assert_eq!(path.to_str(), Some("src"));
+    }
+
+    /// The design fixes the surface: a global flag, the full word,
+    /// alias `-v`, accepted on either side of the subcommand.
+    #[test]
+    fn verbose_is_global_and_defaults_off() {
+        let arguments = Arguments::try_parse_from(["celerrate", "check"]).unwrap();
+        assert!(!arguments.verbose);
+        let arguments = Arguments::try_parse_from(["celerrate", "check", "--verbose"]).unwrap();
+        assert!(arguments.verbose);
+        let arguments = Arguments::try_parse_from(["celerrate", "check", "-v"]).unwrap();
+        assert!(arguments.verbose);
+        let arguments =
+            Arguments::try_parse_from(["celerrate", "explain", "CEL0030", "-v"]).unwrap();
+        assert!(arguments.verbose);
     }
 
     /// The hidden variants must actually stay hidden: `--help` is the
