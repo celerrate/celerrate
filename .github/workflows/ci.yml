@@ -170,3 +170,49 @@ jobs:
         run: cargo clippy --package celerrate_rules --features render --all-targets -- -D warnings
       - if: ${{ needs.changes.outputs.code == 'true' }}
         run: cargo test --package celerrate_rules --features render
+
+  dist:
+    needs: changes
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    runs-on: ${{ matrix.os }}
+    steps:
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' && runner.os == 'Linux' }}
+        run: shellcheck install.sh
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+          targets: ${{ matrix.target }}
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-${{ matrix.target }}
+      - if: ${{ needs.changes.outputs.code == 'true' && contains(matrix.target, 'musl') }}
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask dist --target ${{ matrix.target }}
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        name: Check packaging determinism
+        run: |
+          mkdir determinism
+          cp target/dist/celerrate-* determinism/
+          rm -r target/dist
+          cargo xtask dist --target ${{ matrix.target }}
+          for file in determinism/*; do
+            cmp "$file" "target/dist/$(basename "$file")"
+          done
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        name: Install through install.sh
+        run: |
+          cat target/dist/*.sha256 > target/dist/SHA256SUMS
+          CELERRATE_INSTALL_BASE_URL="file://$PWD/target/dist" sh install.sh --to "$RUNNER_TEMP/celerrate-bin"
+          "$RUNNER_TEMP/celerrate-bin/celerrate" --version
