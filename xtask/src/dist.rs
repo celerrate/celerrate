@@ -205,18 +205,54 @@ mod tests {
         assert_eq!(first_bytes, std::fs::read(&second).unwrap());
         let decoder = flate2::read::GzDecoder::new(first_bytes.as_slice());
         let mut archive = tar::Archive::new(decoder);
-        let paths: Vec<String> = archive
+        // Entry path plus the fixed header fields the packer sets: two
+        // runs producing byte-identical archives could coincidentally
+        // agree on a wall-clock mtime, so the header fields are asserted
+        // directly rather than only inferred from byte equality above.
+        let entries: Vec<(String, u32, u64, u64, u64)> = archive
             .entries()
             .unwrap()
-            .map(|entry| entry.unwrap().path().unwrap().display().to_string())
+            .map(|entry| {
+                let entry = entry.unwrap();
+                let mode = entry.header().mode().unwrap();
+                let mtime = entry.header().mtime().unwrap();
+                let uid = entry.header().uid().unwrap();
+                let gid = entry.header().gid().unwrap();
+                let path = entry.path().unwrap().display().to_string();
+                (path, mode, mtime, uid, gid)
+            })
             .collect();
         assert_eq!(
-            paths,
+            entries,
             [
-                "celerrate-x86_64-unknown-linux-musl/celerrate",
-                "celerrate-x86_64-unknown-linux-musl/LICENSE-MIT",
-                "celerrate-x86_64-unknown-linux-musl/LICENSE-APACHE",
-                "celerrate-x86_64-unknown-linux-musl/README.md",
+                (
+                    "celerrate-x86_64-unknown-linux-musl/celerrate".to_owned(),
+                    0o755,
+                    0,
+                    0,
+                    0,
+                ),
+                (
+                    "celerrate-x86_64-unknown-linux-musl/LICENSE-MIT".to_owned(),
+                    0o644,
+                    0,
+                    0,
+                    0,
+                ),
+                (
+                    "celerrate-x86_64-unknown-linux-musl/LICENSE-APACHE".to_owned(),
+                    0o644,
+                    0,
+                    0,
+                    0,
+                ),
+                (
+                    "celerrate-x86_64-unknown-linux-musl/README.md".to_owned(),
+                    0o644,
+                    0,
+                    0,
+                    0,
+                ),
             ],
         );
     }
@@ -233,9 +269,46 @@ mod tests {
         let first = package(&binary, &documentation, triple, &first_output).unwrap();
         assert!(first.to_string_lossy().ends_with(".zip"));
         let second = package(&binary, &documentation, triple, &second_output).unwrap();
+        let first_bytes = std::fs::read(&first).unwrap();
+        assert_eq!(first_bytes, std::fs::read(&second).unwrap());
+        // Entry name, order, and the fixed metadata `zip_entry_options`
+        // sets: unlike the tar test above, byte equality alone never
+        // exercised the archive structure or pinned the zip-epoch
+        // timestamp and unix permissions a regression could silently drop.
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(first_bytes)).unwrap();
+        let entries: Vec<(String, u32, zip::DateTime)> = (0..archive.len())
+            .map(|index| {
+                let file = archive.by_index(index).unwrap();
+                let name = file.name().to_owned();
+                let mode = file.unix_mode().unwrap() & 0o777;
+                let last_modified = file.last_modified().unwrap();
+                (name, mode, last_modified)
+            })
+            .collect();
         assert_eq!(
-            std::fs::read(&first).unwrap(),
-            std::fs::read(&second).unwrap()
+            entries,
+            [
+                (
+                    "celerrate-x86_64-pc-windows-msvc/celerrate.exe".to_owned(),
+                    0o755,
+                    zip::DateTime::default(),
+                ),
+                (
+                    "celerrate-x86_64-pc-windows-msvc/LICENSE-MIT".to_owned(),
+                    0o644,
+                    zip::DateTime::default(),
+                ),
+                (
+                    "celerrate-x86_64-pc-windows-msvc/LICENSE-APACHE".to_owned(),
+                    0o644,
+                    zip::DateTime::default(),
+                ),
+                (
+                    "celerrate-x86_64-pc-windows-msvc/README.md".to_owned(),
+                    0o644,
+                    zip::DateTime::default(),
+                ),
+            ],
         );
     }
 }
