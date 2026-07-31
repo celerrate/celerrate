@@ -17,6 +17,21 @@ Measured end to end, protocol committed to the repository.
 > with zero configuration and without ever crashing on any input.
 > The rule surface is still deliberately small, and growing.
 
+## Installation
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/celerrate/celerrate/main/install.sh | sh
+```
+
+Or, for Composer projects:
+
+```sh
+composer require --dev celerrate/celerrate
+```
+
+All channels, manual downloads, and checksum verification:
+[docs/installation.md](docs/installation.md).
+
 ## Quick start
 
 Download the archive for your platform from the
