@@ -26,6 +26,7 @@ pub mod bench;
 pub mod codegen;
 pub mod corpus;
 pub mod dependency_shape;
+pub mod dist;
 pub mod emission_scan;
 pub mod ground_truth;
 pub mod memory;
