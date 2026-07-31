@@ -236,3 +236,50 @@ jobs:
           cd packages/composer-bootstrap/tests/fixture
           CELERRATE_DOWNLOAD_BASE_URL="http://127.0.0.1:8737" composer install
           ./vendor/bin/celerrate --version
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        name: Refuse a tampered checksum
+        # The property this whole slice exists for: a regression that
+        # drops `Checksum::matches` from `BinaryInstaller`, or the
+        # `|| fail` from install.sh's verification, would leave every
+        # step above green while the product installed whatever a
+        # server handed it. Both channels must reject a SHA256SUMS
+        # whose recorded hash matches nothing real.
+        run: |
+          refusal="$RUNNER_TEMP/checksum-refusal"
+          rm -rf "$refusal"
+          mkdir -p "$refusal"
+          cp target/dist/celerrate-*.tar.gz "$refusal/" 2>/dev/null || true
+          cp target/dist/celerrate-*.zip "$refusal/" 2>/dev/null || true
+          zeros="$(printf '0%.0s' $(seq 1 64))"
+          : > "$refusal/SHA256SUMS"
+          for archive in "$refusal"/celerrate-*; do
+            echo "${zeros}  $(basename "$archive")" >> "$refusal/SHA256SUMS"
+          done
+
+          echo "expecting install.sh to refuse the tampered checksum"
+          if CELERRATE_INSTALL_BASE_URL="file://$refusal" sh install.sh --to "$RUNNER_TEMP/celerrate-refused"; then
+            echo "install.sh accepted a tampered checksum" >&2
+            exit 1
+          fi
+
+          server_pid=""
+          cleanup() {
+            [ -n "$server_pid" ] && kill "$server_pid" 2>/dev/null
+            return 0
+          }
+          trap cleanup EXIT
+
+          php -S 127.0.0.1:8738 -t "$refusal" &
+          server_pid=$!
+          for _ in $(seq 1 40); do
+            curl -fs http://127.0.0.1:8738/SHA256SUMS >/dev/null 2>&1 && break
+            sleep 0.5
+          done
+
+          cd packages/composer-bootstrap/tests/fixture
+          rm -rf vendor composer.lock
+          echo "expecting the Composer fixture to refuse the tampered checksum"
+          if CELERRATE_DOWNLOAD_BASE_URL="http://127.0.0.1:8738" composer install; then
+            echo "composer install accepted a tampered checksum" >&2
+            exit 1
+          fi
