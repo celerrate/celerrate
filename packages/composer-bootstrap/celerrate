@@ -1,0 +1,35 @@
+#!/usr/bin/env php
+<?php
+
+// Celerrate shim: locates the platform binary the Composer plugin
+// downloaded into bin-cache/ and executes it, forwarding arguments,
+// the standard streams, and the exit code. CELERRATE_BINARY overrides
+// the binary location. Composer generates the vendor/bin proxy (and
+// the .bat proxy on Windows) for this file.
+
+$binary = getenv('CELERRATE_BINARY');
+if (!is_string($binary) || $binary === '') {
+    $binary = null;
+    foreach (['celerrate', 'celerrate.exe'] as $name) {
+        $candidate = __DIR__ . '/bin-cache/' . $name;
+        if (is_file($candidate)) {
+            $binary = $candidate;
+            break;
+        }
+    }
+}
+if ($binary === null || !is_file($binary)) {
+    fwrite(STDERR, "celerrate: the binary is not installed.\n");
+    fwrite(STDERR, "Run `composer install` with plugins and scripts enabled (no --no-plugins, no --no-scripts), or point CELERRATE_BINARY at an existing binary.\n");
+    exit(1);
+}
+$process = proc_open(
+    array_merge([$binary], array_slice($argv, 1)),
+    [0 => STDIN, 1 => STDOUT, 2 => STDERR],
+    $pipes
+);
+if (!is_resource($process)) {
+    fwrite(STDERR, "celerrate: failed to start {$binary}\n");
+    exit(1);
+}
+exit(proc_close($process));
