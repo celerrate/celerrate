@@ -122,6 +122,8 @@ pub fn checksum_line(contents: &[u8], file_name: &str) -> String {
     let digest = sha2::Sha256::digest(contents);
     let mut hex = String::with_capacity(64);
     for byte in digest {
+        // `Write` for `String` is infallible; the `Result` exists only
+        // because the trait is shared with fallible writers.
         let _ = write!(hex, "{byte:02x}");
     }
     format!("{hex}  {file_name}\n")
