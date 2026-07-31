@@ -36,12 +36,23 @@ final class BinaryInstaller
             );
             return;
         }
+        // Null when the plugin is loaded from the root package itself
+        // (developing celerrate/celerrate, not depending on it): there
+        // is no installed package to attach the binary to.
         $package = $composer->getRepositoryManager()->getLocalRepository()->findPackage('celerrate/celerrate', '*');
         if ($package === null) {
+            $io->writeError(
+                '<warning>celerrate: celerrate/celerrate is not an installed package (developing the plugin itself?);'
+                . ' the binary was not installed.</warning>'
+            );
             return;
         }
         $packageDirectory = $composer->getInstallationManager()->getInstallPath($package);
         if (!is_string($packageDirectory) || $packageDirectory === '') {
+            $io->writeError(
+                '<warning>celerrate: could not resolve the install path for celerrate/celerrate;'
+                . ' the binary was not installed.</warning>'
+            );
             return;
         }
         $binaryPath = $packageDirectory . '/bin-cache/' . Platform::binaryFileName($triple);

@@ -63,7 +63,10 @@ final class Archive
         while (!gzeof($source)) {
             $chunk = gzread($source, 1024 * 1024);
             if ($chunk === false) {
-                break;
+                fclose($destination);
+                gzclose($source);
+                unlink($tarPath);
+                throw new \RuntimeException("celerrate: cannot read {$archivePath} (corrupt gzip stream?)");
             }
             if (fwrite($destination, $chunk) !== strlen($chunk)) {
                 fclose($destination);
