@@ -658,6 +658,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(0), TextSize::from(10)),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let second = ResolvedDirective {
@@ -665,6 +666,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(2), TextSize::from(12)),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let directives = vec![first, second];
@@ -692,6 +694,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(0), TextSize::from(4)),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let second = ResolvedDirective {
@@ -699,6 +702,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(2), TextSize::from(12)),
             filter: SuppressionFilter::All,
             identifiers: Vec::new(),
+            widened_by: Vec::new(),
             origin: DirectiveOrigin::Foreign,
         };
         let directives = vec![first, second];

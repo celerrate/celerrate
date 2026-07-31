@@ -142,6 +142,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   paths, level) to `celerrate.toml`, report everything that does not
   carry over, and record `celerrate-baseline.toml` so the first check
   is clean and only new problems fail.
+- `--verbose` (alias `-v`), a global flag that reports analysis
+  meta-information on standard error. A foreign suppression directive
+  naming an identifier the correspondence table does not map falls back
+  to scope-wide suppression; that widening used to be silent, and each
+  one now produces a line naming the file, the directive's line, the
+  unmapped written identifiers, and the consequence. The flag also
+  prints a run summary of files reported and cache verdict traffic.
+  Everything it adds goes to standard error, so the machine formats
+  stay byte-identical with or without it, and its content is not a
+  stable surface. Widening is deliberately not a diagnostic: a code
+  here would turn every suppression of a rule Celerrate does not emit
+  yet into a warning storm on an imported codebase. See
+  `docs/phpdoc-bridge.md`.
 
 ### Changed
 

@@ -22,6 +22,7 @@ pub mod plugins;
 pub mod render;
 pub mod session;
 pub mod suggest;
+pub mod verbose;
 pub mod watch;
 
 use std::ffi::OsString;
@@ -106,6 +107,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             };
         }
     };
+    let verbose = arguments.verbose;
     match arguments.command {
         Command::Check {
             path,
@@ -149,7 +151,7 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
             let mut session = Session::start(&root);
             report_excluded_plugins(&session);
             if watch {
-                return watch::watch(&mut session, output, color, mode);
+                return watch::watch(&mut session, output, color, mode, verbose);
             }
             let inputs = session.inputs();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
@@ -211,6 +213,9 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                     return Outcome::InternalError;
                 }
                 session.statistics.report();
+                if verbose {
+                    verbose::report(&session);
+                }
                 return verdict;
             }
             let failures =
@@ -232,6 +237,9 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 return Outcome::InternalError;
             }
             session.statistics.report();
+            if verbose {
+                verbose::report(&session);
+            }
             Outcome::of(
                 outcome
                     .diagnostics

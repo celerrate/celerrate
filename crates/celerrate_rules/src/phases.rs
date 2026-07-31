@@ -676,6 +676,7 @@ mod tests {
             scope: TextRange::new(TextSize::from(scope.0), TextSize::from(scope.1)),
             filter,
             identifiers: identifiers.iter().map(|s| (*s).to_owned()).collect(),
+            widened_by: Vec::new(),
             origin,
         }
     }

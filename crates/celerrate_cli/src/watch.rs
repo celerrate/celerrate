@@ -113,6 +113,7 @@ fn completed_cycle(
     reanalyzed: usize,
     color: ColorMode,
     mode: crate::baseline::Mode,
+    verbose: bool,
 ) -> Result<(AnalysisOutcome, Option<WatchEvent>, bool), Outcome> {
     let started = Instant::now();
     // Every cycle re-analyzes, so every cycle also recomputes what the
@@ -172,6 +173,9 @@ fn completed_cycle(
     }
     let pending = persist_unless_a_burst_is_already_waiting(session, watcher, &outcome);
     session.statistics.report();
+    if verbose {
+        crate::verbose::report(session);
+    }
     Ok((outcome, pending, shutdown))
 }
 
@@ -242,6 +246,7 @@ pub fn watch(
     output: &mut dyn Write,
     color: ColorMode,
     mode: crate::baseline::Mode,
+    verbose: bool,
 ) -> Outcome {
     let mut watcher = match Watch::spawn(session) {
         Ok(watcher) => watcher,
@@ -256,7 +261,15 @@ pub fn watch(
 
     let mut reanalyzed = session.sources.len();
     loop {
-        match iteration(session, &mut watcher, output, reanalyzed, color, mode) {
+        match iteration(
+            session,
+            &mut watcher,
+            output,
+            reanalyzed,
+            color,
+            mode,
+            verbose,
+        ) {
             ControlFlow::Continue(next) => reanalyzed = next,
             ControlFlow::Break(outcome) => return outcome,
         }
@@ -314,9 +327,10 @@ fn iteration(
     reanalyzed: usize,
     color: ColorMode,
     mode: crate::baseline::Mode,
+    verbose: bool,
 ) -> ControlFlow<Outcome, usize> {
     let (outcome, pending, shutdown) =
-        match completed_cycle(session, watcher, output, reanalyzed, color, mode) {
+        match completed_cycle(session, watcher, output, reanalyzed, color, mode, verbose) {
             Ok(result) => result,
             Err(ended) => return ControlFlow::Break(ended),
         };
@@ -2029,6 +2043,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(
@@ -2053,6 +2068,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert_eq!(second.diagnostics.len(), 1, "the cycle sees the edit");
@@ -2208,6 +2224,7 @@ mod tests {
             total,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(
@@ -2287,6 +2304,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(
@@ -2446,6 +2464,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Break(outcome) => outcome,
             ControlFlow::Continue(next) => {
@@ -2493,6 +2512,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Continue(next) => next,
             ControlFlow::Break(outcome) => {
@@ -2511,6 +2531,7 @@ mod tests {
             next,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(!shutdown, "no shutdown was ever sent");
@@ -2555,6 +2576,7 @@ mod tests {
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Break(outcome) => outcome,
             ControlFlow::Continue(next) => {
@@ -2605,6 +2627,7 @@ mod tests {
                 1,
                 ColorMode::Plain,
                 mode,
+                false,
             ) {
                 ControlFlow::Break(outcome) => outcome,
                 ControlFlow::Continue(next) => {
@@ -2696,6 +2719,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -2736,6 +2760,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Continue(next) => next,
             ControlFlow::Break(outcome) => {
@@ -2751,6 +2776,7 @@ class Consumer
             next,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(
@@ -2791,6 +2817,7 @@ class Consumer
             next,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Continue(next) => next,
             ControlFlow::Break(outcome) => {
@@ -2806,6 +2833,7 @@ class Consumer
             next,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -2873,6 +2901,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert!(
@@ -2928,6 +2957,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert_eq!(first.diagnostics.len(), 1, "the finding is still analyzed");
@@ -2953,6 +2983,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         ) {
             ControlFlow::Continue(next) => next,
             ControlFlow::Break(outcome) => {
@@ -2968,6 +2999,7 @@ class Consumer
             next,
             ColorMode::Plain,
             crate::baseline::Mode::Apply,
+            false,
         )
         .unwrap();
         assert_eq!(
@@ -3008,6 +3040,7 @@ class Consumer
             1,
             ColorMode::Plain,
             crate::baseline::Mode::Ignore,
+            false,
         )
         .unwrap();
         assert_eq!(

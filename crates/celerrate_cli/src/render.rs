@@ -437,7 +437,7 @@ pub fn render_cycle(
     output.flush()
 }
 
-fn display_path(session: &Session, file: FileId) -> String {
+pub(crate) fn display_path(session: &Session, file: FileId) -> String {
     session
         .vfs
         .path(file)
