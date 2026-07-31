@@ -34,4 +34,18 @@ final class ChecksumTest extends TestCase
         self::assertFalse(Checksum::matches($path, str_repeat('0', 64)));
         unlink($path);
     }
+
+    public function testFindsTheHashInASumsBodyWithCrlfLineEndings(): void
+    {
+        $sums = self::EMPTY_HASH . "  celerrate-a.tar.gz\r\n"
+            . str_repeat('a', 64) . "  celerrate-b.tar.gz\r\n";
+        self::assertSame(self::EMPTY_HASH, Checksum::expectedFor('celerrate-a.tar.gz', $sums));
+        self::assertSame(str_repeat('a', 64), Checksum::expectedFor('celerrate-b.tar.gz', $sums));
+    }
+
+    public function testFindsTheHashForAnEntryWrittenWithTheBinaryModeMarker(): void
+    {
+        $sums = self::EMPTY_HASH . " *celerrate-a.tar.gz\n";
+        self::assertSame(self::EMPTY_HASH, Checksum::expectedFor('celerrate-a.tar.gz', $sums));
+    }
 }

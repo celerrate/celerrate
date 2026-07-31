@@ -2,3 +2,5 @@
 /composer.lock
 /bin-cache/
 /bin-cache.download/
+/.phpunit.result.cache
+/.phpunit.cache/
