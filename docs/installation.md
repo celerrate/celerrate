@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/celerrate/celerrate/main/install.sh
 corporate mirrors: point it at a URL serving the release archives and
 the `SHA256SUMS` file directly.
 
-## Composer (all platforms)
+## Composer (all platforms, from v0.1.0)
 
 ```sh
 composer require --dev celerrate/celerrate
@@ -44,15 +44,19 @@ Environment overrides:
 
 - `CELERRATE_BINARY`: use an existing binary; nothing is downloaded.
 - `CELERRATE_DOWNLOAD_BASE_URL`: download from a mirror instead of
-  GitHub Releases.
+  GitHub Releases. Like `CELERRATE_INSTALL_BASE_URL` above, it
+  replaces the whole base including the release tag, so it must serve
+  the release archives and `SHA256SUMS` directly; it must also be an
+  HTTPS URL, since Composer's `secure-http` setting rejects a plain
+  HTTP download base.
 
 On a platform without a published binary, `composer install` warns and
 continues; `vendor/bin/celerrate` reports the situation if invoked.
 
 ## Manual download
 
-Every release publishes archives for five targets, a `SHA256SUMS` file,
-and build provenance attestations:
+Every release publishes archives for five targets and a `SHA256SUMS`
+file; from v0.1.0, also build provenance attestations:
 `https://github.com/celerrate/celerrate/releases`
 
 - Linux: `celerrate-x86_64-unknown-linux-musl.tar.gz`,

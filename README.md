@@ -23,7 +23,7 @@ Measured end to end, protocol committed to the repository.
 curl -fsSL https://raw.githubusercontent.com/celerrate/celerrate/main/install.sh | sh
 ```
 
-Or, for Composer projects:
+Or, for Composer projects, from v0.1.0:
 
 ```sh
 composer require --dev celerrate/celerrate
@@ -34,9 +34,7 @@ All channels, manual downloads, and checksum verification:
 
 ## Quick start
 
-Download the archive for your platform from the
-[latest release](https://github.com/celerrate/celerrate/releases/latest),
-unpack it, and run the binary inside a Composer project:
+With `celerrate` installed, run it inside a Composer project:
 
 ```sh
 celerrate check .
