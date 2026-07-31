@@ -48,6 +48,16 @@ while [ "$#" -gt 0 ]; do
     esac
 done
 
+# Normalize the same way the Composer side does (ReleaseUrl::baseUrl):
+# accept the tag with or without its leading "v" so both installation
+# channels behave alike.
+if [ -n "$version" ]; then
+    case "$version" in
+        v*) ;;
+        *) version="v${version}" ;;
+    esac
+fi
+
 operating_system="$(uname -s)"
 machine="$(uname -m)"
 case "$operating_system" in
@@ -55,14 +65,14 @@ case "$operating_system" in
         case "$machine" in
             x86_64) target="x86_64-unknown-linux-musl" ;;
             aarch64 | arm64) target="aarch64-unknown-linux-musl" ;;
-            *) fail "unsupported architecture: $machine (supported: x86_64, aarch64)" ;;
+            *) fail "unsupported architecture: $machine (supported: x86_64, aarch64, arm64)" ;;
         esac
         ;;
     Darwin)
         case "$machine" in
             x86_64) target="x86_64-apple-darwin" ;;
             arm64 | aarch64) target="aarch64-apple-darwin" ;;
-            *) fail "unsupported architecture: $machine (supported: x86_64, arm64)" ;;
+            *) fail "unsupported architecture: $machine (supported: x86_64, arm64, aarch64)" ;;
         esac
         ;;
     *)
