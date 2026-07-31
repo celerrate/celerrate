@@ -8,10 +8,88 @@
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 
 use sha2::Digest;
 
 use crate::Result;
+
+/// The documentation files packaged alongside the binary in every
+/// release archive.
+const DOCUMENTATION_FILES: [&str; 3] = ["LICENSE-MIT", "LICENSE-APACHE", "README.md"];
+
+/// Builds one target's release binary and packages it with its
+/// checksum under `target/dist/`.
+pub fn run(target: Option<&str>) -> Result<()> {
+    let root = crate::workspace_root()?;
+    let triple = match target {
+        Some(triple) => triple.to_owned(),
+        None => host_triple()?,
+    };
+    build(&root, &triple)?;
+    let binary = root
+        .join("target")
+        .join(&triple)
+        .join("release")
+        .join(binary_file_name(&triple));
+    let output_directory = root.join("target/dist");
+    std::fs::create_dir_all(&output_directory)?;
+    let documentation: Vec<PathBuf> = DOCUMENTATION_FILES
+        .iter()
+        .map(|name| root.join(name))
+        .collect();
+    let archive = package(&binary, &documentation, &triple, &output_directory)?;
+    let checksum = write_checksum(&archive)?;
+    println!("packaged {}", archive.display());
+    println!("checksum {}", checksum.display());
+    Ok(())
+}
+
+/// The running toolchain's target, from `rustc -vV`. Passing the
+/// resolved triple to `cargo build --target` keeps the output path
+/// uniform (`target/<triple>/release/`) whether or not `--target`
+/// was given on the command line.
+fn host_triple() -> Result<String> {
+    let output = Command::new("rustc").args(["-vV"]).output()?;
+    if !output.status.success() {
+        return Err("rustc -vV failed".into());
+    }
+    let stdout = String::from_utf8(output.stdout)?;
+    stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(|host| host.trim().to_owned())
+        .ok_or_else(|| "rustc -vV printed no host line".into())
+}
+
+fn build(root: &Path, triple: &str) -> Result<()> {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
+    let status = Command::new(cargo)
+        .current_dir(root)
+        .args([
+            "build",
+            "--release",
+            "--package",
+            "celerrate_cli",
+            "--target",
+            triple,
+        ])
+        .status()?;
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("the release build for {triple} failed").into())
+    }
+}
+
+/// Writes `<archive>.sha256` next to the archive.
+fn write_checksum(archive_path: &Path) -> Result<PathBuf> {
+    let contents = std::fs::read(archive_path)?;
+    let name = file_name(archive_path)?;
+    let checksum_path = archive_path.with_file_name(format!("{name}.sha256"));
+    std::fs::write(&checksum_path, checksum_line(&contents, &name))?;
+    Ok(checksum_path)
+}
 
 /// `celerrate.exe` for Windows targets, `celerrate` everywhere else.
 pub fn binary_file_name(triple: &str) -> &'static str {
@@ -310,5 +388,29 @@ mod tests {
                 ),
             ],
         );
+    }
+
+    #[test]
+    fn the_host_triple_is_a_target_triple() {
+        let triple = super::host_triple().unwrap();
+        assert!(triple.contains('-'), "not a triple: {triple}");
+    }
+
+    #[test]
+    fn the_checksum_file_sits_next_to_the_archive_with_the_full_name() {
+        let directory = tempfile::tempdir().unwrap();
+        let archive = directory
+            .path()
+            .join("celerrate-x86_64-unknown-linux-musl.tar.gz");
+        std::fs::write(&archive, b"archive body").unwrap();
+        let checksum = super::write_checksum(&archive).unwrap();
+        assert_eq!(
+            checksum,
+            directory
+                .path()
+                .join("celerrate-x86_64-unknown-linux-musl.tar.gz.sha256"),
+        );
+        let line = std::fs::read_to_string(&checksum).unwrap();
+        assert!(line.ends_with("  celerrate-x86_64-unknown-linux-musl.tar.gz\n"));
     }
 }

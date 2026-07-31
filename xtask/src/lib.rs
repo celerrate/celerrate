@@ -13,8 +13,9 @@
 //! `phpdoc-cases` fetch the pinned phpstan/phpdoc-parser snapshot and
 //! extract its `TypeParserTest` inputs into the committed case file the
 //! phpdoc-bridge coverage test consumes; `memory` measures peak RSS on
-//! the corpus against its budget. xtask deliberately depends on no
-//! `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
+//! the corpus against its budget; `dist` builds and packages one
+//! target's release archive with its checksum. xtask deliberately
+//! depends on no `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
 //! `hyperfine`, `/usr/bin/time`, and the built `celerrate` binary, so a
 //! broken generated file, blob, or build can never prevent
 //! regenerating what fixes it.
