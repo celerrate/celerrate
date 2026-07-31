@@ -6,6 +6,8 @@
     "keywords": ["static analysis", "php", "phpstan", "analyzer"],
     "require": {
         "php": ">=7.4",
+        "ext-phar": "*",
+        "ext-zlib": "*",
         "composer-plugin-api": "^2.0"
     },
     "require-dev": {

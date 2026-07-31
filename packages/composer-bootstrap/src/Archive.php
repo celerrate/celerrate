@@ -65,7 +65,12 @@ final class Archive
             if ($chunk === false) {
                 break;
             }
-            fwrite($destination, $chunk);
+            if (fwrite($destination, $chunk) !== strlen($chunk)) {
+                fclose($destination);
+                gzclose($source);
+                unlink($tarPath);
+                throw new \RuntimeException("celerrate: cannot write {$tarPath} (disk full?)");
+            }
         }
         fclose($destination);
         gzclose($source);

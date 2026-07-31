@@ -1,6 +1,8 @@
 #!/usr/bin/env php
 <?php
 
+declare(strict_types=1);
+
 // Celerrate shim: locates the platform binary the Composer plugin
 // downloaded into bin-cache/ and executes it, forwarding arguments,
 // the standard streams, and the exit code. CELERRATE_BINARY overrides
