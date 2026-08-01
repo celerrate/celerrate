@@ -7,8 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.1.0] - 2026-08-01
-
 ### Added
 
 - `celerrate.toml`, a per-project configuration file, parsed with the
@@ -31,7 +29,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   exit-affecting, each with an explain page. Without a `celerrate.toml`
   behavior is byte-identical to before, proven over the pinned corpus.
   The full surface is documented in
-  [docs/configuration.md](https://github.com/celerrate/celerrate/blob/v0.1.0/docs/configuration.md).
+  [docs/configuration.md](https://github.com/celerrate/celerrate/blob/main/docs/configuration.md).
 - `celerrate check --watch` reloads `celerrate.toml` on save and
   reconfigures the next cycle: the version range, the walk, the active
   rule set, and the severity remap all follow the file, and the file's
@@ -130,7 +128,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Obsolete entries and an unreadable file are each announced by their own
   exit-neutral notice, CEL0050 and CEL0051 respectively; nothing is ever
   pruned silently. Recording, applying, and obsolescence are documented in
-  [docs/baseline.md](https://github.com/celerrate/celerrate/blob/v0.1.0/docs/baseline.md).
+  [docs/baseline.md](https://github.com/celerrate/celerrate/blob/main/docs/baseline.md).
 - Machine output formats: `celerrate check --output=json` emits a stable
   versioned document (schema committed at
   `schemas/celerrate-json-report.v1.schema.json`), `--output=sarif` emits
@@ -170,19 +168,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo xtask dist` builds and packages one target's release archive
   deterministically; the release workflow now packages through it and
   attests its artifacts.
-- The PHPStan comparison protocol: `cargo xtask benchmark` measures
-  PHPStan 2.2.7 and Celerrate cold, in the same run, on the same corpus
-  at matched scope, and divides the two medians. Published figure:
-  Celerrate is 35.9x faster than PHPStan 2.2.7 on a cold analysis at
-  matched scope; the ratio narrows on a smaller input, and that
-  boundary is stated rather than hidden. A same-machine ratio gate,
-  `cargo xtask benchmark --gate`, holds the floor at 20x in continuous
-  integration, where an absolute wall clock cannot be compared across
-  runners. Every pinned condition (tool version, rule level,
-  parallelism, analyzed paths) is documented in
-  [benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/v0.1.0/benchmarks/PROTOCOL.md).
+- The PHPStan comparison harness: `cargo xtask benchmark` installs a
+  pinned PHPStan 2.2.7, measures it and Celerrate cold in the same run
+  on the same corpus working tree, with both tools reporting on the
+  same file set and neither tool's result cache, and prints both
+  medians. No comparison figure is published: the pinned corpus has 51
+  first-party files, both tools are dominated by fixed setup cost at
+  that size, and the ratio measured there says nothing about either
+  tool's throughput. Every pinned condition (tool version, rule level,
+  result cache, parallelism, reported file set), what was measured, and
+  why it is withheld are documented in
+  [benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/main/benchmarks/PROTOCOL.md).
 - The continuous-integration guide:
-  [docs/ci.md](https://github.com/celerrate/celerrate/blob/v0.1.0/docs/ci.md)
+  [docs/ci.md](https://github.com/celerrate/celerrate/blob/main/docs/ci.md)
   documents wiring `celerrate check` into a workflow, the machine-readable
   output formats it can annotate a pull request with, and the baseline
   flow for adopting the tool on an existing codebase without a wall of
@@ -487,8 +485,7 @@ reproducible incremental number.
 - Pre-built binaries for Linux x64 and arm64 (static musl builds),
   macOS x64 and arm64, and Windows x64.
 
-[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/celerrate/celerrate/releases/tag/v0.1.0
+[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.2...HEAD
 [0.0.3]: https://github.com/celerrate/celerrate/commit/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7
 [0.0.2]: https://github.com/celerrate/celerrate/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/celerrate/celerrate/releases/tag/v0.0.1
