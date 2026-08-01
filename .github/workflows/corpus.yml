@@ -153,6 +153,12 @@ jobs:
   benchmark:
     needs: changes
     runs-on: ubuntu-latest
+    # This job shells out to PHP, and a PHPStan run that hangs would
+    # otherwise sit on the runner until GitHub's six-hour default. The
+    # measurement itself costs a couple of minutes; the rest of the
+    # budget is headroom for a cold Cargo cache, a cold corpus, and the
+    # release build the harness needs before it can measure anything.
+    timeout-minutes: 45
     steps:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         uses: actions/checkout@v7
