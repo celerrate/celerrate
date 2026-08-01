@@ -38,7 +38,7 @@ vendor/bin/celerrate check --output=github .
 The Composer plugin downloads the binary matching the package version
 on install, so `vendor/bin/celerrate` is ready the moment
 `composer install` (or `composer require`) finishes; see
-[Installing Celerrate](installation.md#composer-all-platforms-from-v010).
+[Installing Celerrate](installation.md#composer-all-platforms).
 
 ## Exit codes
 

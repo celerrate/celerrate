@@ -27,7 +27,7 @@ curl -fsSL https://raw.githubusercontent.com/celerrate/celerrate/main/install.sh
 corporate mirrors: point it at a URL serving the release archives and
 the `SHA256SUMS` file directly.
 
-## Composer (all platforms, from v0.1.0)
+## Composer (all platforms)
 
 ```sh
 composer require --dev celerrate/celerrate
