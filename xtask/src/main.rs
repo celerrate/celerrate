@@ -6,6 +6,8 @@ fn main() -> ExitCode {
     let outcome = match argument_references.as_slice() {
         ["bench"] => xtask::bench::run(false),
         ["bench", "--ceilings"] => xtask::bench::run(true),
+        ["benchmark"] => xtask::benchmark::run(false),
+        ["benchmark", "--gate"] => xtask::benchmark::run(true),
         ["memory"] => xtask::memory::run(false),
         ["memory", "--ceiling"] => xtask::memory::run(true),
         ["codegen"] => xtask::codegen::run(),
@@ -29,7 +31,7 @@ fn main() -> ExitCode {
         ["release-notes", version] => xtask::release::run(version),
         _ => {
             eprintln!(
-                "usage: cargo xtask <codegen | dependency-shape | dist [--target <triple>] | emission-scan | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | mixed-rate [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | memory [--ceiling] | release-notes <version>>"
+                "usage: cargo xtask <codegen | dependency-shape | dist [--target <triple>] | emission-scan | fetch-stubs | compile-stubs [--check] | fetch-corpus | corpus [--bless] | ground-truth [--bless] | mixed-rate [--bless] | fetch-phpdoc-parser | phpdoc-cases [--check] | bench [--ceilings] | benchmark [--gate] | memory [--ceiling] | release-notes <version>>"
             );
             return ExitCode::FAILURE;
         }
