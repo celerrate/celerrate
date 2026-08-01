@@ -16,7 +16,7 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Celerrate
         run: curl -fsSL https://raw.githubusercontent.com/celerrate/celerrate/main/install.sh | sh
       - name: Check
