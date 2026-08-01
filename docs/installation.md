@@ -55,8 +55,8 @@ continues; `vendor/bin/celerrate` reports the situation if invoked.
 
 ## Manual download
 
-Every release publishes archives for five targets and a `SHA256SUMS`
-file; from v0.1.0, also build provenance attestations:
+Every release publishes archives for five targets, a `SHA256SUMS` file,
+and build provenance attestations:
 `https://github.com/celerrate/celerrate/releases`
 
 - Linux: `celerrate-x86_64-unknown-linux-musl.tar.gz`,
