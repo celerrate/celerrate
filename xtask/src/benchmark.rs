@@ -232,14 +232,22 @@ mod tests {
 
     #[test]
     fn the_generated_configuration_pins_level_paths_and_temporary_directory() {
+        let analyzed_directory = std::path::Path::new("/work/corpus");
         let configuration = phpstan_configuration(
-            std::path::Path::new("/work/corpus"),
+            analyzed_directory,
             std::path::Path::new("/work/phpstan-tmp"),
         );
+        // The two directories the caller passes are rendered whole, so
+        // they appear verbatim. The vendor directory is not: the
+        // function joins it, and a join carries the platform's own
+        // separator. Build the expected fragment by joining too, so the
+        // assertion describes what the function produces wherever the
+        // test runs rather than baking in a POSIX separator.
+        let vendor_directory = analyzed_directory.join("vendor");
         assert!(configuration.contains("level: 5"));
         assert!(configuration.contains("- \"/work/corpus\""));
         assert!(configuration.contains("excludePaths:"));
-        assert!(configuration.contains("- \"/work/corpus/vendor\""));
+        assert!(configuration.contains(&format!("- \"{}\"", vendor_directory.display())));
         assert!(configuration.contains("tmpDir: \"/work/phpstan-tmp\""));
     }
 }
