@@ -217,6 +217,10 @@ does not emit).
 
 ## Configuration (CEL0043 to CEL0049)
 
+See [Configuration](configuration.md) for the full `celerrate.toml`
+reference: discovery, the `[project]`, `[rules]`, and `[severity]`
+tables, and what is deliberately not configurable.
+
 About `celerrate.toml` itself, read from the project root next to
 `composer.json`; a missing file is not an event, because zero
 configuration is the contract. Each is span-anchored, is an error,
