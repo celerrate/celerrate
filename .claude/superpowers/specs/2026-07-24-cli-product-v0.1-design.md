@@ -529,6 +529,11 @@ xtask mixed-rate`, `cargo xtask bench --ceilings`, `cargo xtask benchmark
 --gate`. The corpus snapshot and the mixed-rate baseline are byte-identical
 to their committed files, as expected since no analysis code changed here.
 The benchmark gate measured a cold ratio of 45.4x against its 20x floor.
+This figure is this closure run's own measurement, distinct from the
+35.9x reference-protocol figure amendment 3 restores below (pinned in
+`benchmarks/PROTOCOL.md` and cited in the README): both are separate runs
+of the same matched-scope comparison, neither revises the other, and both
+clear the floor.
 
 The nine closure gates from section 1, each with where it is held:
 
