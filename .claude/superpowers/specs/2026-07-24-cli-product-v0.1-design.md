@@ -1,7 +1,7 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Draft
+Status: Closed (v0.1.0, 2026-08-01)
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -516,3 +516,77 @@ The order proposed to the planning stage (dependencies respected):
 - **A documentation website for v0.1**: the README and `docs/` carry the
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
+
+## Closure record (v0.1.0, 2026-08-01)
+
+The full local gate suite ran clean on the branch that carries this
+sub-project (fourteen commits, merging to `main` as the `v0.1.0` tag): `cargo
+fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
+warnings`, `cargo test --workspace`, `cargo deny check`, `cargo xtask
+dependency-shape`, `cargo xtask emission-scan`, `cargo xtask compile-stubs
+--check`, `cargo xtask phpdoc-cases --check`, `cargo xtask corpus`, `cargo
+xtask mixed-rate`, `cargo xtask bench --ceilings`, `cargo xtask benchmark
+--gate`. The corpus snapshot and the mixed-rate baseline are byte-identical
+to their committed files, as expected since no analysis code changed here.
+The benchmark gate measured a cold ratio of 45.4x against its 20x floor.
+
+The nine closure gates from section 1, each with where it is held:
+
+1. **Zero-config parity**: held by `cargo xtask corpus` (the `corpus` job in
+   `.github/workflows/corpus.yml`), which runs the pinned Symfony corpus
+   without a `celerrate.toml` and asserts the report is byte-identical to
+   the committed snapshot.
+2. **The configuration matrix**: held by
+   `crates/celerrate_cli/tests/configuration.rs` and the `celerrate_config`
+   crate's own unit tests for the per-key pins (include/exclude, `php`,
+   `enabled`, `[severity]`) and their configuration diagnostics, and by
+   `crates/celerrate_cli/tests/cache_configuration.rs` for the digest
+   joining the persistent cache key, proven warm and cold.
+3. **The baseline property suite**: held by
+   `crates/celerrate_cli/tests/baseline.rs` (survives line movement, dies
+   with its diagnostic, never masks a second occurrence, deterministic
+   sorting).
+4. **`migrate --from-phpstan` end to end**: held by
+   `crates/celerrate_cli/tests/migrate.rs` (the PHPStan project fixture,
+   one command, a clean first run, "only new problems fail" continuity).
+5. **Formats**: held by `crates/celerrate_cli/tests/output_json.rs`
+   validating against the committed
+   `schemas/celerrate-json-report.v1.schema.json`,
+   `crates/celerrate_cli/tests/output_sarif.rs` validating against
+   `schemas/sarif-2.1.0.schema.json`, and
+   `crates/celerrate_cli/tests/output_github.rs` for the GitHub format
+   snapshot.
+6. **Release dry-run**: held by the `dist` job in
+   `.github/workflows/ci.yml` (the five-target build matrix and the
+   `install.sh` integration test, including its checksum-tampering
+   refusal), and by `packages/composer-bootstrap/tests/` (archive,
+   checksum, platform detection, release URL) for the Composer bootstrap
+   package against a fixture project.
+7. **Benchmark**: held by the protocol committed at
+   `benchmarks/PROTOCOL.md` and reproduced in CI by the `benchmark` job in
+   `.github/workflows/corpus.yml` (`cargo xtask benchmark --gate`), which
+   asserts the ratio floor on the same machine in the same run.
+8. **Documentation**: held by the README landing page and the `docs/` pass
+   (`docs/configuration.md`, `docs/baseline.md`, `docs/migration.md`,
+   `docs/ci.md`, plus the existing `docs/diagnostics.md` and
+   `docs/output-formats.md`); a document, not a test.
+9. **The mixed-rate baseline unchanged**: held by `cargo xtask mixed-rate`
+   (the `mixed-rate` job in `.github/workflows/corpus.yml`), unmoved by
+   construction since no type work happened in this sub-project.
+
+**Three amendments to this design, recorded at closure:**
+
+1. The CI gate asserts the cold ratio only. The sub-second incremental
+   target is held by the protocol run on the reference machine and guarded
+   structurally in CI by `cargo xtask bench --ceilings`, because shared
+   runners cannot hold an absolute wall-clock threshold.
+2. Packagist publication rides a subtree-split mirror,
+   `celerrate/composer-bootstrap`, pushed by a release-workflow job.
+3. The comparison is measured at matched scope: PHPStan's generated
+   configuration lists the corpus working tree root, the same file set
+   `celerrate check .` walks. Measuring PHPStan against the corpus's `src/`
+   alone while Celerrate analyzed the whole tree produced a 1.4x ratio,
+   because at that size PHP's interpreter startup dominates PHPStan's
+   wall-clock rather than analysis. At matched scope the measured ratio is
+   35.9x. The spec's own wording, "roughly 20x faster than PHPStan at
+   matched scope", is what this amendment restores.
