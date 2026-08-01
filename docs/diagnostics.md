@@ -157,7 +157,7 @@ About the project's own configuration, reported once per run.
 ## Unknown members (CEL0030 to CEL0033)
 
 Members that do not exist on the receiver's resolved type, new in
-v0.0.3. Deliberately conservative: a `mixed`, `object`, or otherwise
+v0.1.0. Deliberately conservative: a `mixed`, `object`, or otherwise
 dynamic receiver is silent; magic methods suppress their own kind
 (`__get`/`__set` for properties, `__call` for methods, `__callStatic`
 for static methods), directly or by inheritance; `stdClass` and

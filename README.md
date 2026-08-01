@@ -14,7 +14,8 @@ PHPStan. Measured end to end,
 [at the pinned protocol](benchmarks/PROTOCOL.md), which states the
 conditions and where the ratio narrows.
 
-> **v0.1.0, the first public release.** The engine is type-aware:
+> **v0.1.0, the first stable release, after the 0.0.x previews.** The
+> engine is type-aware:
 > interprocedural inference, your existing PHPDoc/PHPStan/Psalm
 > annotations honored out of the box, and five diagnostic families,
 > with zero configuration and without ever crashing on any input.
@@ -265,8 +266,8 @@ enabled by default, so existing annotated codebases work on day 1.
 ## Roadmap
 
 `celerrate check` with the correctness group is v0.1.0, the first
-public deliverable. What follows, one pillar at a time, in this order
-and without dates:
+deliverable beyond the 0.0.x previews. What follows, one pillar at a
+time, in this order and without dates:
 
 1. **Framework providers**: dynamic type providers for Eloquent magic
    members and builder chains, Laravel facades, and the Symfony

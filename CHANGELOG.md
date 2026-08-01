@@ -409,7 +409,7 @@ numbers re-published with inference active.
 - The `phpdoc-bridge` plugin, enabled by default: standard PHPDoc,
   the PHPStan dialect, and Psalm synonyms, with coverage, precedence,
   and every table published in
-  [docs/phpdoc-bridge.md](https://github.com/celerrate/celerrate/blob/v0.0.3/docs/phpdoc-bridge.md).
+  [docs/phpdoc-bridge.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/docs/phpdoc-bridge.md).
 - Inline suppressions, honored across all diagnostic families:
   `@phpstan-ignore-line`, `@phpstan-ignore-next-line`,
   `@phpstan-ignore`, and `@psalm-suppress`.
@@ -422,9 +422,9 @@ numbers re-published with inference active.
   one-edit stays sub-second with inference active (median 0.460 s, with
   the flagship warm body-edit at 0.521 s), measured by the committed
   protocol
-  ([benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/v0.0.3/benchmarks/PROTOCOL.md)).
+  ([benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/benchmarks/PROTOCOL.md)).
 - The identifier reference:
-  [docs/diagnostics.md](https://github.com/celerrate/celerrate/blob/v0.0.3/docs/diagnostics.md)
+  [docs/diagnostics.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/docs/diagnostics.md)
   documents every `CEL####` identifier.
 
 ### Changed
