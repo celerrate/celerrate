@@ -14,9 +14,11 @@ use Composer\Util\HttpDownloader;
  * in <package>/bin-cache/ where the shim finds it.
  *
  * Failure stance: every failure is loud and actionable (a checksum
- * mismatch or a missing SHA256SUMS entry aborts), with one tolerance:
- * an unsupported platform warns and skips, because the bootstrap
- * package must never make the host project uninstallable. The shim
+ * mismatch or a missing SHA256SUMS entry aborts). The cases where no
+ * binary can be installed at all warn and skip rather than abort, so
+ * the bootstrap package never makes the host project uninstallable:
+ * an unsupported platform, celerrate/celerrate not being an installed
+ * package, and an install path that cannot be resolved. The shim
  * carries the error if celerrate is actually invoked.
  */
 final class BinaryInstaller
