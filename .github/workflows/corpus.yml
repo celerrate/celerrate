@@ -16,12 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # See ci.yml's `changes` job. The snapshot, bench, benchmark and
-  # phpdoc-cases contexts are required by branch protection, so those jobs
-  # always start and gate every step on `code` (issue #89): on a
-  # documentation-only pull request they no-op in seconds and report
-  # success. The ground-truth, mixed-rate and memory contexts are not
-  # required, so those jobs keep the cheaper job-level skip.
+  # See ci.yml's `changes` job. The snapshot, bench and phpdoc-cases
+  # contexts are required by branch protection, so those jobs always start
+  # and gate every step on `code` (issue #89): on a documentation-only pull
+  # request they no-op in seconds and report success. The ground-truth,
+  # mixed-rate and memory contexts are not required, so those jobs keep the
+  # cheaper job-level skip.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -150,38 +150,13 @@ jobs:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         run: cargo xtask bench --ceilings
 
-  benchmark:
-    needs: changes
-    runs-on: ubuntu-latest
-    # This job shells out to PHP, and a PHPStan run that hangs would
-    # otherwise sit on the runner until GitHub's six-hour default. The
-    # measurement itself costs a couple of minutes; the rest of the
-    # budget is headroom for a cold Cargo cache, a cold corpus, and the
-    # release build the harness needs before it can measure anything.
-    timeout-minutes: 45
-    steps:
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: actions/checkout@v7
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: dtolnay/rust-toolchain@v1
-        with:
-          toolchain: "1.94"
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: Swatinem/rust-cache@v2
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: actions/cache@v4
-        with:
-          path: target/corpus
-          key: corpus-${{ hashFiles('xtask/corpus.pin') }}
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: shivammathur/setup-php@v2
-        with:
-          php-version: "8.4"
-          tools: composer
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        run: sudo apt-get update && sudo apt-get install --yes hyperfine
-      - if: ${{ needs.changes.outputs.code == 'true' }}
-        run: cargo xtask benchmark --gate
+  # There is no PHPStan comparison job. `cargo xtask benchmark --gate`
+  # stays in the tree, tested and reproducible on demand, but the pinned
+  # corpus has 51 first-party files and both tools are dominated by fixed
+  # setup cost at that size, so the harness cannot produce a ratio any
+  # floor could hold. The job returns with a corpus that can carry it
+  # (issue #118); until then a required check that cannot pass would block
+  # every merge. See benchmarks/PROTOCOL.md.
 
   memory:
     needs: changes
