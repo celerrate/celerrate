@@ -14,7 +14,7 @@ use crate::Result;
 /// enabled Celerrate families (unknown symbols and members, argument
 /// checks); the residual asymmetry is disclosed in the protocol.
 const PHPSTAN_RULE_LEVEL: u8 = 5;
-const PHPSTAN_MEMORY_LIMIT: &str = "2G";
+const PHPSTAN_MEMORY_LIMIT: &str = "4G";
 const PHPSTAN_COLD_RUNS: u32 = 3;
 const CELERRATE_COLD_RUNS: u32 = 5;
 
@@ -46,7 +46,7 @@ pub fn run(gate: bool) -> Result<()> {
     let configuration_path = benchmark_directory.join("phpstan.neon");
     std::fs::write(
         &configuration_path,
-        phpstan_configuration(&working.join("src"), &temporary),
+        phpstan_configuration(&working, &temporary),
     )?;
 
     println!(
@@ -142,13 +142,15 @@ pub fn phpstan_version(output: &str) -> Result<String> {
         .ok_or_else(|| format!("unreadable PHPStan version output: {output:?}").into())
 }
 
-/// The generated PHPStan configuration: pinned level, the corpus's
-/// application sources, and a result cache directory outside the
-/// analyzed tree, wiped before every timed run so every run is cold.
-pub fn phpstan_configuration(source_directory: &Path, temporary_directory: &Path) -> String {
+/// The generated PHPStan configuration: pinned level, the whole corpus
+/// working tree — the same file set `celerrate check .` walks, so the
+/// two tools are compared at matched scope — and a result cache
+/// directory outside the analyzed tree, wiped before every timed run so
+/// every run is cold.
+pub fn phpstan_configuration(analyzed_directory: &Path, temporary_directory: &Path) -> String {
     format!(
         "parameters:\n    level: {PHPSTAN_RULE_LEVEL}\n    paths:\n        - \"{}\"\n    tmpDir: \"{}\"\n",
-        source_directory.display(),
+        analyzed_directory.display(),
         temporary_directory.display(),
     )
 }
@@ -206,11 +208,11 @@ mod tests {
     #[test]
     fn the_generated_configuration_pins_level_paths_and_temporary_directory() {
         let configuration = phpstan_configuration(
-            std::path::Path::new("/work/corpus/src"),
+            std::path::Path::new("/work/corpus"),
             std::path::Path::new("/work/phpstan-tmp"),
         );
         assert!(configuration.contains("level: 5"));
-        assert!(configuration.contains("- \"/work/corpus/src\""));
+        assert!(configuration.contains("- \"/work/corpus\""));
         assert!(configuration.contains("tmpDir: \"/work/phpstan-tmp\""));
     }
 }
