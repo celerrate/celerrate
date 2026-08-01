@@ -14,7 +14,10 @@ use crate::Result;
 /// enabled Celerrate families (unknown symbols and members, argument
 /// checks); the residual asymmetry is disclosed in the protocol.
 const PHPSTAN_RULE_LEVEL: u8 = 5;
-const PHPSTAN_MEMORY_LIMIT: &str = "4G";
+/// Passed to PHPStan on the command line so the run does not depend on
+/// the machine's `php.ini`. `2G` is ample now that the vendor tree is
+/// excluded from the analyzed set: the measured runs stay far below it.
+const PHPSTAN_MEMORY_LIMIT: &str = "2G";
 const PHPSTAN_COLD_RUNS: u32 = 3;
 const CELERRATE_COLD_RUNS: u32 = 5;
 
@@ -142,15 +145,29 @@ pub fn phpstan_version(output: &str) -> Result<String> {
         .ok_or_else(|| format!("unreadable PHPStan version output: {output:?}").into())
 }
 
-/// The generated PHPStan configuration: pinned level, the whole corpus
-/// working tree — the same file set `celerrate check .` walks, so the
-/// two tools are compared at matched scope — and a result cache
+/// The generated PHPStan configuration: pinned level, the corpus
+/// working tree with its vendor directory excluded, and a result cache
 /// directory outside the analyzed tree, wiped before every timed run so
 /// every run is cold.
+///
+/// The exclusion is what makes the comparison a comparison. Celerrate
+/// parses and indexes the whole tree so names resolve, but it reports
+/// only on the project's own files: an installed dependency's finding
+/// is not the user's to fix. Pointing PHPStan at the tree root without
+/// the exclusion would rule-check the 9396 vendor files nobody asks it
+/// to check, against the 51 project files Celerrate reports on. This is
+/// also the configuration a real project carries: the corpus's own
+/// `phpstan.dist.neon` lists its source directories and never `vendor`.
+///
+/// Excluding the directory does not hide it from PHPStan's reflection:
+/// the vendor autoloader still resolves every symbol the project's
+/// files reference, which the reported findings confirm.
 pub fn phpstan_configuration(analyzed_directory: &Path, temporary_directory: &Path) -> String {
     format!(
-        "parameters:\n    level: {PHPSTAN_RULE_LEVEL}\n    paths:\n        - \"{}\"\n    tmpDir: \"{}\"\n",
+        "parameters:\n    level: {PHPSTAN_RULE_LEVEL}\n    paths:\n        - \"{}\"\n    \
+         excludePaths:\n        - \"{}\"\n    tmpDir: \"{}\"\n",
         analyzed_directory.display(),
+        analyzed_directory.join("vendor").display(),
         temporary_directory.display(),
     )
 }
@@ -213,6 +230,8 @@ mod tests {
         );
         assert!(configuration.contains("level: 5"));
         assert!(configuration.contains("- \"/work/corpus\""));
+        assert!(configuration.contains("excludePaths:"));
+        assert!(configuration.contains("- \"/work/corpus/vendor\""));
         assert!(configuration.contains("tmpDir: \"/work/phpstan-tmp\""));
     }
 }
