@@ -275,3 +275,6 @@ notices above.
 | --- | --- | --- |
 | CEL0050 | a recorded entry counts more occurrences than the current findings still produce, whether all of them or only some (the code was fixed, the enclosing method was renamed, or an engine upgrade reworded the message) | re-record with `celerrate check --baseline` to refresh the file |
 | CEL0051 | `celerrate-baseline.toml` exists but could not be fully read (invalid TOML, a missing or unsupported version, or a malformed entry); unreadable entries are ignored and their findings reported, while valid entries in the same file still apply | fix the file by hand, or re-record it with `celerrate check --baseline` |
+
+See [Baseline](baseline.md) for recording, applying, the file format,
+and the invariants and failure modes behind these two notices.
