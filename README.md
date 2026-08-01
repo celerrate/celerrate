@@ -8,11 +8,9 @@
 **An extremely fast, all-in-one toolchain for PHP, written in Rust.**
 
 Celerrate type-checks 1.3 million lines of PHP in 1.496 seconds
-cold, and in 0.444 seconds after you edit a function body. Given the
-same corpus and the same file set, that cold run is 35.9x faster than
-PHPStan. Measured end to end,
-[at the pinned protocol](benchmarks/PROTOCOL.md), which states the
-conditions and where the ratio narrows.
+cold, and in 0.444 seconds after you edit a function body. Measured
+end to end, [at the pinned protocol](benchmarks/PROTOCOL.md), which
+states the conditions.
 
 > **v0.1.0, the first stable release, after the 0.0.x previews.** The
 > engine is type-aware:
@@ -98,7 +96,7 @@ What carries over, and what deliberately does not:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of median cold wall clock on symfony/demo, linear scale: PHPStan 2.2.7 at rule level 5 takes 53.898 seconds, Celerrate 1.502 seconds, and a warm Celerrate run with one function body edited 0.444 seconds">
+  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of the median wall clock of full celerrate check runs on symfony/demo, linear scale: cold full analysis 1.496 seconds, warm with one function body edited 0.444 seconds">
 </picture>
 
 Measured by the committed [benchmark protocol](benchmarks/PROTOCOL.md)
@@ -116,21 +114,9 @@ All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. Peak resident memory on the same corpus is
 702 MiB cold and 351 MiB warm.
 
-Against PHPStan 2.2.7 at rule level 5, measured in the same run, in
-the same working tree, with both tools given the same file set and
-neither tool's result cache:
-
-| Tool, cold | Median wall clock |
-| --- | --- |
-| PHPStan 2.2.7 | 53.898 s |
-| Celerrate | 1.502 s |
-
-**35.9x at that scope.** The ratio is a property of the input, not a
-constant: on a small tree PHP's interpreter startup dominates
-PHPStan's wall clock and the gap narrows sharply, to roughly 12x on
-this corpus's `src/` alone. Neither tool's rule set is a subset of the
-other's either. The protocol states all of it, and how to reproduce
-both numbers.
+No comparison against another analyzer is published here. The
+protocol states what was measured against PHPStan on this corpus, and
+why that measurement supports no claim about either tool.
 
 ## What works today
 

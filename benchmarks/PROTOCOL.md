@@ -13,7 +13,10 @@ scrutiny is not published.
   `composer install --no-interaction --no-progress --no-scripts
   --no-plugins --ignore-platform-reqs`
 - Size: 9447 PHP files, 1302218 lines of PHP, vendor tree included -
-  that is the tree `celerrate check` analyzes.
+  that is the tree `celerrate check` analyzes. Of those, 51 files are
+  the project's own and 9396 are the installed vendor tree. Celerrate
+  parses and indexes all of them so names resolve, and rule-checks the
+  51: a dependency's finding is not the user's to fix.
 
 symfony/demo is the corpus because it has the exact shape
 `celerrate check` is aimed at: a real user project, with application
@@ -28,7 +31,7 @@ installed from its lock file.
 - Binary: `celerrate` built with `cargo build --release`, version
   `celerrate --version` reports at the commit the results name
 - PHP: 8.5.0 (cli, NTS, Homebrew build) - the interpreter the
-  comparison below runs PHPStan under
+  comparison harness runs PHPStan under
 - OPcache: off on the command line. `opcache.enable_cli` reads `0`,
   which is PHP's own default there, so PHPStan is measured the way a
   user gets it out of the box rather than under a tuned interpreter.
@@ -110,25 +113,27 @@ reconducted from the semantic core's closure budget.
 
 Within budget, no eviction configured.
 
-## The comparison
+## Why no comparison against PHPStan is published
 
+This protocol publishes no ratio against PHPStan. What follows is what
+was measured and why it was withheld, so that the reasoning is visible
+rather than the subject simply being absent.
+
+The harness exists, is committed, and is reproducible:
 `cargo xtask benchmark` measures PHPStan and Celerrate cold, in the
-same run, on the same corpus working tree
-(`target/benchmark/corpus`), and divides the two medians. Everything
-the ratio depends on is pinned in the repository, so a third party can
-rerun the harness and land on the same setup.
+same run, on the same corpus working tree (`target/benchmark/corpus`),
+and everything it depends on is pinned in the repository.
 
 - **PHPStan version**: 2.2.7, installed from the committed
   `benchmarks/phpstan/composer.lock` and run under the PHP named
   above.
 - **Rule level**: 5. It is the closest match to the families the
   measured Celerrate binary enables: unknown symbols, unknown members,
-  and argument checks. The match is not exact, and the residual is
-  disclosed rather than hidden. Celerrate additionally runs its
-  nullability family (CEL0034) and its version-availability family
-  (CEL0021 to CEL0024); PHPStan at level 5 runs rules Celerrate has no
-  equivalent for. Neither tool's rule set is a subset of the other's,
-  and no level makes it one.
+  and argument checks. The match is not exact. Celerrate additionally
+  runs its nullability family (CEL0034) and its version-availability
+  family (CEL0021 to CEL0024); PHPStan at level 5 runs rules Celerrate
+  has no equivalent for. Neither tool's rule set is a subset of the
+  other's, and no level makes it one.
 - **Result cache**: off, on both sides. PHPStan's `tmpDir` is
   `target/benchmark/phpstan-tmp`, outside the analyzed tree, and it is
   removed before every timed run; Celerrate's `.celerrate` is removed
@@ -139,36 +144,48 @@ rerun the harness and land on the same setup.
   auto-detects its worker count and the generated configuration
   overrides no `parallel` parameter; Celerrate uses its default thread
   pool, one worker per logical core (10 on this machine).
-- **Analyzed paths**: matched scope. The generated configuration sets
-  three parameters and nothing else - `level`, `paths`, `tmpDir` - and
-  `paths` is the corpus working tree root, which is exactly the file
-  set `celerrate check .` walks: 9447 PHP files, 1302218 lines, vendor
-  tree included. An earlier version of this harness pointed PHPStan at
-  the corpus's `src/` alone while Celerrate walked the whole tree.
-  That is not a comparison, and it has been corrected: the two tools
-  are given the same work.
-- **Memory limit**: `4G`, passed to PHPStan on the command line. The
-  matched scope needs the headroom, and passing it explicitly keeps
-  the run from depending on the machine's `php.ini`.
+- **Reported file set**: the same 51 files on both sides. The
+  generated configuration sets `level`, `paths`, `tmpDir`, and an
+  `excludePaths` entry for the working tree's `vendor` directory, so
+  PHPStan rule-checks the files the project owns, which is the set
+  Celerrate reports on. The corpus's own `phpstan.dist.neon` does the
+  same thing: it lists the project's source directories and never
+  mentions `vendor`. Reflection is unaffected, because PHPStan still
+  loads the corpus's `vendor/autoload.php`.
+- **Memory limit**: `2G`, passed to PHPStan on the command line so the
+  run does not depend on the machine's `php.ini`. The measured runs
+  stay far below it.
 - **Invocation**: `php benchmarks/phpstan/vendor/bin/phpstan analyse
-  --configuration <generated> --no-progress --memory-limit 4G` against
+  --configuration <generated> --no-progress --memory-limit 2G` against
   `celerrate check .`, both timed by hyperfine, both in the same
   working tree. `--ignore-failure` here too: both tools exit 1 when
-  they report findings, which is a completed analysis.
+  they report diagnostics, which is a completed analysis.
 - **Runs and aggregate**: 3 cold PHPStan runs, 5 cold Celerrate runs,
-  the median of each, and the ratio of the two medians.
+  and the median of each.
 
-### Where the ratio narrows
+What the harness cannot do is separate the two tools on this corpus.
 
-The ratio is a property of the input, not a constant. On a small tree
-the wall clock is dominated by PHP's interpreter startup and
-bootstrapping rather than by analysis, and the gap closes. Measured on
-this machine with the same two binaries, the corpus's `src/` alone (34
-files, 3424 lines) takes PHPStan about 2.1 s against Celerrate's about
-0.17 s: roughly 12x, against the 35.9x the full tree gives below. The
-published ratio is the full-tree one, because the full tree is what
-`celerrate check .` analyzes and what a user waits on, but a user
-checking a handful of files should expect the smaller number.
+Only 51 of the corpus's 9447 files are the project's own. At that size
+neither wall clock is decided by rule checking. PHPStan pays for the
+PHP interpreter's startup and its own bootstrapping; Celerrate pays
+for walking, parsing, and indexing the 9396 vendor files it needs in
+order to resolve names. Measured on the machine named above, PHPStan's
+cold median lands near 2.6 s and Celerrate's near 1.6 s, and three
+consecutive harness runs on that machine within one hour produced
+ratios of 1.4, 2.0, and 1.7. A figure that moves that far between
+runs, on fixed inputs, is measuring setup cost rather than either
+tool's throughput.
+
+The two workloads also differ in kind, not only in size. On this
+corpus Celerrate reports nothing at all and PHPStan reports five
+diagnostics, none of them in a family Celerrate implements. Even a
+stable ratio here would be timing two different pieces of work.
+
+So the measurement was taken and is withheld. A comparison will be
+published once this protocol pins a corpus whose first-party code is
+large enough that rule checking, and not fixed setup cost, decides
+both wall clocks. That corpus is tracked in issue #118. The harness is
+unchanged and waiting for it.
 
 ## Substance
 
@@ -196,19 +213,19 @@ cargo xtask benchmark   # installs the pinned PHPStan itself
 
 ## The gate in CI
 
-The earlier position - no tool comparison published, on the ground
-that a cross-scope timing would be misleading - is superseded by the
-protocol above: the comparison is now measured at matched scope and
-published with its asymmetries stated.
-
 What CI can hold is narrower than what this document reports. A shared
 runner cannot hold an absolute wall clock: its cores, its neighbours,
-and its storage vary from job to job. So the gate is the same-machine
-ratio, `cargo xtask benchmark --gate`, with a floor of 20x. Both tools
-run on whatever runner the job landed on, inside that one job, and the
-ratio survives a slow runner because a slow runner slows both.
+and its storage vary from job to job.
 
-The sub-second incremental target is not gated there at all. It is
+No comparison runs in CI. `cargo xtask benchmark --gate` exists and is
+tested, and it encodes a same-machine cold-ratio floor, which is the
+form a shared runner could carry: a slow runner slows both tools. But
+on the pinned corpus the harness cannot produce a figure any floor
+could honestly be applied to, so no workflow job runs it. The gate is
+wired back into CI together with the corpus that can carry it (issue
+#118).
+
+The sub-second incremental target is not gated in CI either. It is
 held on the reference machine by this protocol run. In CI it is
 guarded only structurally, by `cargo xtask bench --ceilings`: generous
 per-scenario ceilings that catch the cache silently ceasing to work
@@ -216,9 +233,11 @@ and claim nothing about speed.
 
 ## Results
 
-Protocol run of 2026-08-01, at commit `9c24879`, binary version
-`celerrate 0.0.3` (a single run of the harnesses; the raw exports live
-under `target/bench/` and `target/benchmark/` and are not committed):
+Protocol run of 2026-08-01, at commit `9c24879`, which is the code
+that becomes 0.1.0; the binary still reported `celerrate 0.0.3` there,
+because the run predates the version bump. A single run of the
+harnesses; the raw exports live under `target/bench/` and
+`target/benchmark/` and are not committed:
 
 | Scenario | Median |
 | --- | --- |
@@ -234,16 +253,10 @@ about the run-to-run spread hyperfine reports for them on this
 machine: their ordering carries no signal, and no edit scenario is
 measurably more expensive than the no-change floor.
 
-The comparison, same corpus, same run:
-
-| Tool | Cold median |
-| --- | --- |
-| PHPStan 2.2.7, rule level 5 | 53.898 s |
-| Celerrate 0.0.3 | 1.502 s |
-
-Cold ratio: **35.9x**. The Celerrate median here is measured in the
-comparison harness's own working tree, and it agrees with the cold
-full scenario above (1.496 s) within the run-to-run spread.
+The cold full median is the aggregate of five runs that included one
+2.804 s excursion, the usual first-run cold-cache behavior; the
+median is what this protocol publishes precisely so that a single
+excursion does not move the figure.
 
 Per-scenario cache statistics (one manual run each with
 `CELERRATE_CACHE_STATS=1`, recorded verbatim):
@@ -269,6 +282,6 @@ This run records cold full 1.496 s, warm no-change 0.452 s, warm
 body-edit 0.444 s. Cold full is flat against the previous run, inside
 its spread, and warm body-edit came down from 0.521 s: the type
 engine's cost stopped growing between the two runs. The comparison the
-earlier runs pointed forward to is no longer withheld - it is measured
-and published above, at 35.9x against PHPStan on this corpus, against
-an ambition of roughly 20x.
+earlier runs pointed forward to stays withheld, for the reason stated
+above: this corpus cannot separate the two tools at its first-party
+size.
