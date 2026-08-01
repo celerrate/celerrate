@@ -88,3 +88,26 @@ jobs:
         run: |
           cargo xtask release-notes "${GITHUB_REF_NAME#v}" > notes.md
           gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes-file notes.md artifacts/*
+
+  split-composer:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - name: Push the package split and its tag to the read-only mirror
+        env:
+          SPLIT_KEY: ${{ secrets.COMPOSER_SPLIT_SSH_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          printf '%s\n' "$SPLIT_KEY" > ~/.ssh/composer-split
+          chmod 600 ~/.ssh/composer-split
+          # GitHub's published Ed25519 host key, pinned rather than scanned.
+          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> ~/.ssh/known_hosts
+          export GIT_SSH_COMMAND="ssh -i ~/.ssh/composer-split -o IdentitiesOnly=yes"
+          mirror="git@github.com:celerrate/composer-bootstrap.git"
+          split="$(git subtree split --prefix packages/composer-bootstrap HEAD)"
+          git push --force "$mirror" "${split}:refs/heads/main"
+          git push "$mirror" "${split}:refs/tags/${GITHUB_REF_NAME}"
