@@ -16,12 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # See ci.yml's `changes` job. The snapshot, bench and phpdoc-cases contexts
-  # are required by branch protection, so those jobs always start and gate
-  # every step on `code` (issue #89): on a documentation-only pull request
-  # they no-op in seconds and report success. The ground-truth, mixed-rate
-  # and memory contexts are not required, so those jobs keep the cheaper
-  # job-level skip.
+  # See ci.yml's `changes` job. The snapshot, bench, benchmark and
+  # phpdoc-cases contexts are required by branch protection, so those jobs
+  # always start and gate every step on `code` (issue #89): on a
+  # documentation-only pull request they no-op in seconds and report
+  # success. The ground-truth, mixed-rate and memory contexts are not
+  # required, so those jobs keep the cheaper job-level skip.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -149,6 +149,33 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes hyperfine
       - if: ${{ needs.changes.outputs.code == 'true' }}
         run: cargo xtask bench --ceilings
+
+  benchmark:
+    needs: changes
+    runs-on: ubuntu-latest
+    steps:
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/checkout@v7
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: Swatinem/rust-cache@v2
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: actions/cache@v4
+        with:
+          path: target/corpus
+          key: corpus-${{ hashFiles('xtask/corpus.pin') }}
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: sudo apt-get update && sudo apt-get install --yes hyperfine
+      - if: ${{ needs.changes.outputs.code == 'true' }}
+        run: cargo xtask benchmark --gate
 
   memory:
     needs: changes
