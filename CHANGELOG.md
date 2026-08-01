@@ -155,6 +155,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   here would turn every suppression of a rule Celerrate does not emit
   yet into a warning storm on an imported codebase. See
   `docs/phpdoc-bridge.md`.
+- The install script: `curl -fsSL .../install.sh | sh` downloads the
+  platform binary, verifies its SHA-256 checksum, and installs it into
+  `~/.local/bin` (`--version`, `--to`, and a base-URL override for
+  mirrors).
+- The Composer bootstrap package `celerrate/celerrate`: installs the
+  checksum-verified platform binary on `composer install` and exposes
+  `vendor/bin/celerrate`.
+- `cargo xtask dist` builds and packages one target's release archive
+  deterministically; the release workflow now packages through it and
+  attests its artifacts.
 
 ### Changed
 

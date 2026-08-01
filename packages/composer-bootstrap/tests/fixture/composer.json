@@ -1,0 +1,24 @@
+{
+    "name": "celerrate/fixture",
+    "description": "Fixture project proving the Composer bootstrap installs the binary",
+    "license": ["MIT", "Apache-2.0"],
+    "repositories": [
+        {
+            "type": "path",
+            "url": "../..",
+            "options": {
+                "symlink": false
+            }
+        }
+    ],
+    "require": {
+        "celerrate/celerrate": "*"
+    },
+    "minimum-stability": "dev",
+    "config": {
+        "allow-plugins": {
+            "celerrate/celerrate": true
+        },
+        "secure-http": false
+    }
+}

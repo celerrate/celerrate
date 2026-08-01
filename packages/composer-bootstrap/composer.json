@@ -1,0 +1,34 @@
+{
+    "name": "celerrate/celerrate",
+    "description": "Celerrate for Composer projects: installs the platform's celerrate binary and exposes vendor/bin/celerrate",
+    "type": "composer-plugin",
+    "license": ["MIT", "Apache-2.0"],
+    "keywords": ["static analysis", "php", "phpstan", "analyzer"],
+    "require": {
+        "php": ">=7.4",
+        "ext-phar": "*",
+        "ext-zlib": "*",
+        "composer-plugin-api": "^2.0"
+    },
+    "require-dev": {
+        "composer/composer": "^2.0",
+        "phpunit/phpunit": "^9.6 || ^11.5 || ^12.0"
+    },
+    "autoload": {
+        "psr-4": {
+            "Celerrate\\Bootstrap\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Celerrate\\Bootstrap\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "class": "Celerrate\\Bootstrap\\Plugin"
+    },
+    "bin": ["celerrate"],
+    "scripts": {
+        "test": "phpunit"
+    }
+}
