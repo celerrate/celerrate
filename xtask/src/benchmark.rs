@@ -1,4 +1,5 @@
-//! The comparison harness behind the published PHPStan ratio: measure
+//! The PHPStan comparison harness, whose ratio is currently withheld
+//! rather than published (see `COLD_RATIO_FLOOR`): measure
 //! PHPStan and Celerrate cold on the same corpus working tree in the
 //! same run, and gate the ratio, not wall-clock — shared runners are
 //! too noisy for absolute thresholds, but a ratio taken on one machine
@@ -21,8 +22,15 @@ const PHPSTAN_MEMORY_LIMIT: &str = "2G";
 const PHPSTAN_COLD_RUNS: u32 = 3;
 const CELERRATE_COLD_RUNS: u32 = 5;
 
-/// The published claim's floor: at least 20x faster than PHPStan on a
-/// cold full analysis. Gated as a same-machine ratio.
+/// The standing performance target, expressed as a floor: at least 20x
+/// faster than PHPStan on a cold full analysis, checked as a
+/// same-machine ratio. Nothing is published against it today and no
+/// workflow runs this gate: on the pinned corpus only 51 of the 9447
+/// files are the project's own, so both tools are dominated by fixed
+/// setup cost and the measured ratio says nothing about either one.
+/// The gate is wired back into continuous integration with a corpus
+/// that can carry the measurement (issue #118); the target itself
+/// stands unmeasured in the meantime.
 const COLD_RATIO_FLOOR: f64 = 20.0;
 
 /// Runs the comparison and prints the medians and the ratio. With
