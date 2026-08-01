@@ -528,8 +528,8 @@ names, the `v0.1.0` tag itself. Both wait on the same thing, a benchmark
 corpus whose first-party code is large enough to separate two analyzers
 (issue #118).
 
-The full local gate suite ran clean on that branch (twenty-four commits,
-merging to `main` with no tag): `cargo fmt --all -- --check`, `cargo
+The full local gate suite ran clean on the branch that carries the work,
+`feat-cli-release`: `cargo fmt --all -- --check`, `cargo
 clippy --workspace --all-targets -- -D warnings`, `cargo test
 --workspace`, `cargo deny check`, `cargo xtask dependency-shape`, `cargo
 xtask emission-scan`, `cargo xtask compile-stubs --check`, `cargo xtask
