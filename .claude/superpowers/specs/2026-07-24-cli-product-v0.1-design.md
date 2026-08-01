@@ -1,7 +1,8 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Closed (v0.1.0, 2026-08-01)
+Status: Open (product part complete; the published comparison and the
+`v0.1.0` tag remain)
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -517,25 +518,34 @@ The order proposed to the planning stage (dependencies respected):
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
 
-## Closure record (v0.1.0, 2026-08-01)
+## State of play (2026-08-01)
 
-The full local gate suite ran clean on the branch that carries this
-sub-project (fourteen commits, merging to `main` as the `v0.1.0` tag): `cargo
-fmt --all -- --check`, `cargo clippy --workspace --all-targets -- -D
-warnings`, `cargo test --workspace`, `cargo deny check`, `cargo xtask
-dependency-shape`, `cargo xtask emission-scan`, `cargo xtask compile-stubs
---check`, `cargo xtask phpdoc-cases --check`, `cargo xtask corpus`, `cargo
-xtask mixed-rate`, `cargo xtask bench --ceilings`, `cargo xtask benchmark
---gate`. The corpus snapshot and the mixed-rate baseline are byte-identical
-to their committed files, as expected since no analysis code changed here.
-The benchmark gate measured a cold ratio of 45.4x against its 20x floor.
-This figure is this closure run's own measurement, distinct from the
-35.9x reference-protocol figure amendment 3 restores below (pinned in
-`benchmarks/PROTOCOL.md` and cited in the README): both are separate runs
-of the same matched-scope comparison, neither revises the other, and both
-clear the floor.
+This sub-project is not closed. Its product part is complete and its
+release part is not: the branch that carries the work lands on `main`
+without a tag, and two things from section 1 remain open, the published
+comparison (inside gate 7) and the release event the closure criterion
+names, the `v0.1.0` tag itself. Both wait on the same thing, a benchmark
+corpus whose first-party code is large enough to separate two analyzers
+(issue #118).
 
-The nine closure gates from section 1, each with where it is held:
+The full local gate suite ran clean on that branch (twenty-four commits,
+merging to `main` with no tag): `cargo fmt --all -- --check`, `cargo
+clippy --workspace --all-targets -- -D warnings`, `cargo test
+--workspace`, `cargo deny check`, `cargo xtask dependency-shape`, `cargo
+xtask emission-scan`, `cargo xtask compile-stubs --check`, `cargo xtask
+phpdoc-cases --check`, `cargo xtask corpus`, `cargo xtask mixed-rate`,
+`cargo xtask bench --ceilings`. The corpus snapshot and the mixed-rate
+baseline are byte-identical to their committed files, as expected since
+no analysis code changed here.
+
+`cargo xtask benchmark --gate` is the one command in the suite that does
+not pass, and it is excluded from the list above rather than reported
+green. On the pinned corpus it measures a cold ratio between 1.4x and
+2.0x against its 20x floor, so it exits 1. Amendment 3 below records why
+that is neither a defect in the tool nor a defect in the harness.
+
+The nine closure gates from section 1, each with where it is held or what
+it waits on:
 
 1. **Zero-config parity**: held by `cargo xtask corpus` (the `corpus` job in
    `.github/workflows/corpus.yml`), which runs the pinned Symfony corpus
@@ -567,10 +577,19 @@ The nine closure gates from section 1, each with where it is held:
    refusal), and by `packages/composer-bootstrap/tests/` (archive,
    checksum, platform detection, release URL) for the Composer bootstrap
    package against a fixture project.
-7. **Benchmark**: held by the protocol committed at
-   `benchmarks/PROTOCOL.md` and reproduced in CI by the `benchmark` job in
-   `.github/workflows/corpus.yml` (`cargo xtask benchmark --gate`), which
-   asserts the ratio floor on the same machine in the same run.
+7. **Benchmark**: partly held, and the only gate that is not. The
+   protocol is committed at `benchmarks/PROTOCOL.md` with its harnesses,
+   and the absolute side is held: the five scenario medians and the peak
+   memory numbers come from a reference-machine run the document names,
+   `cargo xtask memory --ceiling` holds the memory budget in the `memory`
+   job of `.github/workflows/corpus.yml`, and `cargo xtask bench
+   --ceilings` holds the incremental path structurally in the `bench` job
+   of the same workflow. The comparison side is **not** held: no ratio is
+   published, and the `benchmark` job has been removed from the workflow,
+   because a required check that cannot pass blocks every merge.
+   `cargo xtask benchmark` and its `--gate` flag stay in the tree, tested
+   and reproducible on demand; they are re-wired into CI with the corpus
+   that can carry them (issue #118).
 8. **Documentation**: held by the README landing page and the `docs/` pass
    (`docs/configuration.md`, `docs/baseline.md`, `docs/migration.md`,
    `docs/ci.md`, plus the existing `docs/diagnostics.md` and
@@ -579,19 +598,34 @@ The nine closure gates from section 1, each with where it is held:
    (the `mixed-rate` job in `.github/workflows/corpus.yml`), unmoved by
    construction since no type work happened in this sub-project.
 
-**Three amendments to this design, recorded at closure:**
+**Three amendments to this design, recorded here:**
 
-1. The CI gate asserts the cold ratio only. The sub-second incremental
-   target is held by the protocol run on the reference machine and guarded
-   structurally in CI by `cargo xtask bench --ceilings`, because shared
-   runners cannot hold an absolute wall-clock threshold.
-2. Packagist publication rides a subtree-split mirror,
-   `celerrate/composer-bootstrap`, pushed by a release-workflow job.
-3. The comparison is measured at matched scope: PHPStan's generated
-   configuration lists the corpus working tree root, the same file set
-   `celerrate check .` walks. Measuring PHPStan against the corpus's `src/`
-   alone while Celerrate analyzed the whole tree produced a 1.4x ratio,
-   because at that size PHP's interpreter startup dominates PHPStan's
-   wall-clock rather than analysis. At matched scope the measured ratio is
-   35.9x. The spec's own wording, "roughly 20x faster than PHPStan at
-   matched scope", is what this amendment restores.
+1. Section 8 specified a CI gate asserting both published targets. What
+   was built asserted the cold ratio only: shared runners cannot hold an
+   absolute wall-clock threshold, so the sub-second incremental target is
+   held by the protocol run on the reference machine and guarded
+   structurally in CI by `cargo xtask bench --ceilings`. Amendment 3 then
+   removed the ratio assertion from CI as well, so no comparison runs
+   there at all today.
+2. Section 8's "on Packagist" is delivered through a subtree-split
+   mirror, `celerrate/composer-bootstrap`, pushed by a release-workflow
+   job, rather than by publishing the monorepo path directly.
+3. **The pinned corpus cannot support a comparison with PHPStan, and the
+   comparison is withheld until a corpus that can is pinned (issue
+   #118).** `celerrate check .` parses and indexes the whole tree so that
+   names resolve, then rule-checks only the 51 files the project owns; a
+   dependency's finding is not the user's to fix, and that behavior is
+   correct and unchanged. Giving PHPStan the same work therefore means
+   excluding the 9396 vendor files from its analyzed set, which is what
+   the corpus's own `phpstan.dist.neon` does. At 51 first-party files
+   neither wall clock is decided by rule checking: PHP's interpreter
+   startup dominates one side, the whole-tree index dominates the other,
+   and three consecutive harness runs on one machine within an hour
+   measured 1.4x, 2.0x, and 1.7x. An earlier version of the harness
+   pointed PHPStan at all 9447 files while Celerrate reported on 51; the
+   35.9x it produced measured that difference in work as much as
+   anything else, and it is withdrawn from every document that carried
+   it. The parent design's "at least ~20x faster than PHPStan" therefore
+   stands here as an unmeasured ambition, neither met nor missed;
+   `benchmarks/PROTOCOL.md` states that position publicly instead of
+   publishing a ratio.

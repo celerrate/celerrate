@@ -583,6 +583,13 @@ Held in CI by benchmarks: at least ~20x faster than PHPStan on a cold full
 analysis, and sub-second incremental updates on single-file changes in a
 Symfony-sized project.
 
+Position at the end of the CLI product sub-project: the incremental target
+is met and published, and the cold comparison is unmeasured rather than met
+or missed. The harness is committed and reproducible, but the pinned corpus
+has 51 first-party files, so both tools are dominated by fixed setup cost
+there and no ratio taken on it separates them; the target waits on a corpus
+that can carry it (issue #118), and the ambition itself stands.
+
 Published numbers follow a **pinned benchmark protocol**, committed to the
 repository with the harness: PHPStan version, rule level, result cache
 explicitly off, `--parallel` setting, PHP version and opcache state, corpus
