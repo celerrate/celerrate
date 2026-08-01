@@ -135,6 +135,9 @@ pull-request annotations with no further setup:
 - run: celerrate check --output=github
 ```
 
+See [Continuous integration](ci.md) for a complete workflow, including
+the SARIF upload alternative and the baseline in CI.
+
 ## Exit codes
 
 Identical in every format: 0 clean, 1 diagnostics reported, 2 internal
