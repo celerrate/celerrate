@@ -249,7 +249,7 @@ fn prime(binary: &Path, working: &Path) -> Result<()> {
 /// (never analyzed) and `.celerrate` (each scenario controls the
 /// cache). Symlinks (composer's `vendor/bin`) are copied by content,
 /// which is fine: the tree is read, never executed.
-fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
+pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
         let entry = entry?;
@@ -308,7 +308,7 @@ fn restore_prime_apply(
 
 /// A named check with an installation pointer beats a bare "No such
 /// file or directory" from the spawn.
-fn ensure_hyperfine() -> Result<()> {
+pub(crate) fn ensure_hyperfine() -> Result<()> {
     let found = Command::new("hyperfine")
         .arg("--version")
         .stdout(std::process::Stdio::null())

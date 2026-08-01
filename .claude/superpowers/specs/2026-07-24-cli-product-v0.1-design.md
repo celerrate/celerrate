@@ -1,7 +1,8 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Draft
+Status: Open (product part complete; the published comparison and the
+`v0.1.0` tag remain)
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -516,3 +517,115 @@ The order proposed to the planning stage (dependencies respected):
 - **A documentation website for v0.1**: the README and `docs/` carry the
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
+
+## State of play (2026-08-01)
+
+This sub-project is not closed. Its product part is complete and its
+release part is not: the branch that carries the work lands on `main`
+without a tag, and two things from section 1 remain open, the published
+comparison (inside gate 7) and the release event the closure criterion
+names, the `v0.1.0` tag itself. Both wait on the same thing, a benchmark
+corpus whose first-party code is large enough to separate two analyzers
+(issue #118).
+
+The full local gate suite ran clean on the branch that carries the work,
+`feat-cli-release`: `cargo fmt --all -- --check`, `cargo
+clippy --workspace --all-targets -- -D warnings`, `cargo test
+--workspace`, `cargo deny check`, `cargo xtask dependency-shape`, `cargo
+xtask emission-scan`, `cargo xtask compile-stubs --check`, `cargo xtask
+phpdoc-cases --check`, `cargo xtask corpus`, `cargo xtask mixed-rate`,
+`cargo xtask bench --ceilings`. The corpus snapshot and the mixed-rate
+baseline are byte-identical to their committed files, as expected since
+no analysis code changed here.
+
+`cargo xtask benchmark --gate` is the one command in the suite that does
+not pass, and it is excluded from the list above rather than reported
+green. On the pinned corpus it measures a cold ratio between 1.4x and
+2.0x against its 20x floor, so it exits 1. Amendment 3 below records why
+that is neither a defect in the tool nor a defect in the harness.
+
+The nine closure gates from section 1, each with where it is held or what
+it waits on:
+
+1. **Zero-config parity**: held by `cargo xtask corpus` (the `corpus` job in
+   `.github/workflows/corpus.yml`), which runs the pinned Symfony corpus
+   without a `celerrate.toml` and asserts the report is byte-identical to
+   the committed snapshot.
+2. **The configuration matrix**: held by
+   `crates/celerrate_cli/tests/configuration.rs` and the `celerrate_config`
+   crate's own unit tests for the per-key pins (include/exclude, `php`,
+   `enabled`, `[severity]`) and their configuration diagnostics, and by
+   `crates/celerrate_cli/tests/cache_configuration.rs` for the digest
+   joining the persistent cache key, proven warm and cold.
+3. **The baseline property suite**: held by
+   `crates/celerrate_cli/tests/baseline.rs` (survives line movement, dies
+   with its diagnostic, never masks a second occurrence, deterministic
+   sorting).
+4. **`migrate --from-phpstan` end to end**: held by
+   `crates/celerrate_cli/tests/migrate.rs` (the PHPStan project fixture,
+   one command, a clean first run, "only new problems fail" continuity).
+5. **Formats**: held by `crates/celerrate_cli/tests/output_json.rs`
+   validating against the committed
+   `schemas/celerrate-json-report.v1.schema.json`,
+   `crates/celerrate_cli/tests/output_sarif.rs` validating against
+   `schemas/sarif-2.1.0.schema.json`, and
+   `crates/celerrate_cli/tests/output_github.rs` for the GitHub format
+   snapshot.
+6. **Release dry-run**: held by the `dist` job in
+   `.github/workflows/ci.yml` (the five-target build matrix and the
+   `install.sh` integration test, including its checksum-tampering
+   refusal), and by `packages/composer-bootstrap/tests/` (archive,
+   checksum, platform detection, release URL) for the Composer bootstrap
+   package against a fixture project.
+7. **Benchmark**: partly held, and the only gate that is not. The
+   protocol is committed at `benchmarks/PROTOCOL.md` with its harnesses,
+   and the absolute side is held: the five scenario medians and the peak
+   memory numbers come from a reference-machine run the document names,
+   `cargo xtask memory --ceiling` holds the memory budget in the `memory`
+   job of `.github/workflows/corpus.yml`, and `cargo xtask bench
+   --ceilings` holds the incremental path structurally in the `bench` job
+   of the same workflow. The comparison side is **not** held: no ratio is
+   published, and the `benchmark` job has been removed from the workflow,
+   because a required check that cannot pass blocks every merge.
+   `cargo xtask benchmark` and its `--gate` flag stay in the tree, tested
+   and reproducible on demand; they are re-wired into CI with the corpus
+   that can carry them (issue #118).
+8. **Documentation**: held by the README landing page and the `docs/` pass
+   (`docs/configuration.md`, `docs/baseline.md`, `docs/migration.md`,
+   `docs/ci.md`, plus the existing `docs/diagnostics.md` and
+   `docs/output-formats.md`); a document, not a test.
+9. **The mixed-rate baseline unchanged**: held by `cargo xtask mixed-rate`
+   (the `mixed-rate` job in `.github/workflows/corpus.yml`), unmoved by
+   construction since no type work happened in this sub-project.
+
+**Three amendments to this design, recorded here:**
+
+1. Section 8 specified a CI gate asserting both published targets. What
+   was built asserted the cold ratio only: shared runners cannot hold an
+   absolute wall-clock threshold, so the sub-second incremental target is
+   held by the protocol run on the reference machine and guarded
+   structurally in CI by `cargo xtask bench --ceilings`. Amendment 3 then
+   removed the ratio assertion from CI as well, so no comparison runs
+   there at all today.
+2. Section 8's "on Packagist" is delivered through a subtree-split
+   mirror, `celerrate/composer-bootstrap`, pushed by a release-workflow
+   job, rather than by publishing the monorepo path directly.
+3. **The pinned corpus cannot support a comparison with PHPStan, and the
+   comparison is withheld until a corpus that can is pinned (issue
+   #118).** `celerrate check .` parses and indexes the whole tree so that
+   names resolve, then rule-checks only the 51 files the project owns; a
+   dependency's finding is not the user's to fix, and that behavior is
+   correct and unchanged. Giving PHPStan the same work therefore means
+   excluding the 9396 vendor files from its analyzed set, which is what
+   the corpus's own `phpstan.dist.neon` does. At 51 first-party files
+   neither wall clock is decided by rule checking: PHP's interpreter
+   startup dominates one side, the whole-tree index dominates the other,
+   and three consecutive harness runs on one machine within an hour
+   measured 1.4x, 2.0x, and 1.7x. An earlier version of the harness
+   pointed PHPStan at all 9447 files while Celerrate reported on 51; the
+   35.9x it produced measured that difference in work as much as
+   anything else, and it is withdrawn from every document that carried
+   it. The parent design's "at least ~20x faster than PHPStan" therefore
+   stands here as an unmeasured ambition, neither met nor missed;
+   `benchmarks/PROTOCOL.md` states that position publicly instead of
+   publishing a ratio.

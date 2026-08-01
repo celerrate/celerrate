@@ -72,7 +72,7 @@ member's native declaration.
 
 ## Suppressions
 
-Honored from v0.0.3 on, across **all** diagnostic families, with the
+Honored from v0.1.0 on, across **all** diagnostic families, with the
 posture "over-suppression, never under-suppression":
 
 | Written form | Comment kind | Directive |

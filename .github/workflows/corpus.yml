@@ -16,12 +16,12 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  # See ci.yml's `changes` job. The snapshot, bench and phpdoc-cases contexts
-  # are required by branch protection, so those jobs always start and gate
-  # every step on `code` (issue #89): on a documentation-only pull request
-  # they no-op in seconds and report success. The ground-truth, mixed-rate
-  # and memory contexts are not required, so those jobs keep the cheaper
-  # job-level skip.
+  # See ci.yml's `changes` job. The snapshot, bench and phpdoc-cases
+  # contexts are required by branch protection, so those jobs always start
+  # and gate every step on `code` (issue #89): on a documentation-only pull
+  # request they no-op in seconds and report success. The ground-truth,
+  # mixed-rate and memory contexts are not required, so those jobs keep the
+  # cheaper job-level skip.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -149,6 +149,14 @@ jobs:
         run: sudo apt-get update && sudo apt-get install --yes hyperfine
       - if: ${{ needs.changes.outputs.code == 'true' }}
         run: cargo xtask bench --ceilings
+
+  # There is no PHPStan comparison job. `cargo xtask benchmark --gate`
+  # stays in the tree, tested and reproducible on demand, but the pinned
+  # corpus has 51 first-party files and both tools are dominated by fixed
+  # setup cost at that size, so the harness cannot produce a ratio any
+  # floor could hold. The job returns with a corpus that can carry it
+  # (issue #118); until then a required check that cannot pass would block
+  # every merge. See benchmarks/PROTOCOL.md.
 
   memory:
     needs: changes

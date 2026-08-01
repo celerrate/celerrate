@@ -12,7 +12,9 @@
 //! snapshot baseline; `fetch-phpdoc-parser` and
 //! `phpdoc-cases` fetch the pinned phpstan/phpdoc-parser snapshot and
 //! extract its `TypeParserTest` inputs into the committed case file the
-//! phpdoc-bridge coverage test consumes; `memory` measures peak RSS on
+//! phpdoc-bridge coverage test consumes; `benchmark` measures the pinned
+//! PHPStan and Celerrate cold on the same corpus working tree in the
+//! same run and gates their cold ratio; `memory` measures peak RSS on
 //! the corpus against its budget; `dist` builds and packages one
 //! target's release archive with its checksum. xtask deliberately
 //! depends on no `celerrate_*` crate: it only spawns `git`, `cargo`, `composer`,
@@ -24,6 +26,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 pub mod bench;
+pub mod benchmark;
 pub mod codegen;
 pub mod corpus;
 pub mod dependency_shape;

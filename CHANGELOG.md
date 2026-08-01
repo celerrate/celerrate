@@ -28,6 +28,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the file's own problems (`CEL0043` to `CEL0049`), span-anchored and
   exit-affecting, each with an explain page. Without a `celerrate.toml`
   behavior is byte-identical to before, proven over the pinned corpus.
+  The full surface is documented in
+  [docs/configuration.md](https://github.com/celerrate/celerrate/blob/main/docs/configuration.md).
 - `celerrate check --watch` reloads `celerrate.toml` on save and
   reconfigures the next cycle: the version range, the walk, the active
   rule set, and the severity remap all follow the file, and the file's
@@ -125,7 +127,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   line numbers: they survive moving code and die with their finding.
   Obsolete entries and an unreadable file are each announced by their own
   exit-neutral notice, CEL0050 and CEL0051 respectively; nothing is ever
-  pruned silently.
+  pruned silently. Recording, applying, and obsolescence are documented in
+  [docs/baseline.md](https://github.com/celerrate/celerrate/blob/main/docs/baseline.md).
 - Machine output formats: `celerrate check --output=json` emits a stable
   versioned document (schema committed at
   `schemas/celerrate-json-report.v1.schema.json`), `--output=sarif` emits
@@ -165,6 +168,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `cargo xtask dist` builds and packages one target's release archive
   deterministically; the release workflow now packages through it and
   attests its artifacts.
+- The PHPStan comparison harness: `cargo xtask benchmark` installs a
+  pinned PHPStan 2.2.7, measures it and Celerrate cold in the same run
+  on the same corpus working tree, with both tools reporting on the
+  same file set and neither tool's result cache, and prints both
+  medians. No comparison figure is published: the pinned corpus has 51
+  first-party files, both tools are dominated by fixed setup cost at
+  that size, and the ratio measured there says nothing about either
+  tool's throughput. Every pinned condition (tool version, rule level,
+  result cache, parallelism, reported file set), what was measured, and
+  why it is withheld are documented in
+  [benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/main/benchmarks/PROTOCOL.md).
+- The continuous-integration guide:
+  [docs/ci.md](https://github.com/celerrate/celerrate/blob/main/docs/ci.md)
+  documents wiring `celerrate check` into a workflow, the machine-readable
+  output formats it can annotate a pull request with, and the baseline
+  flow for adopting the tool on an existing codebase without a wall of
+  pre-existing findings.
 
 ### Changed
 
@@ -387,7 +407,7 @@ numbers re-published with inference active.
 - The `phpdoc-bridge` plugin, enabled by default: standard PHPDoc,
   the PHPStan dialect, and Psalm synonyms, with coverage, precedence,
   and every table published in
-  [docs/phpdoc-bridge.md](https://github.com/celerrate/celerrate/blob/v0.0.3/docs/phpdoc-bridge.md).
+  [docs/phpdoc-bridge.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/docs/phpdoc-bridge.md).
 - Inline suppressions, honored across all diagnostic families:
   `@phpstan-ignore-line`, `@phpstan-ignore-next-line`,
   `@phpstan-ignore`, and `@psalm-suppress`.
@@ -400,9 +420,9 @@ numbers re-published with inference active.
   one-edit stays sub-second with inference active (median 0.460 s, with
   the flagship warm body-edit at 0.521 s), measured by the committed
   protocol
-  ([benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/v0.0.3/benchmarks/PROTOCOL.md)).
+  ([benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/benchmarks/PROTOCOL.md)).
 - The identifier reference:
-  [docs/diagnostics.md](https://github.com/celerrate/celerrate/blob/v0.0.3/docs/diagnostics.md)
+  [docs/diagnostics.md](https://github.com/celerrate/celerrate/blob/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7/docs/diagnostics.md)
   documents every `CEL####` identifier.
 
 ### Changed
@@ -465,7 +485,7 @@ reproducible incremental number.
 - Pre-built binaries for Linux x64 and arm64 (static musl builds),
   macOS x64 and arm64, and Windows x64.
 
-[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.3...HEAD
-[0.0.3]: https://github.com/celerrate/celerrate/compare/v0.0.2...v0.0.3
+[Unreleased]: https://github.com/celerrate/celerrate/compare/v0.0.2...HEAD
+[0.0.3]: https://github.com/celerrate/celerrate/commit/1fe4ef8277b11c1dc5a72a0a6cf7d8c77b4f2fb7
 [0.0.2]: https://github.com/celerrate/celerrate/compare/v0.0.1...v0.0.2
 [0.0.1]: https://github.com/celerrate/celerrate/releases/tag/v0.0.1

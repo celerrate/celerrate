@@ -157,7 +157,7 @@ About the project's own configuration, reported once per run.
 ## Unknown members (CEL0030 to CEL0033)
 
 Members that do not exist on the receiver's resolved type, new in
-v0.0.3. Deliberately conservative: a `mixed`, `object`, or otherwise
+v0.1.0. Deliberately conservative: a `mixed`, `object`, or otherwise
 dynamic receiver is silent; magic methods suppress their own kind
 (`__get`/`__set` for properties, `__call` for methods, `__callStatic`
 for static methods), directly or by inheritance; `stdClass` and
@@ -217,6 +217,10 @@ does not emit).
 
 ## Configuration (CEL0043 to CEL0049)
 
+See [Configuration](configuration.md) for the full `celerrate.toml`
+reference: discovery, the `[project]`, `[rules]`, and `[severity]`
+tables, and what is deliberately not configurable.
+
 About `celerrate.toml` itself, read from the project root next to
 `composer.json`; a missing file is not an event, because zero
 configuration is the contract. Each is span-anchored, is an error,
@@ -271,3 +275,6 @@ notices above.
 | --- | --- | --- |
 | CEL0050 | a recorded entry counts more occurrences than the current findings still produce, whether all of them or only some (the code was fixed, the enclosing method was renamed, or an engine upgrade reworded the message) | re-record with `celerrate check --baseline` to refresh the file |
 | CEL0051 | `celerrate-baseline.toml` exists but could not be fully read (invalid TOML, a missing or unsupported version, or a malformed entry); unreadable entries are ignored and their findings reported, while valid entries in the same file still apply | fix the file by hand, or re-record it with `celerrate check --baseline` |
+
+See [Baseline](baseline.md) for recording, applying, the file format,
+and the invariants and failure modes behind these two notices.
