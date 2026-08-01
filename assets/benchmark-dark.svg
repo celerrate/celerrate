@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 194" width="720" height="194" role="img" aria-labelledby="benchmark-title">
-  <title id="benchmark-title">Median wall clock on symfony/demo (9447 PHP files, 1302218 lines, same file set for both tools), linear scale: PHPStan 2.2.7 at rule level 5 cold 53.898 seconds, Celerrate cold 1.496 seconds, Celerrate warm with one function body edited 0.444 seconds.</title>
+  <title id="benchmark-title">Median wall clock on symfony/demo (9447 PHP files, 1302218 lines, same file set for both tools), linear scale: PHPStan 2.2.7 at rule level 5 cold 53.898 seconds, Celerrate cold 1.502 seconds, Celerrate warm with one function body edited 0.444 seconds.</title>
   <g font-family="system-ui, -apple-system, 'Segoe UI', sans-serif">
     <text x="0" y="14" font-size="12" fill="#c3c2b7">Median wall clock, full runs, linear scale &#183; symfony/demo, 9447 PHP files, 1.3M lines, same file set</text>
     <text x="0" y="42" font-size="13" fill="#c3c2b7">PHPStan 2.2.7 (level 5), cold</text>
@@ -7,7 +7,7 @@
     <text x="612" y="62.5" font-size="13" font-weight="600" fill="#ffffff">53.898 s</text>
     <text x="0" y="94" font-size="13" fill="#c3c2b7">Celerrate, cold</text>
     <rect x="0" y="100" width="17" height="20" rx="3" fill="#3987e5"/>
-    <text x="29" y="114.5" font-size="13" font-weight="600" fill="#ffffff">1.496 s</text>
+    <text x="29" y="114.5" font-size="13" font-weight="600" fill="#ffffff">1.502 s</text>
     <text x="0" y="146" font-size="13" fill="#c3c2b7">Celerrate, warm, one function body edited</text>
     <rect x="0" y="152" width="5" height="20" rx="2" fill="#3987e5"/>
     <text x="17" y="166.5" font-size="13" font-weight="600" fill="#ffffff">0.444 s</text>

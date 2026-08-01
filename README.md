@@ -97,7 +97,7 @@ What carries over, and what deliberately does not:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of median cold wall clock on symfony/demo, linear scale: PHPStan 2.2.7 at rule level 5 takes 53.898 seconds, Celerrate 1.496 seconds, and a warm Celerrate run with one function body edited 0.444 seconds">
+  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of median cold wall clock on symfony/demo, linear scale: PHPStan 2.2.7 at rule level 5 takes 53.898 seconds, Celerrate 1.502 seconds, and a warm Celerrate run with one function body edited 0.444 seconds">
 </picture>
 
 Measured by the committed [benchmark protocol](benchmarks/PROTOCOL.md)
@@ -215,23 +215,30 @@ Action yet. Those are the next sub-projects, in the
 ## One engine, a whole toolchain
 
 Every Celerrate command is a view over the same incremental semantic
-model. Index a project once; everything else is a query:
+model. Index a project once; everything else is a query. Two of those
+views exist today:
 
 - **`celerrate check`**: static analysis with interprocedural type
-  inference, plus lint, security taint, and architecture rule groups.
-  One command answers "is my code OK?".
-- **`celerrate format`**: an opinionated, lossless formatter.
-- **`celerrate lsp`**: a language server with the same diagnostics as
-  CI, at typing speed.
-- **`celerrate migrate` / `celerrate generate`**: automated refactoring
-  and semantic code generation. `migrate --from-phpstan` ships today;
-  the rest builds on the same model.
+  inference. Today that is the correctness group: unknown symbols,
+  version gating, unknown members, nullability, and argument types.
+  The lint, security taint, and architecture rule groups will be more
+  queries over the same model, not more tools to install.
+- **`celerrate migrate`**: `--from-phpstan` today; broader automated
+  refactoring, and `celerrate generate` for semantic code generation,
+  will read the same index.
+
+Two more are designed and not written. **`celerrate format`** will be
+an opinionated, lossless formatter over the syntax tree the analyzer
+already keeps; **`celerrate lsp`** will serve an editor the diagnostics
+CI reports, at typing speed, from the engine that already answers a
+warm run in under half a second. The [roadmap](#roadmap) sequences all
+of it.
 
 Speed stays a feature throughout: a Rust core, parallel by default,
 incremental by construction. Diagnostics are meant to teach: annotated
-spans, the engine's reasoning, concrete suggestions, and safe automatic
-fixes. Extensibility is designed in: first-party plugins in Rust,
-community plugins through a sandboxed WASM API.
+spans, the engine's reasoning, concrete suggestions, and byte-precise
+fixes. Extensibility is designed in: first-party plugins in Rust, and a
+sandboxed WASM API for community plugins to come.
 
 ## Built to be trusted
 
