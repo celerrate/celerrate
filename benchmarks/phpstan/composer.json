@@ -1,0 +1,10 @@
+{
+    "description": "The pinned PHPStan installation the benchmark comparison protocol measures.",
+    "require": {
+        "php": ">=8.2",
+        "phpstan/phpstan": "^2.1"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}
