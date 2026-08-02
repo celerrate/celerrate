@@ -1,0 +1,10 @@
+# The pinned PHPStan comparison corpus: a large real application whose
+# first-party code is big enough that rule-checking dominates both
+# tools' wall clocks (issue #118). This pin serves the published cold
+# ratio only: the analysis corpus, its diagnostic snapshot, and the
+# mixed-rate baseline live under xtask/corpus.pin and never move with
+# this file. Bump deliberately, re-run the reference protocol
+# (benchmarks/PROTOCOL.md), and publish the re-measured ratio together
+# with the bump.
+repository = https://github.com/PrestaShop/PrestaShop
+commit = fc96d0d4eae383e8c6f1f54f19cf592c221a62e3

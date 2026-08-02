@@ -32,6 +32,29 @@ pub fn prepare() -> Result<PathBuf> {
     Ok(directory)
 }
 
+/// Reads and parses the committed comparison-corpus pin.
+pub fn comparison_pin() -> Result<Pin> {
+    crate::pin::read(&crate::workspace_root()?.join("xtask/comparison-corpus.pin"))
+}
+
+/// Where the comparison corpus lives: separate from the analysis
+/// corpus, so bumping either pin never invalidates the other's
+/// snapshot.
+pub fn comparison_snapshot_directory() -> Result<PathBuf> {
+    Ok(crate::workspace_root()?
+        .join("target/comparison-corpus")
+        .join(comparison_pin()?.commit))
+}
+
+/// Fetches the comparison corpus and installs its vendor tree; returns
+/// the corpus root, ready to be measured.
+pub fn prepare_comparison() -> Result<PathBuf> {
+    let directory = comparison_snapshot_directory()?;
+    crate::pin::fetch_snapshot(&comparison_pin()?, &directory)?;
+    install_vendor(&directory)?;
+    Ok(directory)
+}
+
 /// Runs `composer install` from the corpus's committed lock file, once:
 /// a present vendor directory is trusted, because the lock file pins
 /// the tree exactly. `--no-scripts` and `--no-plugins` keep the install
@@ -239,5 +262,24 @@ mod tests {
         // nullability line (CEL0034) is gated by snapshot equality only.
         assert_eq!(violations.len(), 4);
         assert!(violations.iter().all(|line| !line.contains("CEL0034")));
+    }
+
+    #[test]
+    fn the_comparison_pin_is_committed_and_names_the_scouted_corpus() {
+        // Exact values, not a prefix: the medians published against this
+        // pin are only meaningful for the commit they were measured on, so
+        // a silent edit here must fail the suite rather than quietly
+        // invalidate every number in the protocol.
+        let pin = super::comparison_pin().unwrap();
+        assert_eq!(pin.repository, "https://github.com/PrestaShop/PrestaShop");
+        assert_eq!(pin.commit, "fc96d0d4eae383e8c6f1f54f19cf592c221a62e3");
+    }
+
+    #[test]
+    fn the_comparison_snapshot_lives_in_its_own_directory() {
+        let directory = super::comparison_snapshot_directory().unwrap();
+        let text = directory.display().to_string();
+        assert!(text.contains("comparison-corpus"));
+        assert!(text.ends_with(&super::comparison_pin().unwrap().commit));
     }
 }
