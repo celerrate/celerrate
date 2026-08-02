@@ -364,6 +364,53 @@ git commit -m "✨ feat(xtask): measure the comparison corpus in the benchmark h
 
 ---
 
+### Task 3b: Make corpus preparation survive a real application's tree
+
+Added 2026-08-03, after the first reference run failed before it measured anything. The corpus machinery was written for symfony/demo and carries two assumptions a real application breaks. Both must be fixed before any measurement is trustworthy.
+
+**Files:**
+- Modify: `xtask/src/corpus.rs` (`install_vendor`'s guard, plus a unit test)
+- Modify: `xtask/src/bench.rs` (`copy_directory`'s symlink handling, plus a unit test)
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: `prepare_comparison()` reaching a complete working tree on the pinned corpus. Signatures unchanged.
+
+- [ ] **Step 1: Guard on composer's own artefact, not on the directory**
+
+`install_vendor` skips the install when `vendor/` is a directory. PrestaShop commits `vendor/.htaccess`, so that directory exists the instant the snapshot is checked out and `composer install` never runs: the vendor tree stays empty and every measurement built on it is meaningless.
+
+Write the failing test first, then guard on `vendor/autoload.php` instead — the file composer itself always produces, which no corpus commits. Keep the rest of the function, its flags and its documentation as they are; extend the documentation to say why the artefact and not the directory.
+
+- [ ] **Step 2: Do not abort the copy on an unresolvable symlink**
+
+`copy_directory` follows symlinks with `fs::copy`, which fails with `ENOENT` when the target is missing. PrestaShop commits exactly one symlink, `tests/Resources/modules/ps_apiresources`, pointing at `modules/ps_apiresources` — a package composer places only through the `composer/installers` plugin, which `--no-scripts --no-plugins` deliberately disables so that no code from the corpus ever runs. The symlink therefore dangles by design, and a dangling symlink must not be able to abort a benchmark.
+
+Write the failing test first (a temporary directory holding a symlink to a nonexistent path), then skip entries whose metadata cannot be resolved, and document the reasoning at the skip. Do not weaken the hermetic flags to make the target exist: not executing corpus code is a deliberate project rule, and one absent test fixture does not justify breaking it.
+
+- [ ] **Step 3: Prove the analysis corpus did not move**
+
+Both functions are shared with the analysis corpus, so this task can silently break it. Run, and record the output:
+
+```bash
+cargo test -p xtask
+cargo xtask fetch-corpus
+cargo xtask corpus
+cargo xtask mixed-rate
+```
+
+`corpus` and `mixed-rate` must pass unchanged. A snapshot or baseline delta here is a failure of this task, not a result to bless.
+
+- [ ] **Step 4: Lint, format, commit**
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all
+git add xtask/src/corpus.rs xtask/src/bench.rs
+git commit -m "🐛 fix(xtask): prepare corpora that commit a vendor placeholder or a dangling symlink"
+```
+
+---
+
 ### Task 4: The reference run and the ratio floor
 
 Runs on the reference machine named in `benchmarks/PROTOCOL.md` (the Apple M5 this project develops on).
