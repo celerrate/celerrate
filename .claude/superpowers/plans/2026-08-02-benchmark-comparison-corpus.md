@@ -165,9 +165,14 @@ In the existing `mod tests` at the bottom of `xtask/src/corpus.rs`:
 
 ```rust
 #[test]
-fn the_comparison_pin_is_committed_and_well_formed() {
+fn the_comparison_pin_is_committed_and_names_the_scouted_corpus() {
+    // Exact values, not a prefix: the medians published against this
+    // pin are only meaningful for the commit they were measured on, so
+    // a silent edit here must fail the suite rather than quietly
+    // invalidate every number in the protocol.
     let pin = super::comparison_pin().unwrap();
-    assert!(pin.repository.starts_with("https://github.com/"));
+    assert_eq!(pin.repository, "https://github.com/PrestaShop/PrestaShop");
+    assert_eq!(pin.commit, "fc96d0d4eae383e8c6f1f54f19cf592c221a62e3");
 }
 
 #[test]
