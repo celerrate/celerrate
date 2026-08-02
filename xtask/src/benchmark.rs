@@ -30,11 +30,12 @@ const CELERRATE_COLD_RUNS: u32 = 5;
 /// shared-runner variance does not fail a healthy build while a real
 /// regression — anything that halves the advantage — still does.
 ///
-/// Reference measurement (2026-08-03, the protocol machine): PHPStan
-/// 34.796s wall, Celerrate 12.841s wall, ratio 2.7x; on CPU consumed,
-/// 14.3x. The gap between the two ratios is parallelism: Celerrate is
-/// effectively single-threaded today and PHPStan forks workers.
-const COLD_RATIO_FLOOR: f64 = 1.3;
+/// Reference measurement (2026-08-03, the protocol machine, warmed
+/// up): PHPStan 38.921s wall, Celerrate 13.107s wall, ratio 3.0x; on
+/// CPU consumed, 14.9x. The gap between the two ratios is parallelism:
+/// Celerrate is effectively single-threaded today and PHPStan forks
+/// workers.
+const COLD_RATIO_FLOOR: f64 = 1.4;
 
 /// Runs the comparison and prints the medians and the ratio. With
 /// `gate`, a ratio under the floor fails the run.
@@ -107,11 +108,24 @@ pub fn run(gate: bool) -> Result<()> {
 
 /// One hyperfine invocation in the working tree. `--ignore-failure`
 /// because both tools exit 1 when they report findings — a completed
-/// analysis, not a failed one.
+/// analysis, not a failed one. `--warmup 1` discards one untimed run
+/// before the timed ones: without it, the first timed run alone pays
+/// for the cold filesystem page cache, which inflated the measured
+/// spread past the stability criterion (issue #118). `--prepare` still
+/// runs before the warmup too, so the warmup is not a loophole in
+/// coldness: Celerrate's own cache and PHPStan's result cache are wiped
+/// before every run, warmup included. Only the page cache is left
+/// warm, which is filesystem state, not analysis work.
 fn measure(working: &Path, command: &str, prepare: &str, runs: u32, export: &Path) -> Result<f64> {
     let status = Command::new("hyperfine")
         .current_dir(working)
-        .args(["--ignore-failure", "--runs", &runs.to_string()])
+        .args([
+            "--ignore-failure",
+            "--warmup",
+            "1",
+            "--runs",
+            &runs.to_string(),
+        ])
         .arg("--export-json")
         .arg(export)
         .arg("--prepare")
