@@ -248,7 +248,21 @@ fn prime(binary: &Path, working: &Path) -> Result<()> {
 /// Copies the corpus into a disposable working tree, skipping `.git`
 /// (never analyzed) and `.celerrate` (each scenario controls the
 /// cache). Symlinks (composer's `vendor/bin`) are copied by content,
-/// which is fine: the tree is read, never executed.
+/// which is fine: the tree is read, never executed. A symlink whose
+/// target does not resolve is skipped rather than aborting the copy:
+/// PrestaShop commits one such symlink,
+/// `tests/Resources/modules/ps_apiresources`, pointing at a package
+/// only the `composer/installers` plugin can place, and
+/// `--no-scripts --no-plugins` deliberately disables that plugin so no
+/// code from the corpus ever runs. The symlink dangles by design on
+/// every fetch, and one absent test fixture must not abort a benchmark.
+///
+/// `entry.file_type()` comes from `read_dir` and does not follow
+/// symlinks, so resolving through `std::fs::metadata` (which does) is
+/// what tells a directory symlink from a dangling one, and from a
+/// plain file: the same resolution that skips the dangling case also
+/// covers a symlink to a directory correctly, with no special case for
+/// symlinks.
 pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -258,7 +272,13 @@ pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
             continue;
         }
         let target = destination.join(&name);
-        if entry.file_type()?.is_dir() {
+        let Ok(metadata) = std::fs::metadata(entry.path()) else {
+            // The entry's target does not resolve (a dangling
+            // symlink): skip it rather than let `fs::copy` fail with
+            // ENOENT.
+            continue;
+        };
+        if metadata.is_dir() {
             copy_directory(&entry.path(), &target)?;
         } else {
             std::fs::copy(entry.path(), &target)?;
@@ -347,6 +367,32 @@ mod tests {
     fn a_median_over_its_ceiling_is_named() {
         assert!(over_ceiling("warm one-edit", 3.2, 3.0).is_some());
         assert!(over_ceiling("warm one-edit", 2.9, 3.0).is_none());
+    }
+
+    #[test]
+    fn the_working_copy_skips_an_unresolvable_symlink() {
+        // PrestaShop commits exactly one symlink,
+        // `tests/Resources/modules/ps_apiresources`, pointing at a
+        // package only the `composer/installers` plugin can place.
+        // `--no-scripts --no-plugins` deliberately disables that
+        // plugin, so the symlink dangles by design on every fetch. A
+        // dangling symlink must not abort the copy.
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("src")).unwrap();
+        std::fs::write(source.path().join("src/A.php"), "<?php").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(
+            source.path().join("does-not-exist"),
+            source.path().join("dangling"),
+        )
+        .unwrap();
+
+        let destination = tempfile::tempdir().unwrap();
+        let copy = destination.path().join("corpus");
+        copy_directory(source.path(), &copy).unwrap();
+
+        assert!(copy.join("src/A.php").is_file());
+        assert!(!copy.join("dangling").exists());
     }
 
     #[test]

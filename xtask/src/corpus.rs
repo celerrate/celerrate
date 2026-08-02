@@ -55,14 +55,26 @@ pub fn prepare_comparison() -> Result<PathBuf> {
     Ok(directory)
 }
 
+/// Whether the vendor tree already carries a completed install. Guards
+/// on `vendor/autoload.php`, the file composer itself always produces,
+/// rather than on the `vendor` directory's mere existence: a corpus may
+/// commit a placeholder entry under `vendor/` (PrestaShop commits
+/// `vendor/.htaccess`), which makes the directory exist the instant the
+/// snapshot is checked out, before any install has run. Trusting the
+/// directory would then skip `composer install` forever and leave the
+/// vendor tree empty.
+fn vendor_is_installed(directory: &Path) -> bool {
+    directory.join("vendor/autoload.php").is_file()
+}
+
 /// Runs `composer install` from the corpus's committed lock file, once:
-/// a present vendor directory is trusted, because the lock file pins
+/// an installed vendor tree is trusted, because the lock file pins
 /// the tree exactly. `--no-scripts` and `--no-plugins` keep the install
 /// hermetic (no code from the corpus runs), and `--ignore-platform-reqs`
 /// decouples it from the local PHP extension set: Celerrate never
 /// executes the corpus, it only reads it.
 fn install_vendor(directory: &Path) -> Result<()> {
-    if directory.join("vendor").is_dir() {
+    if vendor_is_installed(directory) {
         return Ok(());
     }
     let status = Command::new("composer")
@@ -218,6 +230,32 @@ pub fn check_snapshot(bless: bool) -> Result<()> {
 mod tests {
     #![allow(clippy::unwrap_used)]
     use super::{typed_member_violations, unknown_symbol_violations};
+
+    #[test]
+    fn a_vendor_directory_holding_only_a_placeholder_is_not_considered_installed() {
+        // PrestaShop commits exactly one vendor entry, `vendor/.htaccess`,
+        // so the directory exists the instant the snapshot is checked
+        // out. Guarding on the directory alone would skip the install
+        // forever; the guard must look for composer's own artefact.
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("vendor")).unwrap();
+        std::fs::write(directory.path().join("vendor/.htaccess"), "").unwrap();
+        assert!(!super::vendor_is_installed(directory.path()));
+    }
+
+    #[test]
+    fn a_vendor_directory_holding_the_autoloader_is_considered_installed() {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(directory.path().join("vendor")).unwrap();
+        std::fs::write(directory.path().join("vendor/autoload.php"), "<?php").unwrap();
+        assert!(super::vendor_is_installed(directory.path()));
+    }
+
+    #[test]
+    fn a_missing_vendor_directory_is_not_considered_installed() {
+        let directory = tempfile::tempdir().unwrap();
+        assert!(!super::vendor_is_installed(directory.path()));
+    }
 
     #[test]
     fn the_committed_corpus_pin_parses_and_names_the_corpus() {
