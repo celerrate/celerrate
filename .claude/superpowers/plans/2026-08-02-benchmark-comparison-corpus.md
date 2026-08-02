@@ -458,6 +458,46 @@ git commit -m "📈 feat(xtask): gate the cold ratio on the reference measuremen
 
 ---
 
+### Task 4a: Stabilise the reference measurement
+
+Added 2026-08-03. The first reference run met every criterion except the one that decides whether a number is publishable at all. Celerrate's five cold runs came out at 14.21, 11.59, 11.67, 12.15 and 12.12 seconds: a 22.66 % spread driven entirely by the first run, where the spec's acceptance criterion is under 10 %. That is the same instability that disqualified symfony/demo, and it is why two consecutive full measurements reported 2.7x and 3.0x.
+
+The cause is that `measure()` passes hyperfine no warmup run, so the first timed run of each tool absorbs the cold page cache. `--prepare` still wipes Celerrate's own cache before every run including warmups, so a warmup costs nothing in cold-analysis fidelity: what it discards is filesystem warm-up, not analysis work.
+
+**Files:**
+- Modify: `xtask/src/benchmark.rs` (`measure`'s hyperfine invocation; `COLD_RATIO_FLOOR`'s value and the last sentence of its documentation)
+
+- [ ] **Step 1: Give each measurement a warmup run**
+
+Add `--warmup 1` to the hyperfine invocation in `measure()`, and document at the call why it is there: the first timed run otherwise pays for the cold page cache and inflates the spread past the stability criterion, while `--prepare` keeps every timed run cold in the sense that matters, namely Celerrate's own cache and PHPStan's result cache.
+
+This change is not unit-testable — it is one flag on an external process invocation, and the honest verification is the measured spread in Step 2, not an assertion that a string contains a flag. Do not write a test that asserts the argument list; it would restate the implementation rather than verify behaviour.
+
+- [ ] **Step 2: Re-run the reference measurement and check the criterion**
+
+Run `cargo xtask benchmark` once. Then, from `target/benchmark/phpstan-cold.json` and `target/benchmark/celerrate-cold.json`, compute each tool's spread as `(max - min) / min`.
+
+**Both spreads must be under 10 %.** If either is not, stop and report: the corpus or the machine is not delivering a stable measurement, and no floor derived from it is worth committing.
+
+Record the raw times of every run in the report, not only the medians. The previous run recorded medians alone, which is why its instability went unnoticed until the exports were read directly.
+
+- [ ] **Step 3: Set the floor from the stabilised ratio**
+
+`COLD_RATIO_FLOOR` becomes the new measured ratio divided by two, rounded down to one decimal. Update the reference-measurement sentence in its documentation to the new figures, keeping the two-ratio form (wall clock and CPU) and the sentence explaining that the gap between them is parallelism.
+
+- [ ] **Step 4: Verify the gate, lint, format, commit**
+
+```bash
+cargo xtask benchmark --gate
+cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all
+git add xtask/src/benchmark.rs
+git commit -m "📈 fix(xtask): warm up the benchmark so the published ratio is stable"
+```
+
+The gate run is a second full measurement. Record its ratio too: two consecutive full runs agreeing within a few percent is the evidence that the warmup did its job, and their divergence is what this task exists to remove.
+
+---
+
 ### Task 5: The published documents
 
 **Files:**
