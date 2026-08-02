@@ -1,10 +1,13 @@
-//! The PHPStan comparison harness, whose ratio is currently withheld
-//! rather than published (see `COLD_RATIO_FLOOR`): measure
-//! PHPStan and Celerrate cold on the same corpus working tree in the
-//! same run, and gate the ratio, not wall-clock — shared runners are
-//! too noisy for absolute thresholds, but a ratio taken on one machine
-//! in one run survives them. The sub-second incremental claim is held
-//! by `cargo xtask bench` on the reference machine, not here.
+//! The PHPStan comparison harness: measure PHPStan and Celerrate cold
+//! on the same working tree in the same run, and gate the ratio, not
+//! wall-clock — shared runners are too noisy for absolute thresholds,
+//! but a ratio taken on one machine in one run survives them. The
+//! subject is the pinned comparison corpus
+//! (`xtask/comparison-corpus.pin`), not the analysis corpus: a
+//! publishable ratio needs first-party code large enough that
+//! rule-checking dominates both wall clocks (issue #118). The
+//! sub-second incremental claim is held by `cargo xtask bench` on the
+//! reference machine, not here.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -22,15 +25,11 @@ const PHPSTAN_MEMORY_LIMIT: &str = "2G";
 const PHPSTAN_COLD_RUNS: u32 = 3;
 const CELERRATE_COLD_RUNS: u32 = 5;
 
-/// The standing performance target, expressed as a floor: at least 20x
-/// faster than PHPStan on a cold full analysis, checked as a
-/// same-machine ratio. Nothing is published against it today and no
-/// workflow runs this gate: on the pinned corpus only 51 of the 9447
-/// files are the project's own, so both tools are dominated by fixed
-/// setup cost and the measured ratio says nothing about either one.
-/// The gate is wired back into continuous integration with a corpus
-/// that can carry the measurement (issue #118); the target itself
-/// stands unmeasured in the meantime.
+/// The gate floor for the cold ratio. Set from the reference run on
+/// the comparison corpus: half the measured median ratio, so
+/// shared-runner variance does not fail a healthy build while a real
+/// regression — anything that halves the advantage — still does. The
+/// value below is provisional until the reference run lands.
 const COLD_RATIO_FLOOR: f64 = 20.0;
 
 /// Runs the comparison and prints the medians and the ratio. With
@@ -38,7 +37,7 @@ const COLD_RATIO_FLOOR: f64 = 20.0;
 pub fn run(gate: bool) -> Result<()> {
     crate::bench::ensure_hyperfine()?;
     let root = crate::workspace_root()?;
-    let corpus = crate::corpus::prepare()?;
+    let corpus = crate::corpus::prepare_comparison()?;
     let binary = crate::release_binary()?;
     let phpstan = install_phpstan(&root)?;
     let version = installed_phpstan_version(&phpstan)?;
@@ -49,10 +48,13 @@ pub fn run(gate: bool) -> Result<()> {
         std::fs::remove_dir_all(&working)?;
     }
     crate::bench::copy_directory(&corpus, &working)?;
+    std::fs::write(working.join("celerrate.toml"), celerrate_configuration())?;
 
     // The PHPStan temporary directory (its result cache) and the
-    // generated configuration live outside the working tree: nothing
-    // foreign enters the tree Celerrate analyzes.
+    // generated configuration live outside the working tree. Celerrate's
+    // own configuration, by contrast, is written inside it deliberately:
+    // `celerrate.toml` is project configuration, and Celerrate reads it
+    // from the tree it analyzes.
     let temporary = benchmark_directory.join("phpstan-tmp");
     let configuration_path = benchmark_directory.join("phpstan.neon");
     std::fs::write(
@@ -162,10 +164,9 @@ pub fn phpstan_version(output: &str) -> Result<String> {
 /// parses and indexes the whole tree so names resolve, but it reports
 /// only on the project's own files: an installed dependency's finding
 /// is not the user's to fix. Pointing PHPStan at the tree root without
-/// the exclusion would rule-check the 9396 vendor files nobody asks it
-/// to check, against the 51 project files Celerrate reports on. This is
-/// also the configuration a real project carries: the corpus's own
-/// `phpstan.dist.neon` lists its source directories and never `vendor`.
+/// the exclusion would rule-check the entire installed vendor tree
+/// nobody asks it to check, against only the first-party files
+/// Celerrate reports on.
 ///
 /// Excluding the directory does not hide it from PHPStan's reflection:
 /// the vendor autoloader still resolves every symbol the project's
@@ -178,6 +179,18 @@ pub fn phpstan_configuration(analyzed_directory: &Path, temporary_directory: &Pa
         analyzed_directory.join("vendor").display(),
         temporary_directory.display(),
     )
+}
+
+/// The configuration written into the corpus working tree so Celerrate
+/// analyzes exactly what PHPStan is given. Discovery walks Composer's
+/// autoload roots, and a real application routinely loads part of its own
+/// code through a runtime autoloader Composer never declares: on the
+/// pinned corpus that hid 1010 of 6932 first-party files from Celerrate
+/// while PHPStan saw them, which is not a comparison. Pinning the include
+/// set to the whole tree restores equal reported work; vendor stays
+/// indexed for reflection, as it is for PHPStan.
+fn celerrate_configuration() -> String {
+    "[project]\ninclude = [\".\"]\n".to_string()
 }
 
 /// The published ratio: PHPStan cold median over Celerrate cold median.
@@ -249,5 +262,12 @@ mod tests {
         assert!(configuration.contains("excludePaths:"));
         assert!(configuration.contains(&format!("- \"{}\"", vendor_directory.display())));
         assert!(configuration.contains("tmpDir: \"/work/phpstan-tmp\""));
+    }
+
+    #[test]
+    fn the_celerrate_configuration_includes_the_whole_tree() {
+        let text = super::celerrate_configuration();
+        assert!(text.contains("[project]"));
+        assert!(text.contains(r#"include = ["."]"#));
     }
 }
