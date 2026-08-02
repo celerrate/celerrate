@@ -262,7 +262,10 @@ fn prime(binary: &Path, working: &Path) -> Result<()> {
 /// what tells a directory symlink from a dangling one, and from a
 /// plain file: the same resolution that skips the dangling case also
 /// covers a symlink to a directory correctly, with no special case for
-/// symlinks.
+/// symlinks. Only `ErrorKind::NotFound` is skipped; any other
+/// resolution failure (permission denied, a symlink cycle, ...)
+/// propagates, because a corpus copy that silently drops entries on an
+/// unrelated I/O error would report success over a truncated tree.
 pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
     std::fs::create_dir_all(destination)?;
     for entry in std::fs::read_dir(source)? {
@@ -272,11 +275,14 @@ pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
             continue;
         }
         let target = destination.join(&name);
-        let Ok(metadata) = std::fs::metadata(entry.path()) else {
-            // The entry's target does not resolve (a dangling
-            // symlink): skip it rather than let `fs::copy` fail with
-            // ENOENT.
-            continue;
+        let metadata = match std::fs::metadata(entry.path()) {
+            Ok(metadata) => metadata,
+            // Only a missing target is skipped (a dangling symlink):
+            // any other failure (permission denied, a symlink cycle,
+            // ...) is a genuine problem and must propagate, or the
+            // copy would silently go partial instead of reporting it.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(error) => return Err(error.into()),
         };
         if metadata.is_dir() {
             copy_directory(&entry.path(), &target)?;
@@ -393,6 +399,27 @@ mod tests {
 
         assert!(copy.join("src/A.php").is_file());
         assert!(!copy.join("dangling").exists());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_genuine_io_failure_propagates_instead_of_being_skipped() {
+        // A dangling symlink resolves with `ErrorKind::NotFound`, which
+        // is the one case the copy is allowed to skip. A symlink cycle
+        // (two symlinks pointing at each other) resolves with a
+        // different error kind (`ELOOP` on this platform): that must
+        // propagate as an error, not be silently swallowed alongside
+        // the dangling case, or a corpus copy could go silently
+        // partial.
+        let source = tempfile::tempdir().unwrap();
+        let first = source.path().join("first");
+        let second = source.path().join("second");
+        std::os::unix::fs::symlink(&second, &first).unwrap();
+        std::os::unix::fs::symlink(&first, &second).unwrap();
+
+        let destination = tempfile::tempdir().unwrap();
+        let copy = destination.path().join("corpus");
+        assert!(copy_directory(source.path(), &copy).is_err());
     }
 
     #[test]
