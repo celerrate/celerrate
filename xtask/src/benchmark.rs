@@ -28,9 +28,13 @@ const CELERRATE_COLD_RUNS: u32 = 5;
 /// The gate floor for the cold ratio. Set from the reference run on
 /// the comparison corpus: half the measured median ratio, so
 /// shared-runner variance does not fail a healthy build while a real
-/// regression — anything that halves the advantage — still does. The
-/// value below is provisional until the reference run lands.
-const COLD_RATIO_FLOOR: f64 = 20.0;
+/// regression — anything that halves the advantage — still does.
+///
+/// Reference measurement (2026-08-03, the protocol machine): PHPStan
+/// 34.796s wall, Celerrate 12.841s wall, ratio 2.7x; on CPU consumed,
+/// 14.3x. The gap between the two ratios is parallelism: Celerrate is
+/// effectively single-threaded today and PHPStan forks workers.
+const COLD_RATIO_FLOOR: f64 = 1.3;
 
 /// Runs the comparison and prints the medians and the ratio. With
 /// `gate`, a ratio under the floor fails the run.
