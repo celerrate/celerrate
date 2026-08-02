@@ -155,8 +155,25 @@ fn internal_errors_become_tool_execution_notifications() {
 }
 
 #[test]
+fn the_driver_version_is_the_crate_version() {
+    let root = findings_project();
+    let (_, text) = check_with(root.path(), &["--output", "sarif"]);
+    let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        value["runs"][0]["tool"]["driver"]["version"],
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+/// The driver version is redacted so the snapshot survives version bumps;
+/// `the_driver_version_is_the_crate_version` holds the field's value.
+#[test]
 fn sarif_findings_snapshot() {
     let root = findings_project();
     let (_, text) = check_with(root.path(), &["--output", "sarif"]);
+    let text = text.replace(
+        &format!("\"version\": \"{}\"", env!("CARGO_PKG_VERSION")),
+        "\"version\": \"[tool version]\"",
+    );
     insta::assert_snapshot!("sarif_findings", text);
 }
