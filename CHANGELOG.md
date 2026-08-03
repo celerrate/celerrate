@@ -171,15 +171,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   deterministically; the release workflow now packages through it and
   attests its artifacts.
 - The PHPStan comparison harness: `cargo xtask benchmark` installs a
-  pinned PHPStan 2.2.7, measures it and Celerrate cold in the same run
-  on the same corpus working tree, with both tools reporting on the
-  same file set and neither tool's result cache, and prints both
-  medians. No comparison figure is published: the pinned corpus has 51
-  first-party files, both tools are dominated by fixed setup cost at
-  that size, and the ratio measured there says nothing about either
-  tool's throughput. Every pinned condition (tool version, rule level,
-  result cache, parallelism, reported file set), what was measured, and
-  why it is withheld are documented in
+  pinned PHPStan 2.2.7 and measures it against Celerrate cold, in the
+  same run, on the pinned comparison corpus
+  (`xtask/comparison-corpus.pin`: PrestaShop 9.0.3, 6932 first-party PHP
+  files), with neither tool's result cache. Both tools are handed the
+  same file set, and the harness enforces that rather than assuming it:
+  a `celerrate.toml` pinning `[project] include = ["."]` closes the gap
+  between Composer's autoload roots and PrestaShop's own runtime
+  autoloader. Both ratios are published, because either alone misleads:
+  cold `celerrate check` completes 2.90x faster than PHPStan at rule
+  level 5 on the same file set (wall clock), using 14.9x less CPU to do
+  it. The gate (`--gate`) runs weekly and as a required job before any
+  release publishes. Every pinned condition (tool version, rule level,
+  result cache, parallelism, reported file set), the full methodology,
+  and the published figures are documented in
   [benchmarks/PROTOCOL.md](https://github.com/celerrate/celerrate/blob/main/benchmarks/PROTOCOL.md).
 - The continuous-integration guide:
   [docs/ci.md](https://github.com/celerrate/celerrate/blob/main/docs/ci.md)
