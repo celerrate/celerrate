@@ -587,8 +587,11 @@ Position at the end of the CLI product sub-project: the incremental target
 is met and published. The cold comparison is now measured, on a second,
 larger pinned corpus (issue #118): PrestaShop 9.0.3, 6932 first-party PHP
 files. On that corpus, at PHPStan rule level 5, Celerrate is 2.90x faster
-on the wall clock and consumes 14.2x less CPU (2026-08-03, pooled medians
-of three full runs). The "at least ~20x faster" ambition above is not
+on the wall clock (the pooled median over twenty-four timed runs across
+three full runs) and consumes 14.9x less CPU (2026-08-03, the median of
+the three full runs' own CPU totals — hyperfine reports one CPU total
+per invocation, not per timed run, so the two columns do not pool the
+same way). The "at least ~20x faster" ambition above is not
 amended down to that figure: 62 % of Celerrate's measured wall clock is a
 quadratic did-you-mean pass in the presentation layer, not the analysis
 engine, and the engine itself runs at roughly 1.1 effective cores of 10.

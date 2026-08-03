@@ -30,14 +30,17 @@ const CELERRATE_COLD_RUNS: u32 = 5;
 /// shared-runner variance does not fail a healthy build while a real
 /// regression — anything that halves the advantage — still does.
 ///
-/// Published reference measurement (2026-08-03, the protocol machine):
-/// the pooled medians of three full runs, nine timed PHPStan runs and
-/// fifteen timed Celerrate runs. PHPStan 38.92s wall, Celerrate 13.41s
-/// wall, ratio 2.90x; on CPU consumed, 237.5s against 16.8s, ratio
-/// 14.2x. The gap between the two ratios is parallelism: Celerrate is
-/// effectively single-threaded today and PHPStan forks workers. The
-/// three individual runs ranged 2.70x to 2.97x (2.902 / 2 = 1.451,
-/// floored).
+/// Published reference measurement (2026-08-03, the protocol machine).
+/// Wall clock: the pooled median over twenty-four timed runs across
+/// three full runs, nine timed PHPStan runs and fifteen timed Celerrate
+/// runs — PHPStan 38.92s, Celerrate 13.41s, ratio 2.90x. CPU consumed:
+/// hyperfine reports one CPU total per invocation, not per timed run,
+/// so this column is the median of the three full runs' own CPU
+/// totals instead — PHPStan 253.4s, Celerrate 17.0s, ratio 14.9x. The
+/// gap between the two ratios is parallelism: Celerrate is effectively
+/// single-threaded today and PHPStan forks workers. The three
+/// individual wall-clock ratios ranged 2.70x to 2.97x (2.902 / 2 =
+/// 1.451, floored).
 const COLD_RATIO_FLOOR: f64 = 1.4;
 
 /// Runs the comparison and prints the medians and the ratio. With

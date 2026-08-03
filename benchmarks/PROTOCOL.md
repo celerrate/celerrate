@@ -60,15 +60,19 @@ The harness is `cargo xtask benchmark`; `--gate` fails under the
 committed floor (`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half
 the reference ratio below.
 
-Measured on the reference machine, cold. The figures are the pooled
-medians of three full runs: nine timed PHPStan runs and fifteen timed
-Celerrate runs.
+Measured on the reference machine, cold. The two columns pool
+differently, and are labelled accordingly: the wall-clock medians are
+taken over all twenty-four timed runs across three full runs (nine
+timed PHPStan runs and fifteen timed Celerrate runs). Hyperfine reports
+one CPU total per invocation, not per timed run, so the CPU column
+cannot be pooled the same way; it is the median of the three full
+runs' own CPU totals, three values per tool.
 
 | | wall clock | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan | 38.92 s | 237.5 s |
-| Celerrate | 13.41 s | 16.8 s |
-| ratio | **2.90x** | **14.2x** |
+| PHPStan | 38.92 s | 253.4 s |
+| Celerrate | 13.41 s | 17.0 s |
+| ratio | **2.90x** | **14.9x** |
 
 Both ratios are published because either one alone misleads. The wall
 clock is what you wait through; the CPU column is what the engines cost.
