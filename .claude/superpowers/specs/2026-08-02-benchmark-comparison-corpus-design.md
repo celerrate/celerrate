@@ -290,8 +290,7 @@ matrix per candidate. It is not the analysis engine. Removing that churn
 and parallelising the persist, index and read phases is estimated to
 land the run near 4.5-6 s, a wall-clock ratio of **6x-8x**. Celerrate
 already consumes 14.9x less CPU than PHPStan for the same corpus;
-the
-whole gap between that and the wall clock is cores left idle. Spending
+the whole gap between that and the wall clock is cores left idle. Spending
 the same CPU across as many cores as PHPStan actually uses would put the
 wall-clock ratio in the same range again. The "~20x" ambition is gated
 on parallelism and one quadratic pass, not on analysis throughput, so
