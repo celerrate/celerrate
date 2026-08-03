@@ -1,7 +1,10 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Closed (v0.1.0, 2026-08-03)
+Status: Gates held, tag withheld (2026-08-03). Every closure gate below is
+held, including the published comparison. The `v0.1.0` tag is deliberately
+not taken: the measured ratio is not the performance this project is
+willing to ship as its 0.1. See the state of play.
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -517,17 +520,39 @@ The order proposed to the planning stage (dependencies respected):
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
 
-## State of play (2026-08-01, resolved 2026-08-03)
+## State of play (2026-08-01, updated 2026-08-03)
 
-This sub-project is closed. At the 2026-08-01 snapshot below, its
-product part was complete and its release part was not: two things from
-section 1 remained open, the published comparison (inside gate 7) and
-the release event the closure criterion names, the `v0.1.0` tag itself.
-Both waited on the same thing, a benchmark corpus whose first-party code
-is large enough to separate two analyzers (issue #118). Both are now
-resolved: the comparison is measured and published on that corpus, gate
-7 is fully held (below), and `v0.1.0` carries the already-prepared
-CHANGELOG entry.
+Every closure gate is held, and the tag is still not taken. Those two
+facts sit together deliberately, and the second is a decision rather
+than an omission.
+
+At the 2026-08-01 snapshot below, the product part was complete and the
+release part was not: two things from section 1 remained open, the
+published comparison (inside gate 7) and the release event the closure
+criterion names, the `v0.1.0` tag itself. Both waited on the same thing,
+a benchmark corpus whose first-party code is large enough to separate
+two analyzers (issue #118).
+
+The first is resolved. The comparison is measured and published on a
+pinned corpus, and gate 7 is fully held (below). What it measured is
+2.90x on the wall clock and 14.9x on CPU consumed, against a closure
+criterion that names "at least ~20x PHPStan on a cold run" as the proof
+of speed.
+
+The tag is therefore withheld by decision (2026-08-03): 2.90x is not the
+performance this project is willing to publish as its 0.1, and the
+CHANGELOG entry stays under `[Unreleased]` until it is. The measurement
+is not a verdict on the engine — 62 % of that wall clock is a quadratic
+did-you-mean pass in the presentation layer and the run uses roughly one
+core of ten, which is why the parent design's ambition stands unamended.
+It is a verdict on what is shippable today. The work that closes the gap
+is measured and tracked (issue #124), estimated at 6x-8x from the
+per-phase costs; the tag follows it.
+
+Nothing about the release machinery waits on that: the binaries, the
+install script, the Composer bootstrap, the benchmark protocol and both
+CI gates are in place and exercised. Only the decision to publish is
+deferred.
 
 The full local gate suite ran clean on the branch that carries the work,
 `feat-cli-release`: `cargo fmt --all -- --check`, `cargo
