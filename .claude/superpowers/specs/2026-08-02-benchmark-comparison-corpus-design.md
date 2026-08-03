@@ -134,7 +134,7 @@ After the full protocol run on the reference machine:
 - Both ratios are published, because one without the other misleads: the
   **wall-clock** ratio is what a user waits through, and the
   **CPU-time** ratio is what the engines cost. On the pinned corpus they
-  differ by a factor of six, because Celerrate is effectively
+  differ by a factor of five, because Celerrate is effectively
   single-threaded today and PHPStan forks workers. Publishing only the
   wall clock understates the engine; publishing only the CPU time
   overstates the experience.
@@ -233,9 +233,16 @@ Celerrate runs.
 
 | | wall clock, cold median | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan (level 5) | 38.92 s | 237.5 s |
-| Celerrate | 13.41 s | 16.8 s |
-| ratio | **2.90x** | **14.2x** |
+| PHPStan (level 5) | 38.92 s | 253.4 s |
+| Celerrate | 13.41 s | 17.0 s |
+| ratio | **2.90x** | **14.9x** |
+
+The two columns are pooled differently, and the documents must say so
+rather than implying one method. Hyperfine reports every timed run's
+wall clock, so the wall-clock medians are taken over all twenty-four
+timed runs. It reports only one aggregate CPU total per invocation, so
+the CPU column is the median of the three runs' totals, whose ratios
+were 14.9x, 15.7x and 14.2x.
 
 The two ratios differ by roughly a factor of five for one reason:
 Celerrate is effectively single-threaded where PHPStan forks workers.
@@ -282,7 +289,8 @@ that re-clones an 18 000-name pool and reallocates its edit-distance
 matrix per candidate. It is not the analysis engine. Removing that churn
 and parallelising the persist, index and read phases is estimated to
 land the run near 4.5-6 s, a wall-clock ratio of **6x-8x**. Celerrate
-already consumes 14x less CPU than PHPStan for the same corpus; the
+already consumes 14.9x less CPU than PHPStan for the same corpus;
+the
 whole gap between that and the wall clock is cores left idle. Spending
 the same CPU across as many cores as PHPStan actually uses would put the
 wall-clock ratio in the same range again. The "~20x" ambition is gated

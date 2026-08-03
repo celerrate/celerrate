@@ -34,7 +34,7 @@ Empirical, commits nothing. Produces the values every later task consumes: the p
 - `SCOUTED_COMMIT` = `fc96d0d4eae383e8c6f1f54f19cf592c221a62e3` (tag 9.0.3)
 - `FIRST_PARTY_COUNT` = 6932, `TOTAL_COUNT` = 24033
 - `PHPSTAN_MEMORY_LIMIT` stays `2G` (PHPStan finished well under it)
-- Corrected-protocol reference figures, three cold runs each: PHPStan 39.52 s wall / 264.5 s CPU, Celerrate 13.67 s wall / 16.8 s CPU, wall ratio 2.89x, CPU ratio 11.6x
+- The investigation's own corrected-protocol experiment, three cold runs each: PHPStan 39.52 s wall, Celerrate 13.67 s wall, ratio 2.89x. Superseded as the published figure by the harness measurements taken in Tasks 4 and 4a; kept here as the record of what first showed the equalisation working.
 
 **Files:**
 - No repository changes. Working area: `target/scouting/` (gitignored under `target/`).
@@ -553,9 +553,9 @@ Celerrate runs.
 
 | | wall clock | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan | 38.92 s | 237.5 s |
-| Celerrate | 13.41 s | 16.8 s |
-| ratio | **2.90x** | **14.2x** |
+| PHPStan | 38.92 s | 253.4 s |
+| Celerrate | 13.41 s | 17.0 s |
+| ratio | **2.90x** | **14.9x** |
 
 Both ratios are published because either one alone misleads. The wall
 clock is what you wait through; the CPU column is what the engines cost.
@@ -586,7 +586,7 @@ Replace the README's no-published-comparison statement with one sentence in the 
 ```markdown
 On the pinned comparison corpus (6932 first-party PHP files), a cold
 `celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
-the same file set, using 14x less CPU to do it: Celerrate is
+the same file set, using 15x less CPU to do it: Celerrate is
 single-threaded today where PHPStan forks workers. The pinned protocol
 and the full numbers live in
 [benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
@@ -596,7 +596,7 @@ Check `docs/installation.md` and the two benchmark SVG assets referenced by the 
 
 - [ ] **Step 3b: Align the floor's committed record with what is published**
 
-`COLD_RATIO_FLOOR`'s documentation in `xtask/src/benchmark.rs` currently records the single reference run it was first derived from. Rewrite that reference-measurement sentence to the published figures: PHPStan 38.92 s and Celerrate 13.41 s wall, ratio 2.90x, CPU ratio 14.2x, stated as the pooled medians of three full runs, and note that the observed per-run ratios ranged 2.70x to 2.97x. The value `1.4` does not change (2.902 / 2 = 1.451, floored). A committed comment that quotes a better number than the protocol publishes is exactly the kind of drift this branch exists to remove.
+`COLD_RATIO_FLOOR`'s documentation in `xtask/src/benchmark.rs` currently records the single reference run it was first derived from. Rewrite that reference-measurement sentence to the published figures: PHPStan 38.92 s and Celerrate 13.41 s wall, ratio 2.90x, CPU ratio 14.9x, stated as pooled over three full runs, and note that the observed per-run ratios ranged 2.70x to 2.97x. The value `1.4` does not change (2.902 / 2 = 1.451, floored). A committed comment that quotes a better number than the protocol publishes is exactly the kind of drift this branch exists to remove.
 
 - [ ] **Step 4: Annotate the parent design**
 
