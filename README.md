@@ -115,9 +115,12 @@ All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. Peak resident memory on the same corpus is
 702 MiB cold and 351 MiB warm.
 
-No comparison against another analyzer is published here. The
-protocol states what was measured against PHPStan on this corpus, and
-why that measurement supports no claim about either tool.
+On the pinned comparison corpus (6932 first-party PHP files), a cold
+`celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
+the same file set, using 14x less CPU to do it: Celerrate is
+single-threaded today where PHPStan forks workers. The pinned protocol
+and the full numbers live in
+[benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
 
 ## What works today
 
