@@ -18,6 +18,7 @@ pub mod ground_truth;
 mod migrate;
 pub mod mixed_rate;
 pub mod output;
+mod phases;
 pub mod plugins;
 pub mod render;
 pub mod session;
