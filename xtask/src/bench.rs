@@ -247,22 +247,24 @@ fn prime(binary: &Path, working: &Path) -> Result<()> {
 
 /// Copies the corpus into a disposable working tree, skipping `.git`
 /// (never analyzed) and `.celerrate` (each scenario controls the
-/// cache). Symlinks (composer's `vendor/bin`) are copied by content,
-/// which is fine: the tree is read, never executed. A symlink whose
-/// target does not resolve is skipped rather than aborting the copy:
-/// PrestaShop commits one such symlink,
-/// `tests/Resources/modules/ps_apiresources`, pointing at a package
-/// only the `composer/installers` plugin can place, and
+/// cache). A symlink is never recursed into, even when it resolves to
+/// a directory: `entry.file_type()` (from `read_dir`, which does not
+/// follow links, unlike `std::fs::metadata`) tells a symlink from a
+/// real directory, so a symlink pointing at itself or at an ancestor
+/// cannot recurse without bound. A symlink to a file (composer's
+/// `vendor/bin`) is instead copied by content through the same
+/// `std::fs::copy` call, which is fine: the tree is read, never
+/// executed.
+///
+/// A symlink whose target does not resolve at all is skipped (and the
+/// skip is printed to stderr, so a silently truncated corpus stays
+/// visible) rather than aborting the copy: PrestaShop commits one such
+/// symlink, `tests/Resources/modules/ps_apiresources`, pointing at a
+/// package only the `composer/installers` plugin can place, and
 /// `--no-scripts --no-plugins` deliberately disables that plugin so no
 /// code from the corpus ever runs. The symlink dangles by design on
-/// every fetch, and one absent test fixture must not abort a benchmark.
-///
-/// `entry.file_type()` comes from `read_dir` and does not follow
-/// symlinks, so resolving through `std::fs::metadata` (which does) is
-/// what tells a directory symlink from a dangling one, and from a
-/// plain file: the same resolution that skips the dangling case also
-/// covers a symlink to a directory correctly, with no special case for
-/// symlinks. Only `ErrorKind::NotFound` is skipped; any other
+/// every fetch, and one absent test fixture must not abort a
+/// benchmark. Only `ErrorKind::NotFound` is skipped; any other
 /// resolution failure (permission denied, a symlink cycle, ...)
 /// propagates, because a corpus copy that silently drops entries on an
 /// unrelated I/O error would report success over a truncated tree.
@@ -277,14 +279,19 @@ pub(crate) fn copy_directory(source: &Path, destination: &Path) -> Result<()> {
         let target = destination.join(&name);
         let metadata = match std::fs::metadata(entry.path()) {
             Ok(metadata) => metadata,
-            // Only a missing target is skipped (a dangling symlink):
-            // any other failure (permission denied, a symlink cycle,
-            // ...) is a genuine problem and must propagate, or the
-            // copy would silently go partial instead of reporting it.
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // NotFound (a dangling symlink) is the only skip; any
+            // other resolution failure propagates.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                eprintln!(
+                    "skipping a corpus entry whose target does not resolve: {}",
+                    entry.path().display()
+                );
+                continue;
+            }
             Err(error) => return Err(error.into()),
         };
-        if metadata.is_dir() {
+        let is_symlink = entry.file_type()?.is_symlink();
+        if metadata.is_dir() && !is_symlink {
             copy_directory(&entry.path(), &target)?;
         } else {
             std::fs::copy(entry.path(), &target)?;
@@ -376,6 +383,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn the_working_copy_skips_an_unresolvable_symlink() {
         // PrestaShop commits exactly one symlink,
         // `tests/Resources/modules/ps_apiresources`, pointing at a
@@ -386,7 +394,6 @@ mod tests {
         let source = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(source.path().join("src")).unwrap();
         std::fs::write(source.path().join("src/A.php"), "<?php").unwrap();
-        #[cfg(unix)]
         std::os::unix::fs::symlink(
             source.path().join("does-not-exist"),
             source.path().join("dangling"),
@@ -403,14 +410,15 @@ mod tests {
 
     #[test]
     #[cfg(unix)]
-    fn a_genuine_io_failure_propagates_instead_of_being_skipped() {
-        // A dangling symlink resolves with `ErrorKind::NotFound`, which
-        // is the one case the copy is allowed to skip. A symlink cycle
-        // (two symlinks pointing at each other) resolves with a
-        // different error kind (`ELOOP` on this platform): that must
-        // propagate as an error, not be silently swallowed alongside
-        // the dangling case, or a corpus copy could go silently
-        // partial.
+    fn two_symlinks_pointing_at_each_other_propagate_the_error() {
+        // Neither entry here is ever a real file or a real directory:
+        // `first` and `second` are two symlinks naming each other, so
+        // resolving either fails with `ELOOP` on this platform. That is
+        // narrower than the general "a symlink resolves to a directory"
+        // case covered separately below; this test only pins that
+        // `ErrorKind::NotFound` (a dangling symlink) is the sole skip,
+        // and any other resolution failure - `ELOOP` included -
+        // propagates instead of being silently swallowed alongside it.
         let source = tempfile::tempdir().unwrap();
         let first = source.path().join("first");
         let second = source.path().join("second");
@@ -420,6 +428,39 @@ mod tests {
         let destination = tempfile::tempdir().unwrap();
         let copy = destination.path().join("corpus");
         assert!(copy_directory(source.path(), &copy).is_err());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn a_symlink_to_its_own_parent_directory_is_never_recursed_into() {
+        // Resolving through `std::fs::metadata` follows links, so a
+        // symlink pointing at an ancestor of itself (here, its own
+        // parent) resolves as a directory. Recursing into it as if it
+        // were a real subdirectory has no natural end: every level
+        // finds the same symlink again and the copy tree grows one
+        // level deeper each time. The fix must reject that recursion
+        // outright by consulting `entry.file_type()` (which does not
+        // follow links), rather than relying on an incidental limit
+        // (a maximum path length, a symlink-loop error) to eventually
+        // stop it - so a second level of nesting through the symlink
+        // must never appear on disk at all.
+        let source = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(source.path().join("src")).unwrap();
+        std::fs::write(source.path().join("src/A.php"), "<?php").unwrap();
+        std::os::unix::fs::symlink(source.path(), source.path().join("self")).unwrap();
+
+        let destination = tempfile::tempdir().unwrap();
+        let copy = destination.path().join("corpus");
+        // `read_dir` order between `src` and `self` is not guaranteed,
+        // so the outcome may be success or a propagated I/O error
+        // either way; both are acceptable. What must never happen,
+        // regardless of order, is a second level of nesting through
+        // the symlink: even if `self` is visited first at the top
+        // level, the directory it recurses into lists both `src` and
+        // `self` again, so a `self/self` entry is unavoidable once the
+        // recursion is allowed at all.
+        let _ = copy_directory(source.path(), &copy);
+        assert!(!copy.join("self/self").exists());
     }
 
     #[test]
