@@ -42,12 +42,15 @@ Both tools are handed the same file set, and the harness enforces it
 rather than assuming it. Celerrate discovers a project through Composer's
 autoload roots, but PrestaShop loads its 326-file `classes/` directory
 through its own runtime autoloader, which Composer never declares: left
-alone, Celerrate would report on 5922 files while PHPStan analysed 6926.
+alone, Celerrate would report on 5922 files while PHPStan analyzed 6926.
 The harness therefore writes a `celerrate.toml` pinning
-`[project] include = ["."]` into the corpus working tree. Vendor is
-indexed for reflection on both sides but analysed by neither. PHPStan is
-pinned in `benchmarks/phpstan/composer.lock`, at rule level 5, with its
-result cache wiped before every timed run.
+`[project] include = ["."]` into the corpus working tree, which equalizes
+the sets: Celerrate reports on 6932 files against PHPStan's 6926, and the
+reference run below records both counts so a future divergence between
+them is visible rather than silent. Vendor is indexed for reflection on
+both sides but analyzed by neither. PHPStan is pinned in
+`benchmarks/phpstan/composer.lock`, at rule level 5, with its result
+cache wiped before every timed run.
 
 Rule level 5 remains the closest match to the families the measured
 Celerrate binary enables, not an exact one: Celerrate additionally runs
@@ -60,9 +63,10 @@ The harness is `cargo xtask benchmark`; `--gate` fails under the
 committed floor (`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half
 the reference ratio below.
 
-Measured on the reference machine, cold. The two columns pool
-differently, and are labelled accordingly: the wall-clock medians are
-taken over all twenty-four timed runs across three full runs (nine
+Measured on 2026-08-03, at commit `8ab4af1` (`celerrate --version`
+reports `0.1.0` there), on the reference machine, cold. The two columns
+pool differently, and are labeled accordingly: the wall-clock medians
+are taken over all twenty-four timed runs across three full runs (nine
 timed PHPStan runs and fifteen timed Celerrate runs). Hyperfine reports
 one CPU total per invocation, not per timed run, so the CPU column
 cannot be pooled the same way; it is the median of the three full
@@ -79,7 +83,7 @@ clock is what you wait through; the CPU column is what the engines cost.
 They differ by roughly a factor of five because Celerrate is effectively
 single-threaded today while PHPStan forks worker processes: Celerrate
 wins the wall clock while using an order of magnitude less machine.
-Parallelising it is tracked work, not a claim made here (issue #124).
+Parallelizing it is tracked work, not a claim made here (issue #124).
 
 The three full runs gave ratios of 2.97x, 2.95x and 2.70x. The spread is
 Celerrate's, not PHPStan's: its five timed runs step from about 12.3 s to
@@ -265,6 +269,12 @@ release publishes (`.github/workflows/release.yml`), rather than on
 every pull request, because the comparison corpus's `composer install`
 and the timed runs together take longer than a per-pull-request budget
 allows.
+
+The release gate depends on the network: cloning PrestaShop and
+installing its roughly 24000-file vendor tree from Packagist. A
+transient outage there reads as a failed gate, indistinguishable from a
+regressed ratio, and blocks the tag with no automatic retry; the remedy
+is to re-run the job.
 
 The sub-second incremental target is not gated in CI either. It is
 held on the reference machine by this protocol run. In CI it is

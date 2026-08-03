@@ -117,10 +117,10 @@ analysis, and reporting. Peak resident memory on the same corpus is
 
 On the pinned comparison corpus (6932 first-party PHP files), a cold
 `celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
-the same file set, using 15x less CPU to do it: Celerrate is
-single-threaded today where PHPStan forks workers. The pinned protocol
-and the full numbers live in
-[benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
+the same file set (the three measured runs ranged 2.70x to 2.97x), using
+nearly 15x (14.9x) less CPU to do it: Celerrate is single-threaded today
+where PHPStan forks workers. The pinned protocol and the full numbers
+live in [benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
 
 ## What works today
 
