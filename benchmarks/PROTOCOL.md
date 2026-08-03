@@ -79,7 +79,7 @@ clock is what you wait through; the CPU column is what the engines cost.
 They differ by roughly a factor of five because Celerrate is effectively
 single-threaded today while PHPStan forks worker processes: Celerrate
 wins the wall clock while using an order of magnitude less machine.
-Parallelising it is tracked work, not a claim made here.
+Parallelising it is tracked work, not a claim made here (issue #124).
 
 The three full runs gave ratios of 2.97x, 2.95x and 2.70x. The spread is
 Celerrate's, not PHPStan's: its five timed runs step from about 12.3 s to

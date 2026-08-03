@@ -1,7 +1,7 @@
 # Celerrate: Benchmark Comparison Corpus Design
 
 Date: 2026-08-02
-Status: Draft
+Status: Closed (implemented, 2026-08-03)
 Parent: `.claude/superpowers/specs/2026-07-24-cli-product-v0.1-design.md`
 (section 8 and amendment 3)
 Resolves: issue #118

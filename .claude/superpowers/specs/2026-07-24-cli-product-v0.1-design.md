@@ -1,8 +1,7 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Open (product part complete; the published comparison and the
-`v0.1.0` tag remain)
+Status: Closed (v0.1.0, 2026-08-03)
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -518,15 +517,17 @@ The order proposed to the planning stage (dependencies respected):
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
 
-## State of play (2026-08-01)
+## State of play (2026-08-01, resolved 2026-08-03)
 
-This sub-project is not closed. Its product part is complete and its
-release part is not: the branch that carries the work lands on `main`
-without a tag, and two things from section 1 remain open, the published
-comparison (inside gate 7) and the release event the closure criterion
-names, the `v0.1.0` tag itself. Both wait on the same thing, a benchmark
-corpus whose first-party code is large enough to separate two analyzers
-(issue #118).
+This sub-project is closed. At the 2026-08-01 snapshot below, its
+product part was complete and its release part was not: two things from
+section 1 remained open, the published comparison (inside gate 7) and
+the release event the closure criterion names, the `v0.1.0` tag itself.
+Both waited on the same thing, a benchmark corpus whose first-party code
+is large enough to separate two analyzers (issue #118). Both are now
+resolved: the comparison is measured and published on that corpus, gate
+7 is fully held (below), and `v0.1.0` carries the already-prepared
+CHANGELOG entry.
 
 The full local gate suite ran clean on the branch that carries the work,
 `feat-cli-release`: `cargo fmt --all -- --check`, `cargo
@@ -577,19 +578,21 @@ it waits on:
    refusal), and by `packages/composer-bootstrap/tests/` (archive,
    checksum, platform detection, release URL) for the Composer bootstrap
    package against a fixture project.
-7. **Benchmark**: partly held, and the only gate that is not. The
-   protocol is committed at `benchmarks/PROTOCOL.md` with its harnesses,
-   and the absolute side is held: the five scenario medians and the peak
-   memory numbers come from a reference-machine run the document names,
-   `cargo xtask memory --ceiling` holds the memory budget in the `memory`
-   job of `.github/workflows/corpus.yml`, and `cargo xtask bench
-   --ceilings` holds the incremental path structurally in the `bench` job
-   of the same workflow. The comparison side is **not** held: no ratio is
-   published, and the `benchmark` job has been removed from the workflow,
-   because a required check that cannot pass blocks every merge.
-   `cargo xtask benchmark` and its `--gate` flag stay in the tree, tested
-   and reproducible on demand; they are re-wired into CI with the corpus
-   that can carry them (issue #118).
+7. **Benchmark**: fully held. The protocol is committed at
+   `benchmarks/PROTOCOL.md` with its harnesses; the absolute side is held
+   by the five scenario medians and the peak memory numbers from a
+   reference-machine run the document names, `cargo xtask memory
+   --ceiling` holding the memory budget in the `memory` job of
+   `.github/workflows/corpus.yml`, and `cargo xtask bench --ceilings`
+   holding the incremental path structurally in the `bench` job of the
+   same workflow. The comparison side is held too, now that a corpus can
+   carry it: a second pin, `xtask/comparison-corpus.pin`, names
+   PrestaShop 9.0.3, whose first-party code is large enough to separate
+   the two analyzers; the measured cold ratio (both wall-clock and
+   CPU-time) is published in `benchmarks/PROTOCOL.md`; and `cargo xtask
+   benchmark --gate` runs weekly (`.github/workflows/benchmark.yml`) and
+   as a required job before every release (the `benchmark-gate` job of
+   `.github/workflows/release.yml`), closing issue #118.
 8. **Documentation**: held by the README landing page and the `docs/` pass
    (`docs/configuration.md`, `docs/baseline.md`, `docs/migration.md`,
    `docs/ci.md`, plus the existing `docs/diagnostics.md` and
@@ -629,3 +632,22 @@ it waits on:
    stands here as an unmeasured ambition, neither met nor missed;
    `benchmarks/PROTOCOL.md` states that position publicly instead of
    publishing a ratio.
+
+**Update (2026-08-03): the comparison is no longer withheld.** It is
+published on a second pinned corpus, PrestaShop 9.0.3
+(`fc96d0d4eae383e8c6f1f54f19cf592c221a62e3`), whose first-party code is
+large enough that rule-checking dominates both wall clocks. Both measured
+ratios are published — 2.90x cold wall clock, 14.9x CPU consumed — and
+`cargo xtask benchmark --gate` runs weekly
+(`.github/workflows/benchmark.yml`) and as a required job before every
+release (`.github/workflows/release.yml`). The harness now **enforces**
+the equal analysed file set rather than assuming it, a correction the
+scouting forced: Celerrate discovers through Composer's autoload roots,
+and a real application routinely loads part of its own code through a
+runtime autoloader Composer never sees, so an unenforced comparison
+silently charged Celerrate for files it had been denied. The full account
+is `.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`,
+section 11. The parent design's "at least ~20x faster than PHPStan"
+ambition stands unamended, for the reason recorded there: the measurement
+is of a single-threaded run whose wall clock is dominated by a quadratic
+presentation pass, so it does not test what the ambition claims.
