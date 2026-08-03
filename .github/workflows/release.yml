@@ -49,9 +49,33 @@ jobs:
             target/dist/celerrate-*.sha256
           if-no-files-found: error
 
+  benchmark-gate:
+    runs-on: ubuntu-latest
+    # A hung PHPStan run would otherwise hold the runner for GitHub's
+    # six-hour default. The budget covers a cold Cargo cache, a cold
+    # corpus fetch with its composer install, the release build, and
+    # the timed runs themselves.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: target/comparison-corpus
+          key: comparison-corpus-${{ hashFiles('xtask/comparison-corpus.pin') }}
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: "8.4"
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install --yes hyperfine
+      - run: cargo xtask benchmark --gate
+
   publish:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: build
+    needs: [build, benchmark-gate]
     runs-on: ubuntu-latest
     permissions:
       contents: write
