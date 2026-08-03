@@ -127,6 +127,9 @@ pub(crate) fn report_to(session: &Session, output: &mut dyn std::io::Write) -> s
         "{}",
         render_run_summary(&session.statistics, reported)
     )?;
+    for line in session.phases.render_lines() {
+        writeln!(output, "{line}")?;
+    }
     Ok(())
 }
 
@@ -277,6 +280,33 @@ mod tests {
     }
 
     #[test]
+    fn the_phase_lines_print_after_the_run_summary() {
+        let root = project(&[("composer.json", r#"{"require": {"php": "^8.1"}}"#)]);
+        let session = Session::start(root.path());
+        let mut output = Vec::new();
+        report_to(&session, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let summary_position = text.find("verbose: 0 project files").unwrap();
+        let walk_position = text.find("verbose: phase filesystem walk:").unwrap();
+        assert!(
+            summary_position < walk_position,
+            "summary first, then phases"
+        );
+        for label in [
+            "verbose: phase filesystem walk:",
+            "verbose: phase file read + input set:",
+            "verbose: phase analysis fan-out:",
+            "verbose: phase suggest enrich:",
+            "verbose: phase render report:",
+            "verbose: phase persist: collect entries:",
+            "verbose: phase persist: collect signatures:",
+            "verbose: phase persist: pack writes:",
+        ] {
+            assert!(text.contains(label), "missing {label} in {text}");
+        }
+    }
+
+    #[test]
     fn report_to_writes_the_widened_line_then_the_run_summary() {
         let root = project(&[(
             "a.php",
@@ -294,6 +324,14 @@ mod tests {
                  the directive widens to scope-wide suppression",
                 "verbose: 1 project file reported; verdicts 0 served / 0 \
                  discarded / 0 absent from the cache",
+                "verbose: phase filesystem walk: 0ms",
+                "verbose: phase file read + input set: 0ms",
+                "verbose: phase analysis fan-out: 0ms",
+                "verbose: phase suggest enrich: 0ms",
+                "verbose: phase render report: 0ms",
+                "verbose: phase persist: collect entries: 0ms",
+                "verbose: phase persist: collect signatures: 0ms",
+                "verbose: phase persist: pack writes: 0ms",
             ],
         );
     }

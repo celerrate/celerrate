@@ -27,6 +27,7 @@ use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
+use crate::phases::PhaseTimings;
 use crate::plugins::{RegisteredPlugins, plugin_set_digest, register_core_rules, register_plugins};
 use crate::watch::{InputMutation, reconcile};
 
@@ -108,6 +109,9 @@ pub struct Session {
     /// `SnapshotCache` and with every `AnalysisInputs` clone. Never
     /// read by analysis; rendered to stderr on opt-in.
     pub statistics: Arc<CacheStatistics>,
+    /// The session's per-phase timings, shared with the persist layer.
+    /// Never read by analysis; rendered to stderr under `--verbose`.
+    pub phases: Arc<PhaseTimings>,
     /// The plugins the composition root registered into the extension
     /// registries, and the ones it excluded. Set once, right after the
     /// database's other singleton inputs, before any query runs.
@@ -191,6 +195,7 @@ impl Session {
         let files = AnalyzedFileSet::new(&database, Vec::new());
 
         let statistics = Arc::new(CacheStatistics::default());
+        let phases = Arc::new(PhaseTimings::default());
         let cache_directory = root.join(".celerrate").join("cache");
         let cache_loaded_range = discovery.php_version_range;
 
@@ -248,6 +253,7 @@ impl Session {
             cache_directory,
             cache_loaded_range,
             statistics,
+            phases: phases.clone(),
             plugins,
             plugin_set_digest,
             configuration_digest,
@@ -256,11 +262,21 @@ impl Session {
             severity_remap,
             loaded_baseline,
         };
+        // Wall-clock reads, legal here: `start` is orchestration, never
+        // a salsa query, and the readings feed only the verbose channel.
+        let started = std::time::Instant::now();
         let walk = enumerate_php_files(
             &session.discovery.walk_roots(),
             &session.discovery.excluded_roots,
         );
+        session
+            .phases
+            .record(crate::phases::Phase::Walk, started.elapsed());
+        let started = std::time::Instant::now();
         session.load(&walk);
+        session
+            .phases
+            .record(crate::phases::Phase::ReadAndSetInputs, started.elapsed());
         session
     }
 

@@ -132,14 +132,24 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     );
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
-    let Ok((trees, member_trees, verdicts)) =
-        crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked))
-    else {
+    let started = std::time::Instant::now();
+    let collected =
+        crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked));
+    session.phases.record(
+        crate::phases::Phase::PersistCollectEntries,
+        started.elapsed(),
+    );
+    let Ok((trees, member_trees, verdicts)) = collected else {
         return;
     };
-    let Ok(signatures) =
-        crate::analysis::isolated(|| collect_signature_entries(&inputs, &panicked))
-    else {
+    let started = std::time::Instant::now();
+    let collected_signatures =
+        crate::analysis::isolated(|| collect_signature_entries(&inputs, &panicked));
+    session.phases.record(
+        crate::phases::Phase::PersistCollectSignatures,
+        started.elapsed(),
+    );
+    let Ok(signatures) = collected_signatures else {
         return;
     };
 
@@ -161,6 +171,7 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     // header.
     let header_moved = current_range != session.cache_loaded_range
         || session.configuration_digest != session.cache_loaded_configuration_digest;
+    let started = std::time::Instant::now();
     let trees_written = write_when_changed(
         &session.cache_directory.join(ITEM_TREES_PACK),
         &header,
@@ -199,6 +210,9 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     } else {
         PackWrite::Unchanged
     };
+    session
+        .phases
+        .record(crate::phases::Phase::PersistPackWrites, started.elapsed());
     for write in [
         &trees_written,
         &member_trees_written,
