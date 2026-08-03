@@ -185,6 +185,10 @@ by the weekly workflow thereafter.
 - The performance work the scouting exposed (section 11): the quadratic
   did-you-mean pass and the absent parallelism are tracked separately and
   do not gate this design or the tag.
+- Instrumenting the sustained-load step in Celerrate's timings, and any
+  cooldown the protocol might grow because of it (section 11).
+- A per-pull-request benchmark job.
+- Publishing absolute wall-clock numbers from CI runners.
 
 ## 11. Amendment (2026-08-03): what the scouting measured
 
@@ -223,14 +227,53 @@ assuming it.
 
 ### The measured comparison
 
+The published figure is the median of **three full runs** on the
+reference machine, pooled: nine timed PHPStan runs and fifteen timed
+Celerrate runs.
+
 | | wall clock, cold median | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan (level 5) | 39.52 s | 264.5 s |
-| Celerrate | 13.67 s | 16.8 s |
-| ratio | **2.89x** | **11.6x** |
+| PHPStan (level 5) | 38.92 s | 237.5 s |
+| Celerrate | 13.41 s | 16.8 s |
+| ratio | **2.90x** | **14.2x** |
 
-The two ratios differ by a factor of six for one reason: Celerrate runs
-at 1.1 effective cores of 10, PHPStan at 6.7. Section 7 publishes both.
+The two ratios differ by roughly a factor of five for one reason:
+Celerrate is effectively single-threaded where PHPStan forks workers.
+Section 7 publishes both.
+
+### The stability the acceptance criteria did not get
+
+Section 4 requires each tool's spread to stay under 10 %. **Celerrate's
+does not, on this machine**, and the design records that rather than
+quietly dropping the criterion.
+
+The harness originally passed hyperfine no warmup, so the first timed
+run absorbed the cold page cache: Celerrate's spread was 22.66 % and two
+consecutive full measurements disagreed by 11 %. Adding a warmup fixed
+that specific defect. What remains is different in kind: Celerrate's
+five timed runs step from about 12.3 s to about 13.8-14.3 s partway
+through and stay there, rather than scattering. The pattern reproduces
+on a rested machine with nothing measured before it, so it is not
+contamination from a preceding run; it has the shape of frequency
+scaling under roughly seventy seconds of sustained load, though the
+mechanism was not instrumented.
+
+The three full runs produced ratios of 2.969x, 2.950x and 2.703x, a
+9.9 % span. Two of the three exceeded the 10 % spread criterion on the
+Celerrate side (19.93 % and 16.42 %); PHPStan stayed within it every
+time (1.12 % to 6.10 %).
+
+What follows from that:
+
+- The published ratio is the pooled median, not any single run, and
+  `benchmarks/PROTOCOL.md` states the observed range beside it. A figure
+  quoted from the best of three runs would not be honest.
+- The gate is unaffected. `COLD_RATIO_FLOOR` is 1.4, and the worst ratio
+  observed clears it by 1.93x, so shared-runner variance has enormous
+  headroom before a healthy build fails.
+- Instrumenting the step, and deciding whether the protocol should
+  impose a cooldown between runs, is follow-up work. It does not gate
+  this design: the floor holds and the published figure is conservative.
 
 ### Why the parent ambition stands
 
@@ -238,9 +281,10 @@ at 1.1 effective cores of 10, PHPStan at 6.7. Section 7 publishes both.
 that re-clones an 18 000-name pool and reallocates its edit-distance
 matrix per candidate. It is not the analysis engine. Removing that churn
 and parallelising the persist, index and read phases is estimated to
-land the run near 4.5-6 s (**6x-8x**); at unchanged CPU, scaling as well
-as PHPStan actually scales would give ~14x. The "~20x" ambition is gated
+land the run near 4.5-6 s, a wall-clock ratio of **6x-8x**. Celerrate
+already consumes 14x less CPU than PHPStan for the same corpus; the
+whole gap between that and the wall clock is cores left idle. Spending
+the same CPU across as many cores as PHPStan actually uses would put the
+wall-clock ratio in the same range again. The "~20x" ambition is gated
 on parallelism and one quadratic pass, not on analysis throughput, so
 the measurement does not refute it and section 7 does not amend it down.
-- A per-pull-request benchmark job.
-- Publishing absolute wall-clock numbers from CI runners.

@@ -547,20 +547,31 @@ The harness is `cargo xtask benchmark`; `--gate` fails under the
 committed floor (`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half
 the reference ratio below.
 
-Measured on the reference machine (cold, medians):
+Measured on the reference machine, cold. The figures are the pooled
+medians of three full runs: nine timed PHPStan runs and fifteen timed
+Celerrate runs.
 
 | | wall clock | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan | <MEASURED_PHPSTAN_MEDIAN> s | <MEASURED_PHPSTAN_CPU> s |
-| Celerrate | <MEASURED_CELERRATE_MEDIAN> s | <MEASURED_CELERRATE_CPU> s |
-| ratio | <MEASURED_RATIO>x | <MEASURED_CPU_RATIO>x |
+| PHPStan | 38.92 s | 237.5 s |
+| Celerrate | 13.41 s | 16.8 s |
+| ratio | **2.90x** | **14.2x** |
 
 Both ratios are published because either one alone misleads. The wall
 clock is what you wait through; the CPU column is what the engines cost.
-They differ by roughly a factor of six because Celerrate is effectively
+They differ by roughly a factor of five because Celerrate is effectively
 single-threaded today while PHPStan forks worker processes: Celerrate
 wins the wall clock while using an order of magnitude less machine.
 Parallelising it is tracked work, not a claim made here.
+
+The three full runs gave ratios of 2.97x, 2.95x and 2.70x. The spread is
+Celerrate's, not PHPStan's: its five timed runs step from about 12.3 s to
+about 13.8-14.3 s partway through and stay there, which has the shape of
+frequency scaling under sustained load on this machine. PHPStan's own
+spread stayed between 1.1 % and 6.1 % throughout. The published figure is
+therefore the pooled median rather than any single run, and the gate
+floor sits far below the worst of them: 1.4, cleared by 1.93x even at
+2.70x.
 
 The gate runs weekly (`.github/workflows/benchmark.yml`) and as a
 required job before any release publishes (`.github/workflows/release.yml`).
@@ -574,14 +585,18 @@ Replace the README's no-published-comparison statement with one sentence in the 
 
 ```markdown
 On the pinned comparison corpus (6932 first-party PHP files), a cold
-`celerrate check` completes <MEASURED_RATIO>x faster than PHPStan at
-rule level 5 on the same file set, using <MEASURED_CPU_RATIO>x less CPU
-to do it: Celerrate is single-threaded today where PHPStan forks
-workers. The pinned protocol and the full numbers live in
+`celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
+the same file set, using 14x less CPU to do it: Celerrate is
+single-threaded today where PHPStan forks workers. The pinned protocol
+and the full numbers live in
 [benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
 ```
 
 Check `docs/installation.md` and the two benchmark SVG assets referenced by the README for any stale comparison claim; update only what carries one.
+
+- [ ] **Step 3b: Align the floor's committed record with what is published**
+
+`COLD_RATIO_FLOOR`'s documentation in `xtask/src/benchmark.rs` currently records the single reference run it was first derived from. Rewrite that reference-measurement sentence to the published figures: PHPStan 38.92 s and Celerrate 13.41 s wall, ratio 2.90x, CPU ratio 14.2x, stated as the pooled medians of three full runs, and note that the observed per-run ratios ranged 2.70x to 2.97x. The value `1.4` does not change (2.902 / 2 = 1.451, floored). A committed comment that quotes a better number than the protocol publishes is exactly the kind of drift this branch exists to remove.
 
 - [ ] **Step 4: Annotate the parent design**
 
