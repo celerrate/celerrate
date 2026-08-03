@@ -1,0 +1,47 @@
+name: Benchmark
+
+on:
+  schedule:
+    # Weekly, Monday 05:17 UTC. Any off-the-hour minute avoids the
+    # top-of-hour congestion on GitHub's shared cron scheduler (see
+    # fuzz.yml's nightly schedule for the same reasoning).
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  comparison-gate:
+    runs-on: ubuntu-latest
+    # A hung PHPStan run would otherwise hold the runner for GitHub's
+    # six-hour default. The budget covers a cold Cargo cache, a cold
+    # corpus fetch with its composer install, the release build, and
+    # the timed runs themselves.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@v1
+        with:
+          toolchain: "1.94"
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: target/comparison-corpus
+          key: comparison-corpus-${{ hashFiles('xtask/comparison-corpus.pin') }}
+      - uses: shivammathur/setup-php@v2
+        with:
+          # The published protocol (benchmarks/PROTOCOL.md) measured
+          # under PHP 8.5.0. Only PHPStan's side of the ratio moves
+          # with the interpreter version - Celerrate does not run
+          # PHP - and the gate's floor (1.4x, against a measured
+          # ~2.9x) leaves enough margin to absorb the difference, so
+          # this stays at the runner's readily available version
+          # rather than chasing the protocol's exact one.
+          php-version: "8.4"
+          tools: composer
+      - run: sudo apt-get update && sudo apt-get install --yes hyperfine
+      - run: cargo xtask benchmark --gate

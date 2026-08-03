@@ -4,7 +4,9 @@
 
 **Goal:** Pin a comparison corpus whose first-party code is large enough to separate Celerrate from PHPStan, publish the measured cold ratio, wire the gate weekly and into the release workflow, and unblock the `v0.1.0` tag.
 
-**Architecture:** A second pin file (`xtask/comparison-corpus.pin`) feeds the existing `cargo xtask benchmark` harness through new `comparison_*` functions in `xtask/src/corpus.rs`; the analysis corpus, its snapshot, and the mixed-rate baseline do not move. The gate runs in a new weekly workflow and as a required job in the release workflow, never per pull request.
+**Architecture:** A second pin file (`xtask/comparison-corpus.pin`) feeds the existing `cargo xtask benchmark` harness through new `comparison_*` functions in `xtask/src/corpus.rs`; the analysis corpus, its snapshot, and the mixed-rate baseline do not move. The harness generates both tools' configurations so they analyse the same file set. The gate runs in a new weekly workflow and as a required job in the release workflow, never per pull request.
+
+**Amended 2026-08-03**, after Task 1's scouting and the investigation it triggered. Two changes run through Tasks 3, 4, 5 and 7: the harness must *enforce* equal reported work rather than assume it, and the publication states both the wall-clock and the CPU ratio while leaving the parent design's ~20x ambition unamended. Section 11 of the spec carries the evidence.
 
 **Tech Stack:** Rust (xtask), hyperfine, Composer/PHPStan, GitHub Actions.
 
@@ -22,9 +24,17 @@
 
 ---
 
-### Task 1: Scout the comparison candidate
+### Task 1: Scout the comparison candidate — DONE (2026-08-03)
 
 Empirical, commits nothing. Produces the values every later task consumes: the pinned repository and commit, the first-party file count, the trial medians, and their spread. The spec's acceptance criteria decide; if Shopware 6 fails, the same steps run on the fallbacks in order.
+
+**Outcome.** Shopware and phpMyAdmin were both rejected; PrestaShop 9.0.3 is the corpus. Scouting also falsified the design's equal-reported-work assumption, which is why Tasks 3, 4, 5 and 7 below differ from their original text. The full record is `.superpowers/sdd/2026-08-02-benchmark-comparison-corpus/task-1-report.md` and `investigation-ratio-gap.md`; the design amendment is section 11 of the spec. The values later tasks consume:
+
+- `SCOUTED_REPOSITORY` = `https://github.com/PrestaShop/PrestaShop`
+- `SCOUTED_COMMIT` = `fc96d0d4eae383e8c6f1f54f19cf592c221a62e3` (tag 9.0.3)
+- `FIRST_PARTY_COUNT` = 6932, `TOTAL_COUNT` = 24033
+- `PHPSTAN_MEMORY_LIMIT` stays `2G` (PHPStan finished well under it)
+- The investigation's own corrected-protocol experiment, three cold runs each: PHPStan 39.52 s wall, Celerrate 13.67 s wall, ratio 2.89x. Superseded as the published figure by the harness measurements taken in Tasks 4 and 4a; kept here as the record of what first showed the equalisation working.
 
 **Files:**
 - No repository changes. Working area: `target/scouting/` (gitignored under `target/`).
@@ -155,9 +165,14 @@ In the existing `mod tests` at the bottom of `xtask/src/corpus.rs`:
 
 ```rust
 #[test]
-fn the_comparison_pin_is_committed_and_well_formed() {
+fn the_comparison_pin_is_committed_and_names_the_scouted_corpus() {
+    // Exact values, not a prefix: the medians published against this
+    // pin are only meaningful for the commit they were measured on, so
+    // a silent edit here must fail the suite rather than quietly
+    // invalidate every number in the protocol.
     let pin = super::comparison_pin().unwrap();
-    assert!(pin.repository.starts_with("https://github.com/"));
+    assert_eq!(pin.repository, "https://github.com/PrestaShop/PrestaShop");
+    assert_eq!(pin.commit, "fc96d0d4eae383e8c6f1f54f19cf592c221a62e3");
 }
 
 #[test]
@@ -187,8 +202,8 @@ Expected: compilation fails, `comparison_pin` and `comparison_snapshot_directory
 # this file. Bump deliberately, re-run the reference protocol
 # (benchmarks/PROTOCOL.md), and publish the re-measured ratio together
 # with the bump.
-repository = <SCOUTED_REPOSITORY>
-commit = <SCOUTED_COMMIT>
+repository = https://github.com/PrestaShop/PrestaShop
+commit = fc96d0d4eae383e8c6f1f54f19cf592c221a62e3
 ```
 
 In `xtask/src/corpus.rs`, after `prepare()`:
@@ -239,11 +254,13 @@ git commit -m "✨ feat(xtask): pin the PHPStan comparison corpus"
 ### Task 3: Point the harness at the comparison corpus
 
 **Files:**
-- Modify: `xtask/src/benchmark.rs` (module documentation lines 1-7, the `prepare` call line 41, the `COLD_RATIO_FLOOR` documentation lines 25-34, the `phpstan_configuration` documentation lines 156-172; and `PHPSTAN_MEMORY_LIMIT` line 21 only if Task 1 Step 7 required 4G)
+- Modify: `xtask/src/benchmark.rs` (module documentation lines 1-7, the `prepare` call line 41, the `COLD_RATIO_FLOOR` documentation lines 25-34, the `phpstan_configuration` documentation lines 156-172; a new `celerrate_configuration` function beside it, with unit tests in the existing `mod tests`)
+
+`PHPSTAN_MEMORY_LIMIT` stays `2G`: PHPStan finished comfortably under it on the pinned corpus.
 
 **Interfaces:**
 - Consumes: `xtask::corpus::prepare_comparison()` from Task 2.
-- Produces: `cargo xtask benchmark [--gate]` measuring the comparison corpus. Signatures of `run`, `cold_ratio`, `under_ratio_floor`, `phpstan_configuration` unchanged.
+- Produces: `cargo xtask benchmark [--gate]` measuring the comparison corpus, both tools analysing the same file set. Signatures of `run`, `cold_ratio`, `under_ratio_floor`, `phpstan_configuration` unchanged.
 
 - [ ] **Step 1: Swap the corpus and rewrite the stale documentation**
 
@@ -294,7 +311,44 @@ against only the first-party files Celerrate reports on.
 
 and drop the sentence about "the corpus's own `phpstan.dist.neon`" (it described symfony/demo specifically).
 
-If Task 1 Step 7 recorded the 4G requirement, change line 21 to `const PHPSTAN_MEMORY_LIMIT: &str = "4G";` and reword its documentation comment to name the comparison corpus as what sized it.
+- [ ] **Step 1b: Equalise the analysed file set (test-first)**
+
+This step exists because scouting falsified the design's equal-reported-work assumption (spec section 11). Celerrate discovers through Composer autoload; PrestaShop loads its 326-file `classes/` directory through its own runtime autoloader, so Celerrate reported on 5922 files where PHPStan analysed 6926, and the resulting spurious diagnostics cost it 8 seconds of did-you-mean work. Both tools must be handed the same tree.
+
+Write the failing unit tests first, in the existing `mod tests` beside the `phpstan_configuration` tests:
+
+```rust
+#[test]
+fn the_celerrate_configuration_includes_the_whole_tree() {
+    let text = super::celerrate_configuration();
+    assert!(text.contains("[project]"));
+    assert!(text.contains(r#"include = ["."]"#));
+}
+```
+
+Then add, beside `phpstan_configuration`:
+
+```rust
+/// The configuration written into the corpus working tree so Celerrate
+/// analyzes exactly what PHPStan is given. Discovery walks Composer's
+/// autoload roots, and a real application routinely loads part of its own
+/// code through a runtime autoloader Composer never declares: on the
+/// pinned corpus that hid 1010 of 6932 first-party files from Celerrate
+/// while PHPStan saw them, which is not a comparison. Pinning the include
+/// set to the whole tree restores equal reported work; vendor stays
+/// indexed for reflection, as it is for PHPStan.
+fn celerrate_configuration() -> String {
+    "[project]\ninclude = [\".\"]\n".to_string()
+}
+```
+
+and write it into the working tree in `run()`, after the `copy_directory` call:
+
+```rust
+    std::fs::write(working.join("celerrate.toml"), celerrate_configuration())?;
+```
+
+Update the neighbouring comment that claims "nothing foreign enters the tree Celerrate analyzes": PHPStan's cache and configuration still live outside the tree, but Celerrate's own configuration is now written into it deliberately, and the comment must say so.
 
 - [ ] **Step 2: Run the unit tests, lint, format**
 
@@ -306,6 +360,53 @@ Expected: all xtask tests PASS (none encode the corpus choice).
 ```bash
 git add xtask/src/benchmark.rs
 git commit -m "✨ feat(xtask): measure the comparison corpus in the benchmark harness"
+```
+
+---
+
+### Task 3b: Make corpus preparation survive a real application's tree
+
+Added 2026-08-03, after the first reference run failed before it measured anything. The corpus machinery was written for symfony/demo and carries two assumptions a real application breaks. Both must be fixed before any measurement is trustworthy.
+
+**Files:**
+- Modify: `xtask/src/corpus.rs` (`install_vendor`'s guard, plus a unit test)
+- Modify: `xtask/src/bench.rs` (`copy_directory`'s symlink handling, plus a unit test)
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: `prepare_comparison()` reaching a complete working tree on the pinned corpus. Signatures unchanged.
+
+- [ ] **Step 1: Guard on composer's own artefact, not on the directory**
+
+`install_vendor` skips the install when `vendor/` is a directory. PrestaShop commits `vendor/.htaccess`, so that directory exists the instant the snapshot is checked out and `composer install` never runs: the vendor tree stays empty and every measurement built on it is meaningless.
+
+Write the failing test first, then guard on `vendor/autoload.php` instead — the file composer itself always produces, which no corpus commits. Keep the rest of the function, its flags and its documentation as they are; extend the documentation to say why the artefact and not the directory.
+
+- [ ] **Step 2: Do not abort the copy on an unresolvable symlink**
+
+`copy_directory` follows symlinks with `fs::copy`, which fails with `ENOENT` when the target is missing. PrestaShop commits exactly one symlink, `tests/Resources/modules/ps_apiresources`, pointing at `modules/ps_apiresources` — a package composer places only through the `composer/installers` plugin, which `--no-scripts --no-plugins` deliberately disables so that no code from the corpus ever runs. The symlink therefore dangles by design, and a dangling symlink must not be able to abort a benchmark.
+
+Write the failing test first (a temporary directory holding a symlink to a nonexistent path), then skip entries whose metadata cannot be resolved, and document the reasoning at the skip. Do not weaken the hermetic flags to make the target exist: not executing corpus code is a deliberate project rule, and one absent test fixture does not justify breaking it.
+
+- [ ] **Step 3: Prove the analysis corpus did not move**
+
+Both functions are shared with the analysis corpus, so this task can silently break it. Run, and record the output:
+
+```bash
+cargo test -p xtask
+cargo xtask fetch-corpus
+cargo xtask corpus
+cargo xtask mixed-rate
+```
+
+`corpus` and `mixed-rate` must pass unchanged. A snapshot or baseline delta here is a failure of this task, not a result to bless.
+
+- [ ] **Step 4: Lint, format, commit**
+
+```bash
+cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all
+git add xtask/src/corpus.rs xtask/src/bench.rs
+git commit -m "🐛 fix(xtask): prepare corpora that commit a vendor placeholder or a dangling symlink"
 ```
 
 ---
@@ -326,14 +427,20 @@ Runs on the reference machine named in `benchmarks/PROTOCOL.md` (the Apple M5 th
 Run: `cargo xtask benchmark`
 Record from the output: `phpstan cold` median (`MEASURED_PHPSTAN_MEDIAN`), `celerrate cold` median (`MEASURED_CELERRATE_MEDIAN`), `cold ratio` (`MEASURED_RATIO`). The hyperfine exports stay in `target/benchmark/` for inspection.
 
+Also record from those exports, for publication in Task 5: each tool's CPU time (`user + system` in the hyperfine JSON) and the derived `MEASURED_CPU_RATIO`. Scouting measured 264.5 s against 16.8 s, a CPU ratio of 11.6x against a wall-clock ratio of 2.89x; the gap is Celerrate running at 1.1 effective cores against PHPStan's 6.7, and section 7 of the spec publishes both.
+
+Sanity-check that the equalisation from Task 3 actually took effect before trusting the number: `celerrate check` on the working tree should report on roughly 6932 files, not roughly 5922. `target/benchmark/celerrate-cold.json` plus a single `--verbose` run gives this. If the counts still diverge, stop — the ratio is not measuring what it claims.
+
 - [ ] **Step 2: Set the floor to half the measured ratio**
 
-Replace the provisional value: `COLD_RATIO_FLOOR` becomes `MEASURED_RATIO / 2`, rounded down to one decimal (for example, a measured 8.7x gives `4.3`). Replace the documentation's last sentence ("The value below is provisional until the reference run lands.") with the measurement record:
+Replace the provisional value: `COLD_RATIO_FLOOR` becomes `MEASURED_RATIO / 2`, rounded down to one decimal (a measured 2.9x gives `1.4`). Replace the documentation's last sentence ("The value below is provisional until the reference run lands.") with the measurement record:
 
 ```rust
-/// Reference measurement (2026-08-02, the protocol machine): PHPStan
-/// <MEASURED_PHPSTAN_MEDIAN>s, Celerrate <MEASURED_CELERRATE_MEDIAN>s,
-/// ratio <MEASURED_RATIO>x.
+/// Reference measurement (2026-08-03, the protocol machine): PHPStan
+/// <MEASURED_PHPSTAN_MEDIAN>s wall, Celerrate <MEASURED_CELERRATE_MEDIAN>s
+/// wall, ratio <MEASURED_RATIO>x; on CPU consumed, <MEASURED_CPU_RATIO>x.
+/// The gap between the two ratios is parallelism: Celerrate is
+/// effectively single-threaded today and PHPStan forks workers.
 ```
 
 - [ ] **Step 3: Verify the gate passes**
@@ -348,6 +455,46 @@ cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all
 git add xtask/src/benchmark.rs
 git commit -m "📈 feat(xtask): gate the cold ratio on the reference measurement"
 ```
+
+---
+
+### Task 4a: Stabilise the reference measurement
+
+Added 2026-08-03. The first reference run met every criterion except the one that decides whether a number is publishable at all. Celerrate's five cold runs came out at 14.21, 11.59, 11.67, 12.15 and 12.12 seconds: a 22.66 % spread driven entirely by the first run, where the spec's acceptance criterion is under 10 %. That is the same instability that disqualified symfony/demo, and it is why two consecutive full measurements reported 2.7x and 3.0x.
+
+The cause is that `measure()` passes hyperfine no warmup run, so the first timed run of each tool absorbs the cold page cache. `--prepare` still wipes Celerrate's own cache before every run including warmups, so a warmup costs nothing in cold-analysis fidelity: what it discards is filesystem warm-up, not analysis work.
+
+**Files:**
+- Modify: `xtask/src/benchmark.rs` (`measure`'s hyperfine invocation; `COLD_RATIO_FLOOR`'s value and the last sentence of its documentation)
+
+- [ ] **Step 1: Give each measurement a warmup run**
+
+Add `--warmup 1` to the hyperfine invocation in `measure()`, and document at the call why it is there: the first timed run otherwise pays for the cold page cache and inflates the spread past the stability criterion, while `--prepare` keeps every timed run cold in the sense that matters, namely Celerrate's own cache and PHPStan's result cache.
+
+This change is not unit-testable — it is one flag on an external process invocation, and the honest verification is the measured spread in Step 2, not an assertion that a string contains a flag. Do not write a test that asserts the argument list; it would restate the implementation rather than verify behaviour.
+
+- [ ] **Step 2: Re-run the reference measurement and check the criterion**
+
+Run `cargo xtask benchmark` once. Then, from `target/benchmark/phpstan-cold.json` and `target/benchmark/celerrate-cold.json`, compute each tool's spread as `(max - min) / min`.
+
+**Both spreads must be under 10 %.** If either is not, stop and report: the corpus or the machine is not delivering a stable measurement, and no floor derived from it is worth committing.
+
+Record the raw times of every run in the report, not only the medians. The previous run recorded medians alone, which is why its instability went unnoticed until the exports were read directly.
+
+- [ ] **Step 3: Set the floor from the stabilised ratio**
+
+`COLD_RATIO_FLOOR` becomes the new measured ratio divided by two, rounded down to one decimal. Update the reference-measurement sentence in its documentation to the new figures, keeping the two-ratio form (wall clock and CPU) and the sentence explaining that the gap between them is parallelism.
+
+- [ ] **Step 4: Verify the gate, lint, format, commit**
+
+```bash
+cargo xtask benchmark --gate
+cargo clippy --workspace --all-targets -- -D warnings && cargo fmt --all
+git add xtask/src/benchmark.rs
+git commit -m "📈 fix(xtask): warm up the benchmark so the published ratio is stable"
+```
+
+The gate run is a second full measurement. Record its ratio too: two consecutive full runs agreeing within a few percent is the evidence that the warmup did its job, and their divergence is what this task exists to remove.
 
 ---
 
@@ -377,29 +524,54 @@ separate from the analysis corpus above, because a comparison needs
 first-party code large enough that rule-checking dominates both wall
 clocks (issue #118 records why symfony/demo cannot carry one).
 
-- Repository: <SCOUTED_REPOSITORY>
-- Commit: `<SCOUTED_COMMIT>` (committed in `xtask/comparison-corpus.pin`)
+- Repository: https://github.com/PrestaShop/PrestaShop
+- Commit: `fc96d0d4eae383e8c6f1f54f19cf592c221a62e3` (tag 9.0.3,
+  committed in `xtask/comparison-corpus.pin`)
 - Vendor tree: installed from the corpus's own `composer.lock`, same
   flags as the analysis corpus
-- Size: <TOTAL_COUNT> PHP files, of which <FIRST_PARTY_COUNT> are
-  first-party and the rest are the installed vendor tree
+- Size: 24033 PHP files, of which 6932 are first-party and the rest are
+  the installed vendor tree
 
-Both tools do the same reported work: Celerrate parses and indexes the
-whole tree and rule-checks the first-party files; PHPStan (pinned in
-`benchmarks/phpstan/composer.lock`, rule level 5, result cache wiped
-before every timed run, vendor excluded from analysis but loaded for
-reflection) is given exactly the first-party set. The harness is
-`cargo xtask benchmark`; `--gate` fails under the committed floor
-(`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half the reference
-ratio below.
+Both tools are handed the same file set, and the harness enforces it
+rather than assuming it. Celerrate discovers a project through Composer's
+autoload roots, but PrestaShop loads its 326-file `classes/` directory
+through its own runtime autoloader, which Composer never declares: left
+alone, Celerrate would report on 5922 files while PHPStan analysed 6926.
+The harness therefore writes a `celerrate.toml` pinning
+`[project] include = ["."]` into the corpus working tree. Vendor is
+indexed for reflection on both sides but analysed by neither. PHPStan is
+pinned in `benchmarks/phpstan/composer.lock`, at rule level 5, with its
+result cache wiped before every timed run.
 
-Measured on the reference machine (medians, cold):
+The harness is `cargo xtask benchmark`; `--gate` fails under the
+committed floor (`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half
+the reference ratio below.
 
-| | median |
-| --- | --- |
-| PHPStan | <MEASURED_PHPSTAN_MEDIAN> s |
-| Celerrate | <MEASURED_CELERRATE_MEDIAN> s |
-| ratio | <MEASURED_RATIO>x |
+Measured on the reference machine, cold. The figures are the pooled
+medians of three full runs: nine timed PHPStan runs and fifteen timed
+Celerrate runs.
+
+| | wall clock | CPU consumed |
+| --- | ---: | ---: |
+| PHPStan | 38.92 s | 253.4 s |
+| Celerrate | 13.41 s | 17.0 s |
+| ratio | **2.90x** | **14.9x** |
+
+Both ratios are published because either one alone misleads. The wall
+clock is what you wait through; the CPU column is what the engines cost.
+They differ by roughly a factor of five because Celerrate is effectively
+single-threaded today while PHPStan forks worker processes: Celerrate
+wins the wall clock while using an order of magnitude less machine.
+Parallelising it is tracked work, not a claim made here.
+
+The three full runs gave ratios of 2.97x, 2.95x and 2.70x. The spread is
+Celerrate's, not PHPStan's: its five timed runs step from about 12.3 s to
+about 13.8-14.3 s partway through and stay there, which has the shape of
+frequency scaling under sustained load on this machine. PHPStan's own
+spread stayed between 1.1 % and 6.1 % throughout. The published figure is
+therefore the pooled median rather than any single run, and the gate
+floor sits far below the worst of them: 1.4, cleared by 1.93x even at
+2.70x.
 
 The gate runs weekly (`.github/workflows/benchmark.yml`) and as a
 required job before any release publishes (`.github/workflows/release.yml`).
@@ -412,18 +584,25 @@ Then delete or rewrite every withheld-comparison statement found in Step 1 so th
 Replace the README's no-published-comparison statement with one sentence in the same place, filling the values:
 
 ```markdown
-On the pinned comparison corpus (<FIRST_PARTY_COUNT> first-party PHP
-files), a cold `celerrate check` completes <MEASURED_RATIO>x faster
-than PHPStan at rule level 5 on the same first-party set; the pinned
-protocol and the full numbers live in
+On the pinned comparison corpus (6932 first-party PHP files), a cold
+`celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
+the same file set, using 15x less CPU to do it: Celerrate is
+single-threaded today where PHPStan forks workers. The pinned protocol
+and the full numbers live in
 [benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
 ```
 
 Check `docs/installation.md` and the two benchmark SVG assets referenced by the README for any stale comparison claim; update only what carries one.
 
-- [ ] **Step 4: Amend the parent design**
+- [ ] **Step 3b: Align the floor's committed record with what is published**
 
-In `.claude/superpowers/specs/2026-07-09-celerrate-design.md`, find the "at least ~20x faster than PHPStan" target in section 7 and annotate it in place: the ambition is replaced by the measured `<MEASURED_RATIO>x` on the pinned comparison corpus (2026-08-02), met or not, without defensive rewording.
+`COLD_RATIO_FLOOR`'s documentation in `xtask/src/benchmark.rs` currently records the single reference run it was first derived from. Rewrite that reference-measurement sentence to the published figures: PHPStan 38.92 s and Celerrate 13.41 s wall, ratio 2.90x, CPU ratio 14.9x, stated as pooled over three full runs, and note that the observed per-run ratios ranged 2.70x to 2.97x. The value `1.4` does not change (2.902 / 2 = 1.451, floored). A committed comment that quotes a better number than the protocol publishes is exactly the kind of drift this branch exists to remove.
+
+- [ ] **Step 4: Annotate the parent design**
+
+In `.claude/superpowers/specs/2026-07-09-celerrate-design.md`, find the "at least ~20x faster than PHPStan" target in section 7. **Annotate it; do not amend it down.** Record the measured `<MEASURED_RATIO>x` wall-clock and `<MEASURED_CPU_RATIO>x` CPU figures on the pinned comparison corpus (2026-08-03), and state plainly why the ambition still stands: 62 % of Celerrate's wall clock is a quadratic did-you-mean pass in the presentation layer, and the engine runs at 1.1 effective cores of 10. The measurement does not test the claim the ambition makes. Section 11 of `.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md` carries the evidence and the estimates; point at it rather than restating them.
+
+No defensive rewording in either direction: the measured number goes in as it is, and so does the reason it is not the ambition's verdict.
 
 - [ ] **Step 5: Commit**
 
@@ -561,7 +740,7 @@ Every command must pass. `corpus` and `mixed-rate` passing unchanged proves the 
 
 In `.claude/superpowers/specs/2026-07-24-cli-product-v0.1-design.md`:
 - Status line: `Status: Closed (v0.1.0, <today's date>)`.
-- Amendment 3: append that the comparison is no longer withheld — it is published on the pinned comparison corpus (name repository and commit) with the measured ratio, and the gate runs weekly and before releases.
+- Amendment 3: append that the comparison is no longer withheld — it is published on the pinned comparison corpus (name repository and commit) with both measured ratios, and the gate runs weekly and before releases. Note in the same breath that the harness now enforces the equal file set rather than assuming it, and that the parent design's ~20x ambition stands unamended for the reason recorded in section 11 of the comparison-corpus design.
 - Gate 7 in the state-of-play section: rewrite as fully held, naming `xtask/comparison-corpus.pin`, `benchmarks/PROTOCOL.md`, `.github/workflows/benchmark.yml`, and the release gate.
 - The "State of play" introduction: record that both open items (the published comparison, the tag) are resolved.
 
@@ -574,6 +753,17 @@ In `CHANGELOG.md`, change `## [Unreleased]` to `## [0.1.0] - <today's date>` and
 Run: `cargo xtask release-notes 0.1.0`
 Expected: prints the 0.1.0 body, exit 0.
 
+- [ ] **Step 3b: Open the performance issue**
+
+The scouting investigation identified concrete, measured performance work that this design deliberately does not do. File it so it is not lost, and reference it from the protocol's parallelism note:
+
+```bash
+gh issue create --title "⚡️ Parallelise the check pipeline and fix the quadratic did-you-mean pass" \
+  --body "..."
+```
+
+The body states the measured facts, not a plan: Celerrate runs at 1.1 effective cores of 10 on the pinned comparison corpus; `suggest::enrich` is 62 % of the cold wall clock and re-clones an 18000-name pool plus reallocates its edit-distance matrix per candidate; the persist, index and read phases are serial and embarrassingly parallel. Estimated cumulative effect from the measured per-phase costs: a 13.67 s cold run lands near 4.5-6 s. Link the evidence.
+
 - [ ] **Step 4: Commit and open the pull request**
 
 ```bash
@@ -584,9 +774,11 @@ gh pr create --title "📈 feat(benchmarks): publish the PHPStan comparison on a
   --body "Pins a comparison corpus whose first-party code separates the two analyzers, publishes the measured cold ratio in benchmarks/PROTOCOL.md and the README, and gates it weekly and before releases. Closes #118"
 ```
 
-Wait for CI; merge on green (user merges or approves the merge).
+The pull request body states both ratios and says plainly that the harness now enforces the equal file set, so a reviewer meets the correction rather than discovering it.
 
-- [ ] **Step 5: Run the weekly workflow once by hand**
+**Execution stops here.** Steps 5 through 7 below are the user's: they own the merge, the tag, and the release. Report the pull request URL and hand over.
+
+- [ ] **Step 5 (user): Run the weekly workflow once by hand**
 
 After the merge:
 
@@ -597,7 +789,7 @@ gh run watch
 
 Expected: the `comparison-gate` job completes green within its budget.
 
-- [ ] **Step 6: Tag v0.1.0**
+- [ ] **Step 6 (user): Tag v0.1.0**
 
 ```bash
 git checkout main && git pull --ff-only
@@ -608,7 +800,7 @@ gh run watch
 
 Expected: the release workflow runs `build` (five targets), `benchmark-gate`, `publish` (checksums, attestation, GitHub release), and `split-composer`, all green. Confirm the release exists: `gh release view v0.1.0`.
 
-- [ ] **Step 7: Confirm the issue closed**
+- [ ] **Step 7 (user): Confirm the issue closed**
 
 `gh issue view 118` shows CLOSED (the pull request body closes it on merge). If not, close it with a comment linking the release.
 
@@ -618,4 +810,5 @@ Expected: the release workflow runs `build` (five targets), `benchmark-gate`, `p
 
 - Spec coverage: section 3 → Task 2; section 4 → Task 1; section 5 → Tasks 3-4; section 6 → Task 6; section 7 → Task 5; section 8 → Task 7; section 9 → Tasks 2-4 test steps.
 - The analysis-corpus invariant is verified twice: Task 7 Step 1 (`corpus`, `mixed-rate` unchanged) and by construction (no task touches `xtask/corpus.pin`).
-- `<ANGLE_BRACKET>` values are data dependencies produced by Tasks 1 and 4, each defined in a Produces block — not placeholders.
+- `<ANGLE_BRACKET>` values are data dependencies produced by Tasks 1 and 4, each defined in a Produces block — not placeholders. Task 1's are now resolved and inlined; Task 4's are still pending its run.
+- The equal-file-set correction is verified twice: by the unit test in Task 3 Step 1b, and by Task 4 Step 1's reported-file-count check on the real run. A green ratio with divergent counts is a false pass, which is exactly the failure that produced the original 1.95x.

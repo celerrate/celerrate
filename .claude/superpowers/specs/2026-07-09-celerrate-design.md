@@ -584,11 +584,21 @@ analysis, and sub-second incremental updates on single-file changes in a
 Symfony-sized project.
 
 Position at the end of the CLI product sub-project: the incremental target
-is met and published, and the cold comparison is unmeasured rather than met
-or missed. The harness is committed and reproducible, but the pinned corpus
-has 51 first-party files, so both tools are dominated by fixed setup cost
-there and no ratio taken on it separates them; the target waits on a corpus
-that can carry it (issue #118), and the ambition itself stands.
+is met and published. The cold comparison is now measured, on a second,
+larger pinned corpus (issue #118): PrestaShop 9.0.3, 6932 first-party PHP
+files. On that corpus, at PHPStan rule level 5, Celerrate is 2.90x faster
+on the wall clock (the pooled median over twenty-four timed runs across
+three full runs) and consumes 14.9x less CPU (2026-08-03, the median of
+the three full runs' own CPU totals — hyperfine reports one CPU total
+per invocation, not per timed run, so the two columns do not pool the
+same way). The "at least ~20x faster" ambition above is not
+amended down to that figure: 62 % of Celerrate's measured wall clock is a
+quadratic did-you-mean pass in the presentation layer, not the analysis
+engine, and the engine itself runs at roughly 1.1 effective cores of 10.
+The measurement does not test the claim the ambition makes. Section 11 of
+`.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`
+carries the evidence and the estimate of what removing that churn and
+parallelising the rest would do to the wall-clock ratio.
 
 Published numbers follow a **pinned benchmark protocol**, committed to the
 repository with the harness: PHPStan version, rule level, result cache
