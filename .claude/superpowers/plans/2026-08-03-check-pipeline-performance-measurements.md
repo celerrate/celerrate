@@ -440,3 +440,174 @@ median, not attacked by any planned lever) remains the largest untouched
 phase. The third planned lever, parallelising the walk's file reads,
 targets `file read + input set` (1736 ms median here) and has not been
 implemented yet. The target is not yet met.
+
+# File Read Lever: Cold, Gate, and Protocol Measurements
+
+Date: 2026-08-04
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+Lever measured: commit `70da8a4` (`⚡️ perf(cli): parallelise the walk's
+file reads`), which rewrites `Session::load` so file reads fan out with
+rayon into an index-ordered buffer, while every mutation
+(`internal_errors`, the VFS, the salsa inputs) stays on the calling
+thread in walk order.
+
+**This is the third and last of the three planned levers. All three are
+now on the branch**, in the resequenced order: persist entry collection
+(sections 5 through 10 above), then `suggest::enrich` (sections 11
+through 15 above), then this one. The written plan's stated order
+(section 3 above) was `suggest::enrich` first; it was resequenced by
+measured cost after the baseline profile (section 4 above).
+
+## 16. Gate results
+
+- `cargo test --package celerrate_cli`: exit 0, 520 passed, 0 failed, 10
+  ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, no
+  warnings.
+- `cargo xtask corpus`: exit 0, "the corpus report matches the committed
+  snapshot".
+- `cargo xtask mixed-rate`: exit 0, "the mixed-rate report matches the
+  committed baseline".
+
+Nothing was blessed. All gates pass unmodified, consistent with a
+behavior-identical change.
+
+## 17. Cold per-phase profile (three instrumented cold runs)
+
+Protocol: same as sections 2, 6, and 12 above, `rm -rf .celerrate` then
+`../../release/celerrate check . --verbose > /dev/null`, wall clock and
+CPU utilisation captured from the shell's own timing report around the
+command. Values in milliseconds, as printed. Raw log: `/tmp/gate10.log`.
+
+| Phase | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| filesystem walk | 1145 | 372 | 366 | 372 |
+| file read + input set | 399 | 352 | 449 | 399 |
+| analysis fan-out | 3735 | 3571 | 3637 | 3637 |
+| suggest enrich | 232 | 241 | 251 | 241 |
+| render report | 166 | 166 | 164 | 166 |
+| persist: collect entries | 1087 | 975 | 1051 | 1051 |
+| persist: collect signatures | 50 | 42 | 49 | 49 |
+| persist: pack writes | 140 | 128 | 126 | 128 |
+| **Sum of the eight phase medians** | — | — | — | **6043** |
+
+Wall-clock total per run, as reported by the shell around the command
+(includes process startup/teardown and stderr formatting outside the
+eight measured phases, same caveat as sections 2, 6, and 12 above):
+
+| Run | Wall clock | CPU utilisation |
+| --- | ---: | ---: |
+| Run 1 | 8.256 s | 237 % |
+| Run 2 | 6.669 s | 286 % |
+| Run 3 | 6.916 s | 297 % |
+| **Median** | **6.916 s** | — |
+
+Run 1 is again a mild outlier, as in section 12's run 1: its `filesystem
+walk` (1145 ms) is roughly three times runs 2 and 3 (372 ms and 366 ms),
+its wall clock (8.256 s) is well above the other two (6.669 s and
+6.916 s), and its CPU utilisation is correspondingly lower (237 % against
+286 % and 297 %), consistent with the process waiting on something
+outside computation for part of that run rather than doing extra work.
+All three runs and the median are reported above as usual; the outlier
+is noted rather than silently allowed to move the reading, and the
+median (372 ms for `filesystem walk`, 6.916 s for wall clock) already
+excludes run 1's value in both cases.
+
+## 18. `file read + input set`: before and after
+
+| | Before (section 12 above, three cold runs) | This measurement (three cold runs) |
+| --- | ---: | ---: |
+| Run values (ms) | 1819, 1736, 1606 | 399, 352, 449 |
+| Median (ms) | 1736 | 399 |
+
+The lever cuts the median of its own phase from 1736 ms to 399 ms, a
+reduction of 1337 ms (about 77.0 %). This is the phase the lever
+demonstrably moved: `Session::load`'s file reads are the only code path
+changed by commit `70da8a4`, and the corpus and mixed-rate gates passing
+unchanged confirm no behavioral difference in what gets read.
+
+## 19. The official protocol run: the authoritative result
+
+`cargo xtask benchmark` (method as in section 1: hyperfine, one untimed
+warmup plus 5 timed runs, `--prepare "rm -rf .celerrate"` before the
+warmup and before every timed run, plain `celerrate check .` without
+`--verbose`). Raw output: `/tmp/benchmark10.log`.
+
+| Scenario | Baseline (section 1) | Now |
+| --- | ---: | ---: |
+| PHPStan cold median | 44.165 s | 41.219 s |
+| Celerrate cold median | 14.087 s | 8.285 s |
+| Cold ratio | 3.1x | 5.0x |
+
+Full hyperfine detail for this run:
+
+- PHPStan: mean 42.008 s ± 3.510 s, range 38.960 s – 45.845 s (3 runs).
+- Celerrate: mean 8.149 s ± 0.427 s, range 7.446 s – 8.503 s (5 runs).
+
+Both processes exited non-zero (expected: the corpus has diagnostics to
+report); hyperfine's non-zero exit warning was ignored as it is for
+every corpus run. Celerrate reported 6932 files; an independent
+filesystem count also found 6932 files, so the run is on the same
+equalized file set as every other measurement in this document.
+
+The three instrumented cold runs in section 17 give a wall-clock median
+of 6.916 s, noticeably below the protocol's 8.285 s. The two do not
+agree, and the protocol figure is the one that governs: it is the
+published metric this effort is measured against, it discards an
+untimed warmup before every timed sample (the instrumented runs in
+section 17 have no such discarded warmup), and it runs the plain command
+without `--verbose`, which the instrumented runs carry as extra stderr
+formatting work outside the timed phases. The 8.285 s cold median is the
+authoritative result of this lever; the 6.916 s figure is reported only
+to locate where the time goes, exactly as in every earlier section of
+this document.
+
+## 20. Is the cold total at or under 6 seconds?
+
+No. The authoritative cold median, from the official protocol run in
+section 19, is 8.285 s against the 6 s target, a gap of about 2.3 s
+(8.285 s − 6 s = 2.285 s). All three planned levers are now on the
+branch and the target is not met.
+
+## 21. What now dominates
+
+At a 3637 ms median (section 17), `analysis fan-out` is roughly 60 % of
+the 6043 ms phase-median sum, and it is now the largest single phase by
+a wide margin over the next-largest (`persist: collect entries`, 1051 ms
+median). No landed lever touches it, and no planned lever was ever
+scoped to touch it: it is carried in the design document as a reserve
+lever whose first step is a diagnosis of what the phase is actually
+spending its time on, not an implementation. With all three planned
+levers landed and the target still 2.3 s away, `analysis fan-out` is the
+dominant remaining cost in the pipeline.
+
+## 22. Cumulative summary of the whole effort
+
+Protocol totals, baseline versus now (section 1 and section 19 above):
+
+| Scenario | Baseline | Now |
+| --- | ---: | ---: |
+| PHPStan cold median | 44.165 s | 41.219 s |
+| Celerrate cold median | 14.087 s | 8.285 s |
+| Cold ratio | 3.1x | 5.0x |
+
+Each of the three levers, its own targeted phase, before and after
+(figures as reported in sections 7, 13, and 18 above):
+
+| Lever | Commit(s) | Phase | Before (ms) | After (ms) | Reduction |
+| --- | --- | --- | ---: | ---: | ---: |
+| Persist entry collection | `d9841e4` | persist: collect entries | 5978 | 875 | 85.4 % |
+| Suggest enrich | `93d2704`, `49261ec` | suggest enrich | 2165 | 245 | 88.7 % |
+| File read parallelisation | `70da8a4` | file read + input set | 1736 | 399 | 77.0 % |
+
+Each lever moved its own targeted phase decisively, by 77 % to 89 %. The
+authoritative cold wall-clock median nonetheless moved only from
+14.087 s to 8.285 s (a 41.2 % reduction), not by the sum of the three
+phase-level cuts, because `analysis fan-out` (which no lever touches)
+and run-to-run machine variance both move independently of the levers,
+as documented in sections 8 and 14 above. The 6 s target is not met; the
+gap is about 2.3 s, and `analysis fan-out` (3637 ms median, section 17)
+is now the dominant remaining cost.
