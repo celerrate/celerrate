@@ -137,3 +137,169 @@ largest of the three attacked phases) and whether `analysis fan-out`
 (now essentially tied with persist entry collection and untouched by
 any planned lever) should be promoted from a reserve lever to a primary
 one before further work proceeds.
+
+# Persist Entry Collection Lever: Cold and Warm Measurements
+
+Date: 2026-08-04
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+Lever measured: commit `d9841e4` (`⚡️ perf(cli): parallelise persist
+entry collection`), which rewrites `collect_entries` in
+`crates/celerrate_cli/src/cache/mod.rs` with rayon using the salsa
+handle-clone pattern.
+
+Sequencing note: the written plan (section 3 above) lists the
+`suggest::enrich` lever first and the persist entry collection lever
+second. The order was revisited by the measured cost recorded in
+section 4 above: persist entry collection was the largest of the three
+attacked phases on the equalized profile, so it was implemented first.
+**This is the only optimisation landed on the branch at the time of
+this measurement. The `suggest::enrich` lever has not been implemented
+yet**; the `suggest enrich` figures below are unchanged by any lever
+work and are reported only for context.
+
+## 5. Gate results
+
+- `cargo test --workspace`: exit 0, 111 test binaries, 2423 passed, 0
+  failed.
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, no
+  warnings.
+- `cargo xtask fetch-corpus`: snapshot already present at
+  `target/corpus/03fe25671b720b15103a2ff26934e94c87bd4d82`.
+- `cargo xtask corpus`: exit 0, "the corpus report matches the committed
+  snapshot".
+- `cargo xtask mixed-rate`: exit 0, "the mixed-rate report matches the
+  committed baseline".
+
+Nothing was blessed. All gates pass unmodified, consistent with a
+behavior-identical change.
+
+## 6. Cold per-phase profile (three instrumented cold runs)
+
+Protocol: same as section 2 above, `rm -rf .celerrate` then
+`../../release/celerrate check . --verbose > /dev/null`, wall clock
+captured from the shell's own timing report around the command. Values
+in milliseconds, as printed.
+
+| Phase | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| filesystem walk | 377 | 358 | 373 | 373 |
+| file read + input set | 860 | 855 | 867 | 860 |
+| analysis fan-out | 3424 | 3419 | 3473 | 3424 |
+| suggest enrich | 2084 | 2165 | 2210 | 2165 |
+| render report | 165 | 169 | 181 | 169 |
+| persist: collect entries | 964 | 875 | 855 | 875 |
+| persist: collect signatures | 39 | 42 | 41 | 41 |
+| persist: pack writes | 145 | 137 | 154 | 145 |
+| **Sum of the eight phases** | 8058 | 8020 | 8154 | 8052 |
+
+Wall-clock total per run, as reported by the shell around the command
+(includes process startup/teardown and stderr formatting outside the
+eight measured phases, same caveat as section 2 above):
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 8.858 s |
+| Run 2 | 8.825 s |
+| Run 3 | 8.863 s |
+| **Median** | **8.858 s** |
+
+## 7. `persist: collect entries`: before and after
+
+| | Baseline (section 2, three cold runs) | This measurement (three cold runs) |
+| --- | ---: | ---: |
+| Run values (ms) | 6265, 5978, 4563 | 964, 875, 855 |
+| Median (ms) | 5978 | 875 |
+
+The lever cuts the median of its own phase from 5978 ms to 875 ms, a
+reduction of 5103 ms (about 85.4 %).
+
+## 8. Reading the cold total: what this lever demonstrably did, and what it did not
+
+Compared against the baseline's phase-sum median of 17048 ms (section
+2), the new cold phase-sum median is 8052 ms. Two other phases this
+lever does not touch also dropped sharply between the baseline and this
+measurement:
+
+- `analysis fan-out`: baseline median 5265 ms → now 3424 ms.
+- `file read + input set`: baseline median 2121 ms → now 860 ms.
+
+The persist lever changes only `collect_entries`; it has no code path
+through analysis or file reading, so it cannot explain those drops. The
+baseline runs in section 2 were taken immediately after a full `cargo
+xtask benchmark` invocation (which itself runs PHPStan and a Composer
+install) and already showed wide run-to-run variance in exactly these
+two phases — `file read + input set` ran 456 / 2377 / 2121 ms across its
+three baseline runs, a more than 5x spread on a phase that does the same
+work every time. The honest reading is that the baseline was captured on
+a machine that was not idle, and it overstates the whole-pipeline
+improvement measured here. What this lever demonstrably did, isolated
+from that noise, is move its own phase: `persist: collect entries` from
+a median of 5978 ms to 875 ms. The non-persist phases reported in this
+section are included for completeness but are not a trustworthy
+comparison point against the baseline; the authoritative before/after
+for the total will be the hyperfine protocol runs at the end of this
+effort, run under equally idle conditions on both sides.
+
+## 9. Is the cold total at or under 6 seconds?
+
+No. The cold wall-clock median measured here is 8.858 s, above the 6 s
+target. Only one of the three planned levers has landed; `suggest
+enrich` (2165 ms median) and `analysis fan-out` (3424 ms median, not
+attacked by any planned lever) remain unaddressed on this branch. The
+target is not yet met.
+
+## 10. Warm run: guarding against a no-change persist regression
+
+The plan's stated purpose for a warm run is to guard the risk that the
+per-file salsa handle clones introduced by this lever make a no-change
+persist slower.
+
+### 10.1 Discarded outlier
+
+The first warm run recorded in `/tmp/instrumented.log` reports:
+
+```
+../../release/celerrate check . --verbose > /dev/null  13.53s user 1.12s system 1% cpu 16:08.55 total
+```
+
+16 minutes 8.55 seconds of wall clock at 1 % CPU, while its eight phases
+sum to 7224 ms (about 7.2 s). That leaves roughly 15 minutes of wall
+clock unaccounted for by any measured phase, with the process reporting
+essentially no CPU activity during it — consistent with the process
+being blocked outside computation, not the lever doing extra work. This
+run started immediately after a cold run had just written the entire
+`.celerrate` cache, which on this platform triggers filesystem indexing;
+that is the most plausible external cause. It did not reproduce: the two
+warm runs in `/tmp/warm-repeat.log`, run under the same protocol
+immediately after, completed in 6.899 s and 6.798 s with normal CPU
+utilisation (204 % and 211 %). This outlier is recorded here and
+excluded from the warm figures below; it is not treated as a finding
+against the lever.
+
+### 10.2 Reproducing warm runs
+
+| Phase | Warm A | Warm B |
+| --- | ---: | ---: |
+| filesystem walk | 649 | 877 |
+| file read + input set | 876 | 402 |
+| analysis fan-out | 1070 | 1138 |
+| suggest enrich | 2094 | 2172 |
+| render report | 168 | 177 |
+| persist: collect entries | 24 | 23 |
+| persist: collect signatures | 1267 | 1276 |
+| persist: pack writes | 25 | 25 |
+| Wall clock | 6.899 s | 6.798 s |
+
+`persist: collect entries` on a no-change warm run is 24 ms and 23 ms.
+That is far below the cold figures (875 ms median) and shows no sign of
+the per-file salsa handle clones costing extra time on a no-change
+persist; the guard the warm run was designed for holds.
+
+As an observation, not a finding against this lever: `persist: collect
+signatures`, a phase this change does not touch, is markedly higher warm
+(1267 ms, 1276 ms) than cold (41 ms median, section 6 above). Whatever
+causes that difference is unrelated to the entry-collection rewrite
+measured here.
