@@ -31,9 +31,10 @@ struct DistanceScratch {
     current: Vec<usize>,
 }
 
-/// [`bounded_distance`] over pre-lowercased characters and caller-owned
-/// rows: the hot form. The length rejection lives here so no caller
-/// can forget it.
+/// The bounded edit distance over pre-lowercased characters and
+/// caller-owned rows: the hot form every production caller goes
+/// through. The length rejection lives here so no caller can forget
+/// it.
 fn bounded_distance_pooled(
     written: &[char],
     candidate: &[char],
@@ -116,9 +117,12 @@ fn bounded_distance_pooled(
 /// exactly the fix the case-sensitive spaces (constants, properties,
 /// enum cases) want suggested. Test-only: every production caller now
 /// goes through the pooled, pre-lowercased form
-/// (`bounded_distance_pooled`) with a shared scratch; this single-pair
-/// convenience form remains as the reference the pooled distance is
-/// checked against.
+/// (`bounded_distance_pooled`) with a shared scratch, so this
+/// single-pair convenience form has no production caller left. It is
+/// not an independent implementation — it lowers its inputs and then
+/// calls `bounded_distance_pooled` itself, so it cannot catch a
+/// regression in the pooled algorithm; see `did_you_mean`'s doc for
+/// where this refactor's real behavior pin lives.
 #[cfg(test)]
 fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usize> {
     let written: Vec<char> = written.to_lowercase().chars().collect();
@@ -166,12 +170,12 @@ fn pool_entries(names: Vec<String>, fold: impl Fn(&str) -> String) -> Vec<PoolEn
         .collect()
 }
 
-/// [`did_you_mean`] over a precomputed pool: no clone, no re-fold, one
-/// scratch for every candidate. `excluded_folded` is the per-diagnostic
-/// part of an otherwise shared pool: a name folding equal to the
-/// attempted key would have resolved, so it is skipped inline. Answers
-/// the outcome and its minimal distance (`None` exactly when the
-/// outcome is `Nothing`).
+/// The pooled did-you-mean search: no clone, no re-fold, one scratch
+/// for every candidate. `excluded_folded` is the per-diagnostic part of
+/// an otherwise shared pool: a name folding equal to the attempted key
+/// would have resolved, so it is skipped inline. Answers the outcome
+/// and its minimal distance (`None` exactly when the outcome is
+/// `Nothing`).
 fn did_you_mean_pooled(
     written: &str,
     pool: &[PoolEntry],
@@ -215,11 +219,19 @@ fn did_you_mean_pooled(
     (outcome, minimum)
 }
 
-/// The owned-vector form of [`did_you_mean_pooled`]. Test-only: every
+/// The owned-vector test helper for `did_you_mean_pooled`: builds a
+/// throwaway pool and a fresh scratch, then delegates. Test-only: every
 /// production caller builds its pool once per pass and calls
-/// `did_you_mean_pooled` directly with the shared scratch; this
-/// convenience form remains as the reference the pooled outcome is
-/// checked against.
+/// `did_you_mean_pooled` directly with the shared scratch. This is
+/// *not* an independent reference implementation — it bottoms out in
+/// the very algorithm it is compared against below, so it cannot catch
+/// a regression there; it exists to let a test hand in a plain
+/// `Vec<String>` and to exercise scratch-reuse safety (see the tests
+/// using it). The real behavior pin for this refactor is the suite of
+/// fixture-driven enrichment tests further down this module (starting
+/// with `an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion`),
+/// which run the pooled path end-to-end against real diagnostics and
+/// assert the exact suggestion and note text produced.
 #[cfg(test)]
 fn did_you_mean(written: &str, candidates: Vec<String>) -> DidYouMean {
     let pool = pool_entries(candidates, |name| name.to_owned());
@@ -487,9 +499,9 @@ fn attempted_keys(
     ))
 }
 
-/// Runs `did_you_mean` once per attempted key (PHP tries more than one
-/// only for the function/constant global fallback), against the pool
-/// with that key's own fold-equal entries excluded (a name folding
+/// Runs `did_you_mean_pooled` once per attempted key (PHP tries more
+/// than one only for the function/constant global fallback), against
+/// the pool with that key's own fold-equal entries excluded (a name folding
 /// equal to an attempted key would have resolved, so excluding it is
 /// the per-diagnostic part of an otherwise shared pool). Returns the
 /// attempted key with the nearest outcome and that outcome; on an
@@ -1362,8 +1374,21 @@ mod tests {
         assert!(class[0].suggestions.is_empty());
     }
 
+    // `bounded_distance` and `did_you_mean` are test-only convenience
+    // wrappers that themselves call `bounded_distance_pooled` and
+    // `did_you_mean_pooled`: they are not independent implementations,
+    // so comparing pooled output against them cannot catch a
+    // regression in the pooled algorithm. What the next two tests
+    // genuinely verify is scratch-reuse safety — one `DistanceScratch`
+    // driven across many successive calls in a loop must produce the
+    // same answers as a fresh scratch per call, which is exactly what
+    // each wrapper constructs internally. The real behavior pin for
+    // this refactor is the suite of fixture-driven enrichment tests
+    // further down this module (starting with
+    // `an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion`),
+    // which run the pooled path end-to-end against real diagnostics.
     #[test]
-    fn the_pooled_distance_agrees_with_the_string_form_and_survives_scratch_reuse() {
+    fn reusing_the_scratch_across_calls_does_not_leak_state_into_bounded_distance_pooled() {
         let mut scratch = super::DistanceScratch::default();
         let cases: [(&str, &str, usize); 6] = [
             ("svae", "save", 2),
@@ -1376,8 +1401,10 @@ mod tests {
         for (written, candidate, bound) in cases {
             let written_lowercase: Vec<char> = written.to_lowercase().chars().collect();
             let candidate_lowercase: Vec<char> = candidate.to_lowercase().chars().collect();
-            // The same scratch across every case: reuse must not leak one
-            // computation's rows into the next.
+            // The same scratch across every case, checked against
+            // `bounded_distance`, which builds a fresh scratch per
+            // call: reuse must not leak one computation's rows into
+            // the next.
             assert_eq!(
                 super::bounded_distance_pooled(
                     &written_lowercase,
@@ -1392,7 +1419,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pooled_did_you_mean_agrees_with_the_vector_form() {
+    fn reusing_the_scratch_across_calls_does_not_leak_state_into_did_you_mean_pooled() {
         let mut scratch = super::DistanceScratch::default();
         let cases: [(&str, &[&str]); 4] = [
             ("svae", &["save", "wave", "unrelated"]),
@@ -1403,6 +1430,9 @@ mod tests {
         for (written, candidates) in cases {
             let owned: Vec<String> = candidates.iter().map(|name| (*name).to_owned()).collect();
             let pool = super::pool_entries(owned.clone(), |name| name.to_owned());
+            // The same scratch across every case, checked against
+            // `did_you_mean`, which builds a fresh pool and a fresh
+            // scratch per call.
             let (pooled, _) = super::did_you_mean_pooled(written, &pool, None, &mut scratch);
             assert_eq!(pooled, super::did_you_mean(written, owned), "{written}");
         }
