@@ -93,7 +93,42 @@ pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
         .iter()
         .map(|&file| (file, inputs.clone()))
         .collect();
+    // Every file in the analyzed set gets its own cloned handle, up front
+    // and on this thread, for the same reason the reported-file tasks
+    // above do: the closure that runs on the rayon pool must capture
+    // nothing, so it imposes no `Sync` requirement.
+    let prewarm_tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
+        .files
+        .files(&inputs.database)
+        .iter()
+        .map(|&file| (file, inputs.clone()))
+        .collect();
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Demands `item_tree` for every analyzed file in parallel before the
+        // fan-out below runs. This exists solely because of the shape of
+        // `celerrate_semantics::index::source_symbol_table`: it is a
+        // whole-set salsa query keyed on `AnalyzedFileSet` whose body is a
+        // sequential `for` loop calling `item_tree` on every analyzed file.
+        // The fan-out below reaches that query transitively (through
+        // `UnknownSymbols::check` and name resolution) from whichever rayon
+        // worker asks first, and salsa serialises the whole loop inside
+        // that one worker's query execution while every other worker blocks
+        // waiting for the memo. Warming `item_tree` here, outside any
+        // query, lets every analyzed file parse concurrently across the
+        // pool; by the time `source_symbol_table`'s loop runs, each call is
+        // a memo hit and only its own cheap assembly work remains.
+        //
+        // Discarding the result is deliberate: only the memo, not the tree
+        // itself, is wanted here, and holding every tree alive at once for
+        // 24,000+ files would be pure waste.
+        //
+        // This is free only while `source_symbol_table` stays a whole-set
+        // query over the entire analyzed file set. If it ever becomes
+        // incremental or scoped to a subset, this prewarm walks the wrong
+        // set and must be revisited alongside it.
+        prewarm_tasks.into_par_iter().for_each(|(file, inputs)| {
+            let _ = celerrate_semantics::item_tree(&inputs.database, file);
+        });
         tasks
             .into_par_iter()
             .map(|(file, inputs)| analyze_one(&inputs, file))
