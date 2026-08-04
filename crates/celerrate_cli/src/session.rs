@@ -427,14 +427,26 @@ impl Session {
                     reason: directory.reason.clone(),
                 });
         }
+        // The reads fan out; everything that mutates (`internal_errors`,
+        // the VFS, the salsa inputs) stays on this thread, in walk
+        // order. Rayon's indexed `collect` preserves input order, so
+        // the zip below reunites each path with its own read and the
+        // recorded failures keep their serial-era order.
+        let read_outcomes: Vec<Result<Vec<u8>, String>> = {
+            use rayon::prelude::*;
+            walk.files
+                .par_iter()
+                .map(|path| std::fs::read(path).map_err(|error| error.to_string()))
+                .collect()
+        };
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
-        for path in &walk.files {
-            let contents = match std::fs::read(path) {
+        for (path, outcome) in walk.files.iter().zip(read_outcomes) {
+            let contents = match outcome {
                 Ok(contents) => contents,
-                Err(error) => {
+                Err(reason) => {
                     self.internal_errors.push(InternalError::FileUnreadable {
                         path: path.clone(),
-                        reason: error.to_string(),
+                        reason,
                     });
                     Vec::new()
                 }
@@ -721,6 +733,52 @@ mod tests {
             }
             other => panic!("expected FileUnreadable, got {other:?}"),
         }
+    }
+
+    /// The invariant parallelizing the read loop must preserve: several
+    /// unreadable files are recorded in walk order (lexical path order,
+    /// per `enumerate_php_files`), not in whatever order a fanned-out
+    /// read happens to finish. Mirrors the fixture and the permission-bit
+    /// guard of `an_unreadable_file_is_recorded_and_the_run_still_continues`
+    /// above, over three root-level files so an out-of-order read would
+    /// show up as a reordered `unreadable` vector.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_files_are_recorded_in_walk_order() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = project(&[
+            ("alpha.php", "<?php\n"),
+            ("beta.php", "<?php\n"),
+            ("gamma.php", "<?php\n"),
+        ]);
+        let alpha = root.path().join("alpha.php");
+        let gamma = root.path().join("gamma.php");
+        std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::set_permissions(&gamma, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let session = Session::start(root.path());
+
+        // Restore permissions so the temporary directory can be cleaned
+        // up regardless of test outcome.
+        std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&gamma, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let unreadable: Vec<String> = session
+            .internal_errors
+            .iter()
+            .filter_map(|error| match error {
+                InternalError::FileUnreadable { path, .. } => {
+                    Some(path.file_name().unwrap().to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            unreadable,
+            vec!["alpha.php", "gamma.php"],
+            "the recorded failures keep the walk's lexical order",
+        );
     }
 
     /// `--watch` re-analyzes on every save, and every cycle reprints the
