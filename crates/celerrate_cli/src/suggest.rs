@@ -20,6 +20,92 @@ use celerrate_stubs::StubMemberKind;
 
 use crate::session::Session;
 
+/// The three matrix rows `bounded_distance_pooled` works in, owned
+/// outside the call so one allocation serves every candidate of a
+/// pass. The profiling behind issue #124 attributed most of the
+/// enrich phase to reallocating exactly these rows per candidate.
+#[derive(Debug, Default)]
+struct DistanceScratch {
+    before_previous: Vec<usize>,
+    previous: Vec<usize>,
+    current: Vec<usize>,
+}
+
+/// [`bounded_distance`] over pre-lowercased characters and caller-owned
+/// rows: the hot form. The length rejection lives here so no caller
+/// can forget it.
+fn bounded_distance_pooled(
+    written: &[char],
+    candidate: &[char],
+    bound: usize,
+    scratch: &mut DistanceScratch,
+) -> Option<usize> {
+    if written.len().abs_diff(candidate.len()) > bound {
+        return None;
+    }
+    scratch.before_previous.clear();
+    scratch.before_previous.extend(0..=candidate.len());
+    scratch.previous.clear();
+    scratch.previous.extend(0..=candidate.len());
+    for (row, written_character) in written.iter().enumerate() {
+        scratch.current.clear();
+        scratch.current.push(row + 1);
+        for (column, candidate_character) in candidate.iter().enumerate() {
+            // The `get` fallbacks are unreachable (the rows are dense
+            // by construction); they exist because indexing is denied
+            // and a wrong answer here is caught by the tests anyway.
+            let substitution = scratch
+                .previous
+                .get(column)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
+                + usize::from(written_character != candidate_character);
+            let insertion = scratch
+                .current
+                .get(column)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
+                + 1;
+            let deletion = scratch
+                .previous
+                .get(column + 1)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
+                + 1;
+            let mut best = substitution.min(insertion).min(deletion);
+            if row > 0 && column > 0 {
+                let previous_written = written.get(row - 1);
+                let previous_candidate = candidate.get(column - 1);
+                if previous_written == Some(candidate_character)
+                    && previous_candidate == Some(written_character)
+                {
+                    // Adjacent transposition: `..ab` -> `..ba` costs 1,
+                    // read off the diagonal two rows up (dense by
+                    // construction whenever `row > 0`).
+                    let transposition = scratch
+                        .before_previous
+                        .get(column - 1)
+                        .copied()
+                        .unwrap_or(usize::MAX - 1)
+                        + 1;
+                    best = best.min(transposition);
+                }
+            }
+            scratch.current.push(best);
+        }
+        if scratch.current.iter().min().copied().unwrap_or(0) > bound {
+            return None;
+        }
+        std::mem::swap(&mut scratch.before_previous, &mut scratch.previous);
+        std::mem::swap(&mut scratch.previous, &mut scratch.current);
+    }
+    scratch
+        .previous
+        .last()
+        .copied()
+        .filter(|&distance| distance <= bound)
+}
+
 /// Optimal string alignment distance (restricted Damerau-Levenshtein)
 /// over lowercased characters, abandoned as soon as it provably
 /// exceeds `bound`. A transposition of two adjacent characters costs 1
@@ -32,54 +118,7 @@ use crate::session::Session;
 fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usize> {
     let written: Vec<char> = written.to_lowercase().chars().collect();
     let candidate: Vec<char> = candidate.to_lowercase().chars().collect();
-    if written.len().abs_diff(candidate.len()) > bound {
-        return None;
-    }
-    let mut before_previous: Vec<usize> = (0..=candidate.len()).collect();
-    let mut previous: Vec<usize> = (0..=candidate.len()).collect();
-    for (row, written_character) in written.iter().enumerate() {
-        let mut current: Vec<usize> = Vec::with_capacity(candidate.len() + 1);
-        current.push(row + 1);
-        for (column, candidate_character) in candidate.iter().enumerate() {
-            // The `get` fallbacks are unreachable (the rows are dense
-            // by construction); they exist because indexing is denied
-            // and a wrong answer here is caught by the tests anyway.
-            let substitution = previous.get(column).copied().unwrap_or(usize::MAX - 1)
-                + usize::from(written_character != candidate_character);
-            let insertion = current.get(column).copied().unwrap_or(usize::MAX - 1) + 1;
-            let deletion = previous.get(column + 1).copied().unwrap_or(usize::MAX - 1) + 1;
-            let mut best = substitution.min(insertion).min(deletion);
-            if row > 0 && column > 0 {
-                let previous_written = written.get(row - 1);
-                let previous_candidate = candidate.get(column - 1);
-                if previous_written == Some(candidate_character)
-                    && previous_candidate == Some(written_character)
-                {
-                    // Adjacent transposition: `..ab` -> `..ba` costs 1,
-                    // read off the diagonal two rows up (the `get`
-                    // fallback is unreachable for the same reason as
-                    // above: the row two back is dense by construction
-                    // whenever `row > 0`).
-                    let transposition = before_previous
-                        .get(column - 1)
-                        .copied()
-                        .unwrap_or(usize::MAX - 1)
-                        + 1;
-                    best = best.min(transposition);
-                }
-            }
-            current.push(best);
-        }
-        if current.iter().min().copied().unwrap_or(0) > bound {
-            return None;
-        }
-        before_previous = previous;
-        previous = current;
-    }
-    previous
-        .last()
-        .copied()
-        .filter(|&distance| distance <= bound)
+    bounded_distance_pooled(&written, &candidate, bound, &mut DistanceScratch::default())
 }
 
 /// The "bounded edit distance" bound: tight for short
@@ -1265,5 +1304,34 @@ mod tests {
             .collect();
         assert_eq!(class.len(), 1);
         assert!(class[0].suggestions.is_empty());
+    }
+
+    #[test]
+    fn the_pooled_distance_agrees_with_the_string_form_and_survives_scratch_reuse() {
+        let mut scratch = super::DistanceScratch::default();
+        let cases: [(&str, &str, usize); 6] = [
+            ("svae", "save", 2),
+            ("nmae", "name", 2),
+            ("php_eol", "PHP_EOL", 2),
+            ("draft", "active", 2),
+            ("a", "abcd", 2),
+            ("Activ", "Active", 2),
+        ];
+        for (written, candidate, bound) in cases {
+            let written_lowercase: Vec<char> = written.to_lowercase().chars().collect();
+            let candidate_lowercase: Vec<char> = candidate.to_lowercase().chars().collect();
+            // The same scratch across every case: reuse must not leak one
+            // computation's rows into the next.
+            assert_eq!(
+                super::bounded_distance_pooled(
+                    &written_lowercase,
+                    &candidate_lowercase,
+                    bound,
+                    &mut scratch,
+                ),
+                super::bounded_distance(written, candidate, bound),
+                "{written} vs {candidate}",
+            );
+        }
     }
 }
