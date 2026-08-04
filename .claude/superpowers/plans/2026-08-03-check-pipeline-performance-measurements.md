@@ -303,3 +303,140 @@ signatures`, a phase this change does not touch, is markedly higher warm
 (1267 ms, 1276 ms) than cold (41 ms median, section 6 above). Whatever
 causes that difference is unrelated to the entry-collection rewrite
 measured here.
+
+# Suggest Enrich Lever: Cold and Gate Measurements
+
+Date: 2026-08-04
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+Lever measured: commits `93d2704` (`⚡️ perf(cli): reuse the
+edit-distance rows across candidates`), which introduces a caller-owned
+`DistanceScratch` holding the three edit-distance matrix rows so one
+allocation serves every candidate of a pass instead of one per
+candidate, and `49261ec` (`⚡️ perf(cli): precompute the did-you-mean
+candidate pools`), which computes each candidate's fold key and
+lowercased characters once at pool construction instead of re-deriving
+them for the whole pool on every diagnostic, plus a pass-wide shared
+scratch. Commit `9ce26bb` (`📝 docs(cli): correct the scratch-reuse test
+names and stale doc links`) is documentation and test-naming only, no
+behavior change, and is not itself a measured lever.
+
+Sequencing note: the written plan (section 3 above) lists the
+`suggest::enrich` lever first and the persist entry collection lever
+second, but the levers were resequenced by measured cost after the
+baseline profile (section 4 above), so the persist entry collection
+lever landed first (sections 5 through 10 above). **Both the persist
+lever and this enrich lever are now on the branch. The third planned
+lever, parallelising the walk's file reads, has not been implemented
+yet.**
+
+## 11. Gate results
+
+- `cargo test --workspace`: exit 0, 2426 passed, 0 failed, no `test
+  result: FAILED` anywhere.
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, no
+  warnings.
+- `cargo xtask corpus`: exit 0, "the corpus report matches the committed
+  snapshot".
+- `cargo xtask mixed-rate`: exit 0, "the mixed-rate report matches the
+  committed baseline".
+
+Nothing was blessed. The corpus gate passing unchanged is the strongest
+evidence available that the enrich rework did not alter a single emitted
+suggestion: this lever touches the did-you-mean candidate scoring path
+directly (edit-distance computation and candidate pool construction), so
+an unintentional change to which suggestion wins, or in what order, was
+its principal behavioral risk. An unchanged corpus snapshot rules that
+out on this corpus.
+
+## 12. Cold per-phase profile (three instrumented cold runs)
+
+Protocol: same as section 2 and section 6 above, `rm -rf .celerrate`
+then `../../release/celerrate check . --verbose > /dev/null`, wall clock
+captured from the shell's own timing report around the command. Values
+in milliseconds, as printed. Raw log: `/tmp/instrumented6.log`.
+
+| Phase | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| filesystem walk | 967 | 367 | 371 | 371 |
+| file read + input set | 1819 | 1736 | 1606 | 1736 |
+| analysis fan-out | 3768 | 3643 | 3538 | 3643 |
+| suggest enrich | 248 | 245 | 237 | 245 |
+| render report | 165 | 168 | 170 | 168 |
+| persist: collect entries | 1045 | 932 | 1013 | 1013 |
+| persist: collect signatures | 45 | 40 | 60 | 45 |
+| persist: pack writes | 153 | 130 | 151 | 151 |
+| **Sum of the eight phases** | 8210 | 7261 | 7146 | 7372 |
+
+Wall-clock total per run, as reported by the shell around the command
+(includes process startup/teardown and stderr formatting outside the
+eight measured phases, same caveat as sections 2 and 6 above):
+
+| Run | Wall clock | CPU utilisation |
+| --- | ---: | ---: |
+| Run 1 | 9.646 s | 194 % |
+| Run 2 | 8.077 s | 220 % |
+| Run 3 | 8.119 s | 225 % |
+| **Median** | **8.119 s** | — |
+
+Run 1 is a mild outlier: its `filesystem walk` (967 ms, against 367 ms
+and 371 ms for runs 2 and 3) and its wall clock (9.646 s, against 8.077 s
+and 8.119 s) are both noticeably higher than the other two runs, and its
+CPU utilisation is correspondingly a little lower (194 % against 220 %
+and 225 %), consistent with the process spending more of that run
+waiting rather than computing. All three runs and the median are
+reported above as usual; the outlier is noted rather than silently
+allowed to move the reading, but the median (which excludes run 1's
+value in both the `filesystem walk` and wall-clock columns) is not
+materially affected by it.
+
+## 13. `suggest enrich`: before and after
+
+| | Before (section 6 above, three cold runs) | This measurement (three cold runs) |
+| --- | ---: | ---: |
+| Run values (ms) | 2084, 2165, 2210 | 248, 245, 237 |
+| Median (ms) | 2165 | 245 |
+
+The lever cuts the median of its own phase from 2165 ms to 245 ms, a
+reduction of 1920 ms (about 88.7 %).
+
+## 14. Reading the cold total: what this lever demonstrably did, and what it did not
+
+The lever moved its own phase decisively: `suggest enrich` drops from a
+2165 ms median (section 6) to a 245 ms median (section 13), an 88.7 %
+cut consistent with removing per-candidate allocation churn from a
+phase that does none of its own file or database access.
+
+The cold wall-clock median, by contrast, only moves from 8.858 s
+(section 6) to 8.119 s here, a much smaller step than the phase's own
+cut would suggest if it were the only thing moving. The reason is
+visible in the per-phase table: `file read + input set`, a phase this
+lever does not touch, rose over the same interval, from a median of
+860 ms (section 6) to 1736 ms here. `analysis fan-out`, another phase
+untouched by this lever, moved from a median of 3424 ms (section 6) to
+3643 ms here, a smaller shift but in the same direction. Neither phase
+has a code path through `suggest::enrich`'s candidate scoring, so this
+lever cannot explain either move. Both phases were already the
+recurring theme of run-to-run variance in this document (section 2's
+`file read + input set` alone ranged 456 to 2377 ms across three runs
+taken back to back), so the honest reading is that the phase-level drop
+in `suggest enrich` is attributable to this lever, and the remainder of
+the change in the cold total is attributable to run-to-run machine
+variance in phases no landed lever touches, not to this lever.
+
+As throughout this document, the per-phase tables exist to locate cost,
+not to adjudicate the 6 s target. The authoritative before/after for the
+total will be the hyperfine protocol runs (section 1's method) at the
+end of this effort, run under equally idle conditions.
+
+## 15. Is the cold total at or under 6 seconds?
+
+No. The cold wall-clock median measured here is 8.119 s, above the 6 s
+target. Two of the three planned levers have now landed (persist entry
+collection and `suggest::enrich`), and `analysis fan-out` (3643 ms
+median, not attacked by any planned lever) remains the largest untouched
+phase. The third planned lever, parallelising the walk's file reads,
+targets `file read + input set` (1736 ms median here) and has not been
+implemented yet. The target is not yet met.
