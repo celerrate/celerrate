@@ -611,3 +611,227 @@ and run-to-run machine variance both move independently of the levers,
 as documented in sections 8 and 14 above. The 6 s target is not met; the
 gap is about 2.3 s, and `analysis fan-out` (3637 ms median, section 17)
 is now the dominant remaining cost.
+
+# Analysis Fan-out Lever: Diagnosis, Warm A/B, and Gate Measurements
+
+Date: 2026-08-05
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+Lever measured: commit `9a89e2b` (`⚡️ perf(cli): prewarm the item trees
+before the analysis fan-out`). All three planned levers were on the
+branch (sections 5 through 20 above) and the target was still 2.3 s
+away, with `analysis fan-out` the dominant remaining cost (section 21
+above) and no planned lever scoped to touch it. This is the fourth
+lever, the one the design carried as a reserve, built only after a
+diagnosis of what the phase was actually spending its time on.
+
+## 23. The bottleneck the diagnosis found
+
+`celerrate_semantics::index::source_symbol_table`
+(`crates/celerrate_semantics/src/index.rs:92-129`) is a
+`#[salsa::tracked]` query keyed on the whole analyzed file set
+(`AnalyzedFileSet`), whose body is a sequential `for` loop calling
+`item_tree` on every one of the 24,033 analyzed files.
+
+Before this lever, that query was first demanded from *inside* the
+rayon fan-out in `analysis::analyze` (transitively, through
+`UnknownSymbols::check` and name resolution), by whichever worker asked
+for it first. Salsa serialises the whole loop inside that one worker's
+query execution; every other worker blocks waiting for the memo. A
+sampling profile taken during the diagnosis showed nine of the ten
+workers spending about 89 % of their time in `__psynch_cvwait`, and the
+fan-out scaled only 1.53x going from 1 to 10 threads, both consistent
+with nine workers idle behind the tenth's sequential parse.
+
+The fix, in `crates/celerrate_cli/src/analysis.rs`, demands `item_tree`
+for every analyzed file in parallel, outside any query and before the
+fan-out, so that by the time `source_symbol_table`'s sequential loop
+runs later (inside the fan-out, on whichever worker reaches it first),
+every call is a memo hit and only the loop's own cheap assembly work
+remains. Each file gets its own cloned handle up front, on the calling
+thread, so the rayon closure captures nothing and imposes no `Sync`
+requirement; the result of each `item_tree` call is discarded
+deliberately, since only the memo is wanted and holding 24,000+ trees
+alive at once would be pure waste. The prewarm runs inside the existing
+`catch_unwind`, so a `salsa::Cancelled` raised under `--watch` still
+surfaces as `Err(Cancelled)` rather than escaping as a panic; this
+placement was verified by review, not by measurement, since `--watch`
+was not exercised directly in this diagnosis (see section 25 below).
+
+The comment left at the call site also records the condition under
+which this prewarm stops paying for itself: it is free only while
+`source_symbol_table` stays a whole-set query over the entire analyzed
+file set. If that query becomes incremental or scoped to a subset, the
+prewarm would walk the wrong set and need revisiting alongside it.
+
+## 24. Gate results
+
+- `cargo test --workspace`: exit 0, 2427 passed, 0 failed, 10 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, no
+  warnings.
+- `cargo fmt --all -- --check`: exit 0.
+- `cargo deny check`: "advisories ok, bans ok, licenses ok, sources ok".
+- `cargo xtask corpus`: exit 0, "the corpus report matches the committed
+  snapshot".
+- `cargo xtask mixed-rate`: exit 0, "the mixed-rate report matches the
+  committed baseline".
+
+Nothing was blessed. All gates pass unmodified, consistent with a
+behavior-identical change.
+
+## 25. Warm behaviour: an A/B against the parent commit
+
+This lever's own risk is not to the cold path it targets but to the
+warm path: it adds work (the prewarm loop) to every `check` invocation,
+cold or warm, so a warm no-change run could in principle regress even
+while the cold run improves. `--watch` itself was **not** measured
+directly; the warm `check` path below is used as its proxy, on the
+assumption that both exercise the same prewarm-then-fan-out code path
+on an already-populated cache.
+
+The A/B compares this lever's commit against its parent, `1da48c4`
+(built in a temporary git worktree for the comparison, since removed).
+An important measurement artefact applies throughout: switching the
+`celerrate` binary between the two builds invalidates the `.celerrate`
+cache, so the *first* run after a switch re-analyses from cold and only
+the *second* run is truly warm. The table below separates the two.
+
+| | Parent `1da48c4` | With this lever |
+| --- | ---: | ---: |
+| Truly warm wall clock | 4.980 s, 4.961 s | 4.841 s, 4.869 s |
+| Cache-invalidated wall clock (first run after switch) | 7.826 s, 7.707 s | 5.262 s, 5.255 s |
+| Warm `analysis fan-out` | 1183 ms, 1159 ms | 1165 ms, 1138 ms |
+| Cold wall clock (same session) | 8.172 s | 5.637 s |
+| Cold `analysis fan-out` | 3705 ms | 1559 ms |
+
+Reading this plainly: there is no warm regression. The truly warm wall
+clock is marginally faster with this lever (4.841 s and 4.869 s against
+4.980 s and 4.961 s), and the warm `analysis fan-out` phase is flat
+between the two builds (1165 ms and 1138 ms against 1183 ms and
+1159 ms), within the run-to-run noise seen throughout this document. The
+cache-invalidated row is the artefact explained above, not a warm
+measurement in its own right: it is the first run after swapping
+binaries, which finds a cache built by the other binary and therefore
+re-analyses; it happens to improve with this lever too, but that is a
+cold-path effect riding on the same swap, not evidence about the warm
+path. The cold wall clock and cold `analysis fan-out` rows, taken in the
+same session as the rest of this table, corroborate the phase-level
+fix directly: `analysis fan-out` drops from 3705 ms to 1559 ms cold,
+consistent with the fan-out no longer stalling nine of ten workers
+behind one worker's sequential parse.
+
+## 26. Is the cold total at or under 6 seconds?
+
+Yes, on this lever's own cold figures (section 25): 5.637 s, against the
+6 s target. Section 27 below reports the authoritative official
+protocol figures.
+
+# Closing Measurements
+
+Date: 2026-08-05
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+All four levers are now on the branch. Final gate suite (as reported in
+section 24 above): `cargo test --workspace` (2427 passed, 0 failed, 10
+ignored), `cargo clippy --workspace --all-targets -- -D warnings`,
+`cargo fmt --all -- --check`, and `cargo deny check` all pass; `cargo
+xtask corpus` and `cargo xtask mixed-rate` both match their committed
+baselines unchanged. Nothing was blessed.
+
+## 27. The official protocol runs: three full repetitions
+
+`cargo xtask benchmark` (method as in section 1: hyperfine, one untimed
+warmup plus 5 timed runs, `--prepare "rm -rf .celerrate"` before the
+warmup and before every timed run, plain `celerrate check .` without
+`--verbose`), run three times per the protocol.
+
+| Run | PHPStan cold | Celerrate cold | Ratio |
+| --- | ---: | ---: | ---: |
+| 1 | 35.494 s | 5.594 s | 6.3x |
+| 2 | 37.467 s | 5.486 s | 6.8x |
+| 3 | 38.529 s | 5.522 s | 7.0x |
+
+Full hyperfine detail for run 1: Celerrate mean 5.552 s ± 0.092 s;
+PHPStan mean 35.585 s ± 0.388 s.
+
+Taking the median across the three runs, per the protocol, gives the
+published figures for this effort:
+
+| Scenario | Published median |
+| --- | ---: |
+| PHPStan cold | 37.467 s |
+| Celerrate cold | 5.522 s |
+| Cold ratio | 6.8x |
+
+## 28. Is the 6 s target met?
+
+Yes. The published cold median is 5.522 s, at or under the 6 s target,
+by a margin of about 0.478 s (6 s − 5.522 s = 0.478 s). All three of run
+1, run 2, and run 3 individually come in under 6 s (5.594 s, 5.486 s,
+5.522 s), so this is not a result that depends on which single run is
+picked as authoritative; the median simply selects the middle of three
+runs that all clear the bar. The effort's stated goal, bringing the
+cold median on the pinned PrestaShop comparison corpus to at or under
+6 s, behavior-identical, is met.
+
+## 29. Cumulative summary of the whole effort
+
+Protocol totals, baseline versus final published median (section 1 and
+section 27 above):
+
+| Scenario | Baseline (section 1) | Final (section 27, published median) |
+| --- | ---: | ---: |
+| PHPStan cold median | 44.165 s | 37.467 s |
+| Celerrate cold median | 14.087 s | 5.522 s |
+| Cold ratio | 3.1x | 6.8x |
+
+Each of the four levers, in landing order, with its own targeted phase
+before and after (figures as reported in sections 7, 13, 18, and 25
+above; the fourth lever's before/after is its cold `analysis fan-out`
+row from the same-session comparison in section 25, since that lever's
+own targeted phase, unlike the first three, is not isolated by three
+separate instrumented cold runs but by the session-matched A/B):
+
+| Lever | Commit(s) | Phase | Before | After | Reduction |
+| --- | --- | --- | ---: | ---: | ---: |
+| Persist entry collection | `d9841e4` | persist: collect entries | 5978 ms | 875 ms | 85.4 % |
+| Suggest enrich | `93d2704`, `49261ec` | suggest enrich | 2165 ms | 245 ms | 88.7 % |
+| File read parallelisation | `70da8a4` | file read + input set | 1736 ms | 399 ms | 77.0 % |
+| Prewarm item trees | `9a89e2b` | analysis fan-out | 3705 ms | 1559 ms | 57.9 % |
+
+Each lever moved its own targeted phase decisively. The authoritative
+protocol cold wall-clock median moved from 14.087 s (baseline, section
+1) through 8.858 s, 8.119 s, and 8.285 s (after each of the first three
+levers, sections 6, 12, and 19 above) to 5.522 s (published median,
+section 27), a reduction of about 60.8 % over the whole effort. The 6 s
+target is met, by a margin of about 0.478 s.
+
+## 30. Follow-up leads, not landed
+
+Two observations from the fourth lever's diagnosis are recorded here so
+they are not lost, even though neither was acted on in this effort.
+
+**A global-allocator swap to mimalloc**, measured during the diagnosis
+on the same corpus, showed about −0.9 s cold wall clock and about −6 s
+of total user CPU time. It was not landed: the 6 s target is met
+without it, and it would add a vendored C dependency to an open-source
+project. Before landing it in a future effort, it would need a `cargo
+deny` licence pass and a supply-chain note, given the vendored
+dependency; it is recorded here purely as a quantified, unlanded lead.
+
+**A latent instance of the same trap this lever fixed**: `stub_symbol_table`,
+`stub_frontier`, and `stub_signature_table`, all in
+`crates/celerrate_semantics/src/index.rs`, share the same shape as
+`source_symbol_table` before this lever — a whole-set query, demanded
+from inside the fan-out, whose body is not parallelised internally.
+They showed no significant self time in the diagnosis's sampling
+profile, so they are not a cost today, but they carry the same
+structural risk `source_symbol_table` did, and the note left in
+`crates/celerrate_cli/src/analysis.rs` about this prewarm's dependence
+on `source_symbol_table` staying a whole-set query applies to these
+three queries as well, should any of them ever grow expensive enough to
+matter.
