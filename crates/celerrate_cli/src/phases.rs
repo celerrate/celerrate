@@ -4,10 +4,20 @@
 //! nothing here enters a salsa query, and the line format is not a
 //! stable surface. Wall-clock reads happen at the recording call
 //! sites, which are all orchestration code — the same legality
-//! argument as `cache::persist`'s own timer. Under `--watch` the
-//! counters accumulate across cycles rather than resetting; the
-//! channel reports totals for the session, which is what profiling a
-//! long-running watch wants anyway.
+//! argument as `cache::persist`'s own timer.
+//!
+//! Coverage is uneven, and `--watch` is not this channel's audience.
+//! `Phase::PersistCollectEntries`, `Phase::PersistCollectSignatures`,
+//! and `Phase::PersistPackWrites` are recorded from `cache::persist`,
+//! which runs on every cycle of every mode, so those three do
+//! accumulate session totals under `--watch`. Every other phase is
+//! recorded only from the non-watch branch of `run`
+//! (`Phase::Analysis`, `Phase::Enrich`, `Phase::Render`) or only from
+//! `Session::start` (`Phase::Walk`, `Phase::ReadAndSetInputs`); a
+//! `--watch` cycle's `rediscover` re-walks and re-loads on every
+//! configuration change without recording either. Under `--watch`,
+//! read the walk, read-and-set-inputs, analysis, enrich, and render
+//! lines as permanently `0ms`, not as a stalled or empty phase.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;

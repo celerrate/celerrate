@@ -104,10 +104,14 @@ enum PackWrite {
 /// raw abort. The old snapshot stays and the next pass retries, exactly
 /// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
-    // Wall-clock read, legal here and only here: this is the
-    // persist orchestration layer, never a salsa query, and the reading
-    // feeds only `CacheStatistics` — telemetry for the stats line, never
-    // analysis or the rendered diagnostics.
+    // Wall-clock read, legal here: this is the persist orchestration
+    // layer, never a salsa query, and the reading feeds only
+    // `CacheStatistics` — telemetry for the stats line, never analysis
+    // or the rendered diagnostics. The general rule (orchestration code
+    // only, never inside a query) is what makes this legal, not
+    // exclusivity to this call site: `persist_timed` below reads the
+    // clock three more times for `session.phases`, and `session.rs` and
+    // `lib.rs` do the same for their own phases.
     let started = std::time::Instant::now();
     persist_timed(session, outcome);
     let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -792,8 +796,10 @@ mod tests {
     /// preserve: two collections of the same inputs, run back to back,
     /// yield byte-identical, identically sorted entries. Several files
     /// (with a dependency edge between two of them) give the collection
-    /// real fan-out, so this pins cross-run identity rather than a
-    /// single-file case where reordering could never surface.
+    /// more than one task to interleave, so this pins cross-run identity
+    /// rather than a single-file case where reordering could never
+    /// surface; it is a modest fixture, not a stand-in for fan-out at
+    /// corpus scale.
     #[test]
     fn collecting_entries_twice_yields_identical_sorted_entries() {
         let root = project(&[

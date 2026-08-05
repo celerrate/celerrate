@@ -12,7 +12,6 @@ use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
 use celerrate_source::{FileId, TextSize};
 use celerrate_stubs::StubIndexInput;
-use rayon::prelude::*;
 
 use crate::cache::snapshot::CacheSnapshot;
 use crate::database::AnalysisDatabase;
@@ -88,6 +87,8 @@ pub struct AnalysisOutcome {
 /// captures nothing and therefore imposes no `Sync` requirement of its
 /// own.
 pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
+    use rayon::prelude::*;
+
     let tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
         .reported
         .iter()
@@ -118,9 +119,11 @@ pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
         // pool; by the time `source_symbol_table`'s loop runs, each call is
         // a memo hit and only its own cheap assembly work remains.
         //
-        // Discarding the result is deliberate: only the memo, not the tree
-        // itself, is wanted here, and holding every tree alive at once for
-        // 24,000+ files would be pure waste.
+        // Discarding the result is deliberate: only the memo, not the
+        // reference returned here, is wanted. `item_tree` is
+        // `#[salsa::tracked(returns(ref))]`, so the memo table is exactly
+        // what holds every tree alive for the rest of the pass; that
+        // retention is the prewarm's purpose, not a cost this discards.
         //
         // This is free only while `source_symbol_table` stays a whole-set
         // query over the entire analyzed file set. If it ever becomes

@@ -97,6 +97,13 @@ fn bounded_distance_pooled(
         if scratch.current.iter().min().copied().unwrap_or(0) > bound {
             return None;
         }
+        // Rotates the three rows for the next iteration without
+        // allocating: equivalent to `before_previous = previous; previous
+        // = current`, but moving the buffers in place instead of cloning
+        // them. The row left in `current` after both swaps is the stale
+        // `before_previous` from two iterations back; it is `clear`ed and
+        // rebuilt from scratch at the top of the loop before anything
+        // reads it, so its leftover contents never leak into the result.
         std::mem::swap(&mut scratch.before_previous, &mut scratch.previous);
         std::mem::swap(&mut scratch.previous, &mut scratch.current);
     }

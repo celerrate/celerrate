@@ -253,7 +253,7 @@ impl Session {
             cache_directory,
             cache_loaded_range,
             statistics,
-            phases: phases.clone(),
+            phases,
             plugins,
             plugin_set_digest,
             configuration_digest,
@@ -409,6 +409,8 @@ impl Session {
     /// files it could not read, and these are the directories it could not
     /// open.
     fn load(&mut self, walk: &Walk) {
+        use rayon::prelude::*;
+
         // This load decides, for the walk it is given, exactly what could
         // not be read. The previous load's verdict is superseded, not added
         // to: a lockfile saved twice under `--watch` re-runs discovery
@@ -432,13 +434,11 @@ impl Session {
         // order. Rayon's indexed `collect` preserves input order, so
         // the zip below reunites each path with its own read and the
         // recorded failures keep their serial-era order.
-        let read_outcomes: Vec<Result<Vec<u8>, String>> = {
-            use rayon::prelude::*;
-            walk.files
-                .par_iter()
-                .map(|path| std::fs::read(path).map_err(|error| error.to_string()))
-                .collect()
-        };
+        let read_outcomes: Vec<Result<Vec<u8>, String>> = walk
+            .files
+            .par_iter()
+            .map(|path| std::fs::read(path).map_err(|error| error.to_string()))
+            .collect();
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
         for (path, outcome) in walk.files.iter().zip(read_outcomes) {
             let contents = match outcome {
