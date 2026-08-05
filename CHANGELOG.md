@@ -190,6 +190,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   output formats it can annotate a pull request with, and the baseline
   flow for adopting the tool on an existing codebase without a wall of
   pre-existing findings.
+- `celerrate check --verbose` now prints a per-phase wall-clock line for
+  each stage of one pass: the filesystem walk, the file read and input
+  set, the analysis fan-out, the did-you-mean enrichment, the report
+  rendering, and the three persist stages. Meta-reporting only, on the
+  same stderr channel as the rest of `--verbose`: the machine-readable
+  formats are byte-identical with or without the flag, and no timing is
+  read inside an analysis query. Under `--watch` only the three persist
+  stages accumulate across cycles; the others report the first pass.
 
 ### Changed
 
@@ -303,6 +311,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   path sorts. An emission-side scan (`cargo xtask emission-scan`)
   joins CI so a check family cannot quietly grow back outside the
   framework.
+- `celerrate check` is substantially faster on a cold run, with the
+  diagnostics unchanged: on the pinned PrestaShop comparison corpus the
+  cold median falls from 14.1 s to 4.8 s and the ratio against PHPStan
+  rises from 3.1x to 6.6x. Four changes carry it. The item trees are now
+  demanded in parallel before the analysis fan-out, because the
+  whole-project symbol table parses every analyzed file in a sequential
+  loop and was first demanded from inside the fan-out, leaving one worker
+  parsing while the rest blocked; this was the largest single win and
+  lifted process CPU use from about 290 % to about 420 % on ten cores.
+  The persist stage's per-file conversion to stored trees and verdicts
+  fans out, as do the walk's file reads, both cloning a database handle
+  per task on the calling thread and keeping every mutation serial and in
+  walk order. The did-you-mean search stops reallocating its edit-distance
+  rows per candidate and stops re-folding and re-lowercasing the whole
+  candidate pool per diagnostic. The corpus snapshot and the type-precision
+  baseline are unchanged throughout, which is what establishes that no
+  suggestion, severity, span, or exit code moved.
 
 ### Fixed
 
