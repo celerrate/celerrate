@@ -12,7 +12,6 @@ use celerrate_diagnostics::Diagnostic;
 use celerrate_project::ProjectConfiguration;
 use celerrate_source::{FileId, TextSize};
 use celerrate_stubs::StubIndexInput;
-use rayon::prelude::*;
 
 use crate::cache::snapshot::CacheSnapshot;
 use crate::database::AnalysisDatabase;
@@ -88,12 +87,67 @@ pub struct AnalysisOutcome {
 /// captures nothing and therefore imposes no `Sync` requirement of its
 /// own.
 pub fn analyze(inputs: &AnalysisInputs) -> Result<AnalysisOutcome, Cancelled> {
+    use rayon::prelude::*;
+
     let tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
         .reported
         .iter()
         .map(|&file| (file, inputs.clone()))
         .collect();
+    // Every file in the analyzed set gets its own cloned handle, up front
+    // and on this thread, for the same reason the reported-file tasks
+    // above do: the closure that runs on the rayon pool must capture
+    // nothing, so it imposes no `Sync` requirement.
+    let prewarm_tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
+        .files
+        .files(&inputs.database)
+        .iter()
+        .map(|&file| (file, inputs.clone()))
+        .collect();
     let attempt = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        // Demands `item_tree` for every analyzed file in parallel before the
+        // fan-out below runs. This exists solely because of the shape of
+        // `celerrate_semantics::index::source_symbol_table`: it is a
+        // whole-set salsa query keyed on `AnalyzedFileSet` whose body is a
+        // sequential `for` loop calling `item_tree` on every analyzed file.
+        // The fan-out below reaches that query transitively (through
+        // `UnknownSymbols::check` and name resolution) from whichever rayon
+        // worker asks first, and salsa serialises the whole loop inside
+        // that one worker's query execution while every other worker blocks
+        // waiting for the memo. Warming `item_tree` here, outside any
+        // query, lets every analyzed file parse concurrently across the
+        // pool; by the time `source_symbol_table`'s loop runs, each call is
+        // a memo hit and only its own cheap assembly work remains.
+        //
+        // Discarding the result is deliberate: only the memo, not the
+        // reference returned here, is wanted. `item_tree` is
+        // `#[salsa::tracked(returns(ref))]`, so the memo table is exactly
+        // what holds every tree alive for the rest of the pass; that
+        // retention is the prewarm's purpose, not a cost this discards.
+        //
+        // This is free only while `source_symbol_table` stays a whole-set
+        // query over the entire analyzed file set. If it ever becomes
+        // incremental or scoped to a subset, this prewarm walks the wrong
+        // set and must be revisited alongside it.
+        //
+        // Each task runs behind `guarded`, exactly like `analyze_one`
+        // below: without it, a lowering or parsing panic here would escape
+        // this `for_each` uncontained, reach the `catch_unwind` around
+        // this whole closure, and turn one bad file into
+        // `InternalError::AnalysisPanicked` for the entire run instead of
+        // one entry in `outcome.panicked`. `guarded` re-raises
+        // `salsa::Cancelled` rather than swallowing it, so `--watch`
+        // cancellation still propagates; and salsa never memoizes a
+        // panicked query, so a file that panics here is not memoized and
+        // is re-attempted inside `analyze_one`'s own `guarded` call below,
+        // which is what actually attributes the panic to its file in
+        // `outcome.panicked`.
+        prewarm_tasks.into_par_iter().for_each(|(file, inputs)| {
+            let file_id = file.file_id(&inputs.database);
+            let _ = guarded(file_id, || {
+                let _ = celerrate_semantics::item_tree(&inputs.database, file);
+            });
+        });
         tasks
             .into_par_iter()
             .map(|(file, inputs)| analyze_one(&inputs, file))

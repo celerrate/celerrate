@@ -104,10 +104,14 @@ enum PackWrite {
 /// raw abort. The old snapshot stays and the next pass retries, exactly
 /// as it already does for an I/O failure below.
 pub fn persist(session: &mut Session, outcome: &AnalysisOutcome) {
-    // Wall-clock read, legal here and only here: this is the
-    // persist orchestration layer, never a salsa query, and the reading
-    // feeds only `CacheStatistics` — telemetry for the stats line, never
-    // analysis or the rendered diagnostics.
+    // Wall-clock read, legal here: this is the persist orchestration
+    // layer, never a salsa query, and the reading feeds only
+    // `CacheStatistics` — telemetry for the stats line, never analysis
+    // or the rendered diagnostics. The general rule (orchestration code
+    // only, never inside a query) is what makes this legal, not
+    // exclusivity to this call site: `persist_timed` below reads the
+    // clock three more times for `session.phases`, and `session.rs` and
+    // `lib.rs` do the same for their own phases.
     let started = std::time::Instant::now();
     persist_timed(session, outcome);
     let elapsed = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
@@ -132,14 +136,24 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     );
     let panicked: BTreeSet<FileId> = outcome.panicked.iter().copied().collect();
 
-    let Ok((trees, member_trees, verdicts)) =
-        crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked))
-    else {
+    let started = std::time::Instant::now();
+    let collected =
+        crate::analysis::isolated(|| collect_entries(&session.sources, &inputs, &panicked));
+    session.phases.record(
+        crate::phases::Phase::PersistCollectEntries,
+        started.elapsed(),
+    );
+    let Ok((trees, member_trees, verdicts)) = collected else {
         return;
     };
-    let Ok(signatures) =
-        crate::analysis::isolated(|| collect_signature_entries(&inputs, &panicked))
-    else {
+    let started = std::time::Instant::now();
+    let collected_signatures =
+        crate::analysis::isolated(|| collect_signature_entries(&inputs, &panicked));
+    session.phases.record(
+        crate::phases::Phase::PersistCollectSignatures,
+        started.elapsed(),
+    );
+    let Ok(signatures) = collected_signatures else {
         return;
     };
 
@@ -161,6 +175,7 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     // header.
     let header_moved = current_range != session.cache_loaded_range
         || session.configuration_digest != session.cache_loaded_configuration_digest;
+    let started = std::time::Instant::now();
     let trees_written = write_when_changed(
         &session.cache_directory.join(ITEM_TREES_PACK),
         &header,
@@ -199,6 +214,9 @@ fn persist_timed(session: &mut Session, outcome: &AnalysisOutcome) {
     } else {
         PackWrite::Unchanged
     };
+    session
+        .phases
+        .record(crate::phases::Phase::PersistPackWrites, started.elapsed());
     for write in [
         &trees_written,
         &member_trees_written,
@@ -242,52 +260,62 @@ fn collect_entries(
     inputs: &AnalysisInputs,
     panicked: &BTreeSet<FileId>,
 ) -> (TreeEntries, MemberTreeEntries, VerdictEntries) {
-    let database = &inputs.database;
+    use rayon::prelude::*;
 
-    let mut trees: TreeEntries = sources
+    // The salsa storage is `Send` but not `Sync` (see
+    // `analysis::analyze`): every task's handle clone is made up front
+    // on this thread and handed to rayon as owned data. The queries
+    // underneath are memoized from the pass that just ran, so the
+    // parallel work is mostly the `Stored*::of` conversions.
+    let tree_tasks: Vec<(SourceFile, AnalysisInputs)> = sources
         .iter()
         .filter(|(file_id, _)| !panicked.contains(file_id))
-        .map(|(_, &file)| {
+        .map(|(_, &file)| (file, inputs.clone()))
+        .collect();
+    let (mut trees, mut member_trees): (TreeEntries, MemberTreeEntries) = tree_tasks
+        .into_par_iter()
+        .map(|(file, inputs)| {
+            let database = &inputs.database;
+            let hash = celerrate_db::content_hash(database, file);
             (
-                celerrate_db::content_hash(database, file),
-                StoredItemTree::of(celerrate_semantics::item_tree(database, file)),
+                (
+                    hash,
+                    StoredItemTree::of(celerrate_semantics::item_tree(database, file)),
+                ),
+                (
+                    hash,
+                    StoredMemberTree::of(celerrate_semantics::member_tree(database, file)),
+                ),
             )
         })
-        .collect();
+        .unzip();
     sort_entries(&mut trees);
-
-    let mut member_trees: MemberTreeEntries = sources
-        .iter()
-        .filter(|(file_id, _)| !panicked.contains(file_id))
-        .map(|(_, &file)| {
-            (
-                celerrate_db::content_hash(database, file),
-                StoredMemberTree::of(celerrate_semantics::member_tree(database, file)),
-            )
-        })
-        .collect();
     sort_entries(&mut member_trees);
 
-    let mut verdicts: VerdictEntries = Vec::new();
-    for &file in inputs.reported.iter() {
-        let file_id = file.file_id(database);
-        if panicked.contains(&file_id) {
-            continue;
-        }
-        let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
-        // Mirrors `analyze_one`: a validated hit's whole entry is only
-        // reused byte-for-byte when every stored diagnostic still
-        // re-interns AND the typed half itself validated
-        // (`TypedOutcome::Served`) — a `Recompute` typed outcome means
-        // this file's typed portion is already stale against the live
-        // project, and reusing the old entry verbatim would persist that
-        // staleness forward untouched (never re-checked until the whole
-        // entry moves for some unrelated reason). `composed_verdict`
-        // recomputes both halves in that case; every query underneath it
-        // is memoized from the pass that already ran, so this costs
-        // nothing beyond a salsa cache read.
-        let stored =
-            match verdict::lookup_verdict(inputs, file) {
+    let verdict_tasks: Vec<(SourceFile, AnalysisInputs)> = inputs
+        .reported
+        .iter()
+        .filter(|file| !panicked.contains(&file.file_id(&inputs.database)))
+        .map(|&file| (file, inputs.clone()))
+        .collect();
+    let mut verdicts: VerdictEntries = verdict_tasks
+        .into_par_iter()
+        .map(|(file, inputs)| {
+            let database = &inputs.database;
+            let file_id = file.file_id(database);
+            let content_length = u32::try_from(file.bytes(database).len()).unwrap_or(0);
+            // Mirrors `analyze_one`: a validated hit's whole entry is only
+            // reused byte-for-byte when every stored diagnostic still
+            // re-interns AND the typed half itself validated
+            // (`TypedOutcome::Served`) — a `Recompute` typed outcome means
+            // this file's typed portion is already stale against the live
+            // project, and reusing the old entry verbatim would persist that
+            // staleness forward untouched (never re-checked until the whole
+            // entry moves for some unrelated reason). `composed_verdict`
+            // recomputes both halves in that case; every query underneath it
+            // is memoized from the pass that already ran, so this costs
+            // nothing beyond a salsa cache read.
+            let stored = match verdict::lookup_verdict(&inputs, file) {
                 verdict::VerdictLookup::Hit {
                     verdict: stored,
                     typed: verdict::TypedOutcome::Served,
@@ -297,10 +325,11 @@ fn collect_entries(
                 {
                     stored.clone()
                 }
-                _ => composed_verdict(inputs, file),
+                _ => composed_verdict(&inputs, file),
             };
-        verdicts.push((celerrate_db::content_hash(database, file), stored));
-    }
+            (celerrate_db::content_hash(database, file), stored)
+        })
+        .collect();
     sort_entries(&mut verdicts);
 
     (trees, member_trees, verdicts)
@@ -749,6 +778,55 @@ mod tests {
 
     use crate::analysis::AnalysisOutcome;
     use crate::session::Session;
+
+    /// A project on disk, written into a temporary directory.
+    fn project(files: &[(&str, &str)]) -> tempfile::TempDir {
+        let root = tempfile::tempdir().unwrap();
+        for (path, contents) in files {
+            let path = root.path().join(path);
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(path, contents).unwrap();
+        }
+        root
+    }
+
+    /// The invariant a parallel rewrite of `collect_entries` must
+    /// preserve: two collections of the same inputs, run back to back,
+    /// yield byte-identical, identically sorted entries. Several files
+    /// (with a dependency edge between two of them) give the collection
+    /// more than one task to interleave, so this pins cross-run identity
+    /// rather than a single-file case where reordering could never
+    /// surface; it is a modest fixture, not a stand-in for fan-out at
+    /// corpus scale.
+    #[test]
+    fn collecting_entries_twice_yields_identical_sorted_entries() {
+        let root = project(&[
+            (
+                "composer.json",
+                r#"{"require": {"php": "^8.1"}, "autoload": {"psr-4": {"App\\": "src/"}}}"#,
+            ),
+            ("src/Alpha.php", "<?php\nnamespace App;\nclass Alpha {}\n"),
+            ("src/Beta.php", "<?php\nnamespace App;\nclass Beta {}\n"),
+            ("src/Gamma.php", "<?php\nnamespace App;\nclass Gamma {}\n"),
+            ("src/Delta.php", "<?php\nnamespace App;\nnew Alpha();\n"),
+        ]);
+        let session = Session::start(root.path());
+        let inputs = session.inputs();
+        let panicked = std::collections::BTreeSet::new();
+
+        let first = super::collect_entries(&session.sources, &inputs, &panicked);
+        let second = super::collect_entries(&session.sources, &inputs, &panicked);
+
+        assert_eq!(first.0, second.0, "item-tree entries stay identical");
+        assert_eq!(first.1, second.1, "member-tree entries stay identical");
+        assert_eq!(first.2, second.2, "verdict entries stay identical");
+        assert!(
+            !first.0.is_empty(),
+            "the fixture must actually collect trees"
+        );
+    }
 
     /// A file the pass reported as panicked yields no verdict entry, and
     /// no item-tree entry either: nothing a panic touched enters the

@@ -20,34 +20,59 @@ use celerrate_stubs::StubMemberKind;
 
 use crate::session::Session;
 
-/// Optimal string alignment distance (restricted Damerau-Levenshtein)
-/// over lowercased characters, abandoned as soon as it provably
-/// exceeds `bound`. A transposition of two adjacent characters costs 1
-/// edit, not 2: transposition is the dominant typo class (`svae` for
-/// `save`, `nmae` for `name`) and plain Levenshtein overcharges it,
-/// pushing exactly the typos this feature exists for outside the
-/// bound. Lowercasing makes a case-only typo distance 0, which is
-/// exactly the fix the case-sensitive spaces (constants, properties,
-/// enum cases) want suggested.
-fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usize> {
-    let written: Vec<char> = written.to_lowercase().chars().collect();
-    let candidate: Vec<char> = candidate.to_lowercase().chars().collect();
+/// The three matrix rows `bounded_distance_pooled` works in, owned
+/// outside the call so one allocation serves every candidate of a
+/// pass. The profiling behind issue #124 attributed most of the
+/// enrich phase to reallocating exactly these rows per candidate.
+#[derive(Debug, Default)]
+struct DistanceScratch {
+    before_previous: Vec<usize>,
+    previous: Vec<usize>,
+    current: Vec<usize>,
+}
+
+/// The bounded edit distance over pre-lowercased characters and
+/// caller-owned rows: the hot form every production caller goes
+/// through. The length rejection lives here so no caller can forget
+/// it.
+fn bounded_distance_pooled(
+    written: &[char],
+    candidate: &[char],
+    bound: usize,
+    scratch: &mut DistanceScratch,
+) -> Option<usize> {
     if written.len().abs_diff(candidate.len()) > bound {
         return None;
     }
-    let mut before_previous: Vec<usize> = (0..=candidate.len()).collect();
-    let mut previous: Vec<usize> = (0..=candidate.len()).collect();
+    scratch.before_previous.clear();
+    scratch.before_previous.extend(0..=candidate.len());
+    scratch.previous.clear();
+    scratch.previous.extend(0..=candidate.len());
     for (row, written_character) in written.iter().enumerate() {
-        let mut current: Vec<usize> = Vec::with_capacity(candidate.len() + 1);
-        current.push(row + 1);
+        scratch.current.clear();
+        scratch.current.push(row + 1);
         for (column, candidate_character) in candidate.iter().enumerate() {
             // The `get` fallbacks are unreachable (the rows are dense
             // by construction); they exist because indexing is denied
             // and a wrong answer here is caught by the tests anyway.
-            let substitution = previous.get(column).copied().unwrap_or(usize::MAX - 1)
+            let substitution = scratch
+                .previous
+                .get(column)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
                 + usize::from(written_character != candidate_character);
-            let insertion = current.get(column).copied().unwrap_or(usize::MAX - 1) + 1;
-            let deletion = previous.get(column + 1).copied().unwrap_or(usize::MAX - 1) + 1;
+            let insertion = scratch
+                .current
+                .get(column)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
+                + 1;
+            let deletion = scratch
+                .previous
+                .get(column + 1)
+                .copied()
+                .unwrap_or(usize::MAX - 1)
+                + 1;
             let mut best = substitution.min(insertion).min(deletion);
             if row > 0 && column > 0 {
                 let previous_written = written.get(row - 1);
@@ -56,11 +81,10 @@ fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usiz
                     && previous_candidate == Some(written_character)
                 {
                     // Adjacent transposition: `..ab` -> `..ba` costs 1,
-                    // read off the diagonal two rows up (the `get`
-                    // fallback is unreachable for the same reason as
-                    // above: the row two back is dense by construction
-                    // whenever `row > 0`).
-                    let transposition = before_previous
+                    // read off the diagonal two rows up (dense by
+                    // construction whenever `row > 0`).
+                    let transposition = scratch
+                        .before_previous
                         .get(column - 1)
                         .copied()
                         .unwrap_or(usize::MAX - 1)
@@ -68,18 +92,49 @@ fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usiz
                     best = best.min(transposition);
                 }
             }
-            current.push(best);
+            scratch.current.push(best);
         }
-        if current.iter().min().copied().unwrap_or(0) > bound {
+        if scratch.current.iter().min().copied().unwrap_or(0) > bound {
             return None;
         }
-        before_previous = previous;
-        previous = current;
+        // Rotates the three rows for the next iteration without
+        // allocating: equivalent to `before_previous = previous; previous
+        // = current`, but moving the buffers in place instead of cloning
+        // them. The row left in `current` after both swaps is the stale
+        // `before_previous` from two iterations back; it is `clear`ed and
+        // rebuilt from scratch at the top of the loop before anything
+        // reads it, so its leftover contents never leak into the result.
+        std::mem::swap(&mut scratch.before_previous, &mut scratch.previous);
+        std::mem::swap(&mut scratch.previous, &mut scratch.current);
     }
-    previous
+    scratch
+        .previous
         .last()
         .copied()
         .filter(|&distance| distance <= bound)
+}
+
+/// Optimal string alignment distance (restricted Damerau-Levenshtein)
+/// over lowercased characters, abandoned as soon as it provably
+/// exceeds `bound`. A transposition of two adjacent characters costs 1
+/// edit, not 2: transposition is the dominant typo class (`svae` for
+/// `save`, `nmae` for `name`) and plain Levenshtein overcharges it,
+/// pushing exactly the typos this feature exists for outside the
+/// bound. Lowercasing makes a case-only typo distance 0, which is
+/// exactly the fix the case-sensitive spaces (constants, properties,
+/// enum cases) want suggested. Test-only: every production caller now
+/// goes through the pooled, pre-lowercased form
+/// (`bounded_distance_pooled`) with a shared scratch, so this
+/// single-pair convenience form has no production caller left. It is
+/// not an independent implementation — it lowers its inputs and then
+/// calls `bounded_distance_pooled` itself, so it cannot catch a
+/// regression in the pooled algorithm; see `did_you_mean`'s doc for
+/// where this refactor's real behavior pin lives.
+#[cfg(test)]
+fn bounded_distance(written: &str, candidate: &str, bound: usize) -> Option<usize> {
+    let written: Vec<char> = written.to_lowercase().chars().collect();
+    let candidate: Vec<char> = candidate.to_lowercase().chars().collect();
+    bounded_distance_pooled(&written, &candidate, bound, &mut DistanceScratch::default())
 }
 
 /// The "bounded edit distance" bound: tight for short
@@ -99,33 +154,95 @@ enum DidYouMean {
     Tie(Vec<String>),
 }
 
-fn did_you_mean(written: &str, candidates: Vec<String>) -> DidYouMean {
+/// One pool name with everything the per-candidate loop needs,
+/// computed once at pool construction: the fold key the exclusion
+/// compares, and the lowercased characters the distance walks. Before
+/// this existed, both were recomputed for the whole pool on every
+/// diagnostic — the dominant cost of the enrich phase (issue #124).
+struct PoolEntry {
+    original: String,
+    folded: String,
+    lowercase: Vec<char>,
+}
+
+/// Builds a pool from declared names and the space's fold function.
+fn pool_entries(names: Vec<String>, fold: impl Fn(&str) -> String) -> Vec<PoolEntry> {
+    names
+        .into_iter()
+        .map(|name| PoolEntry {
+            folded: fold(&name),
+            lowercase: name.to_lowercase().chars().collect(),
+            original: name,
+        })
+        .collect()
+}
+
+/// The pooled did-you-mean search: no clone, no re-fold, one scratch
+/// for every candidate. `excluded_folded` is the per-diagnostic part of
+/// an otherwise shared pool: a name folding equal to the attempted key
+/// would have resolved, so it is skipped inline. Answers the outcome
+/// and its minimal distance (`None` exactly when the outcome is
+/// `Nothing`).
+fn did_you_mean_pooled(
+    written: &str,
+    pool: &[PoolEntry],
+    excluded_folded: Option<&str>,
+    scratch: &mut DistanceScratch,
+) -> (DidYouMean, Option<usize>) {
     let bound = distance_bound(written);
+    let written_lowercase: Vec<char> = written.to_lowercase().chars().collect();
     let mut minimum: Option<usize> = None;
-    let mut names: Vec<String> = Vec::new();
-    for candidate in candidates {
-        let Some(distance) = bounded_distance(written, &candidate, bound) else {
+    let mut names: Vec<&str> = Vec::new();
+    for entry in pool {
+        if excluded_folded == Some(entry.folded.as_str()) {
+            continue;
+        }
+        let Some(distance) =
+            bounded_distance_pooled(&written_lowercase, &entry.lowercase, bound, scratch)
+        else {
             continue;
         };
         match minimum {
             Some(best) if distance > best => {}
             Some(best) if distance == best => {
-                if !names.contains(&candidate) {
-                    names.push(candidate);
+                if !names.contains(&entry.original.as_str()) {
+                    names.push(&entry.original);
                 }
             }
             _ => {
                 minimum = Some(distance);
-                names = vec![candidate];
+                names = vec![&entry.original];
             }
         }
     }
-    names.sort();
-    match names.len() {
+    names.sort_unstable();
+    let outcome = match names.len() {
         0 => DidYouMean::Nothing,
-        1 => names.pop().map_or(DidYouMean::Nothing, DidYouMean::Unique),
-        _ => DidYouMean::Tie(names),
-    }
+        1 => names.pop().map_or(DidYouMean::Nothing, |name| {
+            DidYouMean::Unique(name.to_owned())
+        }),
+        _ => DidYouMean::Tie(names.into_iter().map(str::to_owned).collect()),
+    };
+    (outcome, minimum)
+}
+
+/// The owned-vector test helper for `did_you_mean_pooled`: builds a
+/// throwaway pool and a fresh scratch, then delegates. Test-only: every
+/// production caller builds its pool once per pass and calls
+/// `did_you_mean_pooled` directly with the shared scratch. This is
+/// *not* an independent reference implementation — it bottoms out in
+/// the very algorithm it is compared against below, so it cannot catch
+/// a regression there; it exists to let a test hand in a plain
+/// `Vec<String>` and to exercise scratch-reuse safety (see the tests
+/// using it). The real behavior pin for this refactor is the suite of
+/// fixture-driven enrichment tests further down this module (starting
+/// with `an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion`),
+/// which run the pooled path end-to-end against real diagnostics and
+/// assert the exact suggestion and note text produced.
+#[cfg(test)]
+fn did_you_mean(written: &str, candidates: Vec<String>) -> DidYouMean {
+    let pool = pool_entries(candidates, |name| name.to_owned());
+    did_you_mean_pooled(written, &pool, None, &mut DistanceScratch::default()).0
 }
 
 /// The last segment of a qualified name: `Lib\Client` -> `Client`.
@@ -240,15 +357,15 @@ fn span_text(session: &Session, file: FileId, range: TextRange) -> Option<String
 /// would be wasted work on the case that matters most.
 struct CandidatePools<'a> {
     session: &'a Session,
-    classes: Option<Vec<String>>,
-    functions: Option<Vec<String>>,
-    constants: Option<Vec<String>>,
+    classes: Option<Vec<PoolEntry>>,
+    functions: Option<Vec<PoolEntry>>,
+    constants: Option<Vec<PoolEntry>>,
     /// The receiver's member names of one kind, keyed by (resolved
     /// class-like key, kind), built at most once per [`enrich`] call.
     /// Excludes nothing yet: the written member's own key is filtered
     /// out per diagnostic afterwards, since two diagnostics can share a
     /// receiver while writing different unknown members.
-    members: HashMap<(String, MemberKind), Vec<String>>,
+    members: HashMap<(String, MemberKind), Vec<PoolEntry>>,
     /// One file's statically named references, parsed and collected on
     /// first use per file and shared with every later call in the same
     /// pass. `attempted_keys` and `resolved_receiver_key` both used to
@@ -258,6 +375,8 @@ struct CandidatePools<'a> {
     /// thousands of tree walks over that file. Caching here turns it
     /// into at most one walk per file for the whole pass.
     reference_cache: HashMap<FileId, Vec<Reference>>,
+    /// The pass-wide distance rows, shared by every diagnostic.
+    scratch: DistanceScratch,
 }
 
 impl<'a> CandidatePools<'a> {
@@ -269,6 +388,7 @@ impl<'a> CandidatePools<'a> {
             constants: None,
             members: HashMap::new(),
             reference_cache: HashMap::new(),
+            scratch: DistanceScratch::default(),
         }
     }
 
@@ -291,28 +411,42 @@ impl<'a> CandidatePools<'a> {
             .as_slice()
     }
 
-    /// The declared qualified names of `space`, computed on first use
-    /// and shared with every later call in the same pass.
-    fn get(&mut self, space: SymbolSpace) -> &[String] {
+    /// The declared pool of `space` plus the shared distance scratch,
+    /// split-borrowed so one call feeds `did_you_mean_pooled` directly.
+    fn symbol_pool(&mut self, space: SymbolSpace) -> (&[PoolEntry], &mut DistanceScratch) {
         let session = self.session;
         let slot = match space {
             SymbolSpace::ClassLike => &mut self.classes,
             SymbolSpace::Function => &mut self.functions,
             SymbolSpace::Constant => &mut self.constants,
         };
-        slot.get_or_insert_with(|| declared_pool(session, space))
+        let entries = slot.get_or_insert_with(|| {
+            pool_entries(declared_pool(session, space), |name| {
+                folded_symbol_key(space, name)
+            })
+        });
+        (entries.as_slice(), &mut self.scratch)
     }
 
-    /// The declared member names of `kind` on the class-like named by
-    /// `class_key`, computed on first use per (class_key, kind) pair
-    /// and shared with every later call in the same pass. `class_key`
+    /// The member pool of (`class_key`, `kind`) plus the shared
+    /// scratch, same split-borrow shape as `symbol_pool`. `class_key`
     /// must already be the resolved fully qualified key (see
     /// `receiver_class_key`), not the as-written receiver text.
-    fn member_pool(&mut self, class_key: &str, kind: MemberKind) -> &[String] {
+    fn member_pool(
+        &mut self,
+        class_key: &str,
+        kind: MemberKind,
+    ) -> (&[PoolEntry], &mut DistanceScratch) {
         let session = self.session;
-        self.members
+        let entries = self
+            .members
             .entry((class_key.to_owned(), kind))
-            .or_insert_with(|| member_candidates(session, class_key, kind))
+            .or_insert_with(|| {
+                pool_entries(member_candidates(session, class_key, kind), |name| {
+                    folded_member_key(kind, name)
+                })
+            });
+        (entries.as_slice(), &mut self.scratch)
     }
 }
 
@@ -372,9 +506,9 @@ fn attempted_keys(
     ))
 }
 
-/// Runs `did_you_mean` once per attempted key (PHP tries more than one
-/// only for the function/constant global fallback), against the pool
-/// with that key's own fold-equal entries excluded (a name folding
+/// Runs `did_you_mean_pooled` once per attempted key (PHP tries more
+/// than one only for the function/constant global fallback), against
+/// the pool with that key's own fold-equal entries excluded (a name folding
 /// equal to an attempted key would have resolved, so excluding it is
 /// the per-diagnostic part of an otherwise shared pool). Returns the
 /// attempted key with the nearest outcome and that outcome; on an
@@ -382,28 +516,15 @@ fn attempted_keys(
 /// wins, which is PHP's own precedence.
 fn did_you_mean_across_keys(
     attempted: Vec<String>,
-    pool: &[String],
+    pool: &[PoolEntry],
     space: SymbolSpace,
+    scratch: &mut DistanceScratch,
 ) -> Option<(String, DidYouMean)> {
     let mut best: Option<(String, DidYouMean, usize)> = None;
     for key in attempted {
         let folded_key = folded_symbol_key(space, &key);
-        let filtered: Vec<String> = pool
-            .iter()
-            .filter(|candidate| folded_symbol_key(space, candidate) != folded_key)
-            .cloned()
-            .collect();
-        let bound = distance_bound(&key);
-        let outcome = did_you_mean(&key, filtered);
-        let distance = match &outcome {
-            DidYouMean::Nothing => None,
-            DidYouMean::Unique(candidate) => bounded_distance(&key, candidate, bound),
-            // Every name in a tie shares the same minimal distance;
-            // any of them reports it.
-            DidYouMean::Tie(names) => names
-                .first()
-                .and_then(|candidate| bounded_distance(&key, candidate, bound)),
-        };
+        let (outcome, distance) =
+            did_you_mean_pooled(&key, pool, Some(folded_key.as_str()), scratch);
         let Some(distance) = distance else { continue };
         let replace = match &best {
             Some((_, _, best_distance)) => distance < *best_distance,
@@ -425,8 +546,8 @@ fn symbol_did_you_mean(
 ) -> Option<Enrichment> {
     let written = span_text(session, file, range)?;
     let attempted = attempted_keys(session, pools, file, range, space)?;
-    let pool = pools.get(space);
-    let (winning_key, outcome) = did_you_mean_across_keys(attempted, pool, space)?;
+    let (pool, scratch) = pools.symbol_pool(space);
+    let (winning_key, outcome) = did_you_mean_across_keys(attempted, pool, space, scratch)?;
     match outcome {
         DidYouMean::Nothing => None,
         DidYouMean::Unique(candidate) => {
@@ -547,16 +668,9 @@ fn member_did_you_mean(
     }
     let class_key = receiver_class_key(session, pools, file, range, &receiver);
     let written_key = folded_member_key(kind, &member);
-    let pool = pools.member_pool(&class_key, kind);
-    let candidates: Vec<String> = pool
-        .iter()
-        .filter(|candidate| folded_member_key(kind, candidate) != written_key)
-        .cloned()
-        .collect();
-    if candidates.is_empty() {
-        return None;
-    }
-    match did_you_mean(&member, candidates) {
+    let (pool, scratch) = pools.member_pool(&class_key, kind);
+    let (outcome, _) = did_you_mean_pooled(&member, pool, Some(written_key.as_str()), scratch);
+    match outcome {
         DidYouMean::Nothing => None,
         DidYouMean::Unique(candidate) => {
             // The span is only decoded here, the one arm that needs it:
@@ -1265,5 +1379,82 @@ mod tests {
             .collect();
         assert_eq!(class.len(), 1);
         assert!(class[0].suggestions.is_empty());
+    }
+
+    // `bounded_distance` and `did_you_mean` are test-only convenience
+    // wrappers that themselves call `bounded_distance_pooled` and
+    // `did_you_mean_pooled`: they are not independent implementations,
+    // so comparing pooled output against them cannot catch a
+    // regression in the pooled algorithm. What the next two tests
+    // genuinely verify is scratch-reuse safety — one `DistanceScratch`
+    // driven across many successive calls in a loop must produce the
+    // same answers as a fresh scratch per call, which is exactly what
+    // each wrapper constructs internally. The real behavior pin for
+    // this refactor is the suite of fixture-driven enrichment tests
+    // further down this module (starting with
+    // `an_unknown_class_with_one_near_declaration_gains_an_applicable_suggestion`),
+    // which run the pooled path end-to-end against real diagnostics.
+    #[test]
+    fn reusing_the_scratch_across_calls_does_not_leak_state_into_bounded_distance_pooled() {
+        let mut scratch = super::DistanceScratch::default();
+        let cases: [(&str, &str, usize); 6] = [
+            ("svae", "save", 2),
+            ("nmae", "name", 2),
+            ("php_eol", "PHP_EOL", 2),
+            ("draft", "active", 2),
+            ("a", "abcd", 2),
+            ("Activ", "Active", 2),
+        ];
+        for (written, candidate, bound) in cases {
+            let written_lowercase: Vec<char> = written.to_lowercase().chars().collect();
+            let candidate_lowercase: Vec<char> = candidate.to_lowercase().chars().collect();
+            // The same scratch across every case, checked against
+            // `bounded_distance`, which builds a fresh scratch per
+            // call: reuse must not leak one computation's rows into
+            // the next.
+            assert_eq!(
+                super::bounded_distance_pooled(
+                    &written_lowercase,
+                    &candidate_lowercase,
+                    bound,
+                    &mut scratch,
+                ),
+                super::bounded_distance(written, candidate, bound),
+                "{written} vs {candidate}",
+            );
+        }
+    }
+
+    #[test]
+    fn reusing_the_scratch_across_calls_does_not_leak_state_into_did_you_mean_pooled() {
+        let mut scratch = super::DistanceScratch::default();
+        let cases: [(&str, &[&str]); 4] = [
+            ("svae", &["save", "wave", "unrelated"]),
+            ("sive", &["sove", "save", "sove"]),
+            ("svae", &["unrelated"]),
+            ("Activ", &["Active", "Passive"]),
+        ];
+        for (written, candidates) in cases {
+            let owned: Vec<String> = candidates.iter().map(|name| (*name).to_owned()).collect();
+            let pool = super::pool_entries(owned.clone(), |name| name.to_owned());
+            // The same scratch across every case, checked against
+            // `did_you_mean`, which builds a fresh pool and a fresh
+            // scratch per call.
+            let (pooled, _) = super::did_you_mean_pooled(written, &pool, None, &mut scratch);
+            assert_eq!(pooled, super::did_you_mean(written, owned), "{written}");
+        }
+    }
+
+    #[test]
+    fn a_fold_excluded_entry_never_becomes_a_candidate() {
+        let mut scratch = super::DistanceScratch::default();
+        let pool = super::pool_entries(vec!["save".to_owned(), "wave".to_owned()], |name| {
+            format!("folded::{name}")
+        });
+        let (outcome, _) =
+            super::did_you_mean_pooled("svae", &pool, Some("folded::save"), &mut scratch);
+        // `save` is fold-excluded; `wave` is at distance 2, outside the
+        // short-name bound of 1: nothing survives.
+        assert_eq!(outcome, super::DidYouMean::Nothing);
     }
 }

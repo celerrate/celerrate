@@ -18,6 +18,7 @@ pub mod ground_truth;
 mod migrate;
 pub mod mixed_rate;
 pub mod output;
+mod phases;
 pub mod plugins;
 pub mod render;
 pub mod session;
@@ -154,12 +155,21 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 return watch::watch(&mut session, output, color, mode, verbose);
             }
             let inputs = session.inputs();
+            let started = std::time::Instant::now();
             let outcome = single_pass(&mut session, || analysis::analyze(&inputs));
+            session
+                .phases
+                .record(phases::Phase::Analysis, started.elapsed());
             session.absorb_outcome(&outcome);
             // Presentation only: the persisted verdicts read `outcome`,
             // never the enriched copy.
+            let started = std::time::Instant::now();
+            let enriched = suggest::enrich(&session, &outcome.diagnostics);
+            session
+                .phases
+                .record(phases::Phase::Enrich, started.elapsed());
             let mut presented = analysis::AnalysisOutcome {
-                diagnostics: suggest::enrich(&session, &outcome.diagnostics),
+                diagnostics: enriched,
                 panicked: outcome.panicked.clone(),
             };
             let baseline_outcome = match mode {
@@ -209,7 +219,12 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 );
                 let report =
                     crate::output::model::build(&session, &presented, &baseline_outcome, verdict);
-                if crate::output::write(machine, output, &report).is_err() {
+                let started = std::time::Instant::now();
+                let write_result = crate::output::write(machine, output, &report);
+                session
+                    .phases
+                    .record(phases::Phase::Render, started.elapsed());
+                if write_result.is_err() {
                     return Outcome::InternalError;
                 }
                 session.statistics.report();
@@ -218,12 +233,16 @@ pub fn run(arguments: Vec<OsString>, output: &mut dyn Write, color: ColorMode) -
                 }
                 return verdict;
             }
-            let failures =
-                match render::render_report(output, &session, &presented, color, &baseline_outcome)
-                {
-                    Ok(failures) => failures,
-                    Err(_) => return Outcome::InternalError,
-                };
+            let started = std::time::Instant::now();
+            let render_result =
+                render::render_report(output, &session, &presented, color, &baseline_outcome);
+            session
+                .phases
+                .record(phases::Phase::Render, started.elapsed());
+            let failures = match render_result {
+                Ok(failures) => failures,
+                Err(_) => return Outcome::InternalError,
+            };
             session.absorb_render_failures(failures);
             cache::persist(&mut session, &outcome);
             if let Some(threshold) = fix::fix_threshold(fix, fix_suggestions) {

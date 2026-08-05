@@ -27,6 +27,7 @@ use crate::cache::pack::PackHeader;
 use crate::cache::snapshot::{CacheSnapshot, SnapshotCache};
 use crate::cache::statistics::CacheStatistics;
 use crate::database::AnalysisDatabase;
+use crate::phases::PhaseTimings;
 use crate::plugins::{RegisteredPlugins, plugin_set_digest, register_core_rules, register_plugins};
 use crate::watch::{InputMutation, reconcile};
 
@@ -108,6 +109,9 @@ pub struct Session {
     /// `SnapshotCache` and with every `AnalysisInputs` clone. Never
     /// read by analysis; rendered to stderr on opt-in.
     pub statistics: Arc<CacheStatistics>,
+    /// The session's per-phase timings, shared with the persist layer.
+    /// Never read by analysis; rendered to stderr under `--verbose`.
+    pub phases: Arc<PhaseTimings>,
     /// The plugins the composition root registered into the extension
     /// registries, and the ones it excluded. Set once, right after the
     /// database's other singleton inputs, before any query runs.
@@ -191,6 +195,7 @@ impl Session {
         let files = AnalyzedFileSet::new(&database, Vec::new());
 
         let statistics = Arc::new(CacheStatistics::default());
+        let phases = Arc::new(PhaseTimings::default());
         let cache_directory = root.join(".celerrate").join("cache");
         let cache_loaded_range = discovery.php_version_range;
 
@@ -248,6 +253,7 @@ impl Session {
             cache_directory,
             cache_loaded_range,
             statistics,
+            phases,
             plugins,
             plugin_set_digest,
             configuration_digest,
@@ -256,11 +262,21 @@ impl Session {
             severity_remap,
             loaded_baseline,
         };
+        // Wall-clock reads, legal here: `start` is orchestration, never
+        // a salsa query, and the readings feed only the verbose channel.
+        let started = std::time::Instant::now();
         let walk = enumerate_php_files(
             &session.discovery.walk_roots(),
             &session.discovery.excluded_roots,
         );
+        session
+            .phases
+            .record(crate::phases::Phase::Walk, started.elapsed());
+        let started = std::time::Instant::now();
         session.load(&walk);
+        session
+            .phases
+            .record(crate::phases::Phase::ReadAndSetInputs, started.elapsed());
         session
     }
 
@@ -393,6 +409,8 @@ impl Session {
     /// files it could not read, and these are the directories it could not
     /// open.
     fn load(&mut self, walk: &Walk) {
+        use rayon::prelude::*;
+
         // This load decides, for the walk it is given, exactly what could
         // not be read. The previous load's verdict is superseded, not added
         // to: a lockfile saved twice under `--watch` re-runs discovery
@@ -411,14 +429,24 @@ impl Session {
                     reason: directory.reason.clone(),
                 });
         }
+        // The reads fan out; everything that mutates (`internal_errors`,
+        // the VFS, the salsa inputs) stays on this thread, in walk
+        // order. Rayon's indexed `collect` preserves input order, so
+        // the zip below reunites each path with its own read and the
+        // recorded failures keep their serial-era order.
+        let read_outcomes: Vec<Result<Vec<u8>, String>> = walk
+            .files
+            .par_iter()
+            .map(|path| std::fs::read(path).map_err(|error| error.to_string()))
+            .collect();
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
-        for path in &walk.files {
-            let contents = match std::fs::read(path) {
+        for (path, outcome) in walk.files.iter().zip(read_outcomes) {
+            let contents = match outcome {
                 Ok(contents) => contents,
-                Err(error) => {
+                Err(reason) => {
                     self.internal_errors.push(InternalError::FileUnreadable {
                         path: path.clone(),
-                        reason: error.to_string(),
+                        reason,
                     });
                     Vec::new()
                 }
@@ -705,6 +733,52 @@ mod tests {
             }
             other => panic!("expected FileUnreadable, got {other:?}"),
         }
+    }
+
+    /// The invariant parallelizing the read loop must preserve: several
+    /// unreadable files are recorded in walk order (lexical path order,
+    /// per `enumerate_php_files`), not in whatever order a fanned-out
+    /// read happens to finish. Mirrors the fixture and the permission-bit
+    /// guard of `an_unreadable_file_is_recorded_and_the_run_still_continues`
+    /// above, over three root-level files so an out-of-order read would
+    /// show up as a reordered `unreadable` vector.
+    #[cfg(unix)]
+    #[test]
+    fn unreadable_files_are_recorded_in_walk_order() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let root = project(&[
+            ("alpha.php", "<?php\n"),
+            ("beta.php", "<?php\n"),
+            ("gamma.php", "<?php\n"),
+        ]);
+        let alpha = root.path().join("alpha.php");
+        let gamma = root.path().join("gamma.php");
+        std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o000)).unwrap();
+        std::fs::set_permissions(&gamma, std::fs::Permissions::from_mode(0o000)).unwrap();
+
+        let session = Session::start(root.path());
+
+        // Restore permissions so the temporary directory can be cleaned
+        // up regardless of test outcome.
+        std::fs::set_permissions(&alpha, std::fs::Permissions::from_mode(0o644)).unwrap();
+        std::fs::set_permissions(&gamma, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+        let unreadable: Vec<String> = session
+            .internal_errors
+            .iter()
+            .filter_map(|error| match error {
+                InternalError::FileUnreadable { path, .. } => {
+                    Some(path.file_name().unwrap().to_string_lossy().into_owned())
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            unreadable,
+            vec!["alpha.php", "gamma.php"],
+            "the recorded failures keep the walk's lexical order",
+        );
     }
 
     /// `--watch` re-analyzes on every save, and every cycle reprints the

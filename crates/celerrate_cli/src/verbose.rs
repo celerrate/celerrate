@@ -127,6 +127,9 @@ pub(crate) fn report_to(session: &Session, output: &mut dyn std::io::Write) -> s
         "{}",
         render_run_summary(&session.statistics, reported)
     )?;
+    for line in session.phases.render_lines() {
+        writeln!(output, "{line}")?;
+    }
     Ok(())
 }
 
@@ -277,6 +280,33 @@ mod tests {
     }
 
     #[test]
+    fn the_phase_lines_print_after_the_run_summary() {
+        let root = project(&[("composer.json", r#"{"require": {"php": "^8.1"}}"#)]);
+        let session = Session::start(root.path());
+        let mut output = Vec::new();
+        report_to(&session, &mut output).unwrap();
+        let text = String::from_utf8(output).unwrap();
+        let summary_position = text.find("verbose: 0 project files").unwrap();
+        let walk_position = text.find("verbose: phase filesystem walk:").unwrap();
+        assert!(
+            summary_position < walk_position,
+            "summary first, then phases"
+        );
+        for label in [
+            "verbose: phase filesystem walk:",
+            "verbose: phase file read + input set:",
+            "verbose: phase analysis fan-out:",
+            "verbose: phase suggest enrich:",
+            "verbose: phase render report:",
+            "verbose: phase persist: collect entries:",
+            "verbose: phase persist: collect signatures:",
+            "verbose: phase persist: pack writes:",
+        ] {
+            assert!(text.contains(label), "missing {label} in {text}");
+        }
+    }
+
+    #[test]
     fn report_to_writes_the_widened_line_then_the_run_summary() {
         let root = project(&[(
             "a.php",
@@ -287,14 +317,48 @@ mod tests {
         report_to(&session, &mut output).unwrap();
         let output = String::from_utf8(output).unwrap();
         let lines: Vec<&str> = output.lines().collect();
+        // The widened line and the run summary carry no timing, so they are
+        // asserted verbatim. The eight phase lines that follow carry a real
+        // wall-clock reading from `Session::start`'s own walk and load (see
+        // `Phase::Walk` and `Phase::ReadAndSetInputs`), so only their label
+        // and order are asserted here, never the millisecond value: on a
+        // slower or more loaded machine that reading can round up past
+        // `0ms`, and asserting the exact rendered number would make this
+        // test flake on timing it was never meant to pin. Label and order
+        // is exactly what this test exists to verify; the millisecond
+        // values themselves are `phases.rs`'s own responsibility
+        // (`every_phase_renders_one_line_in_pipeline_order` and friends),
+        // which pin them with synthetic, not real, durations.
         assert_eq!(
-            lines,
-            vec![
-                "verbose: a.php:2: unmapped identifier `some.unknownIdentifier`: \
-                 the directive widens to scope-wide suppression",
-                "verbose: 1 project file reported; verdicts 0 served / 0 \
-                 discarded / 0 absent from the cache",
-            ],
+            lines.len(),
+            10,
+            "the widened line, the run summary, and the eight phase lines: {lines:?}",
         );
+        assert_eq!(
+            lines[0],
+            "verbose: a.php:2: unmapped identifier `some.unknownIdentifier`: \
+             the directive widens to scope-wide suppression",
+        );
+        assert_eq!(
+            lines[1],
+            "verbose: 1 project file reported; verdicts 0 served / 0 \
+             discarded / 0 absent from the cache",
+        );
+        let phase_labels = [
+            "verbose: phase filesystem walk:",
+            "verbose: phase file read + input set:",
+            "verbose: phase analysis fan-out:",
+            "verbose: phase suggest enrich:",
+            "verbose: phase render report:",
+            "verbose: phase persist: collect entries:",
+            "verbose: phase persist: collect signatures:",
+            "verbose: phase persist: pack writes:",
+        ];
+        for (line, label) in lines[2..].iter().zip(phase_labels) {
+            assert!(
+                line.starts_with(label),
+                "expected {line:?} to start with {label:?}",
+            );
+        }
     }
 }
