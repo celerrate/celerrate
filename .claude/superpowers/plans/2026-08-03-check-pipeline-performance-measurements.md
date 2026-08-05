@@ -778,6 +778,10 @@ runs that all clear the bar. The effort's stated goal, bringing the
 cold median on the pinned PrestaShop comparison corpus to at or under
 6 s, behavior-identical, is met.
 
+**This figure was superseded by a re-measurement after two further
+commits landed; see the addendum below for the current published
+figure and why it differs.**
+
 ## 29. Cumulative summary of the whole effort
 
 Protocol totals, baseline versus final published median (section 1 and
@@ -835,3 +839,123 @@ structural risk `source_symbol_table` did, and the note left in
 on `source_symbol_table` staying a whole-set query applies to these
 three queries as well, should any of them ever grow expensive enough to
 matter.
+
+# Addendum: Re-measurement After the Panic-Guard Fix
+
+Date: 2026-08-05
+Machine: reference machine used for this work, 10 cores
+Corpus: pinned PrestaShop comparison corpus, equalized file set (see
+section 1 above for method)
+
+## 31. Why a re-measurement was needed
+
+Section 27's published figure (5.522 s cold median, commit `ab7157a`)
+was recorded before the final whole-branch review's fix wave. Two
+commits landed after it:
+
+- `4c8947c` (`🐛 fix(cli): guard the item-tree prewarm against a panic`)
+  — the only behavioral commit of the two. The parallel `item_tree`
+  prewarm added by the fourth lever (section 23 above) ran outside every
+  per-file panic guard, so a panic during lowering would have emptied
+  the whole report instead of costing one file, same as any other
+  analysis path. This commit wraps the prewarm in the same `guarded
+  (file_id, …)` the per-file analysis already uses elsewhere, restoring
+  the containment that existed before the prewarm lever was introduced.
+- `d26d304` (`📝 fix(cli): correct stale comments left by the perf
+  work`) — comments, one needless `Arc` clone removed, and import-scope
+  unification. No behavior change.
+
+Because a behavioral commit landed after the published figure in
+section 27, that figure no longer describes the code on the branch, and
+the protocol was re-run on the final HEAD (`d26d304`) to publish a
+figure that does.
+
+## 32. Gate results
+
+- `cargo test --workspace`: exit 0, 2427 passed, 0 failed, 10 ignored.
+- `cargo clippy --workspace --all-targets -- -D warnings`: exit 0, no
+  warnings.
+- `cargo fmt --all -- --check`: exit 0.
+- `cargo xtask corpus`: exit 0, "the corpus report matches the committed
+  snapshot".
+- `cargo xtask mixed-rate`: exit 0, "the mixed-rate report matches the
+  committed baseline".
+
+Nothing was blessed. The corpus snapshot and the mixed-rate baseline
+both still matching, unchanged, is what establishes that the
+panic-guard fix changed no output: a `catch_unwind` placed on the
+non-unwinding path does not alter what gets analyzed, read, or
+reported, and these two gates are the evidence that it did not.
+
+## 33. The official protocol runs: three full repetitions on the final HEAD
+
+`cargo xtask benchmark` (method as in section 1: hyperfine, one untimed
+warmup plus 5 timed runs, `--prepare "rm -rf .celerrate"` before the
+warmup and before every timed run, plain `celerrate check .` without
+`--verbose`), run three times per the protocol, on commit `d26d304`.
+
+| Run | PHPStan cold | Celerrate cold | Ratio |
+| --- | ---: | ---: | ---: |
+| 1 | 32.419 s | 4.813 s | 6.7x |
+| 2 | 31.279 s | 4.764 s | 6.6x |
+| 3 | 36.204 s | 5.492 s | 6.6x |
+
+Taking the median across the three runs, per the protocol:
+
+| Scenario | Published median |
+| --- | ---: |
+| PHPStan cold | 32.419 s |
+| Celerrate cold | 4.813 s |
+| Cold ratio | 6.6x |
+
+## 34. Reading the difference from section 27 honestly
+
+Section 27's published figure was a Celerrate cold median of 5.522 s at
+`ab7157a`, ratio 6.8x. This re-measurement gives 4.813 s at `d26d304`,
+ratio 6.6x. It would be tempting to credit the panic-guard fix for the
+faster figure, but that reading does not hold up: `4c8947c` wraps an
+already-non-panicking code path in a `catch_unwind`, and a
+`catch_unwind` on the path that never unwinds is close to free on this
+platform. Adding a guard cannot make anything faster, so the fix is not
+a candidate explanation for the movement.
+
+The far more likely explanation is machine state, not code. PHPStan is
+an unchanged reference workload on the same corpus across both
+measurement sessions, run by the same protocol; it received no code
+change whatsoever between the two sessions. Its own median nonetheless
+moved from 37.467 s (section 27) to 32.419 s here, about 14 % faster
+with nothing in PHPStan or its corpus having changed. A reference
+workload that is entirely untouched by this branch moving by that much
+is direct evidence that the two sessions were not run under identical
+machine load, and it is the same kind of session-to-session variance
+this document has flagged repeatedly (sections 8, 14, 21, and 25 above)
+whenever a phase or a total moved without a corresponding code change
+to explain it.
+
+The honest reading follows the same discipline as the rest of this
+document: both sessions clear the 6 s target comfortably, all three
+runs in both section 27 and section 33 individually come in under 6 s,
+and the exact cold-median figure depends on machine load at
+measurement time rather than on the two commits that landed between the
+sessions. The conservative claim, spanning both measurement sessions
+on this reference machine, is that the cold median sits between
+roughly 4.8 s and 5.5 s, with a PHPStan ratio between 6.3x and 7.0x.
+Section 32's gate results, in particular the unchanged corpus snapshot
+and mixed-rate baseline, are what confirm the panic-guard fix itself
+changed no output; the change in the wall-clock figure is a property of
+the machine across two sessions, not of the fix.
+
+## 35. Updated published figure
+
+The current published figure, on the final HEAD (`d26d304`), superseding
+section 27:
+
+| Scenario | Published median |
+| --- | ---: |
+| PHPStan cold | 32.419 s |
+| Celerrate cold | 4.813 s |
+| Cold ratio | 6.6x |
+
+The 6 s target remains met, as it was at the section 27 measurement; the
+conservative range across both sessions, given in section 34 above, is
+4.8 s to 5.5 s.
