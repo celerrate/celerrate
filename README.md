@@ -111,16 +111,22 @@ names:
 | Warm, one function body edited | **0.444 s** |
 | Warm, one signature edited | 0.446 s |
 
+These medians predate the check-pipeline parallelization that also ships
+in 0.1.0, so they understate the shipping binary; see the protocol's
+Results section for the detail.
+
 All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. Peak resident memory on the same corpus is
 702 MiB cold and 351 MiB warm.
 
 On the pinned comparison corpus (6932 first-party PHP files), a cold
-`celerrate check` completes 2.9x faster than PHPStan at rule level 5 on
-the same file set (the three measured runs ranged 2.70x to 2.97x), using
-nearly 15x (14.9x) less CPU to do it: Celerrate is single-threaded today
-where PHPStan forks workers. The pinned protocol and the full numbers
-live in [benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
+`celerrate check` completes 8.01x faster than PHPStan at rule level 5 on
+the same file set (the three measured runs ranged 7.52x to 8.04x), using
+11.0x less CPU to do it. That CPU ratio is down from the 14.9x published
+before the check pipeline was parallelized: the wall-clock win was bought
+with Celerrate's own CPU, and both directions are published. The pinned
+protocol and the full numbers live in
+[benchmarks/PROTOCOL.md](benchmarks/PROTOCOL.md).
 
 ## What works today
 

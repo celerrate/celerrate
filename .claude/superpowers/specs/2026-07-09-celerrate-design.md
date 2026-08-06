@@ -583,22 +583,32 @@ Held in CI by benchmarks: at least ~20x faster than PHPStan on a cold full
 analysis, and sub-second incremental updates on single-file changes in a
 Symfony-sized project.
 
-Position at the end of the CLI product sub-project: the incremental target
-is met and published. The cold comparison is now measured, on a second,
-larger pinned corpus (issue #118): PrestaShop 9.0.3, 6932 first-party PHP
-files. On that corpus, at PHPStan rule level 5, Celerrate is 2.90x faster
-on the wall clock (the pooled median over twenty-four timed runs across
-three full runs) and consumes 14.9x less CPU (2026-08-03, the median of
-the three full runs' own CPU totals — hyperfine reports one CPU total
-per invocation, not per timed run, so the two columns do not pool the
-same way). The "at least ~20x faster" ambition above is not
-amended down to that figure: 62 % of Celerrate's measured wall clock is a
-quadratic did-you-mean pass in the presentation layer, not the analysis
-engine, and the engine itself runs at roughly 1.1 effective cores of 10.
-The measurement does not test the claim the ambition makes. Section 11 of
+Position at the end of the CLI product sub-project, re-measured after the
+check-pipeline performance work (issue #124): the incremental target is
+met and published. The cold comparison is re-measured on the same pinned
+corpus (issue #118): PrestaShop 9.0.3, 6932 first-party PHP files. On
+that corpus, at PHPStan rule level 5, Celerrate is now 8.01x faster on
+the wall clock (the pooled median over three full runs, a 6.87 % span
+across the per-run ratios) and consumes 11.0x less CPU (2026-08-06, the
+median of the three full runs' own CPU totals — hyperfine reports one
+CPU total per invocation, not per timed run, so the two columns do not
+pool the same way). The "at least ~20x faster" ambition above is still
+not amended down to that figure, but the two reasons the previous
+measurement gave for not testing it are both gone: the quadratic
+did-you-mean pass in the presentation layer is fixed, and the whole
+process now runs at 4.51 effective cores of 10 (22.0 s of CPU over
+4.874 s of wall clock), up from the 1.27 the superseded run measured the
+same way (17.0 s over 13.41 s) — still short of PHPStan's own 6.21.
+That leaves the remaining gap to ~20x without the
+explanation the previous measurement gave, and this measurement does not
+supply a new one: unclaimed parallelism (4.51 of 10 against PHPStan's
+6.21) plausibly accounts for part of it, but nothing measured here
+isolates how much, or rules other costs in or out. Section 11 of
 `.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`
-carries the evidence and the estimate of what removing that churn and
-parallelising the rest would do to the wall-clock ratio.
+carries the evidence for the earlier measurement and the estimate of what
+removing that churn and parallelising the rest would do to the
+wall-clock ratio — near 4.5-6 s, 6x-8x — which this measurement has
+since tested: 4.874 s, 8.01x, the top of that range.
 
 Published numbers follow a **pinned benchmark protocol**, committed to the
 repository with the harness: PHPStan version, rule level, result cache

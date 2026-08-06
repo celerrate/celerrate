@@ -1,10 +1,10 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Gates held, tag withheld (2026-08-03). Every closure gate below is
-held, including the published comparison. The `v0.1.0` tag is deliberately
-not taken: the measured ratio is not the performance this project is
-willing to ship as its 0.1. See the state of play.
+Status: Closed (v0.1.0, 2026-08-06). Every closure gate below is held,
+including the published comparison. The `v0.1.0` tag is taken by
+decision, not because the closure criterion's ~20x is met: the measured
+figure is 8.01x. See the state of play.
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -520,11 +520,11 @@ The order proposed to the planning stage (dependencies respected):
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
 
-## State of play (2026-08-01, updated 2026-08-03)
+## State of play (2026-08-01, updated 2026-08-06)
 
-Every closure gate is held, and the tag is still not taken. Those two
-facts sit together deliberately, and the second is a decision rather
-than an omission.
+Every closure gate is held, and the tag is taken. The two facts sit
+together deliberately: the tag follows by decision, not because the
+closure criterion is met.
 
 At the 2026-08-01 snapshot below, the product part was complete and the
 release part was not: two things from section 1 remained open, the
@@ -534,24 +534,31 @@ a benchmark corpus whose first-party code is large enough to separate
 two analyzers (issue #118).
 
 The first is resolved. The comparison is measured and published on a
-pinned corpus, and gate 7 is fully held (below). What it measured is
-2.90x on the wall clock and 14.9x on CPU consumed, against a closure
-criterion that names "at least ~20x PHPStan on a cold run" as the proof
-of speed.
+pinned corpus, and gate 7 is fully held (below). The first measurement
+(2026-08-03) found 2.90x on the wall clock and 14.9x on CPU consumed,
+against a closure criterion that names "at least ~20x PHPStan on a cold
+run" as the proof of speed. The tag was withheld against that figure:
+2.90x was not the performance this project was willing to publish as its
+0.1.
 
-The tag is therefore withheld by decision (2026-08-03): 2.90x is not the
-performance this project is willing to publish as its 0.1, and the
-CHANGELOG entry stays under `[Unreleased]` until it is. The measurement
-is not a verdict on the engine — 62 % of that wall clock is a quadratic
-did-you-mean pass in the presentation layer and the run uses roughly one
-core of ten, which is why the parent design's ambition stands unamended.
-It is a verdict on what is shippable today. The work that closes the gap
-is measured and tracked (issue #124), estimated at 6x-8x from the
-per-phase costs; the tag follows it.
+The work that closed the gap between that measurement and shippable —
+tracked on issue #124, the check-pipeline performance design
+(`.claude/superpowers/specs/2026-08-03-check-pipeline-performance-design.md`)
+— fixed the quadratic did-you-mean pass and parallelised the persist and
+file-read phases. Re-measured on the same corpus (2026-08-06): 8.01x on
+the wall clock, 11.0x on CPU consumed. **That is not ~20x.** The tag is
+taken anyway, by decision, not because the closure criterion is met: the
+user has chosen to publish 0.1 at the measured figure rather than
+continue withholding it. That is recorded here as a decision taken with
+the criterion unmet — the criterion's wording is not softened to fit,
+and 8.01x is not represented as satisfying "~20x" anywhere in this
+document. What remains of the gap to ~20x is addressed in the parent
+design (section 7); this spec closes without it.
 
-Nothing about the release machinery waits on that: the binaries, the
+Nothing about the release machinery waited on that: the binaries, the
 install script, the Composer bootstrap, the benchmark protocol and both
-CI gates are in place and exercised. Only the decision to publish is
+CI gates were in place and exercised before the figure moved. The
+decision to publish was the only piece deferred, and it is no longer
 deferred.
 
 The full local gate suite ran clean on the branch that carries the work,
@@ -564,11 +571,17 @@ phpdoc-cases --check`, `cargo xtask corpus`, `cargo xtask mixed-rate`,
 baseline are byte-identical to their committed files, as expected since
 no analysis code changed here.
 
-`cargo xtask benchmark --gate` is the one command in the suite that does
-not pass, and it is excluded from the list above rather than reported
-green. On the pinned corpus it measures a cold ratio between 1.4x and
-2.0x against its 20x floor, so it exits 1. Amendment 3 below records why
-that is neither a defect in the tool nor a defect in the harness.
+`cargo xtask benchmark --gate` was the one command in that run that did
+not pass, excluded from the list above rather than reported green: at
+the time, on the pinned corpus, it measured a cold ratio between 1.4x
+and 2.0x against its then-20x floor, so it exited 1. Amendment 3 below
+records why that was neither a defect in the tool nor a defect in the
+harness.
+
+That is no longer the state of the gate. Re-measured 2026-08-06, `cargo
+xtask benchmark --gate` holds: 8.01x against a floor now set at 4.0 (the
+dated update below records the change), so the command belongs beside
+the rest of the list above today.
 
 The nine closure gates from section 1, each with where it is held or what
 it waits on:
@@ -633,8 +646,11 @@ it waits on:
    absolute wall-clock threshold, so the sub-second incremental target is
    held by the protocol run on the reference machine and guarded
    structurally in CI by `cargo xtask bench --ceilings`. Amendment 3 then
-   removed the ratio assertion from CI as well, so no comparison runs
-   there at all today.
+   removed the ratio assertion from CI as well, so for as long as the
+   comparison was withheld no comparison ran there at all. That is no
+   longer the state of the gate: the dated updates below record its
+   return, and `cargo xtask benchmark --gate` runs weekly and as a
+   required job before every release today.
 2. Section 8's "on Packagist" is delivered through a subtree-split
    mirror, `celerrate/composer-bootstrap`, pushed by a release-workflow
    job, rather than by publishing the monorepo path directly.
@@ -676,3 +692,31 @@ section 11. The parent design's "at least ~20x faster than PHPStan"
 ambition stands unamended, for the reason recorded there: the measurement
 is of a single-threaded run whose wall clock is dominated by a quadratic
 presentation pass, so it does not test what the ambition claims.
+
+**Update (2026-08-06): the tag is taken, at a measured ratio below the
+ambition.** The check-pipeline performance work
+(`.claude/superpowers/specs/2026-08-03-check-pipeline-performance-design.md`,
+issue #124) fixed the quadratic `suggest::enrich` pass the update above
+attributes the wall clock to, and parallelised the persist-entry and
+file-read phases. Re-measured on the same pinned corpus, over three full
+runs: Celerrate is 8.01x faster on the wall clock (39.058 s against
+4.874 s) and consumes 11.0x less CPU (242.5 s against 22.0 s), against
+the 2.90x and 14.9x this design withheld the tag on. The whole process
+now runs at 4.51 effective cores of 10 (22.0 s of CPU over 4.874 s of
+wall clock), against PHPStan's 6.21, up from the 1.27 the superseded run
+measured the same way (17.0 s over 13.41 s); the "roughly 1.1" quoted
+elsewhere is a different base, not this one.
+`COLD_RATIO_FLOOR` moves from 1.4 to 4.0, comfortably under the
+measured 8.01x, so `cargo xtask benchmark --gate` continues to hold. The
+closure criterion, "at least ~20x PHPStan on a cold run," is **not**
+reached — 8.01x is not ~20x, and nothing in this update claims otherwise.
+The user has decided to publish `v0.1.0` at the measured figure rather
+than continue withholding it; that decision is recorded here as taken
+with the criterion unmet, not as the criterion being satisfied. The
+parent design's "at least ~20x faster than PHPStan" ambition stands
+unamended, but not for the reason given above: both causes cited there
+(the quadratic pass, the near-single-threaded run) are gone. The
+process's effective core count still trails PHPStan's, so unclaimed
+parallelism plausibly explains part of the remaining gap, but this
+measurement does not establish how much, or what else, if anything,
+accounts for the rest.

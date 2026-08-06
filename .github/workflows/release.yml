@@ -71,8 +71,8 @@ jobs:
           # The published protocol (benchmarks/PROTOCOL.md) measured
           # under PHP 8.5.0. Only PHPStan's side of the ratio moves
           # with the interpreter version - Celerrate does not run
-          # PHP - and the gate's floor (1.4x, against a measured
-          # ~2.9x) leaves enough margin to absorb the difference, so
+          # PHP - and the gate's floor (4.0x, against a measured
+          # ~8.01x) leaves enough margin to absorb the difference, so
           # this stays at the runner's readily available version
           # rather than chasing the protocol's exact one.
           php-version: "8.4"
