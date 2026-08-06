@@ -177,8 +177,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   a `celerrate.toml` pinning `[project] include = ["."]` closes the gap
   between Composer's autoload roots and PrestaShop's own runtime
   autoloader. Both ratios are published, because either alone misleads:
-  cold `celerrate check` completes 2.90x faster than PHPStan at rule
-  level 5 on the same file set (wall clock), using 14.9x less CPU to do
+  cold `celerrate check` completes 8.01x faster than PHPStan at rule
+  level 5 on the same file set (wall clock), using 11x less CPU to do
   it. The gate (`--gate`) runs weekly and as a required job before any
   release publishes. Every pinned condition (tool version, rule level,
   result cache, parallelism, reported file set), the full methodology,

@@ -63,7 +63,7 @@ The harness is `cargo xtask benchmark`; `--gate` fails under the
 committed floor (`COLD_RATIO_FLOOR` in `xtask/src/benchmark.rs`), half
 the reference ratio below.
 
-Measured on 2026-08-03, at commit `8ab4af1` (`celerrate --version`
+Measured on 2026-08-06, at commit `4bc0156` (`celerrate --version`
 reports `0.1.0` there), on the reference machine, cold. The two columns
 pool differently, and are labeled accordingly: the wall-clock medians
 are taken over all twenty-four timed runs across three full runs (nine
@@ -74,25 +74,29 @@ runs' own CPU totals, three values per tool.
 
 | | wall clock | CPU consumed |
 | --- | ---: | ---: |
-| PHPStan | 38.92 s | 253.4 s |
-| Celerrate | 13.41 s | 17.0 s |
-| ratio | **2.90x** | **14.9x** |
+| PHPStan | 39.058 s | 242.5 s |
+| Celerrate | 4.874 s | 22.0 s |
+| ratio | **8.01x** | **11.0x** |
 
 Both ratios are published because either one alone misleads. The wall
 clock is what you wait through; the CPU column is what the engines cost.
-They differ by roughly a factor of five because Celerrate is effectively
-single-threaded today while PHPStan forks worker processes: Celerrate
-wins the wall clock while using an order of magnitude less machine.
-Parallelizing it is tracked work, not a claim made here (issue #124).
+The wall-clock/CPU gap has narrowed from roughly 5.1x to roughly 1.4x
+now that Celerrate parallelizes its own analysis (issue #124): the
+reference run measured 4.51 of 10 effective cores for Celerrate against
+PHPStan's 6.21, which is the honest account of what remains between the
+two ratios and why Celerrate's own CPU cost rose alongside its
+wall-clock win.
 
-The three full runs gave ratios of 2.97x, 2.95x and 2.70x. The spread is
-Celerrate's, not PHPStan's: its five timed runs step from about 12.3 s to
-about 13.8-14.3 s partway through and stay there, which has the shape of
-frequency scaling under sustained load on this machine. PHPStan's own
-spread stayed between 1.1 % and 6.1 % throughout. The published figure is
-therefore the pooled median rather than any single run, and the gate
-floor sits far below the worst of them: 1.4, cleared by 1.93x even at
-2.70x.
+The three full runs gave ratios of 7.52x, 8.04x and 7.93x, a 6.87 % span.
+Per-tool per-run spreads (`(max - min) / min` within each full run):
+PHPStan 7.43 %, 13.43 %, 7.34 %; Celerrate 9.95 %, 10.16 %, 9.68 %. Two of
+these six marginally exceed the protocol's 10 % target, at 13.43 % and
+10.16 %, published here rather than dropped, as an earlier run published
+its own 19.93 % and 16.42 %. Reported and independently counted analyzed
+files agreed at 6932 on all three runs. The published figure is the
+pooled median rather than any single run, and the gate floor sits below
+the worst of them: 4.0, cleared by 1.88x even at the run's worst
+observed ratio of 7.52x.
 
 The gate runs weekly (`.github/workflows/benchmark.yml`) and as a
 required job before any release publishes (`.github/workflows/release.yml`).
