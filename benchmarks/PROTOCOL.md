@@ -95,11 +95,14 @@ PHPStan's fell. Parallelism is paid for in CPU, and that is what bought
 the wall clock. Both movements are recorded here: publishing only the
 column that improved would misrepresent the trade.
 
-This protocol's stability target is 10 %: a comparison is publishable
-when the ratio's span across the full runs stays under it, and each
-tool's own per-run spread (`(max - min) / min` over that run's timed
-runs) is measured against the same 10 % and reported whatever it comes
-out at.
+This protocol's stability target is 10 %, and it covers every timed
+figure the document publishes, the absolute scenarios under Results
+included. On a ratio it gates: a comparison is publishable when the
+ratio's span across the full runs stays under it. On a single tool's own
+timings, wherever in this document they appear, it is a reporting
+obligation rather than a gate: the per-run spread (`(max - min) / min`
+over that run's timed runs) is measured against the same 10 % and
+reported whatever it comes out at, over or under.
 
 The three full runs gave ratios of 7.52x, 8.04x and 7.93x, a 6.87 % span,
 which meets the target. Per-tool per-run spreads: PHPStan 7.43 %,
@@ -220,10 +223,16 @@ reconducted from the semantic core's closure budget.
 
 | Run | Peak RSS |
 | --- | --- |
-| Cold full | 702 MiB |
-| Warm no-change | 351 MiB |
+| Cold full | 723 MiB |
+| Warm no-change | 334 MiB |
 
-Within budget, no eviction configured.
+Within budget, no eviction configured. Against the 2026-08-01 run the
+cold figure rose 3.0 % (702 MiB to 723 MiB) and the warm figure fell
+4.8 % (351 MiB to 334 MiB). The cold rise is the expected price of the
+check-pipeline parallelization that ships in 0.1.0 (issue #124): running
+the pipeline in parallel keeps more work in flight at once, and the cold
+run is where that peak is paid. It is recorded here rather than left for
+a reader to discover as an unexplained regression.
 
 ## Why the analysis corpus cannot carry the comparison
 
@@ -233,11 +242,18 @@ project's own. At that size neither wall clock is decided by rule
 checking. PHPStan pays for the PHP interpreter's startup and its own
 bootstrapping; Celerrate pays for walking, parsing, and indexing the
 9396 vendor files it needs in order to resolve names. Measured on the
-machine named above, PHPStan's cold median lands near 2.6 s and
+machine named above on 2026-08-01, before the check-pipeline
+parallelization, PHPStan's cold median landed near 2.6 s and
 Celerrate's near 1.6 s, and three consecutive harness runs on that
 machine within one hour produced ratios of 1.4, 2.0, and 1.7. A figure
 that moves that far between runs, on fixed inputs, is measuring setup
-cost rather than either tool's throughput.
+cost rather than either tool's throughput. Celerrate's side of that
+observation has come down since: the scenario harness's own cold median
+on this corpus fell from 1.496 s to 0.714 s over the same change, so the
+comparison harness's figure will have moved with it, by how much this
+document has not measured. The PHPStan side has not been re-measured
+here either, so no current ratio is quoted; the instability is what the
+paragraph is for, and it is unaffected.
 
 The two workloads also differ in kind, not only in size. On this
 corpus Celerrate reports nothing at all and PHPStan reports five
@@ -302,39 +318,88 @@ and claim nothing about speed.
 
 ## Results
 
-Protocol run of 2026-08-01, at commit `9c24879`; the binary still
-reported `celerrate 0.0.3` there, because the run predates the version
-bump. It also predates the check-pipeline parallelization that ships in
-0.1.0 (issue #124), measured at `4bc0156` in the comparison above, which
-made cold runs substantially faster: the medians below therefore
-describe a slower binary than the one 0.1.0 ships and understate it by
-an amount this document has not measured. They are republished as they
-were taken rather than re-derived; re-measuring them at the shipping
-commit is a separate run this document does not yet carry. A single run
-of the harnesses; the raw exports live under `target/bench/` and
+Protocol run of 2026-08-06, at commit `a826408` on `main`, with the
+release binary reporting `celerrate 0.1.0`. Three full runs of
+`cargo xtask bench`, each separated by a settle pause, on a deliberately
+quieted machine. The published value is the pooled median over all timed
+runs of the three, exactly as the comparison above pools: fifteen timed
+runs for cold full, thirty for each warm scenario. `a826408` descends
+from the `4bc0156` the comparison above names by documentation and
+harness commits only, so both sets of figures describe the same analyzer
+binary. The raw exports live under `target/bench/` and
 `target/benchmark/` and are not committed:
 
 | Scenario | Median |
 | --- | --- |
-| Cold full | 1.496 s |
-| Warm no-change | 0.452 s |
-| Warm one-edit | 0.467 s |
-| Warm body-edit | 0.444 s |
-| Warm signature-edit | 0.446 s |
+| Cold full | 0.714 s |
+| Warm no-change | 0.376 s |
+| Warm one-edit | 0.401 s |
+| Warm body-edit | 0.385 s |
+| Warm signature-edit | 0.384 s |
+
+Three spreads describe this run, and they are not the same number.
+
+Run to run, the three full runs' own medians agree closely: cold full
+0.709, 0.711 and 0.717 s; warm no-change 0.377, 0.378 and 0.371 s; warm
+one-edit 0.405, 0.392 and 0.402 s; warm body-edit 0.386, 0.383 and
+0.387 s; warm signature-edit 0.387, 0.380 and 0.389 s. Median to median
+that is 1.1 % to 3.3 % across the five scenarios, and that is the
+stability this document claims for the published figures.
+
+Against the 10 % target the metric is the per-run `(max - min) / min`,
+reported here whatever it comes out at: cold full 6.64 %, 10.33 %,
+14.26 %; warm no-change 37.57 %, 6.63 %, 9.83 %; warm one-edit 9.92 %,
+7.16 %, 4.98 %; warm body-edit 6.08 %, 5.82 %, 12.06 %; warm
+signature-edit 2.43 %, 1.23 %, 9.23 %. Four of those fifteen exceed the
+target, published rather than dropped on the same principle the
+comparison applies to its own two: a subsidiary spread over target is a
+caveat on the figure, not grounds for hiding it. In each of the four the
+excess is one sample. Discarding only the slowest sample of each brings
+them to 3.43 %, 5.24 %, 9.80 % and 9.96 %, all inside the target, which
+is what "isolated outlier" means here and is the whole reason the
+aggregate is a median.
+
+Pooled across the three runs, minimum to maximum spans 14.5 % for cold
+full, 38.1 % for warm no-change, 11.3 % for warm one-edit, 12.2 % for
+warm body-edit and 10.3 % for warm signature-edit. That figure measures
+one sample against the fastest of the fifteen or thirty pooled; it is
+neither the run-to-run agreement above nor the per-run metric the target
+is defined over, and it must not be read as either.
+
+All three are published because each alone misleads. The median
+agreement quoted alone would hide the outliers; the pooled min-to-max
+alone would read as an instability the medians do not show; and the
+per-run spreads are the figure this protocol committed to report. The
+gap between them is exactly why the aggregate is a median rather than a
+mean or a range.
+
+These scenarios are short enough that a single busy core measurably
+moves them, which a reproducer should know before trusting a first
+result. An earlier attempt on the same day, taken while a runaway
+terminal process held one of the machine's ten cores, produced medians
+8 % to 30 % higher and spreads up to 207 %; it was discarded rather than
+published. Quiet the machine before timing, and read the spread as well
+as the median.
 
 The warm body-edit number is the published flagship; the README links
-here. The four warm medians sit within 25 ms of one another, which is
-about the run-to-run spread hyperfine reports for them on this
-machine: their ordering carries no signal, and no edit scenario is
-measurably more expensive than the no-change floor.
+here. The four warm medians sit within 25 ms of one another, comparable
+to the 23 ms the previous run reported and narrower than the pooled
+sample spread of any one of them: their ordering carries no signal, and
+no edit scenario is measurably more expensive than the no-change floor.
 
-The cold full median is the aggregate of five runs that included one
-2.804 s excursion, the usual first-run cold-cache behavior; the
-median is what this protocol publishes precisely so that a single
-excursion does not move the figure.
+The previous run recorded an excursion of the same kind, a single
+2.804 s sample against a 1.496 s median: the usual first-run cold-cache
+behavior, and the same phenomenon the four over-target spreads above are
+made of. It is a standing property of this measurement, not a defect of
+one run.
 
 Per-scenario cache statistics (one manual run each with
-`CELERRATE_CACHE_STATS=1`, recorded verbatim):
+`CELERRATE_CACHE_STATS=1`, recorded verbatim during the 2026-08-01 run
+at `9c24879` and not re-taken since). The hit, miss, and edge counts are
+expected to be structural, and so to hold unchanged for the shipping
+binary, but they have not been re-measured to confirm it. The trailing
+persist timings describe the binary of that run, not this one, and the
+parallelization changed the persist stage specifically:
 
 ```
 cold full:            cache: trees 0 hit / 9341 miss; members 0 hit / 9341 miss; verdicts 0 served / 0 discarded / 46 absent; typed 217 bodies, edges 794 declared / 25 inferred / 7 provider, verdicts 0 served / 46 recomputed; persist 4 written / 0 skipped / 0 failed, 292ms
@@ -353,10 +418,22 @@ diagnostic families and no inference. The 2026-07-18 run (commit
 body-edit 0.521 s, with the full type engine enabled: a 1.4x change
 against the previous cold number, the price of inference.
 
-This run records cold full 1.496 s, warm no-change 0.452 s, warm
-body-edit 0.444 s. Cold full is flat against the previous run, inside
-its spread, and warm body-edit came down from 0.521 s: the type
-engine's cost stopped growing between the two runs. The comparison the
-earlier runs pointed forward to is now published, on the separate
-corpus this document's own methodology requires: see
+The 2026-08-01 run (commit `9c24879`, a single run of the harnesses)
+recorded cold full 1.496 s, warm no-change 0.452 s, warm body-edit
+0.444 s. Cold full was flat against the previous run, inside its spread,
+and warm body-edit had come down from 0.521 s: the type engine's cost
+stopped growing between those two runs.
+
+This run records cold full 0.714 s, warm no-change 0.376 s, warm
+body-edit 0.385 s. Cold full is 2.10x faster than the previous run and
+the warm scenarios are 1.15x to 1.20x faster, from the check-pipeline
+parallelization that ships in 0.1.0 (issue #124) and landed between the
+two runs. The gain is lopsided and the document does not average it
+away: the cold path had a sequential item-tree demand and a sequential
+persist stage to remove, the warm path had almost none of that work
+left to remove, so the cold-to-warm ratio falls from 3.37x to 1.85x. A
+warm run is still the cheaper run, by less than it was, against a cold
+run that now costs under half what it did. The comparison the earlier
+runs pointed forward to is published, on the separate corpus this
+document's own methodology requires: see
 [Comparison corpus](#comparison-corpus), above.

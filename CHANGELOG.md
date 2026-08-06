@@ -333,7 +333,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   re-lowercasing the whole candidate pool per diagnostic. Together they
   take the cold run from 1.27 effective cores (17.0 s of CPU over 13.41 s
   of wall clock) to 4.51 effective cores of the reference machine's ten,
-  which is where the added CPU goes. The corpus snapshot and the
+  which is where the added CPU goes. Peak memory is the other price:
+  cold peak resident set on the symfony/demo analysis corpus rose from
+  702 MiB to 723 MiB, 3.0 %, because more work is in flight at once. It
+  stays far inside the protocol's 1536 MiB budget, and the warm peak
+  fell from 351 MiB to 334 MiB. The corpus snapshot and the
   type-precision baseline are unchanged throughout, which is what
   establishes that no suggestion, severity, span, or exit code moved.
 
