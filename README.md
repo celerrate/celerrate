@@ -7,8 +7,8 @@
 
 **An extremely fast, all-in-one toolchain for PHP, written in Rust.**
 
-Celerrate type-checks 1.3 million lines of PHP in 1.496 seconds
-cold, and in 0.444 seconds after you edit a function body. Measured
+Celerrate type-checks 1.3 million lines of PHP in 0.714 seconds
+cold, and in 0.385 seconds after you edit a function body. Measured
 end to end, [at the pinned protocol](benchmarks/PROTOCOL.md), which
 states the conditions.
 
@@ -97,27 +97,31 @@ What carries over, and what deliberately does not:
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/benchmark-dark.svg">
-  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of the median wall clock of full celerrate check runs on symfony/demo, linear scale: cold full analysis 1.496 seconds, warm with one function body edited 0.444 seconds">
+  <img src="assets/benchmark-light.svg" width="720" alt="Bar chart of the median wall clock of full celerrate check runs on symfony/demo, linear scale: cold full analysis 0.714 seconds, warm with one function body edited 0.385 seconds">
 </picture>
 
 Measured by the committed [benchmark protocol](benchmarks/PROTOCOL.md)
 on symfony/demo (9447 PHP files, 1302218 lines, vendor tree
 included), with type inference active, on the hardware the protocol
-names:
+names, pooled over three full runs:
 
 | Scenario | Median wall clock |
 | --- | --- |
-| Cold full analysis | 1.496 s |
-| Warm, one function body edited | **0.444 s** |
-| Warm, one signature edited | 0.446 s |
+| Cold full analysis | 0.714 s |
+| Warm, one function body edited | **0.385 s** |
+| Warm, one signature edited | 0.384 s |
 
-These medians predate the check-pipeline parallelization that also ships
-in 0.1.0, so they understate the shipping binary; see the protocol's
-Results section for the detail.
+The check-pipeline parallelization that also ships in 0.1.0 made the
+cold run 2.10x faster and the warm ones 1.15x to 1.20x faster, so the
+contrast between them narrowed: a cold run now costs 1.85x a warm one,
+where it cost 3.37x. The incremental path still wins, by less, against a
+cold path that is under half what it was.
 
 All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. Peak resident memory on the same corpus is
-702 MiB cold and 351 MiB warm.
+723 MiB cold and 334 MiB warm; the cold figure rose 3.0 % with the
+parallelization, which is what keeping more work in flight at once
+costs.
 
 On the pinned comparison corpus (6932 first-party PHP files), a cold
 `celerrate check` completes 8.01x faster than PHPStan at rule level 5 on
