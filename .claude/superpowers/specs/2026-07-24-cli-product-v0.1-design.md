@@ -571,11 +571,17 @@ phpdoc-cases --check`, `cargo xtask corpus`, `cargo xtask mixed-rate`,
 baseline are byte-identical to their committed files, as expected since
 no analysis code changed here.
 
-`cargo xtask benchmark --gate` is the one command in the suite that does
-not pass, and it is excluded from the list above rather than reported
-green. On the pinned corpus it measures a cold ratio between 1.4x and
-2.0x against its 20x floor, so it exits 1. Amendment 3 below records why
-that is neither a defect in the tool nor a defect in the harness.
+`cargo xtask benchmark --gate` was the one command in that run that did
+not pass, excluded from the list above rather than reported green: at
+the time, on the pinned corpus, it measured a cold ratio between 1.4x
+and 2.0x against its then-20x floor, so it exited 1. Amendment 3 below
+records why that was neither a defect in the tool nor a defect in the
+harness.
+
+That is no longer the state of the gate. Re-measured 2026-08-06, `cargo
+xtask benchmark --gate` holds: 8.01x against a floor now set at 4.0 (the
+dated update below records the change), so the command belongs beside
+the rest of the list above today.
 
 The nine closure gates from section 1, each with where it is held or what
 it waits on:
