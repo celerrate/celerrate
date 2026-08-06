@@ -132,7 +132,7 @@ jobs:
       # deploy keys, and an app token is owned by the organization, scoped
       # to the single mirror repository below, and expires with the job
       # instead of outliving it in a secret.
-      - uses: actions/create-github-app-token@v2
+      - uses: actions/create-github-app-token@v3
         id: mirror-token
         with:
           app-id: ${{ secrets.COMPOSER_SPLIT_APP_ID }}
