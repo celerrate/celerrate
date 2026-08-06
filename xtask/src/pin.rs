@@ -49,24 +49,32 @@ pub fn parse(text: &str) -> Result<Pin> {
 }
 
 /// Whether `directory` already carries a completed fetch. Guards on
-/// `.git`, the tree the fetch itself always produces (it inits a
-/// repository, fetches into it and checks it out), rather than on the
-/// snapshot directory's mere existence: a completed snapshot can be
-/// emptied from the outside and leave its directory behind. That is
-/// exactly what `Swatinem/rust-cache` does in continuous integration,
-/// where `target/` is cached and everything under it that is not a
-/// build artefact gets pruned, so every run after the first restored a
-/// hollow directory, skipped the fetch and left the stub compiler with
-/// no files to read (issue #128).
+/// `.git/HEAD` being a regular file, rather than on the snapshot
+/// directory's mere existence: a completed snapshot can be emptied from
+/// the outside and leave its directory behind. That is what
+/// `Swatinem/rust-cache` does in continuous integration, where
+/// `target/` is cached and everything under it that is not a build
+/// artefact gets pruned, so every run after the first restored a hollow
+/// directory, skipped the fetch and left the stub compiler with no
+/// files to read.
+///
+/// The guard must key on a *file*, and a continuous-integration run
+/// measured why: the pruning removes files and leaves the directory
+/// tree standing, so `.git` itself survived as an empty directory and
+/// an existence check on it still reported a complete snapshot.
+/// `.git/HEAD` is the file `git init` always produces, it lives inside
+/// `.git`, which every consumer already skips when walking a snapshot,
+/// and `is_file` rejects a hollow `HEAD/` directory the same pruning
+/// could leave behind.
 ///
 /// Non-emptiness would be the smaller guard, but a partially pruned
 /// tree would still pass it. Keying on the fetch's own artefact is the
 /// same choice `vendor_is_installed` makes with `vendor/autoload.php`,
-/// and it fails the same safe way: if `.git` is itself pruned from an
-/// otherwise intact snapshot, the cost is a redundant re-fetch, which
-/// is correct, merely slower.
+/// and it fails the same safe way: if `.git/HEAD` is itself pruned from
+/// an otherwise intact snapshot, the cost is a redundant re-fetch,
+/// which is correct, merely slower.
 fn snapshot_is_complete(directory: &Path) -> bool {
-    directory.join(".git").exists()
+    directory.join(".git/HEAD").is_file()
 }
 
 /// Fetches the pinned snapshot into `directory` if it does not already
@@ -176,10 +184,31 @@ mod tests {
     }
 
     #[test]
-    fn a_snapshot_directory_carrying_its_repository_is_considered_complete() {
+    fn a_snapshot_directory_left_with_a_hollow_repository_is_not_considered_complete() {
+        // The case the continuous-integration cache actually produces,
+        // and the one an earlier `.git` existence guard let through:
+        // the pruning removes files and leaves the directory tree, so
+        // `.git` itself survives as an empty directory.
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join(VALID_SHA);
+        std::fs::create_dir_all(directory.join(".git/objects")).unwrap();
+        assert!(!snapshot_is_complete(&directory));
+    }
+
+    #[test]
+    fn a_snapshot_directory_whose_head_is_a_directory_is_not_considered_complete() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join(VALID_SHA);
+        std::fs::create_dir_all(directory.join(".git/HEAD")).unwrap();
+        assert!(!snapshot_is_complete(&directory));
+    }
+
+    #[test]
+    fn a_snapshot_directory_carrying_its_checked_out_head_is_considered_complete() {
         let parent = tempfile::tempdir().unwrap();
         let directory = parent.path().join(VALID_SHA);
         std::fs::create_dir_all(directory.join(".git")).unwrap();
+        std::fs::write(directory.join(".git/HEAD"), format!("{VALID_SHA}\n")).unwrap();
         assert!(snapshot_is_complete(&directory));
     }
 
