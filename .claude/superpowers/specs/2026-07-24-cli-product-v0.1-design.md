@@ -705,7 +705,7 @@ the 2.90x and 14.9x this design withheld the tag on. The whole process
 now runs at 4.51 effective cores of 10 (22.0 s of CPU over 4.874 s of
 wall clock), against PHPStan's 6.21, up from the 1.27 the superseded run
 measured the same way (17.0 s over 13.41 s); the "roughly 1.1" quoted
-elsewhere is an engine-only figure and a different base, not this one.
+elsewhere is a different base, not this one.
 `COLD_RATIO_FLOOR` moves from 1.4 to 4.0, comfortably under the
 measured 8.01x, so `cargo xtask benchmark --gate` continues to hold. The
 closure criterion, "at least ~20x PHPStan on a cold run," is **not**
@@ -716,7 +716,7 @@ with the criterion unmet, not as the criterion being satisfied. The
 parent design's "at least ~20x faster than PHPStan" ambition stands
 unamended, but not for the reason given above: both causes cited there
 (the quadratic pass, the near-single-threaded run) are gone. The
-engine's effective core count still trails PHPStan's, so unclaimed
+process's effective core count still trails PHPStan's, so unclaimed
 parallelism plausibly explains part of the remaining gap, but this
 measurement does not establish how much, or what else, if anything,
 accounts for the rest.

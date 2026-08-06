@@ -111,6 +111,10 @@ names:
 | Warm, one function body edited | **0.444 s** |
 | Warm, one signature edited | 0.446 s |
 
+These medians predate the check-pipeline parallelization that also ships
+in 0.1.0, so they understate the shipping binary; see the protocol's
+Results section for the detail.
+
 All numbers are full CLI runs: process startup, cache loading,
 analysis, and reporting. Peak resident memory on the same corpus is
 702 MiB cold and 351 MiB warm.

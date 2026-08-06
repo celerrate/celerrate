@@ -331,11 +331,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   and in walk order. The did-you-mean search stops reallocating its
   edit-distance rows per candidate and stops re-folding and
   re-lowercasing the whole candidate pool per diagnostic. Together they
-  take the cold run from roughly one busy core to 4.51 effective cores of
-  the reference machine's ten, which is where the added CPU goes. The
-  corpus snapshot and the type-precision baseline are unchanged
-  throughout, which is what establishes that no suggestion, severity,
-  span, or exit code moved.
+  take the cold run from 1.27 effective cores (17.0 s of CPU over 13.41 s
+  of wall clock) to 4.51 effective cores of the reference machine's ten,
+  which is where the added CPU goes. The corpus snapshot and the
+  type-precision baseline are unchanged throughout, which is what
+  establishes that no suggestion, severity, span, or exit code moved.
 
 ### Fixed
 
