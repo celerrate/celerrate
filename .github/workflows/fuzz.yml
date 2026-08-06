@@ -112,7 +112,7 @@ jobs:
       - name: Cache the cargo-fuzz binary
         if: ${{ env.RUN_FUZZ == 'true' }}
         id: cargo-fuzz-cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cargo/bin/cargo-fuzz
           # Bump the key suffix to pick up a newer cargo-fuzz release.
@@ -126,7 +126,7 @@ jobs:
       # committed seeds under fuzz/corpus/<target> remain the floor.
       - name: Restore the accumulated corpus
         if: ${{ env.RUN_FUZZ == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fuzz/corpus
           key: fuzz-corpus-${{ runner.os }}-${{ github.run_id }}

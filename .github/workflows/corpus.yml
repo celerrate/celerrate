@@ -89,7 +89,7 @@ jobs:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         uses: Swatinem/rust-cache@v2
       - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
@@ -106,7 +106,7 @@ jobs:
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
@@ -122,7 +122,7 @@ jobs:
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
@@ -141,7 +141,7 @@ jobs:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         uses: Swatinem/rust-cache@v2
       - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
@@ -164,7 +164,7 @@ jobs:
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: target/corpus
           key: corpus-${{ hashFiles('xtask/corpus.pin') }}
@@ -184,7 +184,7 @@ jobs:
       - if: ${{ needs.changes.outputs.code == 'true' }}
         uses: Swatinem/rust-cache@v2
       - if: ${{ needs.changes.outputs.code == 'true' }}
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: target/phpdoc-parser
           key: phpdoc-parser-${{ hashFiles('xtask/phpdoc-parser.pin') }}
