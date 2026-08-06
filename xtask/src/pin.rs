@@ -48,14 +48,41 @@ pub fn parse(text: &str) -> Result<Pin> {
     Ok(Pin { repository, commit })
 }
 
-/// Fetches the pinned snapshot into `directory` if it is not already
-/// present. The checkout lands in a staging directory first and is
-/// renamed only when complete, so an interrupted fetch never
-/// masquerades as a snapshot.
+/// Whether `directory` already carries a completed fetch. Guards on
+/// `.git`, the tree the fetch itself always produces (it inits a
+/// repository, fetches into it and checks it out), rather than on the
+/// snapshot directory's mere existence: a completed snapshot can be
+/// emptied from the outside and leave its directory behind. That is
+/// exactly what `Swatinem/rust-cache` does in continuous integration,
+/// where `target/` is cached and everything under it that is not a
+/// build artefact gets pruned, so every run after the first restored a
+/// hollow directory, skipped the fetch and left the stub compiler with
+/// no files to read (issue #128).
+///
+/// Non-emptiness would be the smaller guard, but a partially pruned
+/// tree would still pass it. Keying on the fetch's own artefact is the
+/// same choice `vendor_is_installed` makes with `vendor/autoload.php`,
+/// and it fails the same safe way: if `.git` is itself pruned from an
+/// otherwise intact snapshot, the cost is a redundant re-fetch, which
+/// is correct, merely slower.
+fn snapshot_is_complete(directory: &Path) -> bool {
+    directory.join(".git").exists()
+}
+
+/// Fetches the pinned snapshot into `directory` if it does not already
+/// carry a completed fetch. The checkout lands in a staging directory
+/// first and is renamed only when complete, so an interrupted fetch
+/// never masquerades as a snapshot.
 pub fn fetch_snapshot(pin: &Pin, directory: &Path) -> Result<()> {
-    if directory.exists() {
+    if snapshot_is_complete(directory) {
         println!("snapshot already present at {}", directory.display());
         return Ok(());
+    }
+    // An incomplete snapshot is removed rather than fetched into: the
+    // rename below needs a free destination, and whatever survived the
+    // pruning must not linger beside the fresh checkout.
+    if directory.exists() {
+        std::fs::remove_dir_all(directory)?;
     }
     let staging = directory.with_file_name(format!("{}.staging", pin.commit));
     if staging.exists() {
@@ -96,7 +123,7 @@ fn run_git(directory: &Path, arguments: &[&str]) -> Result<()> {
 mod tests {
     #![allow(clippy::unwrap_used)]
 
-    use super::parse;
+    use super::{Pin, fetch_snapshot, parse, snapshot_is_complete};
 
     const VALID_SHA: &str = "0123456789abcdef0123456789abcdef01234567";
 
@@ -133,5 +160,48 @@ mod tests {
     #[test]
     fn unknown_keys_are_rejected_to_catch_typos() {
         assert!(parse(&format!("repo = r\ncommit = {VALID_SHA}")).is_err());
+    }
+
+    #[test]
+    fn a_snapshot_directory_stripped_of_its_checkout_is_not_considered_complete() {
+        // What the continuous-integration cache does to a snapshot:
+        // `Swatinem/rust-cache` prunes everything under `target/` that
+        // is not a build artefact, which empties the snapshot while
+        // leaving the directory behind. Guarding on the directory alone
+        // would then trust an empty tree forever.
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join(VALID_SHA);
+        std::fs::create_dir_all(&directory).unwrap();
+        assert!(!snapshot_is_complete(&directory));
+    }
+
+    #[test]
+    fn a_snapshot_directory_carrying_its_repository_is_considered_complete() {
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join(VALID_SHA);
+        std::fs::create_dir_all(directory.join(".git")).unwrap();
+        assert!(snapshot_is_complete(&directory));
+    }
+
+    #[test]
+    fn an_incomplete_snapshot_directory_is_removed_and_re_fetched() {
+        // Proves the guard does not return early on a stripped
+        // directory: the fetch is attempted (and fails, the repository
+        // being unreachable), and the stale directory is gone rather
+        // than fetched into.
+        let parent = tempfile::tempdir().unwrap();
+        let directory = parent.path().join(VALID_SHA);
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("leftover.txt"), "stale").unwrap();
+        let pin = Pin {
+            repository: parent
+                .path()
+                .join("absent-repository")
+                .display()
+                .to_string(),
+            commit: VALID_SHA.to_owned(),
+        };
+        assert!(fetch_snapshot(&pin, &directory).is_err());
+        assert!(!directory.exists());
     }
 }
