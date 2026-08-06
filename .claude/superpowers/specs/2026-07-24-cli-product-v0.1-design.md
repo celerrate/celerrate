@@ -646,8 +646,11 @@ it waits on:
    absolute wall-clock threshold, so the sub-second incremental target is
    held by the protocol run on the reference machine and guarded
    structurally in CI by `cargo xtask bench --ceilings`. Amendment 3 then
-   removed the ratio assertion from CI as well, so no comparison runs
-   there at all today.
+   removed the ratio assertion from CI as well, so for as long as the
+   comparison was withheld no comparison ran there at all. That is no
+   longer the state of the gate: the dated updates below record its
+   return, and `cargo xtask benchmark --gate` runs weekly and as a
+   required job before every release today.
 2. Section 8's "on Packagist" is delivered through a subtree-split
    mirror, `celerrate/composer-bootstrap`, pushed by a release-workflow
    job, rather than by publishing the monorepo path directly.
@@ -698,9 +701,12 @@ attributes the wall clock to, and parallelised the persist-entry and
 file-read phases. Re-measured on the same pinned corpus, over three full
 runs: Celerrate is 8.01x faster on the wall clock (39.058 s against
 4.874 s) and consumes 11.0x less CPU (242.5 s against 22.0 s), against
-the 2.90x and 14.9x this design withheld the tag on. The engine now runs
-at 4.51 effective cores of 10, against PHPStan's 6.21, up from roughly
-1.1. `COLD_RATIO_FLOOR` moves from 1.4 to 4.0, comfortably under the
+the 2.90x and 14.9x this design withheld the tag on. The whole process
+now runs at 4.51 effective cores of 10 (22.0 s of CPU over 4.874 s of
+wall clock), against PHPStan's 6.21, up from the 1.27 the superseded run
+measured the same way (17.0 s over 13.41 s); the "roughly 1.1" quoted
+elsewhere is an engine-only figure and a different base, not this one.
+`COLD_RATIO_FLOOR` moves from 1.4 to 4.0, comfortably under the
 measured 8.01x, so `cargo xtask benchmark --gate` continues to hold. The
 closure criterion, "at least ~20x PHPStan on a cold run," is **not**
 reached — 8.01x is not ~20x, and nothing in this update claims otherwise.

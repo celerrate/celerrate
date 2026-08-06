@@ -84,19 +84,33 @@ The wall-clock/CPU gap has narrowed from roughly 5.1x to roughly 1.4x
 now that Celerrate parallelizes its own analysis (issue #124): the
 reference run measured 4.51 of 10 effective cores for Celerrate against
 PHPStan's 6.21, which is the honest account of what remains between the
-two ratios and why Celerrate's own CPU cost rose alongside its
-wall-clock win.
+two ratios.
 
-The three full runs gave ratios of 7.52x, 8.04x and 7.93x, a 6.87 % span.
-Per-tool per-run spreads (`(max - min) / min` within each full run):
-PHPStan 7.43 %, 13.43 %, 7.34 %; Celerrate 9.95 %, 10.16 %, 9.68 %. Two of
-these six marginally exceed the protocol's 10 % target, at 13.43 % and
-10.16 %, published here rather than dropped, as an earlier run published
-its own 19.93 % and 16.42 %. Reported and independently counted analyzed
-files agreed at 6932 on all three runs. The published figure is the
-pooled median rather than any single run, and the gate floor sits below
-the worst of them: 4.0, cleared by 1.88x even at the run's worst
-observed ratio of 7.52x.
+Against the run this one supersedes (2026-08-03: PHPStan 38.92 s wall
+and 253.4 s CPU, Celerrate 13.41 s wall and 17.0 s CPU, ratios 2.90x and
+14.9x), the two columns moved in opposite directions. The wall-clock
+ratio rose from 2.90x to 8.01x; the CPU ratio fell from 14.9x to 11.0x,
+because Celerrate's own CPU consumption rose from 17.0 s to 22.0 s while
+PHPStan's fell. Parallelism is paid for in CPU, and that is what bought
+the wall clock. Both movements are recorded here: publishing only the
+column that improved would misrepresent the trade.
+
+This protocol's stability target is 10 %: a comparison is publishable
+when the ratio's span across the full runs stays under it, and each
+tool's own per-run spread (`(max - min) / min` over that run's timed
+runs) is measured against the same 10 % and reported whatever it comes
+out at.
+
+The three full runs gave ratios of 7.52x, 8.04x and 7.93x, a 6.87 % span,
+which meets the target. Per-tool per-run spreads: PHPStan 7.43 %,
+13.43 %, 7.34 %; Celerrate 9.95 %, 10.16 %, 9.68 %. Two of these six
+marginally exceed the 10 % target, at 13.43 % and 10.16 %, published
+here rather than dropped: a subsidiary spread over target is a caveat on
+the figure, not grounds for hiding it. Reported and independently
+counted analyzed files agreed at 6932 on all three runs. The published
+figure is the pooled median rather than any single run, and the gate
+floor sits below the worst of them: 4.0, cleared by 1.88x even at the
+run's worst observed ratio of 7.52x.
 
 The gate runs weekly (`.github/workflows/benchmark.yml`) and as a
 required job before any release publishes (`.github/workflows/release.yml`).
@@ -288,10 +302,16 @@ and claim nothing about speed.
 
 ## Results
 
-Protocol run of 2026-08-01, at commit `9c24879`, which is the code
-that becomes 0.1.0; the binary still reported `celerrate 0.0.3` there,
-because the run predates the version bump. A single run of the
-harnesses; the raw exports live under `target/bench/` and
+Protocol run of 2026-08-01, at commit `9c24879`; the binary still
+reported `celerrate 0.0.3` there, because the run predates the version
+bump. It also predates the check-pipeline parallelization that ships in
+0.1.0 (issue #124), measured at `4bc0156` in the comparison above, which
+made cold runs substantially faster: the medians below therefore
+describe a slower binary than the one 0.1.0 ships and understate it by
+an amount this document has not measured. They are republished as they
+were taken rather than re-derived; re-measuring them at the shipping
+commit is a separate run this document does not yet carry. A single run
+of the harnesses; the raw exports live under `target/bench/` and
 `target/benchmark/` and are not committed:
 
 | Scenario | Median |

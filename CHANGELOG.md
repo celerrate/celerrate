@@ -180,7 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   between Composer's autoload roots and PrestaShop's own runtime
   autoloader. Both ratios are published, because either alone misleads:
   cold `celerrate check` completes 8.01x faster than PHPStan at rule
-  level 5 on the same file set (wall clock), using 11x less CPU to do
+  level 5 on the same file set (wall clock), using 11.0x less CPU to do
   it. The gate (`--gate`) runs weekly and as a required job before any
   release publishes. Every pinned condition (tool version, rule level,
   result cache, parallelism, reported file set), the full methodology,
@@ -315,21 +315,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   framework.
 - `celerrate check` is substantially faster on a cold run, with the
   diagnostics unchanged: on the pinned PrestaShop comparison corpus the
-  cold median falls from 14.1 s to 4.8 s and the ratio against PHPStan
-  rises from 3.1x to 6.6x. Four changes carry it. The item trees are now
-  demanded in parallel before the analysis fan-out, because the
-  whole-project symbol table parses every analyzed file in a sequential
-  loop and was first demanded from inside the fan-out, leaving one worker
-  parsing while the rest blocked; this was the largest single win and
-  lifted process CPU use from about 290 % to about 420 % on ten cores.
-  The persist stage's per-file conversion to stored trees and verdicts
-  fans out, as do the walk's file reads, both cloning a database handle
-  per task on the calling thread and keeping every mutation serial and in
-  walk order. The did-you-mean search stops reallocating its edit-distance
-  rows per candidate and stops re-folding and re-lowercasing the whole
-  candidate pool per diagnostic. The corpus snapshot and the type-precision
-  baseline are unchanged throughout, which is what establishes that no
-  suggestion, severity, span, or exit code moved.
+  cold median falls from 13.41 s to 4.874 s, the two figures the pinned
+  benchmark protocol published before and after this work, and the ratios
+  they produce against PHPStan are the 8.01x wall clock and 11.0x CPU
+  stated above. That CPU ratio is down from the 14.9x published before:
+  Celerrate's own CPU consumption rose from 17.0 s to 22.0 s, which is
+  what the wall-clock win was bought with. Four changes carry it. The
+  item trees are now demanded in parallel before the analysis fan-out,
+  because the whole-project symbol table parses every analyzed file in a
+  sequential loop and was first demanded from inside the fan-out, leaving
+  one worker parsing while the rest blocked; this was the largest single
+  win. The persist stage's per-file conversion to stored trees and
+  verdicts fans out, as do the walk's file reads, both cloning a database
+  handle per task on the calling thread and keeping every mutation serial
+  and in walk order. The did-you-mean search stops reallocating its
+  edit-distance rows per candidate and stops re-folding and
+  re-lowercasing the whole candidate pool per diagnostic. Together they
+  take the cold run from roughly one busy core to 4.51 effective cores of
+  the reference machine's ten, which is where the added CPU goes. The
+  corpus snapshot and the type-precision baseline are unchanged
+  throughout, which is what establishes that no suggestion, severity,
+  span, or exit code moved.
 
 ### Fixed
 

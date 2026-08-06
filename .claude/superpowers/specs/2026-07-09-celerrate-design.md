@@ -595,9 +595,11 @@ CPU total per invocation, not per timed run, so the two columns do not
 pool the same way). The "at least ~20x faster" ambition above is still
 not amended down to that figure, but the two reasons the previous
 measurement gave for not testing it are both gone: the quadratic
-did-you-mean pass in the presentation layer is fixed, and the engine now
-runs at 4.51 effective cores of 10, up from roughly 1.1 — still short of
-PHPStan's own 6.21. That leaves the remaining gap to ~20x without the
+did-you-mean pass in the presentation layer is fixed, and the whole
+process now runs at 4.51 effective cores of 10 (22.0 s of CPU over
+4.874 s of wall clock), up from the 1.27 the superseded run measured the
+same way (17.0 s over 13.41 s) — still short of PHPStan's own 6.21.
+That leaves the remaining gap to ~20x without the
 explanation the previous measurement gave, and this measurement does not
 supply a new one: unclaimed parallelism (4.51 of 10 against PHPStan's
 6.21) plausibly accounts for part of it, but nothing measured here
