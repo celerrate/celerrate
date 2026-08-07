@@ -1846,9 +1846,13 @@ clock (9.79 s of the 10.08 s median) despite a walked file count
 count* while doing so is only **1.93**, the lowest of the four, not the
 highest: it was not competing harder for cores than the others, it had
 less parallel work available to fill them with. Every partition in this
-table sits between 1.93 and 2.17 effective cores out of ten available,
-average 4.32 for the group across the three counted repetitions (from
-the table above). **Cores were never the contended resource here.** A
+supplementary run sits between 1.93 and 2.17 effective cores out of ten
+available. At the group level, across the three counted repetitions (the
+table above), effective cores are 3.99, 4.33 and 4.32, a mean of **4.21**
+(the group's median-wall-clock repetition happens to read 4.32 as well,
+which is a coincidence of these particular three numbers, not the same
+statistic as the mean; both are reported here so neither is mistaken for
+the other). **Cores were never the contended resource here.** A
 process given the whole ten-core machine to itself and running at fewer
 than two effective cores is parallelism-starved, not core-starved;
 oversubscription (forty rayon worker threads across four processes
@@ -2033,67 +2037,174 @@ vendor content it carries needed those threads to stay cheap.
 
 ### The core-seconds comparison, and the bound
 
-| Configuration | Threads (total across the group) | Wall clock (median) | Core-seconds (median-wall-clock repetition) | Core-seconds range | Ratio to the single-process control |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| Single process (control) | 10 | 4.62 s | 21.71 | 20.38 to 22.11 | 1.00x |
-| Shared-nothing, `RAYON_NUM_THREADS=2` | 8 | 6.93 s | 31.77 | 31.01 to 32.29 | 1.46x |
-| Shared-nothing, `RAYON_NUM_THREADS=3` | 12 | 6.94 s | 38.26 | 36.83 to 38.26 | 1.76x |
-| Shared-nothing, default (~10 per process) | ~40 | 10.08 s | 43.53 | 41.57 to 43.53 | 2.00x |
+The first three data rows below share one partitioning (the rebalanced
+split) and vary only the thread budget, so the thread budget is the
+sole variable across them. The fourth row is the original, file-count-
+balanced split at the same unrestricted thread budget as the third; it
+is not a fourth point on the same sweep, because it changes which files
+sit in which process as well as reporting on the same thread budget, and
+is kept separate for that reason. Three further cold repetitions of the
+unrestricted default configuration on the rebalanced partitions were run
+specifically to give the sweep a same-partitioning fourth point:
 
-Every configuration tested burns more total processor time than the
-single process, and the excess grows monotonically with the thread
-budget given to each worker: 1.46x at two threads per process (fewer
-total threads across the whole group than the single process uses by
-itself), 1.76x at three, 2.00x at the unrestricted default. That
-progression is consistent with the mechanism named above: each process
-pays a share of section 5's intra-process fan-out growth scaled by its
-own thread count, and no thread budget tested removes it, only shrinks
-it. Isolated workers do not escape the work expansion section 5
-measured inside a single process; they carry a smaller copy of it into
-every worker that runs with more than one thread.
+```
+rep1: real 6.66  user 30.30  sys 17.09  (47.39 core-s)
+rep2: real 6.27  user 29.73  sys 13.83  (43.56 core-s)
+rep3: real 6.43  user 30.16  sys 14.50  (44.66 core-s)   <- median wall clock
+```
 
-Every configuration is also slower in wall clock than the control: 6.93
-to 6.94 s at eight and twelve threads, 10.08 s at the unrestricted
-default, against the control's 4.62 s (this session's open control) to
-4.79 s (this session's close control, below) and section 4's 4.57 s
-cross-session anchor. Restricting the thread budget shrinks the
-processor-work excess, as intended, but does not close the wall-clock
-gap, because it does not fix the partition imbalance the rebalancing
-section already flagged as unresolved at low thread counts: partition 1
-alone takes 6.92 to 6.93 s at both restricted budgets, essentially the
-whole group's wall clock.
+| Configuration | Partitioning | Threads (total) | Wall clock (median) | Core-seconds (median-wall-clock repetition) | Core-seconds range | Ratio to the single-process control |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| Single process (control) | n/a | 10 | 4.62 s | 21.71 | 20.38 to 22.11 | 1.00x |
+| Shared-nothing, `RAYON_NUM_THREADS=2` | rebalanced | 8 | 6.93 s | 31.77 | 31.01 to 32.29 | 1.46x |
+| Shared-nothing, `RAYON_NUM_THREADS=3` | rebalanced | 12 | 6.94 s | 38.26 | 36.83 to 38.26 | 1.76x |
+| Shared-nothing, default | rebalanced | ~40 | 6.43 s | 44.66 | 43.56 to 47.39 | 2.06x |
+| Shared-nothing, default | original (file-count) split | ~40 | 10.08 s | 43.53 | 41.57 to 43.53 | 2.00x |
+
+Across the three same-partitioning rows, the excess grows monotonically
+with the thread budget given to each worker: 1.46x at two threads per
+process (fewer total threads across the whole group than the single
+process uses by itself), 1.76x at three, 2.06x at the unrestricted
+default, with the thread budget as the only variable that changed
+between them. That progression is consistent with the mechanism named
+above: each process pays a share of section 5's intra-process fan-out
+growth scaled by its own thread count, and no thread budget tested
+removes it, only shrinks it.
+
+The fourth row shows something the three-row sweep alone could not: the
+original split's default-configuration core-seconds (43.53) and the
+rebalanced split's (44.66) are close enough to overlap at their nearer
+edges (43.53 against 43.56), despite the two partitionings sending
+different files to different processes. **Total processor-seconds is
+largely independent of how the corpus is divided into four processes;
+it tracks the thread budget each process is given, not which files it
+was given.** Wall clock is the opposite: at the same unrestricted
+thread budget, the original split's median wall clock (10.08 s) is 57 %
+higher than the rebalanced split's (6.43 s), because wall clock is set
+by whichever single partition finishes last, which is exactly the
+quantity the rebalance targeted and the file-count split did not. The
+core-seconds leg of this section's conclusion is therefore largely
+independent of how well these four partitions happen to be balanced;
+the wall-clock leg is not, and is the weaker of the two for that reason.
+
+Every configuration is also slower in wall clock than the control: 6.43
+to 6.94 s at the rebalanced partitions across all three thread budgets,
+10.08 s at the original split's default budget, against the control's
+4.62 s (this session's open control) to 4.79 s (this session's close
+control, below) and section 4's 4.57 s cross-session anchor. On the
+rebalanced partitions specifically, restricting the thread budget shrinks
+the processor-work excess, as intended, but actually makes the wall
+clock slightly worse, not merely fails to improve it: 6.93 to 6.94 s at
+eight and twelve threads against 6.43 s at the unrestricted default,
+because it does not fix the partition imbalance the rebalancing section
+already flagged as unresolved at low thread counts, and giving each
+process fewer threads makes that dominating partition's own content take
+longer to finish: partition 1 alone takes 6.92 to 6.93 s at both
+restricted budgets, essentially the whole group's wall clock, against
+6.42 s for the same partition at the unrestricted default.
 
 **An idealized wall-clock floor, computed the same way section 7 derives
-a floor from measured phase costs**, divides the default configuration's
-median core-seconds (43.53) by the machine's ten physical cores:
-43.53 / 10 = **4.35 s**. Against the control's 4.62 to 4.79 s range, that
-is an upper bound on the achievable gain of only a few percent, not the
-multiple the raw wall-clock comparison alone would suggest. But this
-floor is idealized in a way neither restricted-thread configuration
-actually achieves: it assumes the default configuration's total
-processor work could be redistributed perfectly across all ten cores
-with no partition boundary and no scheduling overhead, which is not what
-a fixed-per-process, shared-nothing architecture does. The
-`RAYON_NUM_THREADS=2` configuration, built specifically to test whether
-a lower thread budget could approach or beat this floor, produced a
-*lower* idealized floor (31.77 / 10 = 3.18 s) but a *higher* actual wall
-clock (6.93 s) than the default configuration's own idealized floor,
-because restricting threads did not fix which partition dominates.
+a floor from measured phase costs**, divides the rebalanced default
+configuration's median core-seconds (44.66) by the machine's ten
+physical cores: 44.66 / 10 = **4.47 s**. Against the control's 4.62 to
+4.79 s range, that is an upper bound on the achievable gain of only a
+few percent, not the multiple the raw wall-clock comparison for the
+original split alone would suggest. But this floor is idealized in a way
+no configuration actually measured here achieves: it assumes the default
+configuration's total processor work could be redistributed perfectly
+across all ten cores with no partition boundary and no scheduling
+overhead, which is not what a fixed-per-process, shared-nothing
+architecture does. The `RAYON_NUM_THREADS=2` configuration, built
+specifically to test whether a lower thread budget could approach or
+beat this floor, produced a *lower* idealized floor (31.77 / 10 = 3.18 s)
+but a *higher* actual wall clock (6.93 s), because restricting threads
+did not fix which partition dominates.
 
-**The bound, stated once, plainly: this architectural option is bounded
-at no gain.** Every thread budget measured, from two threads per worker
-(fewer total threads than the control uses alone) up to the unrestricted
-default, burns more total processor-seconds than the single process and
-takes longer in wall clock to finish. The idealized 4.35 s floor is the
-most favourable number anywhere in this section, and it is a hypothetical
-that no measured configuration reaches, not a result. The campaign's
-answer for a PHPStan-style shared-nothing architecture on this corpus
-and machine is that it does not show a processor-work or wall-clock
-advantage over the existing single-process design at any thread budget
-this section tested; it reproduces a share of section 5's fan-out cost
-growth in every worker that runs with more than one thread, and the
-share shrinks with the thread budget without ever reaching zero or
-turning into a net gain.
+**The two caveats the brief requires, corrected for direction.** An
+earlier draft of this section stated both caveats below inflate the
+shared-nothing figures and therefore make the "no gain" verdict
+optimistic. That direction is backwards for the second caveat, and this
+draft corrects it. First, this measurement excludes the merge and
+determinism costs a real shared-nothing implementation would have to
+pay: reconciling four independently produced diagnostic sets into one
+coherent report, and guaranteeing the merged result is deterministic and
+independent of which partition finishes first, are real engineering
+costs this measurement does not include. That omission understates what
+a real implementation would cost, which is conservative in the
+direction of "no gain": if anything, a real implementation would show a
+larger deficit than measured here, not a smaller one. Second, each of
+the four processes redundantly pays its own stub loading and process
+startup: the fixed process cost section 2 measured (19.6 ms on an empty
+project) is far smaller than what this corpus's own Composer and
+autoload discovery costs on every partition; the diagnostic table above
+puts the solo floor for cheap content at roughly 4.8 to 5.0
+core-seconds per process (`vendor/symfony` 4.98, `admin-dev` 4.84,
+partition 3's small-vendor remainder 4.90). A single process pays that
+floor once; four shared-nothing processes pay it four times, three of
+those payments being pure redundancy rather than architecture-intrinsic
+work. Three redundant payments at roughly 4.9 core-seconds each are
+about **14.7 core-seconds**, against the original split's total
+processor-work excess of 43.53 − 21.71 = **21.82 core-seconds**: on this
+estimate, **roughly two thirds of the measured excess is redundant
+startup paid four times over, not work genuinely expanded by running
+under isolated workers.** The residual, after subtracting that estimate,
+is about 21.82 − 14.7 ≈ 7.1 core-seconds, or a ratio of about **1.33x**
+rather than 2.00x. This second caveat therefore makes the measured
+result *pessimistic* about the architecture's intrinsic prospects, the
+opposite of the first caveat and the opposite of what the earlier draft
+claimed: a real implementation that amortizes startup across many runs
+(a persistent worker pool rather than a fresh process per run, for
+instance) would likely show a substantially smaller processor-work
+deficit than the roughly 2x this section's raw numbers report, though
+this section did not measure such a configuration and the 1.33x
+residual is an estimate built from solo-probe floors, not a fourth
+measured data point in the sweep above.
+
+**A third caveat this measurement warrants.** Partitioning breaks
+cross-partition name resolution: each partition's process only ever
+sees its own slice of the corpus, so a class in one partition that
+extends a class physically walked into another is, from the first
+process, an unresolved symbol exactly as if that class did not exist in
+the project at all. The four processes are therefore not doing the same
+analysis the single process does; they are doing four smaller, mutually
+blind analyses whose diagnostics this section never attempted to
+reconcile or compare against the single-process run's output. Unlike the
+second caveat above, this one pulls in the same direction as the first:
+part of what makes the single-process run slower and costlier in
+processor-seconds is work (cross-partition resolution, and everything
+downstream of it in type inference and rule evaluation) that the
+four-process run simply never does, so the comparison in this section
+understates how much more the four-process architecture would cost if it
+did the same job the single process does.
+
+**The bound, stated once, plainly, and scoped to what was actually
+measured: on this corpus, this machine, these four partitions (both the
+original file-count split and the cost-rebalanced split), and every
+thread budget from two per worker up to the unrestricted default, the
+shared-nothing configurations measured here show no net gain over the
+single ten-thread process, in either wall clock or raw processor-
+seconds.** That scope matters in two different ways for the two legs of
+the claim. The core-seconds leg is the sturdier one: it is largely
+independent of how these four partitions happen to be balanced (the
+rebalanced and original splits produced near-identical default-
+configuration core-seconds, 44.66 against 43.53), so a different,
+better-balanced or differently-sized partitioning of this same corpus
+would likely show a similar processor-work ratio at a given thread
+budget. The wall-clock leg is not sturdy in the same way: it is highly
+sensitive to partition balance (10.08 s against 6.43 s for the same
+thread budget, depending only on which split was used), so a wall-clock
+verdict at a partitioning this section did not try remains genuinely
+open, in a way the core-seconds verdict does not. And per the caveat
+above, roughly two thirds of the measured core-seconds excess at the
+unrestricted default is estimated to be redundant per-process startup
+rather than intrinsic work expansion, which is not architecture-
+intrinsic in the way section 5's fan-out growth is; a shared-nothing
+design that amortizes startup would likely land closer to the estimated
+1.33x residual than the raw 2.00x to 2.06x this section measured. The
+direction of the verdict, no gain at any thread budget or partitioning
+tested, is high confidence. The magnitude is not: it depends on how much
+of the measured excess is avoidable startup overhead, which this section
+estimates but does not measure directly.
 
 ### Session-close control
 
@@ -2117,44 +2228,21 @@ sweeps), was run afterward on the same otherwise-idle machine: three
 further cold runs gave 4.71 s, 4.49 s and 4.78 s, median 4.71 s. Against
 the session-close control immediately preceding it (4.79 s, the last
 formal control recorded before this further work began), the drift is
-0.08 s, about 1.7 %, again well inside the ~10 % threshold. Every
-comparison in this section rests on control medians between 4.62 s and
-4.79 s, a 0.17 s band, across the whole of this section's measurement
-work.
+0.08 s, about 1.7 %, again well inside the ~10 % threshold.
 
-**The two caveats the brief requires, stated in full.** First, this
-measurement excludes the merge and determinism costs a real
-shared-nothing implementation would have to pay: reconciling four
-independently produced diagnostic sets into one coherent report, and
-guaranteeing that the merged result is deterministic and independent of
-which partition finishes first, are real engineering costs this
-measurement does not include. Second, each of the four processes
-redundantly pays its own stub loading and process startup: the fixed
-process cost section 2 measured (19.6 ms on an empty project, though
-this corpus's own Composer and autoload discovery costs more than that
-on every partition) is paid four times over here instead of once. Both
-caveats point the same direction this section's own numbers already
-point: they inflate every shared-nothing figure above, so the bound
-already stated (no gain, at any thread budget tested) is if anything
-optimistic rather than pessimistic about the architecture's prospects,
-not the reverse.
+A third control bracketed the rebalanced partitions' unrestricted
+default-configuration repetitions (the fourth row of the core-seconds
+table above), the last measurement added to this section: three cold
+runs opened it, 4.63 s, 4.66 s and 4.40 s, median 4.63 s; three more
+closed it, 4.13 s, 4.86 s and 4.88 s, median 4.86 s. Drift: 0.23 s over
+the 4.63 s open median, about 5.0 %, inside the ~10 % threshold. Every
+comparison in this section, across its full measurement history, rests
+on control medians between 4.62 s and 4.86 s, a 0.24 s band.
 
-**A third caveat this measurement warrants.** Partitioning breaks
-cross-partition name resolution: each partition's process only ever
-sees its own slice of the corpus, so a class in one partition that
-extends a class physically walked into another is, from the first
-process, an unresolved symbol exactly as if that class did not exist in
-the project at all. The four processes are therefore not doing the same
-analysis the single process does; they are doing four smaller, mutually
-blind analyses whose diagnostics this section never attempted to
-reconcile or compare against the single-process run's output. This
-cuts in the same direction as the two caveats above: part of what makes
-the single-process run slower and costlier in processor-seconds is work
-(cross-partition resolution, and everything downstream of it in type
-inference and rule evaluation) that the four-process run simply never
-does, so even the already-negative comparison in this section understates
-how much more the four-process architecture would cost if it did the
-same job the single process does.
+The two caveats the brief requires, and the third this measurement
+warrants, are stated together with the core-seconds comparison above,
+next to the numbers that make their direction and size checkable, rather
+than repeated here.
 
 ### Confidence
 
@@ -2164,28 +2252,48 @@ same job the single process does.
   each `celerrate.toml` was built from.
 - **High** that every shared-nothing configuration measured in this
   section, at every thread budget from two per process to the
-  unrestricted default, is both slower in wall clock and costlier in
-  total processor-seconds than the single ten-thread process on this
-  corpus and machine: the pattern holds across nine repetitions (three
-  each at the default, `RAYON_NUM_THREADS=2` and `RAYON_NUM_THREADS=3`
-  configurations) and two independently bracketed controls whose medians
-  span only 4.62 s to 4.79 s.
+  unrestricted default, and under both partitionings tried, is both
+  slower in wall clock and costlier in total processor-seconds than the
+  single ten-thread process on this corpus and machine: the pattern
+  holds across twelve repetitions (three each at the original split's
+  default configuration, the rebalanced split's `RAYON_NUM_THREADS=2`,
+  its `RAYON_NUM_THREADS=3`, and its own default configuration) and
+  three independently bracketed controls whose medians span 4.62 s to
+  4.86 s.
+- **High** that the direction of the bound (no net gain) holds; **medium**
+  on its magnitude. The raw processor-work ratio at the unrestricted
+  default is 2.00x to 2.06x depending on partitioning, but roughly two
+  thirds of that excess is estimated, from the solo diagnostic floors
+  above, to be redundant per-process startup rather than work
+  genuinely expanded by isolated execution; the residual, intrinsic
+  ratio is estimated at about 1.33x. That estimate was not itself
+  measured as a fourth sweep point (no configuration here amortizes
+  startup across runs), so it is a reasoned bound on the bound, not a
+  measured one.
 - **High** that thread oversubscription does not explain the original
-  default-configuration result: the group averaged 4.32 effective cores
-  of ten across the three counted repetitions, and the single dominating
-  partition ran at 1.93 effective cores over its own 9.79 s, both far
-  below contention.
+  default-configuration result: the group averaged (mean) 4.21 effective
+  cores of ten across the three counted repetitions, and the single
+  dominating partition ran at 1.93 effective cores over its own 9.79 s,
+  both far below contention.
 - **High** that the processor-work excess is concentrated in a small,
   specific set of directories (`tests`, `classes`, and to a lesser
   degree `src`) rather than spread evenly or tied to project-file status
   in general: nine solo diagnostic measurements, not merely partition-
   level aggregates, isolate `tests/Unit` in particular as the single
   largest contributor found.
+- **High** that the core-seconds leg of the bound is largely independent
+  of these four partitions' balance, and the wall-clock leg is not: the
+  same unrestricted thread budget produced near-identical core-seconds
+  under the two different partitionings tried (43.53 against 44.66,
+  a 2.6 % difference) but wall clocks 57 % apart (10.08 s against
+  6.43 s). A partitioning this section did not try could plausibly
+  change the wall-clock verdict; it is far less likely to change the
+  core-seconds verdict.
 - **Medium** on whether a differently rebalanced or further-subdivided
   partitioning (splitting `tests/Unit` itself, for instance, or
   thread-limiting each worker to a value chosen per its own measured
   content rather than uniformly across the group) could close the
-  remaining gap between the idealized 4.35 s floor and the 6.93 to
+  remaining gap between the idealized 4.47 s floor and the 6.43 to
   10.08 s wall clocks this section actually measured. This section's
   own rebalance already shows a cost-balanced split at one thread
   budget does not stay balanced at another, which is a specific,
@@ -2195,3 +2303,7 @@ same job the single process does.
   much more per file to walk, read, parse and analyze than `src` or any
   measured vendor directory. This section identifies the concentration
   and its magnitude; it does not open the files to find the cause.
+  Also not established: the actual processor-work ratio a
+  startup-amortized shared-nothing implementation would show; 1.33x is
+  this section's estimate from solo-probe floors, not a measurement of
+  such an implementation.
