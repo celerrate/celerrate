@@ -1286,3 +1286,295 @@ Confidence, per claim:
   not scale with thread count in the way that would indict the allocator
   for the missing cores.
 
+
+## 7. The corpus parse floor and the ratio ceiling (Task 7)
+
+Date: 2026-08-07
+Commit: `aa80613e` (this branch's HEAD at measurement time). The source
+tree is identical to `2621b81` for every crate this campaign measures:
+`git diff 2621b81 HEAD --stat` touches only this measurement document, so
+the binary built here is the same performance object every earlier
+section cites.
+Corpus measured: the equalized corpus copy at
+`target/comparison-corpus-equalized` (the same corpus as sections 1, 3,
+4, 5 and 6).
+Machine: otherwise idle for the whole session; both binaries were built
+before any timed run, and nothing was built while a run was in progress.
+
+This section measures the cost no optimization of Celerrate can remove:
+walking the project, reading every file the walk finds, and lexing and
+parsing all of them. Everything Celerrate does beyond that (name
+resolution, type inference, rule evaluation, rendering, cache writes)
+sits on top of this figure. Dividing PHPStan's cold median by it gives a
+hard upper bound on the speed ratio this corpus can ever show on this
+machine.
+
+### The probe
+
+Built on scratch branch `scratch-parse-floor`, local commit
+`28e9c36d20089705f1c5e8f72d94cc8cb07db288`. The branch is local only:
+never merged, never pushed, and never the base of another branch; its
+commit hash is recorded here for provenance only. `cargo deny` was not
+run on the scratch branch, since the licence pass belongs to a future
+landing effort, not this probe.
+
+The probe adds `crates/celerrate_cli/src/parse_floor.rs` behind a
+`__parse-floor` argument checked before the normal dispatch in `main.rs`.
+It reproduces the discovery-and-walk slice of `Session::start` exactly:
+it normalizes the root the same way, loads `celerrate.toml` through
+`crate::configuration::load`, derives the same configuration model,
+calls `celerrate_project::discover` with it, and then calls
+`celerrate_vfs::enumerate_php_files(&discovery.walk_roots(),
+&discovery.excluded_roots)` with those same arguments. It then reads
+every walked file through rayon and calls `celerrate_syntax::parse` on
+each, discarding both results. `parse` is fully eager (it lexes, runs the
+parser, and builds the green tree before returning), so nothing measured
+here is deferred to a later access.
+
+Because the build directory is shared across branches, the probe binary
+was copied aside to a session-scoped scratch path immediately after
+building it and before switching back; the working tree then returned to
+`docs-cold-run-performance-diagnostic` and rebuilt, restoring
+`target/release/celerrate` to the ordinary artefact before any run below
+was measured.
+
+### The file-count check, and what it corrected
+
+The brief for this task expected the probe to print `floor: files: 6932`
+and to treat any other value as proof that the probe walks a different
+set from a real `check`. That expectation conflated two different
+quantities, and holding the probe to it would have produced a floor that
+was wrong in both directions at once.
+
+A real cold `check` on this corpus reports `6932 project files`. That
+number is not the walked set: it is the walked set filtered by
+`Session::reported_files`, which keeps only the files
+`ProjectDiscovery::classify` calls `FileOrigin::Project`. An installed
+dependency's files stay in the analyzed set, because their symbols are
+what make a `use` statement resolve; what they do not do is report
+diagnostics. The walked, read, loaded and parsed set is therefore
+strictly larger than the reported set. On this corpus the independent
+filesystem counts are exact: 24033 PHP files in total, 17101 of them
+under `vendor`, and 6932 outside it, matching the reported count to the
+file.
+
+That the whole 24033 is parsed on a real run, and not merely loaded, is
+settled by `analysis::analyze`: before the reporting fan-out it builds
+`prewarm_tasks` over `inputs.files`, the entire analyzed file set rather
+than the reported subset, and demands `item_tree` for every one of them, so
+every walked file is parsed on every cold run. The floor must therefore
+cover all 24033 files, and it does.
+
+The probe prints both numbers so the equality is proved rather than
+assumed, and the cross-check is computed after every timer has stopped so
+it cannot enter a measured figure:
+
+    floor: files: 24033
+    floor: project files: 6932
+
+The project-classified subset matches the `6932 project files` a real
+`check --verbose` reports on the same corpus, exactly. This is the check
+the brief intended, in the form that actually tests the claim.
+
+Finding that equality also caught a genuine bug in the probe. The brief
+wired it as `parse_floor_probe(std::path::Path::new("."))`, but
+`Session::start` never receives a relative root: `check .` resolves its
+argument through `absolute_root` first. A bare `"."` normalizes to the
+empty path, which is neither a file nor a directory, so the project walk
+root was silently dropped and only the vendor autoload roots were walked.
+The first probe build reported `files: 12617` with `project files: 0`,
+that is, it walked barely half the corpus and none of the project's own
+code, while still printing a plausible-looking file count. Had the count
+alone been trusted, the floor would have been measured over the wrong
+set. The probe now resolves the current directory to an absolute path
+before calling `Session::start`'s slice, exactly as the CLI does.
+
+### Raw probe output
+
+Command: `env RAYON_NUM_THREADS=<N> <probe> __parse-floor`, run from the
+equalized corpus directory, three repetitions per thread count. The probe
+prints its own instrumented millisecond figures; `/usr/bin/time -p` is
+not used here, because the interesting quantity is the per-phase split
+and not the process wall clock. The probe reads only: no `.celerrate` is
+created, read, or removed, so there is no cold-versus-warm cache
+distinction to control for. The page cache was warm throughout, which is
+the same condition every other section in this document measured under
+(a cold run in this campaign clears `.celerrate`, never the page cache).
+
+Ten threads (the machine has 10 logical cores, so this is also the
+default):
+
+| Phase | Run 1 | Run 2 | Run 3 | Median | Range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Walk | 372 ms | 362 ms | 364 ms | **364 ms** | 362 to 372 ms |
+| Read | 460 ms | 294 ms | 311 ms | **311 ms** | 294 to 460 ms |
+| Parse | 579 ms | 549 ms | 673 ms | **579 ms** | 549 to 673 ms |
+| Sum of medians | | | | **1254 ms** | |
+
+One thread:
+
+| Phase | Run 1 | Run 2 | Run 3 | Median | Range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Walk | 406 ms | 424 ms | 377 ms | **406 ms** | 377 to 424 ms |
+| Read | 440 ms | 450 ms | 407 ms | **440 ms** | 407 to 450 ms |
+| Parse | 2464 ms | 2250 ms | 2250 ms | **2250 ms** | 2250 to 2464 ms |
+| Sum of medians | | | | **3096 ms** | |
+
+Three things in that pair are worth naming before the floor is computed.
+
+The walk is serial and thread-count-independent: 364 ms at ten threads
+against 406 ms at one, a difference within the run-to-run range of
+either. `enumerate_php_files` accumulates into a `BTreeSet` on the
+calling thread, so no thread count changes it. It is a hard serial
+component of every cold run, and section 3's measured walk phase
+(366 ms) agrees with it.
+
+The read barely parallelizes: 311 ms at ten threads against 440 ms at
+one, a 1.41x speedup for a tenfold thread increase. It is bound by the
+filesystem, not by cores.
+
+The parse scales 3.89x from one thread to ten (2250 ms to 579 ms).
+Expressed in core-seconds, it costs 2.250 core-seconds at one thread and
+5.790 core-seconds at ten, a growth factor of **2.57x**. Section 5
+measured the analysis fan-out's core-seconds growing by 2.62x over the
+same thread range. Those two numbers are close enough to matter: the
+floor measured at ten threads already carries the same magnitude of
+parallel inefficiency the real pipeline suffers, so it is not an
+artificially clean bound flattering the comparison. Whatever costs
+Celerrate roughly 2.6x in core-seconds when it fans out is present in
+this floor too, and reading, lexing and parsing is about as simple as a
+parallel workload gets.
+
+### The same-session anchor
+
+Command: `cargo xtask benchmark`, run in this session, machine otherwise
+idle.
+
+| Scenario  | Cold median | Mean       | Standard deviation | Range               | Timed runs |
+| --------- | ----------- | ---------- | ------------------- | ------------------- | ---------- |
+| PHPStan   | 38.361 s    | 37.115 s   | ± 2.955 s            | 33.741 to 39.242 s   | 3          |
+| Celerrate | 5.278 s     | 5.268 s    | ± 0.112 s            | 5.106 to 5.405 s     | 5          |
+
+Cold ratio this session: 7.3x. The file-count cross-check matched exactly
+(6932 reported, 6932 counted independently).
+
+Both medians sit inside the historical bands section 1 records (PHPStan
+31 s to 39 s; Celerrate 4.8 s to 5.5 s), but both sit higher than
+section 1's own figures from earlier the same day: PHPStan 38.361 s
+against 32.652 s (17.5 % higher) and Celerrate 5.278 s against 4.945 s
+(6.7 % higher). PHPStan's own spread this session is wide (± 2.955 s over
+three runs, a 5.5 s range), which is most of the gap. The ceiling below
+is computed against this session's PHPStan median, per the same-session
+discipline the brief requires; the effect of choosing section 1's median
+instead is quantified afterwards.
+
+### The corpus floor
+
+**Corpus floor** = walk + read + parse medians at ten threads, plus the
+fixed process cost section 2 measured for an empty-project cold `check`
+(19.6 ms ± 1.4 ms, which covers startup, embedded-stub loading,
+configuration, discovery and teardown):
+
+    364 ms + 311 ms + 579 ms + 19.6 ms = 1273.6 ms
+
+**Corpus floor: 1.274 s** (2026-08-07, probe at scratch commit
+`28e9c36d`, working-branch source at `2621b81`). Summing the per-phase
+extremes rather than the medians, and carrying section 2's own spread,
+puts the run-to-run envelope at 1.223 s to 1.526 s.
+
+The same computation at one thread gives 406 + 440 + 2250 + 19.6 =
+3115.6 ms, a **one-thread floor of 3.116 s**.
+
+For scale: the floor is 24.1 % of this session's cold Celerrate median
+(1.274 s of 5.278 s). Roughly three quarters of a cold run, 4.00 s, is
+spent on work above reading, lexing and parsing.
+
+### The ratio ceiling
+
+**Ratio ceiling** = this session's PHPStan cold median divided by the
+corpus floor:
+
+    38.361 s / 1.274 s = 30.1x
+
+**Ratio ceiling: 30.1x.** This is a bound, not a target. It is the ratio
+Celerrate would show if it did nothing at all beyond walking the project,
+reading every file, lexing and parsing them, and paying its fixed process
+cost, while PHPStan continued to do its whole job.
+
+The bound is robust to the spreads in its two inputs. Combining the
+observed extremes in the least favourable direction (PHPStan's slowest
+run, 33.741 s, over the floor's worst envelope, 1.526 s) still gives
+22.1x; the most favourable combination (39.242 s over 1.223 s) gives
+32.1x. Dividing by section 1's lower, cross-session PHPStan median
+(32.652 s) instead of this session's gives 25.6x. Every one of those
+values is above 20x.
+
+At one thread the ceiling is 38.361 / 3.116 = **12.3x**, which is below
+20x. The 20x ambition is therefore not merely an optimization target but
+a claim that depends on multi-core execution: no single-threaded
+Celerrate can reach it on this corpus and machine, whatever else is
+optimized away, because parsing alone costs more than a twentieth of
+PHPStan's run.
+
+### Where roughly 20x sits, and the floor's own caveat
+
+**Roughly 20x sits below the ceiling, with a factor of 1.51x to spare**
+(30.1 / 20). Stated as wall clock: a 20x ratio against this session's
+PHPStan median means a cold run of 38.361 / 20 = 1.918 s. The floor
+consumes 1.274 s of that, leaving **644 ms** for everything Celerrate
+does above parsing: name resolution, the symbol index, type inference,
+rule evaluation, suggestion enrichment, rendering, and every cache write.
+Today that same work takes about 4.00 s. Reaching 20x therefore requires
+compressing the above-parse work by roughly **6.2x**, while the cold run
+as a whole gets 2.75x faster (5.278 s to 1.918 s).
+
+So the answer the spec asks for is that 20x is not arithmetically
+impossible on this corpus and machine, but the margin is much thinner
+than the headline factor suggests. The ceiling being 30.1x does not mean
+there is 30.1x of room; it means that the 1.274 s of incompressible work
+already spends about two thirds of the entire time budget a 20x run
+would have.
+
+**The floor's caveat, stated explicitly.** A real analyzer does more than
+read, lex and parse. Name resolution, the symbol index, type inference,
+rule evaluation, rendering and cache persistence are not optional
+extras: they are the product. The true reachable ceiling is therefore
+**below** 30.1x, and by an unknown margin this section does not measure:
+the bound is what no optimization can beat, not what any optimization can
+approach. Any figure derived from this section must be read as an upper
+bound on a bound.
+
+Two further caveats bound the bound's own precision. First, the floor is
+measured with a warm page cache; a genuinely cold filesystem would raise
+the read median and lower the ceiling. Second, the floor inherits the
+parallel inefficiency quantified above: if parse scaled ideally from its
+one-thread cost (2250 / 10 = 225 ms instead of the observed 579 ms), the
+floor would fall to 920 ms and the ceiling would rise to 41.7x. That
+hypothetical is not claimed as achievable; it is recorded because it
+shows the ceiling is itself sensitive to the same fan-out inefficiency
+sections 4 and 5 investigated, and that improving that inefficiency
+raises the bound rather than merely moving Celerrate toward it.
+
+### Confidence
+
+- **High** that the probe walks and parses the same file set a real cold
+  `check` does: it calls the same discovery and walk functions with the
+  same arguments, and its project-classified subset (6932) matches the
+  real run's reported count exactly, while its walk median (364 ms) and
+  read median (311 ms) sit alongside the real run's measured walk phase
+  (366 ms) and read-and-set-inputs phase (591 ms, which additionally
+  interns paths and creates salsa inputs).
+- **High** that the corpus floor exceeds one second on this corpus and
+  machine, and therefore that the ratio ceiling is well under 40x.
+- **Medium** on the floor's exact value of 1.274 s: three runs per thread
+  count, one read median disturbed by a 460 ms outlier against 294 ms and
+  311 ms, and a 1.223 s to 1.526 s envelope over the observed extremes.
+- **Medium** on the ceiling's exact value of 30.1x, chiefly because
+  PHPStan's own cold median moved 17.5 % between section 1's measurement
+  and this one on the same day and the same machine. The qualitative
+  conclusion survives that movement: every combination of observed
+  extremes leaves the ceiling between 22.1x and 32.1x.
+- **Not established**: how far below 30.1x the true reachable ceiling
+  lies. That depends on the irreducible cost of name resolution,
+  inference and rendering, which this section deliberately does not
+  measure.
