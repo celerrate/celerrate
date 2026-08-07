@@ -8,8 +8,26 @@ Binary: `target/release/celerrate`, built at commit `2621b81`
 
 ## Protocol
 
+- Measurement base: the equalized corpus copy at
+  `target/comparison-corpus-equalized`, cloned from the pinned corpus
+  (`fc96d0d4eae383e8c6f1f54f19cf592c221a62e3`), with a `celerrate.toml`
+  at its root containing `[project]` and `include = ["."]`. Without that
+  configuration, discovery falls back to the Composer manifest's autoload
+  walk roots, which for this PrestaShop corpus hide 1010 of its 6932
+  first-party files from Celerrate while PHPStan still sees all of them;
+  the pinned corpus directory alone, with no configuration written into
+  it, therefore walks a smaller, non-comparable set. `include = ["."]`
+  restores the equal reported file count (6932) that section 1's `cargo
+  xtask benchmark` protocol already produces, by writing the same
+  configuration into its own working copy. Every section in this document
+  from here measures this equalized set.
 - Cold run: `rm -rf .celerrate` in the corpus directory, then
-  `../../release/celerrate check .` from the corpus directory.
+  `target/release/celerrate check .` from the corpus directory, invoked
+  by an absolute or repository-root-relative path to the binary. (The
+  equalized corpus directory sits one path level shallower than the
+  originally pinned directory, so the shortcut relative path
+  `../../release/celerrate` used against the original directory does not
+  resolve to the binary from here; use an unambiguous path instead.)
 - Three repetitions minimum per measurement point; medians reported.
 - Session discipline: machine otherwise idle; every A/B measured back
   to back in one session; each session opens and closes with a control
@@ -85,25 +103,31 @@ affected by this caveat.
 
 Date: 2026-08-07
 Commit: `2621b81`
+Corpus measured: the equalized corpus copy at
+`target/comparison-corpus-equalized` (see Protocol above: cloned from the
+pinned corpus, `celerrate.toml` with `[project]` / `include = ["."]`
+written at its root). Verified immediately before measuring, with one
+`--verbose` cold run discarded from the timed set: 6932 project files
+reported, matching section 1's file count exactly.
 Command: `rm -rf .celerrate` then
-`../../release/celerrate check . --verbose > /dev/null`, three repetitions,
-from the corpus directory
-(`target/comparison-corpus/fc96d0d4eae383e8c6f1f54f19cf592c221a62e3`)
+`target/release/celerrate check . --verbose > /dev/null`, three
+repetitions, from the corpus directory, binary invoked by an unambiguous
+(non-`../../`) path
 Machine: otherwise idle for the whole run
 Timing mechanism: `/usr/bin/time -p` wrapping each invocation; wall clock
 read from its `real` line (resolution: hundredths of a second)
 
 | Phase | Run 1 | Run 2 | Run 3 | Median |
 | --- | ---: | ---: | ---: | ---: |
-| filesystem walk | 281 | 245 | 494 | 281 |
-| file read + input set | 279 | 400 | 482 | 400 |
-| analysis fan-out | 718 | 674 | 731 | 718 |
-| suggest enrich | 364 | 356 | 365 | 364 |
-| render report | 77 | 84 | 77 | 77 |
-| persist: collect entries | 801 | 768 | 878 | 801 |
-| persist: collect signatures | 33 | 30 | 31 | 31 |
-| persist: pack writes | 95 | 87 | 89 | 89 |
-| **Sum of the eight phases** | 2648 | 2644 | 3147 | 2761 |
+| filesystem walk | 402 | 396 | 425 | 402 |
+| file read + input set | 435 | 467 | 517 | 467 |
+| analysis fan-out | 1454 | 1634 | 1976 | 1634 |
+| suggest enrich | 234 | 234 | 244 | 234 |
+| render report | 178 | 188 | 177 | 178 |
+| persist: collect entries | 934 | 1041 | 1054 | 1041 |
+| persist: collect signatures | 41 | 44 | 48 | 44 |
+| persist: pack writes | 135 | 131 | 138 | 135 |
+| **Sum of the eight phases** | 3813 | 4135 | 4579 | 4135 |
 
 Wall-clock total per run, as reported by `/usr/bin/time -p`'s `real` line
 around the command (includes process startup/teardown and stderr
@@ -112,45 +136,48 @@ above):
 
 | Run | Wall clock |
 | --- | ---: |
-| Run 1 | 3.26 s |
-| Run 2 | 3.23 s |
-| Run 3 | 3.77 s |
-| **Median** | **3.26 s** |
+| Run 1 | 4.68 s |
+| Run 2 | 4.94 s |
+| Run 3 | 5.41 s |
+| **Median** | **4.94 s** |
 
 Reconciliation, using the phase-sum median above and the fixed process
 cost floor from section 2:
 
 | Component | Median (ms) | Source |
 | --- | ---: | --- |
-| Eight-phase sum | 2761 | phase table above |
+| Eight-phase sum | 4135 | phase table above |
 | Fixed process cost | 19.6 | section 2 |
-| Unaccounted residue | 479.4 | wall (3260) minus sum (2761) minus fixed (19.6) |
+| Unaccounted residue | 785.4 | wall (4940) minus sum (4135) minus fixed (19.6) |
 
-The residue is 479 ms, about 14.7 % of the 3260 ms wall-clock median,
+The residue is 785 ms, about 15.9 % of the 4940 ms wall-clock median,
 which is above the roughly 300 ms threshold that calls for a chase before
 moving on.
 
 Two candidates were checked. First, `--verbose` stderr formatting: three
-further cold runs on the same corpus, same commit, with the flag dropped
-(`rm -rf .celerrate` then `../../release/celerrate check . > /dev/null`),
-gave wall clocks of 3.71 s, 3.62 s, 3.55 s (median 3.62 s), higher than the
-3.26 s median measured with `--verbose`, not lower. Dropping the flag does
-not shrink the wall clock, so stderr formatting from `--verbose` is not the
-source of the residue; the 360 ms gap between the two medians runs the
-wrong direction to be explained by formatting cost, and is consistent with
-ordinary run-to-run variance instead. Second, cache-directory deletion:
-`rm -rf .celerrate` runs before `/usr/bin/time -p` starts timing in every
-repetition of both sets above, which the protocol already places outside
-the timed region by construction; it is confirmed not to be a candidate
-for this residue.
+further cold runs on the same equalized corpus, same commit, with the
+flag dropped (`rm -rf .celerrate` then
+`target/release/celerrate check . > /dev/null`), gave wall clocks of
+4.96 s, 4.84 s, 5.03 s (median 4.96 s), essentially the same as the
+4.94 s median measured with `--verbose` (a 20 ms difference, with the
+no-verbose median again the higher of the two). Dropping the flag does
+not shrink the wall clock, so stderr formatting from `--verbose` is not
+the source of the residue; a 20 ms gap running in the wrong direction is
+ordinary run-to-run variance, not a formatting cost. Second,
+cache-directory deletion: `rm -rf .celerrate` runs before
+`/usr/bin/time -p` starts timing in every repetition of both sets above,
+which the protocol already places outside the timed region by
+construction; it is confirmed not to be a candidate for this residue.
 
 Neither candidate explains the gap. The eight phases are instrumentation
 points inside `check`; they do not cover process startup before the first
 phase begins or teardown after the last phase ends. Across the six cold
-runs in this section, user time ran 13.36 s to 13.81 s and sys time ran
-1.75 s to 4.95 s, both measured against a real time near a third of the
-user figure, confirming the binary is heavily multi-threaded during the
-cold run. Thread-pool setup, teardown, and scheduling variance are
-plausible contributors that the eight phases, as currently instrumented,
-cannot isolate. The residue is recorded as unattributed beyond ruling out
-the two candidates above: 479 ms, about 14.7 % of the wall-clock median.
+runs in this section (three `--verbose`, three without), real time ran
+4.68 s to 5.41 s against user time of 16.56 s to 17.30 s, a per-run ratio
+of real to user time ranging from about 27.6 % to 32.6 % (not the roughly
+one-third figure an earlier draft of this section stated), confirming the
+binary is heavily multi-threaded during the cold run. Thread-pool setup,
+teardown, and scheduling variance are plausible contributors that the
+eight phases, as currently instrumented, cannot isolate. The residue is
+recorded as unattributed beyond ruling out the two candidates above:
+785 ms, about 15.9 % of the wall-clock median.
