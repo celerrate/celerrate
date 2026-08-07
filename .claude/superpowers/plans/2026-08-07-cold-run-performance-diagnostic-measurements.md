@@ -423,22 +423,78 @@ residue inside the phase):
   file reads), and is recorded here as a deviation from the spec's
   two-shape taxonomy rather than forced into either label.
 
+
 ## 5. Sampling profiles at the stagnation point (Task 5)
 
 Date: 2026-08-07
-Commit: `2621b81`
+Commit: `2621b81`, the same commit as every section above, with no source
+file changed.
 Corpus measured: the equalized corpus copy at
 `target/comparison-corpus-equalized` (the same corpus as sections 1, 3
-and 4).
+and 4). Every run below reported 6932 project files.
 Machine: otherwise idle for the whole session; one capture at a time,
-nothing else running, no build during the session.
+nothing else running, no build during any capture.
 Profiler: `sample`, the macOS built-in sampling profiler, nominal
-interval 1 millisecond, 4-second window. It attached 25 to 35
-milliseconds after process launch in every capture, so the window opens
-at the very start of the run and covers roughly the first 4 seconds of a
-cold run whose wall clock is about 4.6 seconds at ten threads
-(section 4).
-Profiles written to `/tmp/celerrate-profiles/` (not committed).
+interval 1 millisecond, 4-second window, attaching 25 to 35 milliseconds
+after process launch.
+Profiles written to `/tmp/celerrate-profiles/sym/` (not committed).
+
+### The profiling artefact, and why it differs from sections 1 to 4
+
+The workspace release profile sets `strip = "symbols"`, so the artefact
+sections 1 to 4 measure resolves no Celerrate function name and no
+profile taken from it can name a single frame of the program under
+study. Every profile in this section therefore comes from a
+symbol-carrying and line-table-carrying build of the same commit:
+
+```
+cargo build --release --config 'profile.release.strip="none"' --config 'profile.release.debug=1'
+```
+
+Both settings are passed on the command line. No file in the repository
+was modified to obtain them, and nothing about the build configuration is
+committed. The canonical stripped artefact was copied aside before the
+rebuild and restored byte for byte afterwards (identical SHA-256), so the
+artefact sections 1 to 4 cite remains exactly reproducible. `strip` and
+`debug` change only what is emitted alongside the machine code, not the
+machine code itself, and `debug=1` was included because `stub_frontier`
+is a plain function with a single caller that can be inlined out of the
+symbol table without line tables.
+
+The equivalence control below establishes that the symbol-carrying
+artefact is the same performance object, which is what licenses comparing
+this section's percentages to section 4's timings.
+
+### Equivalence control
+
+Three cold runs at each thread count on the symbol-carrying artefact,
+using section 4's exact protocol (`rm -rf .celerrate`, then
+`env RAYON_NUM_THREADS=<N> /usr/bin/time -p <binary> check . --verbose > /dev/null`),
+so the wall clocks are directly comparable:
+
+| N | Run 1 | Run 2 | Run 3 | Median | Section 4 median | Difference |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 10 | 5.69 s | 4.48 s | 4.75 s | 4.75 s | 4.57 s | +3.9 % |
+| 8 | 5.06 s | 4.65 s | 4.68 s | 4.68 s | 4.56 s | +2.6 % |
+
+Both sit inside the Protocol's ~10 % drift threshold, so the
+symbol-carrying artefact is treated as the same performance object and
+this section's figures are read against section 4's. The first run at
+each thread count is the slowest of its three in both cases, which is the
+expected shape for a freshly linked binary that no run has yet paged in;
+it is reported rather than discarded.
+
+Disclosure of a divergence the wall clock hides: the per-phase medians
+from these same control runs do not all match section 4 as closely as the
+wall clock does. The analysis fan-out reads 1648 milliseconds at ten
+threads against section 4's 1399, and 1590 against 1485 at eight. The
+per-run values at ten threads are 1652, 1361 and 1648 against section 4's
+1535, 1399 and 1368, so the two sets overlap and the difference is inside
+the spread each set already shows, but the median gap at ten threads is
+17.8 %, larger than the wall-clock gap. Every derived figure in this
+section that needs a fan-out wall time uses this artefact's own control
+medians, never section 4's, so the derivation stays internally
+consistent.
 
 ### Capture protocol
 
@@ -448,167 +504,133 @@ N = 8 that section 4 identified. Each capture is one cold run:
 ```
 rm -rf .celerrate
 env RAYON_NUM_THREADS=<N> /absolute/path/to/target/release/celerrate check . > /dev/null 2>&1 &
-sample $! 4 -file /tmp/celerrate-profiles/cold-<N>t-run<K>.txt
+sample $! 4 -file /tmp/celerrate-profiles/sym/cold-<N>t-run<K>.txt
 wait
 ```
 
 Run from the equalized corpus directory, binary by absolute path, with
-`rm -rf .celerrate` outside the sampled region, as the Protocol section
-requires. The same deviation section 4 records applies here: the brief's
-snippet runs from the pinned corpus directory with a relative binary
-path, which walks a smaller, non-comparable file set.
-
-Sample counts per capture, which set the resolution of every percentage
-below:
+`rm -rf .celerrate` outside the sampled region. The deviation section 4
+records applies here too: the brief's snippet runs from the pinned corpus
+directory, which walks a smaller, non-comparable file set.
 
 | Capture | Worker threads | Worker samples (total) | Samples per worker | Main-thread samples |
 | --- | ---: | ---: | ---: | ---: |
-| 10 threads, run 1 | 10 | 22120 | 2212 | 2512 |
-| 10 threads, run 2 | 10 | 22220 | 2222 | 2566 |
-| 10 threads, run 3 | 10 | 22380 | 2238 | 2551 |
-| 8 threads, run 1 | 8 | 18528 | 2316 | 2630 |
-| 8 threads, run 2 | 8 | 18896 | 2362 | 2695 |
-| 8 threads, run 3 | 8 | 18240 | 2280 | 2623 |
+| 10 threads, run 1 | 10 | 22390 | 2239 | 2546 |
+| 10 threads, run 2 | 10 | 22480 | 2248 | 2563 |
+| 10 threads, run 3 | 10 | 22360 | 2236 | 2570 |
+| 8 threads, run 1 | 8 | 18864 | 2358 | 2671 |
+| 8 threads, run 2 | 8 | 18568 | 2321 | 2636 |
+| 8 threads, run 3 | 8 | 19056 | 2382 | 2703 |
 
-The effective interval is about 1.5 milliseconds, not the nominal 1
-millisecond: `sample` sleeps one millisecond of run time between samples
-and pays its own collection cost on top, so a 4-second window yields
-roughly 2500 main-thread samples rather than 4000. The worker threads
-carry 250 to 400 fewer samples than the main thread in every capture,
-because the pool's threads are created after the run starts, during the
-filesystem walk. Percentages below are therefore shares of worker
-lifetime inside the window, not shares of the whole process lifetime.
+The effective interval is about 1.5 milliseconds, not the nominal 1:
+`sample` sleeps one millisecond of run time between samples and pays its
+own collection cost on top. Taking the main thread, which is alive for
+the whole window, as the reference gives 1.571, 1.561 and 1.556
+milliseconds for the three ten-thread captures and 1.498, 1.517 and 1.480
+for the three at eight.
 
-### Deviation: the released binary carries no symbols
-
-The workspace release profile sets `strip = "symbols"`, so
-`target/release/celerrate` and every copy of it under `target/release/deps`
-contain only the 137 undefined symbols they import from the system
-libraries. `sample` therefore resolves no frame belonging to Celerrate
-itself: every in-binary frame is reported as `???  (in celerrate)  load
-address 0x... + 0x<offset>`. Only frames in the system libraries
-(`libsystem_kernel`, `libsystem_pthread`, `libsystem_malloc`,
-`libsystem_platform`, `dyld`) carry names.
-
-The campaign forbids rebuilding the binary, and a rebuild is the only way
-to recover the names, so this section reports what a stripped profile can
-establish and states plainly what it cannot. The consequence for the four
-buckets the brief asks for:
-
-- The allocator bucket is fully measurable: the allocator lives in
-  `libsystem_malloc`, which is symbolicated.
-- The wait buckets are measurable by wait site, because every blocking
-  primitive bottoms out in a symbolicated `libsystem_kernel` or
-  `libsystem_pthread` frame, and the distinct wait sites are
-  distinguishable by the in-binary offsets immediately above them.
-- The boundary between "salsa memo access" and "productive work" is not
-  measurable. Both are pure in-binary execution with no system-library
-  frame to name them. Only the part of memo access that is contended
-  hard enough to yield the processor or park a thread becomes visible,
-  through the lock implementation's calls into `libsystem_pthread`.
-
-The unresolved share is quantified below as its own bucket rather than
-being split by guesswork.
+Sampling-window coverage, stated for both thread counts because the
+worker pool is created after the run starts, during the filesystem walk:
+the worker threads are alive for 3.52, 3.51 and 3.48 seconds of the
+4.00-second window at ten threads (87 % to 88 %), and 3.53, 3.52 and 3.52
+seconds at eight threads (88 %). Every worker percentage below is a share
+of worker lifetime inside the window, not of the whole process lifetime.
 
 ### Method: how stacks were bucketed
 
-Every capture was parsed into its per-thread call tree, and each tree
-node's self samples (its own count minus the sum of its children's
-counts) were assigned to exactly one bucket by reading the whole stack
-from thread start to leaf, not by matching the leaf name. The
-per-capture bucket counts sum exactly to the capture's worker sample
-total, which is the arithmetic check that no sample was double-counted
-or dropped. Offsets are stable across captures because every capture ran
-the same binary, which is how the same wait sites are recognisable in
-all six profiles.
+Each capture was parsed into its per-thread call tree, and each node's
+self samples (its count minus the sum of its children's counts) were
+assigned to exactly one bucket by reading the whole stack from thread
+start to leaf, not by matching the leaf name. Per-capture bucket counts
+sum exactly to the capture's worker sample total, which is the arithmetic
+check that no sample was double-counted or dropped. The main thread is
+summed separately and excluded from every worker percentage.
 
-Every worker thread in every capture shares the same six-frame prefix
-(`thread_start`, `_pthread_start`, then four in-binary frames ending at
-`celerrate+0x3af4e8`), the thread pool's worker loop. The seventh frame
-splits into two values: `celerrate+0x484664`, which goes on to park the
-thread, and `celerrate+0x4846cc`, which goes on to execute a job. The
-eighth frame, present only under the job-executing branch, takes one of a
-small set of values, each of which is one parallel call site, that is,
-one phase. This is what makes a per-phase attribution possible without
-symbols.
+The rules, in the order they are tested, so that a lock owns the
+allocation performed beneath it:
 
-The buckets, in the order they are tested:
+**Memo wait.** Any stack containing `salsa::runtime::Running::block_on`
+or `salsa::runtime::dependency_graph::DependencyGraph::block_on`. This is
+the block-on-an-in-progress-memo path, the pattern the previous effort's
+diagnosis reported. Example stack, 129 samples in the ten-thread run 1:
 
-**Contended lock.** Any stack containing a frame in the
-`celerrate+0x486xxx` region. That region is a lock implementation:
-its frames call `cthread_yield`, `_pthread_cond_wait` and
-`pthread_cond_signal`, it is entered from exactly two in-binary call
-sites (`celerrate+0x167ba8` and `celerrate+0x1610d0`), and it carries
-self samples of its own, the spin before the yield. Testing this rule
-first is what implements the brief's instruction that an allocation
-performed beneath a lock acquisition belongs to the lock, not to the
-allocator. Example stack, 82 samples in the ten-thread run 1:
+    salsa::function::fetch::...::fetch_cold
+      <- salsa::runtime::Running::block_on
+      <- salsa::runtime::dependency_graph::DependencyGraph::block_on
+      <- parking_lot::condvar::Condvar::wait_until_internal
+      <- _pthread_cond_wait <- __psynch_cvwait
 
-    ... celerrate+0x230d50 <- celerrate+0x20c614 <- celerrate+0x167ba8
-        <- celerrate+0x486724 <- cthread_yield <- swtch_pri
+**Contended lock.** Any stack containing a `parking_lot` slow path
+(`RawMutex::lock_slow`, `RawRwLock::lock_*`, `parking_lot_core::park`).
+Example stack, 119 samples:
 
-**Deep condition-variable wait.** Any stack containing
-`celerrate+0x3b70b8`, a second, distinct caller of `_pthread_cond_wait`,
-always reached through `celerrate+0x39e200` and `celerrate+0x3aef0c` and
-always at a stack depth above 50, that is, from deep inside application
-work rather than from the worker loop. This is the site that would carry
-the "workers blocked behind one worker's in-progress work" pattern.
-Example stack, 7 samples, depth 54:
+    celerrate_types::flow::Environment::join_any
+      <- celerrate_types::construction::...
+      <- salsa::interned::IngredientImpl<C>::intern_id
+      <- parking_lot::raw_mutex::RawMutex::lock_slow
+      <- cthread_yield <- swtch_pri
 
-    ... 40 in-binary frames ... <- celerrate+0x39e200
-        <- celerrate+0x3aef0c <- celerrate+0x3b70b8
-        <- _pthread_cond_wait <- __psynch_cvwait
+**Parked.** Any stack containing `rayon_core::sleep::Sleep::sleep`, split
+in two by whether the worker holds a job: with
+`rayon_core::join::join_context` or `rayon_core::registry::in_worker`
+present it is parked at a split point of a parallel iterator, without
+them it is parked with no job at all. Example of the second, 7149 samples
+at ten threads, run 1:
 
-**Idle park.** Leaf `__psynch_cvwait`, reached through
-`celerrate+0x484664` then `celerrate+0x484b5c` directly from the worker
-loop, at depth 10 with no job frame in between. The worker is parked
-because there is no job to run. Example stack, 784 samples:
+    rayon_core::registry::ThreadBuilder::run
+      <- rayon_core::registry::WorkerThread::wait_until_cold
+      <- rayon_core::sleep::Sleep::sleep
+      <- _pthread_cond_wait <- __psynch_cvwait
 
-    thread_start <- _pthread_start <- celerrate+0x3ee360
-        <- celerrate+0x3b4d78 <- celerrate+0x3b3c9c <- celerrate+0x3af4e8
-        <- celerrate+0x484664 <- celerrate+0x484b5c
-        <- _pthread_cond_wait <- __psynch_cvwait
+**Otherwise, the nearest attributable frame from the leaf upwards.**
+Frames that carry no attribution of their own (`core::`, `alloc::`,
+`std::`, `hashbrown::`, `indexmap::`, the `libsystem_platform` memory
+helpers, and the like) are skipped, and the first frame that does carry
+one decides:
 
-**Latch wait.** Leaf `__psynch_cvwait` through the same
-`celerrate+0x484b5c` wait site, but with the job-executing frame
-`celerrate+0x4846cc` present, so the worker is inside a job and blocked
-at a split point of the parallel iterator waiting for its other half.
-These stacks show the recursive splitting triple
-(`celerrate+0x38188`, `celerrate+0x6a66c`, `celerrate+0x69ce4`) repeated
-once per split level, at depths 15, 18, 20, 22 and 25. Example stack,
-333 samples, depth 15:
+- a leaf in `libsystem_malloc` is the **allocator**;
+- a file operation in `libsystem_kernel` (`open`, `read`, `close`,
+  `fstat` and their family) is **file input and output**;
+- a `salsa::` frame is **salsa memo access**;
+- a `celerrate_*` or `rowan::` frame is **productive work**, except that a
+  salsa trait implementation generated inside a Celerrate module is
+  counted as memo access wearing a Celerrate name (see the ambiguity note
+  below);
+- a `rayon_core::` frame outside the parking paths is scheduler overhead.
 
-    ... celerrate+0x4846cc <- celerrate+0x7313c <- celerrate+0x38188
-        <- celerrate+0x6a66c <- celerrate+0x69ce4 <- celerrate+0x484664
-        <- celerrate+0x484b5c <- _pthread_cond_wait <- __psynch_cvwait
+Example of the allocator rule, 42 samples:
 
-**Allocator.** Leaf in `libsystem_malloc`, with no lock frame anywhere in
-the stack. On this operating system version that is the `xzm` allocator
-family. Example stack, 42 samples:
+    celerrate_semantics::items::collect_defines
+      <- ... <- _xzm_free  (libsystem_malloc)
 
-    ... celerrate+0x2e0560 <- celerrate+0x2e016c <- celerrate+0x3deb68
-        <- celerrate+0x3dd950 <- celerrate+0x3de39c <- _xzm_free
+Example of the file input and output rule, showing that the Celerrate
+closure is inlined away entirely, which matters for the phase attribution
+below:
 
-**File input and output.** Leaf in `libsystem_kernel` naming a file
-operation (`open`, `read`, `close`, `fstat`, `stat`, `getdirentries`,
-and the rest of that family). Example stack, 99 samples, depth 25:
+    rayon::iter::plumbing::bridge_producer_consumer::helper
+      <- rayon::iter::map::MapFolder::consume
+      <- std::fs::read::inner <- std::sys::fs::unix::File::open_c
+      <- open <- __open
 
-    ... celerrate+0x4846cc <- celerrate+0x72f24 <- (five split levels)
-        <- celerrate+0x99acc <- celerrate+0xc8c44 <- celerrate+0x3e8818
-        <- celerrate+0x3eb7f0 <- open <- __open
+**The ambiguity, quantified.** The concern that salsa's generic memo
+lookup inlines into its caller and makes the memo-access boundary
+unmeasurable does not materialise at the entry point:
+`salsa::function::fetch` is present as a real frame in 41.98 % of worker
+samples at ten threads and `salsa::function::execute` in 41.95 %, so the
+lookup path is not inlined away and the boundary between framework and
+query body is a frame boundary the profile can see. What does blur is
+narrower and is measured: salsa trait implementations generated inside
+Celerrate modules, which carry a Celerrate symbol name while executing
+memo machinery. They hold 0.25 % of worker samples at ten threads and
+0.33 % at eight, dominated by a single `salsa::interned::HashEqLike`
+implementation for a Celerrate string type. That share is reported as its
+own line rather than folded silently into either side. A residue that no
+method here can size remains: memo code fully inlined into a query body
+with no distinguishing symbol leaves no trace at all, and the profile
+cannot bound it.
 
-**Running in the binary (unresolved).** Everything else: self samples in
-unnamed Celerrate frames, plus the `libsystem_platform` memory helpers
-(`_platform_memcmp`, `_platform_memmove`, `_platform_memset`) that
-in-binary code calls directly. This is the bucket that mixes productive
-analysis work with uncontended memo access, and that the stripped binary
-cannot split.
-
-The check that each wait bucket is pure: in the ten-thread run 1, every
-sample in idle park, latch wait and deep condition-variable wait has
-`__psynch_cvwait` as its leaf, and the contended-lock bucket's leaves are
-`swtch_pri` (468), `__psynch_cvwait` (80), in-binary spin frames (25) and
-`__psynch_cvsignal` (4).
+Samples that reach no attributable frame at all are 2 or 3 per capture at
+ten threads and 0 or 1 at eight, that is under 0.01 %.
 
 ### Worker-thread buckets, ten threads
 
@@ -617,216 +639,269 @@ worker samples in parentheses.
 
 | Bucket | Run 1 | Run 2 | Run 3 | Median share |
 | --- | ---: | ---: | ---: | ---: |
-| Idle park (no job available) | 4664 (21.08 %) | 5720 (25.74 %) | 5632 (25.17 %) | 25.17 % |
-| Running in the binary (unresolved) | 7704 (34.83 %) | 7179 (32.31 %) | 6830 (30.52 %) | 32.31 % |
-| File input and output syscalls | 4258 (19.25 %) | 4537 (20.42 %) | 4437 (19.83 %) | 19.83 % |
-| Latch wait (blocked inside a job) | 2621 (11.85 %) | 2166 (9.75 %) | 2962 (13.24 %) | 11.85 % |
-| Allocator | 2198 (9.94 %) | 1854 (8.34 %) | 1826 (8.16 %) | 8.34 % |
-| Contended lock | 577 (2.61 %) | 639 (2.88 %) | 617 (2.76 %) | 2.76 % |
-| Deep condition-variable wait | 98 (0.44 %) | 125 (0.56 %) | 76 (0.34 %) | 0.44 % |
-| **Total worker samples** | **22120** | **22220** | **22380** | |
+| Parked, no job at all | 7149 (31.93 %) | 6305 (28.05 %) | 5529 (24.73 %) | 28.05 % |
+| Productive work | 5239 (23.40 %) | 5527 (24.59 %) | 5357 (23.96 %) | 23.96 % |
+| File input and output syscalls | 4275 (19.09 %) | 4355 (19.37 %) | 3971 (17.76 %) | 19.09 % |
+| Allocator | 2217 (9.90 %) | 2268 (10.09 %) | 2374 (10.62 %) | 10.09 % |
+| Parked at a split | 1497 (6.69 %) | 1843 (8.20 %) | 3122 (13.96 %) | 8.20 % |
+| Salsa memo access | 1265 (5.65 %) | 1285 (5.72 %) | 1288 (5.76 %) | 5.72 % |
+| Salsa lock contention | 541 (2.42 %) | 675 (3.00 %) | 547 (2.45 %) | 2.45 % |
+| Memo wait | 129 (0.58 %) | 126 (0.56 %) | 107 (0.48 %) | 0.56 % |
+| Salsa glue in Celerrate symbols | 57 (0.25 %) | 74 (0.33 %) | 53 (0.24 %) | 0.25 % |
+| Rayon scheduler | 19 (0.08 %) | 20 (0.09 %) | 9 (0.04 %) | 0.08 % |
+| Unattributable | 2 (0.01 %) | 2 (0.01 %) | 3 (0.01 %) | 0.01 % |
+| **Total worker samples** | **22390** | **22480** | **22360** | |
 
 ### Worker-thread buckets, eight threads (the stagnation point)
 
 | Bucket | Run 1 | Run 2 | Run 3 | Median share |
 | --- | ---: | ---: | ---: | ---: |
-| Idle park (no job available) | 3598 (19.42 %) | 5051 (26.73 %) | 3848 (21.10 %) | 21.10 % |
-| Running in the binary (unresolved) | 6979 (37.67 %) | 6736 (35.65 %) | 7147 (39.18 %) | 37.67 % |
-| File input and output syscalls | 3300 (17.81 %) | 3017 (15.97 %) | 3301 (18.10 %) | 17.81 % |
-| Latch wait (blocked inside a job) | 2316 (12.50 %) | 1938 (10.26 %) | 1606 (8.80 %) | 10.26 % |
-| Allocator | 1950 (10.52 %) | 1847 (9.77 %) | 1995 (10.94 %) | 10.52 % |
-| Contended lock | 263 (1.42 %) | 240 (1.27 %) | 248 (1.36 %) | 1.36 % |
-| Deep condition-variable wait | 122 (0.66 %) | 67 (0.35 %) | 95 (0.52 %) | 0.52 % |
-| **Total worker samples** | **18528** | **18896** | **18240** | |
+| Productive work | 5306 (28.13 %) | 5319 (28.65 %) | 5044 (26.47 %) | 28.13 % |
+| Parked, no job at all | 4810 (25.50 %) | 4387 (23.63 %) | 5770 (30.28 %) | 25.50 % |
+| File input and output syscalls | 3278 (17.38 %) | 2962 (15.95 %) | 3187 (16.72 %) | 16.72 % |
+| Allocator | 2221 (11.77 %) | 2496 (13.44 %) | 2052 (10.77 %) | 11.77 % |
+| Salsa memo access | 1503 (7.97 %) | 1686 (9.08 %) | 1217 (6.39 %) | 7.97 % |
+| Parked at a split | 1342 (7.11 %) | 1220 (6.57 %) | 1449 (7.60 %) | 7.11 % |
+| Salsa lock contention | 222 (1.18 %) | 249 (1.34 %) | 183 (0.96 %) | 1.18 % |
+| Memo wait | 95 (0.50 %) | 150 (0.81 %) | 66 (0.35 %) | 0.50 % |
+| Salsa glue in Celerrate symbols | 63 (0.33 %) | 84 (0.45 %) | 53 (0.28 %) | 0.33 % |
+| Rayon scheduler | 23 (0.12 %) | 15 (0.08 %) | 35 (0.18 %) | 0.12 % |
+| Unattributable | 1 (0.01 %) | 0 | 0 | 0.00 % |
+| **Total worker samples** | **18864** | **18568** | **19056** | |
 
-Each capture's counts sum exactly to its total. The medians are taken
-per bucket across the three captures, so they do not sum to exactly
-100 % (100.70 % at ten threads, 99.24 % at eight); the per-capture
-columns are the exact accounting.
+Each capture's counts sum exactly to its total. Medians are taken per
+bucket across the three captures, so they do not compose: a median of a
+sum is not the sum of the medians, and no total below is built by adding
+the medians above.
 
-### The main thread, counted separately
+### The parked total, from per-capture totals
 
-| Bucket | Median share, 10 threads | Median share, 8 threads |
-| --- | ---: | ---: |
-| Waiting on the thread pool | 73.97 % | 72.02 % |
-| Running in the binary (unresolved) | 14.22 % | 16.58 % |
-| File input and output syscalls | 10.35 % | 10.65 % |
-| Allocator | 0.64 % | 0.88 % |
+The parked share is the figure the reading turns on, so it is computed
+per capture and only then medianed:
 
-The main thread blocks at its own wait site (`celerrate+0x3b4540`
-calling `_pthread_cond_wait`, distinct from all three worker wait sites)
-for roughly three quarters of the window, which is the expected shape:
-it hands each phase to the pool and waits. Its file input and output
-share is the filesystem walk, which runs before the pool starts. It is
-excluded from every worker percentage above, as the brief requires.
+| | Run 1 | Run 2 | Run 3 | Median | Range |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Parked, 10 threads | 38.62 % | 36.25 % | 38.69 % | 38.62 % | 36.25 to 38.69 |
+| Parked, 8 threads | 32.61 % | 30.20 % | 37.88 % | 32.61 % | 30.20 to 37.88 |
+| Running, 10 threads | 61.38 % | 63.75 % | 61.31 % | 61.38 % | 61.31 to 63.75 |
+| Running, 8 threads | 67.39 % | 69.80 % | 62.12 % | 67.39 % | 62.12 to 69.80 |
 
-### Which phase each bucket belongs to
+The medians differ by 6.01 points, but the two distributions overlap:
+the eight-thread run 3 (37.88 %) is parked more than the ten-thread run 2
+(36.25 %). At three captures per thread count, the rise in parked time
+from eight to ten threads is a direction, not an established quantity,
+and nothing below rests on its size. Whole-run parked share is in any
+case the wrong instrument for the fan-out question, for the reason the
+next section gives.
 
-The eighth frame identifies the parallel call site. Three of the call
-sites are large enough to name, and one supplementary capture was taken
-to name them: a single extra cold run at ten threads sampled twice in
-sequence, a first 2-second window and then a second one, so that early
-phases and late phases could be told apart by which call sites appear in
-which window (`/tmp/celerrate-profiles/phase-split-early.txt` and
-`phase-split-late.txt`). This capture is diagnostic only and contributes
-no figure to the tables above.
+### Call sites, and what belongs to no call site
 
-- `celerrate+0x72f24` is the file read and input set phase. It is
-  present only in the early window, and 99.7 % of its samples are the
-  `open` syscall.
-- `celerrate+0x7313c` is the analysis fan-out. It dominates the early
-  window (40.4 %) and still holds 11.9 % of the late window, the tail of
-  the phase.
-- `celerrate+0x73fe0` is the persist collect-entries phase. It is absent
-  from the early window and takes 48.3 % of the late window.
+The parallel call sites resolve by name. Reading the source establishes
+which phase timer wraps each one: `session.rs` line 439 is the file read
+and input set phase; `analysis.rs` lines 145 and 152 are both inside the
+analysis fan-out timer, the first a prewarm of `item_tree` over every
+file and the second the per-file `analyze_one`; `cache/mod.rs` lines 276
+and 302 are both inside the persist collect-entries timer.
 
-Median shares of total worker samples, and the bucket composition inside
-each call site:
+Median shares of total worker samples:
 
-| Call site | Share of worker samples, 10 threads | Share, 8 threads |
-| --- | ---: | ---: |
-| Analysis fan-out | 25.43 % | 25.14 % |
-| Persist: collect entries | 24.22 % | 23.13 % |
-| File read and input set | 17.90 % | 15.64 % |
+| Call site | 10 threads | 8 threads | Phase |
+| --- | ---: | ---: | --- |
+| `analysis::served_typed_diagnostics` | 21.17 % | 21.38 % | analysis fan-out |
+| `semantics::queries::item_tree` (prewarm) | 18.66 % | 19.42 % | analysis fan-out |
+| `std::fs::read` (closure inlined) | 19.21 % | 16.79 % | file read and input set |
+| `analysis::persistable_diagnostics` | 2.60 % | 2.81 % | persist collect entries |
+| `semantics::queries::member_tree` | 0.00 % | 2.08 % | persist collect entries |
+| `types::records::class_surface_digest` | 0.00 % | 3.60 % | not mapped |
+| Parked, no job at all | 28.05 % | 25.50 % | **no call site** |
+| Parked at a split | 8.20 % | 7.11 % | **no call site** |
 
-**Inside the analysis fan-out** (median across the three captures at each
-thread count, as a share of that call site's own samples):
+**The share that belongs to no call site, stated plainly.** A worker
+parked with no job carries no job frame, and a worker parked at a split
+carries no job body either. Together they are 36.25 % to 38.69 % of
+worker samples at ten threads and 30.20 % to 37.88 % at eight. That share
+cannot be assigned to any phase by construction, and no reading below
+assigns it to one. The unmapped call-site residue is separate and small:
+0.16 % median at ten threads, 3.94 % at eight, the latter almost entirely
+`class_surface_digest`, a types query reached through a parallel
+construct whose enclosing frame is inlined away. It most plausibly sits
+inside the analysis phase, but that is not established here and it is
+left unmapped rather than folded in.
 
-| Bucket | 10 threads | 8 threads |
-| --- | ---: | ---: |
-| Running in the binary (unresolved) | 60.40 % | 61.99 % |
-| Latch wait (blocked inside a job) | 28.67 % | 27.68 % |
-| Allocator | 10.88 % | 10.41 % |
-| Contended lock | 0.12 % | 0.02 % |
+The `item_tree` call site was checked for whether it is the fan-out's
+prewarm or the persist phase's tree pass, since both call the same query:
+99.95 % of its samples at ten threads have `salsa::function::execute` on
+the stack, meaning a cold miss that is computing, not a memoized fetch
+being serialised. It is the prewarm, inside the fan-out.
 
-**Inside persist: collect entries:**
+The persist phase holds only 2.68 % of worker samples at ten threads and
+5.18 % at eight, far below the share its 883-millisecond wall time would
+suggest. Its parallel work is memoized fetches and conversions, so the
+workers are largely parked during it, which is part of what the parked
+buckets contain.
 
-| Bucket | 10 threads | 8 threads |
-| --- | ---: | ---: |
-| Running in the binary (unresolved) | 63.62 % | 68.49 % |
-| Allocator | 21.62 % | 25.01 % |
-| Contended lock | 9.31 % | 4.41 % |
-| Deep condition-variable wait | 1.62 % | 1.92 % |
+### Reconciling the fan-out against its wall clock
 
-**Inside the file read and input set phase:** 99.70 % of its samples at
-ten threads and 99.72 % at eight are the `open` syscall itself, with the
-allocator and everything else below half a percent.
+The reconciliation the parked share cannot give directly: the fan-out's
+wall time on this artefact, times the thread count, divided by the
+effective sampled interval, is the number of worker samples the phase
+would hold if every worker were busy for its whole duration. Comparing
+that with the samples the fan-out call sites actually hold gives the
+phase's own utilisation, with no appeal to the unattributable parked
+share.
+
+| | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| 10 threads, expected if fully busy | 10490 | 10560 | 10588 | |
+| 10 threads, observed | 8810 | 9024 | 9101 | |
+| 10 threads, utilisation | 84.0 % | 85.5 % | 86.0 % | 85.5 % |
+| 8 threads, expected if fully busy | 8494 | 8382 | 8596 | |
+| 8 threads, observed | 7697 | 7806 | 7547 | |
+| 8 threads, utilisation | 90.6 % | 93.1 % | 87.8 % | 90.6 % |
+
+The two ranges do not overlap: 84.0 to 86.0 against 87.8 to 93.1. The
+fan-out loses about five points of utilisation between eight and ten
+threads, and it is between 85 % and 91 % busy in both cases. Idleness
+inside the fan-out is therefore real but small, and it is nowhere near
+large enough to explain a phase that reaches 3.83 effective cores out of
+ten.
+
+### What the fan-out actually costs
+
+The same arithmetic converts samples into processor time, which is what
+exposes the rest of the loss. Fan-out cost in core-seconds inside the
+window:
+
+| Bucket | 10 threads (3 captures) | Median | 8 threads (3 captures) | Median |
+| --- | --- | ---: | --- | ---: |
+| Productive work | 7.88, 7.95, 8.04 | 7.95 | 7.03, 6.93, 6.73 | 6.93 |
+| Allocator | 3.20, 3.09, 3.37 | 3.20 | 2.56, 2.82, 2.54 | 2.56 |
+| Salsa memo access | 1.78, 1.79, 1.79 | 1.79 | 1.57, 1.59, 1.56 | 1.57 |
+| Salsa lock contention | 0.83, 1.04, 0.84 | 0.84 | 0.28, 0.31, 0.25 | 0.28 |
+| Memo wait | 0.06, 0.10, 0.04 | 0.06 | 0.01, 0.07, 0.02 | 0.02 |
+| Salsa glue | 0.09, 0.12, 0.08 | 0.09 | 0.08, 0.11, 0.08 | 0.08 |
+| **Total** | **13.84, 14.08, 14.16** | **14.08** | **11.53, 11.85, 11.17** | **11.53** |
+
+Every line here has non-overlapping ranges between the two thread counts
+except salsa glue, and the totals are 13.84 to 14.16 against 11.17 to
+11.85. The fan-out consumes about 2.5 core-seconds more processor time at
+ten threads than at eight, roughly 22 % more, to do identical work on an
+identical corpus, while its wall time does not improve at all (1648
+milliseconds against 1590 on this artefact). That is the loss: not
+idleness, and not any one bucket, but the whole phase costing more per
+unit of work as threads are added.
+
+Where the extra 2.5 core-seconds go, by difference of medians: productive
+work +1.02, allocator +0.64, salsa lock contention +0.56, salsa memo
+access +0.22, memo wait +0.04. In relative terms the ordering reverses:
+salsa lock contention triples (+200 %), the allocator grows 25 %,
+productive work grows 15 %.
+
+Salsa lock contention is named down to its entry points, and it is
+concentrated: across the three ten-thread captures, 1598 of 1763 samples
+enter through `salsa::interned::IngredientImpl<C>::intern_id`, with
+`salsa::table::Table::fetch_or_push_page` (83),
+`salsa::function::sync::ClaimGuard::drop_impl` (39),
+`salsa::function::sync::SyncTable::try_claim` (37) and
+`salsa::table::Table::record_unfilled_page` (6) making up the rest. Five
+distinct entry sites, not two.
+
+The whole-run view agrees and adds one term the fan-out table does not
+contain. Total processor time in the window, all phases, median of three:
+21.59 core-seconds at ten threads against 19.04 at eight. The file input
+and output bucket alone accounts for 6.72 against 4.72 core-seconds
+(ranges 6.18 to 6.80 and 4.49 to 4.91, non-overlapping), a 42 % increase
+in time spent inside the `open` syscall for the same 6932 files. This is
+the mechanism behind section 4's finding that the file read and input set
+phase runs slower at ten threads than at four.
 
 ### The `stub_*` self-time check
 
-Not performable on this binary, and recorded as such rather than
-answered. The brief asks for self time in `stub_symbol_table`,
-`stub_frontier` and `stub_signature_table`
-(`crates/celerrate_semantics/src/index.rs`). Those are Celerrate
-functions, and the stripped binary resolves no Celerrate function name,
-so no profile in this campaign can confirm or deny their presence by
-name. The previous record found no self time in them; this campaign
-neither confirms nor contradicts that. Answering it requires a build
-without `strip = "symbols"`, which this campaign's constraints exclude.
+Performed, and answered: no measurable self time, confirming the previous
+record.
 
-What can be said in its place, from the same profiles, is that the
-analysis fan-out has no single dominant unresolved hot spot: in the
-ten-thread run 1 the largest unnamed in-binary self-time frame inside
-the fan-out holds 2.49 % of the phase's running samples, and the next
-three hold 2.37 %, 1.36 % and 1.05 %. A shared table serialising the
-fan-out would be expected to concentrate self time rather than spread it
-this thinly, but this is an argument from shape, not a name match, and
-it does not close the question.
+| Function | 10 threads, self samples | 8 threads, self samples | Presence anywhere in a stack |
+| --- | ---: | ---: | ---: |
+| `stub_symbol_table` | 0, 0, 0 | 0, 0, 0 | 7 to 15 samples per capture |
+| `stub_frontier` | 0, 0, 1 | 0, 1, 0 | 0 to 4 samples per capture |
+| `stub_signature_table` | 0, 0, 0 | 0, 0, 0 | 2 to 3 samples per capture |
 
-The one named frame that is concentrated is `_platform_memcmp`, the
-system byte-comparison routine, which in-binary code calls directly. It
-holds a median 5.03 % of all worker samples at ten threads and 5.41 % at
-eight, and a median 13.36 % and 13.77 % of the analysis fan-out's own
-samples. Two thirds of it arrives through a single call chain
-(`celerrate+0x3878fc` to `celerrate+0x3dcc14` to `celerrate+0x3bcdbc`),
-the shape of hash-table key equality on byte-string keys. Which table
-that is cannot be established without symbols.
+Against worker totals of 18568 to 22480 samples per capture, the largest
+self-time reading is a single sample, under 0.005 %, and the largest
+in-stack presence is 15 samples, 0.08 %. The three functions
+(`crates/celerrate_semantics/src/index.rs`) are present in the symbol
+table of the profiled build, so their absence from the profile is a
+measurement and not a symbol-resolution failure; `debug=1` was passed
+specifically so that `stub_frontier`, a plain function with one caller,
+could not be inlined out of reach.
 
 ### Reading: which bucket owns the missing cores
 
-Mapping the measurements onto the four buckets the brief names, at ten
-threads and at the stagnation point N = 8, as shares of total worker
-samples:
+The four buckets the brief names, as shares of total worker samples, now
+all measurements rather than bounds:
 
-| Bucket as the brief names it | 10 threads | 8 threads | What was actually measured |
-| --- | ---: | ---: | --- |
-| Allocator | 8.34 % | 10.52 % | Leaf in `libsystem_malloc`, no lock frame above it. Complete. |
-| Salsa memo access | 2.76 % | 1.36 % | Only the contended part, the lock region that spins, yields and parks. The uncontended part is inside the unresolved bucket. |
-| Memo wait | 0.44 % | 0.52 % | The deep condition-variable wait site. |
-| Productive work | at most 52.14 % | at most 55.48 % | Unresolved in-binary running (32.31 % / 37.67 %) plus file input and output syscalls (19.83 % / 17.81 %). An upper bound: it still contains uncontended memo access. |
+| Bucket | 10 threads | 8 threads |
+| --- | ---: | ---: |
+| Allocator | 10.09 % | 11.77 % |
+| Salsa memo access | 5.72 % | 7.97 % |
+| Memo wait | 0.56 % | 0.50 % |
+| Productive work | 23.96 % | 28.13 % |
 
-The unassignable share is the unresolved running bucket: 32.31 % of
-worker samples at ten threads and 37.67 % at eight cannot be split
-between memo access and productive analysis work. That is the honest
-size of what the stripped binary hides.
+Salsa lock contention (2.45 % and 1.18 %) is reported separately from
+memo access rather than folded into it, because the two behave
+differently with thread count. Productive work is a measurement, not the
+upper bound the earlier draft of this section gave: file input and output
+(19.09 % and 16.72 %) is now its own bucket rather than being counted
+inside it, which matters because that bucket is almost entirely the
+`open` syscall.
 
-**None of the four buckets owns the missing cores.** The bucket that
-does is the one the brief's taxonomy does not contain: workers parked
-with no work to run.
+**No single bucket owns the missing cores.** The loss splits into two
+mechanisms, both measured, neither dominant:
 
-| | 10 threads | 8 threads | Change |
-| --- | ---: | ---: | ---: |
-| Idle park (no job available) | 25.17 % | 21.10 % | +4.07 points |
-| Latch wait (blocked inside a job) | 11.85 % | 10.26 % | +1.59 points |
-| **Parked, total** | **37.02 %** | **31.36 %** | **+5.66 points** |
-| Running in the binary | 32.31 % | 37.67 % | -5.36 points |
+- The fan-out is 85.5 % utilised at ten threads against 90.6 % at eight
+  (non-overlapping ranges). About 14 % of the phase's capacity is
+  workers parked with no work, and that share grows by roughly five
+  points between the two thread counts.
+- The fan-out costs about 22 % more processor time at ten threads than at
+  eight for identical work, 14.08 against 11.53 core-seconds
+  (non-overlapping ranges), while its wall time does not improve.
 
-At ten threads, roughly 37 % of worker capacity inside the sampling
-window is parked, against roughly 31 % at eight. The two threads added
-between the stagnation point and full width bought parked time, not
-work: the parked share rises by 5.66 points and the running share falls
-by 5.36 points, an almost exact trade. This is what a fan-out reaching
-3.83 effective cores out of ten (section 4) looks like from the inside.
+The second mechanism is the larger of the two, and within it the largest
+absolute term is productive work itself costing more (+1.02 core-seconds
+of the +2.55), followed by the allocator (+0.64) and salsa's interning
+lock (+0.56). The sharpest relative growth is salsa lock contention,
+which triples.
 
-Confidence in that reading is high, and it rests on a discriminator
-inside the fan-out rather than on the aggregate alone. Inside the
-analysis fan-out call site, contended-lock samples are 0.12 % at ten
-threads and 0.02 % at eight, effectively zero, while 28.67 % of the
-phase's own samples are workers blocked at a split point of the parallel
-iterator. A phase losing its cores to lock contention would show the
-opposite. The fan-out is starved of stealable work, not blocked on a
-shared structure.
+Confidence, per claim:
 
-The confidence attaches to the shape, not to the cause of the
-starvation. The profile establishes that workers have no work; it does
-not establish why, because the frames that would name the work
-distribution belong to Celerrate and are stripped. Two candidates are
-consistent with these profiles and neither is decided here: a parallel
-iterator whose splitting granularity leaves the tail of each phase
-running on too few items, and a dependency structure in which later work
-cannot start until earlier work finishes. The supplementary early and
-late windows favour the first, since idle park is 10.34 % of the early
-window and 31.68 % of the late one, so the parking concentrates in phase
-tails rather than being spread evenly.
+- **High** that the fan-out utilisation figures and the fan-out cost
+  figures are what they are measured to be. Both rest on non-overlapping
+  ranges across three captures per thread count, on symbolicated frames,
+  and on a reconciliation that never touches the unattributable parked
+  share.
+- **High** that salsa lock contention grows sharply with thread count and
+  that it enters overwhelmingly through interning. The entry points are
+  named frames and the ranges do not overlap.
+- **High** that memo wait is not the problem: 0.56 % and 0.50 % of worker
+  samples. The pattern the previous effort's diagnosis reported, many
+  workers blocked behind one worker's in-progress work, is absent. Those
+  samples are split between `persistable_diagnostics` and
+  `served_typed_diagnostics` at ten threads, and at eight threads
+  `class_surface_digest` appears as a third site; the earlier claim that
+  they sat entirely inside one phase does not hold.
+- **Medium** on why productive work itself costs 15 % more per unit of
+  work at ten threads. Contention for shared cache and memory bandwidth
+  across more active cores is the standard candidate and is consistent
+  with the allocator growing alongside it, but nothing here measures the
+  memory system, and no cause is asserted.
+- **Low**, and therefore not claimed, on any statement about the size of
+  the change in whole-run parked share between the two thread counts.
+  The per-capture distributions overlap at three captures each.
 
-Three secondary findings, all measured:
-
-- **Contention does grow with threads, but in the persist phase, not the
-  fan-out.** The contended-lock share inside persist collect-entries
-  roughly doubles from 4.41 % at eight threads to 9.31 % at ten, and 86 %
-  of all contended-lock samples in the ten-thread run 1 sit in that call
-  site (499 of 577). The spec's prediction that contention grows with
-  thread count holds; it just does not hold where the fan-out is.
-- **The file read phase is a syscall wall.** Its workers spend 99.7 % of
-  their samples in `open`. That is the mechanism behind section 4's
-  finding that the file read and input set phase runs slower at ten
-  threads than at four: concurrent `open` calls serialise in the kernel,
-  so adding threads adds contention on a path that was never
-  parallel-friendly.
-- **The pattern the previous effort's diagnosis reported is absent.**
-  The signature of many workers blocked behind one worker's in-progress
-  sequential work is the deep condition-variable wait site, and it holds
-  0.44 % of worker samples at ten threads and 0.52 % at eight, entirely
-  inside the persist phase and not the fan-out. Whatever the fan-out's
-  problem is, it is not that.
-
-Confidence, stated per claim: high that the parked share is what it is
-measured to be, and high that the fan-out is starvation-bound rather
-than contention-bound, since both rest on symbolicated system frames and
-on wait sites that reproduce identically across all six captures.
-Medium that the contended-lock region is the lock implementation it
-appears to be, since that rests on reading its behaviour (it spins,
-yields, parks, signals) rather than on its name. Low on any claim tying
-a specific bucket to a specific Celerrate component, including whether
-the contended lock belongs to memo access at all; those claims need
-symbols this binary does not have.
+For the campaign's decision between local optimization and architectural
+rework, the profile points at neither cleanly. Salsa's interning lock is
+a local target with a clear name and a contention curve that worsens with
+width. But it is 0.84 of 14.08 core-seconds in the fan-out, so removing
+it entirely would not recover the missing cores; the larger term is that
+the same analysis work simply costs more when more threads run it, which
+is not a target a lock-level fix reaches.
