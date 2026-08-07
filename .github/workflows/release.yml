@@ -62,7 +62,7 @@ jobs:
         with:
           toolchain: "1.94"
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
+      - uses: actions/cache@v6
         with:
           path: target/comparison-corpus
           key: comparison-corpus-${{ hashFiles('xtask/comparison-corpus.pin') }}
