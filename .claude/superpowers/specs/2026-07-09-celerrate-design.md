@@ -1,6 +1,6 @@
 # Celerrate — Vision and Engine Architecture Design
 
-Date: 2026-07-09 (amended 2026-07-23)
+Date: 2026-07-09 (amended 2026-08-07)
 Status: Approved (brainstorming output; each sub-project gets its own detailed spec)
 
 Amendment history:

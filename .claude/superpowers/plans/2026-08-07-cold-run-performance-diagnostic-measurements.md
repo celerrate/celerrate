@@ -340,9 +340,10 @@ session discipline, disclosed here as such. Against that 4.94 s median,
 this section's open control (4.67 s) is lower by 0.27 s, about 5.5 %,
 and the close control (4.59 s) is lower by 0.35 s, about 7.1 %;
 averaging the two controls (4.63 s) gives a gap of about 6.3 %. That
-gap is larger than the ~10 % drift threshold would tolerate if it were
-being judged as a same-session drift, but it is not being judged as one:
-it is smaller than the spread each session's own runs already show.
+gap is comfortably inside the ~10 % drift threshold the Protocol sets,
+even though this is a cross-session comparison the threshold was not
+written to judge; it is also smaller than the spread each session's own
+runs already show.
 Section 3's three wall clocks ranged from 4.68 s to 5.41 s; this
 section's six control runs (three open, three close) ranged from 4.46 s
 to 5.16 s; the two ranges overlap between 4.68 s and 5.16 s, and
@@ -813,14 +814,14 @@ full cross of the two, that is every observed value against every
 available value, which is the honest bound when the two sets cannot be
 paired (the profiled runs and the control runs are different runs).
 
-| N | Observed cost (core-seconds) | Available (core-seconds) | Utilisation at the means | Full propagated range |
+| N | Observed cost (core-seconds) | Available (core-seconds) | Utilisation, median observed over mean available | Full propagated range |
 | --- | --- | --- | ---: | ---: |
 | 10 | 13.84, 14.08, 14.16 | 16.52, 13.61, 16.48 | 90.6 % | 83.8 % to 104.1 % |
 | 8 | 11.53, 11.85, 11.17 | 13.00, 12.72, 12.62 | 90.2 % | 85.9 % to 93.9 % |
 | 1 | 5.38, 5.38, 5.61 | 5.29, 5.31, 5.38 | 101.0 % | 100.0 % to 106.0 % |
 
 **The utilisation difference between eight and ten threads does not
-survive its own uncertainty.** At the means the two are 90.6 % and
+survive its own uncertainty.** By this measure the two are 90.6 % and
 90.2 %, a difference of 0.4 points, and the propagated ranges overlap
 almost completely. An earlier reading of this section claimed the two
 ranges did not overlap; that claim was built from a single median fan-out
@@ -832,7 +833,7 @@ nothing about how that figure moves between them.
 
 The single-thread row calibrates the method. One worker inside a phase it
 occupies alone must be essentially 100 % utilised, and the reconciliation
-returns 101.0 % at the means with an upper excursion to 106.0 %. The
+returns 101.0 % by this measure, with an upper excursion to 106.0 %. The
 method therefore reads about 1 % high, with a systematic band of roughly
 ±6 % coming from window edges, phase boundaries and the interval
 estimate. Any utilisation difference smaller than that band is not
@@ -1001,7 +1002,7 @@ Confidence, per claim:
   `persistable_diagnostics` and `served_typed_diagnostics` at ten
   threads, with `class_surface_digest` a third site at eight.
 - **Medium** on the fan-out being about 90 % utilised. The figure is
-  90.6 % at ten threads and 90.2 % at eight at the means, but the
+  90.6 % at ten threads and 90.2 % at eight by this measure, but the
   propagated ranges are 83.8 % to 104.1 % and 85.9 % to 93.9 %, and the
   single-thread calibration shows the method carries a systematic band of
   roughly ±6 %. The order of magnitude is established; the second digit
@@ -1030,9 +1031,10 @@ whole cost at ten threads.
 For the campaign's decision between local optimization and architectural
 rework, the profile now supports a sharper statement than the earlier
 draft of this section did. Salsa's interning lock is a real, named, local
-target whose cost triples between one and ten threads, but it is 0.84 of
-the 8.49 core-seconds of expansion, so removing it entirely would move
-the effective-core figure from about 3.5 to about 3.7. The decision the
+target: its cost is unmeasurable at one thread, where a single worker
+never contends for it, and rises to about 0.84 core-seconds at ten; it is
+0.84 of the 8.49 core-seconds of expansion, so removing it entirely would
+move the effective-core figure from about 3.5 to about 3.7. The decision the
 campaign is actually facing is what to do about the other 7.6
 core-seconds, half of which is the same analysis code getting slower per
 unit of work as threads are added. That is not a lock-level question, and
@@ -2147,18 +2149,30 @@ about **14.7 core-seconds**, against the original split's total
 processor-work excess of 43.53 − 21.71 = **21.82 core-seconds**: on this
 estimate, **roughly two thirds of the measured excess is redundant
 startup paid four times over, not work genuinely expanded by running
-under isolated workers.** The residual, after subtracting that estimate,
-is about 21.82 − 14.7 ≈ 7.1 core-seconds, or a ratio of about **1.33x**
-rather than 2.00x. This second caveat therefore makes the measured
-result *pessimistic* about the architecture's intrinsic prospects, the
-opposite of the first caveat and the opposite of what the earlier draft
-claimed: a real implementation that amortizes startup across many runs
-(a persistent worker pool rather than a fresh process per run, for
-instance) would likely show a substantially smaller processor-work
-deficit than the roughly 2x this section's raw numbers report, though
-this section did not measure such a configuration and the 1.33x
-residual is an estimate built from solo-probe floors, not a fourth
-measured data point in the sweep above.
+under isolated workers.** The solo-probe floor this estimate is built
+from is the total processor cost of a solo run against real content, not
+a startup-only measurement, so it is an upper bound on per-process
+startup rather than a value isolated to it; the 14.7 core-seconds is
+therefore an upper bound on redundant startup, and every ratio derived
+from it below is a lower bound on the intrinsic ratio, not a point
+estimate. The residual, after subtracting that estimate, is about
+21.82 − 14.7 ≈ 7.1 core-seconds, or a ratio of at least about **1.33x**
+rather than 2.00x. Applying the same method to the rebalanced split's
+excess (44.66 − 21.71 = 22.95 core-seconds, minus the same 14.7
+core-seconds) gives a residual ratio of about **1.38x**, so the two
+partitionings together put the lower bound on the intrinsic ratio
+somewhere in the 1.33x-to-1.38x range rather than at a single figure.
+This second caveat therefore makes the measured result *pessimistic*
+about the architecture's intrinsic prospects, the opposite of the first
+caveat and the opposite of what the earlier draft claimed: a real
+implementation that amortizes startup across many runs (a persistent
+worker pool rather than a fresh process per run, for instance) would
+likely show a substantially smaller processor-work deficit than the
+roughly 2x this section's raw numbers report, though this section did
+not measure such a configuration, and the 1.33x-to-1.38x residual range
+is itself an estimate built from solo-probe floors, not a fourth
+measured data point in the sweep above, and remains a lower bound on the
+intrinsic ratio rather than the ratio itself.
 
 **A third caveat this measurement warrants.** Partitioning breaks
 cross-partition name resolution: each partition's process only ever
@@ -2200,7 +2214,8 @@ unrestricted default is estimated to be redundant per-process startup
 rather than intrinsic work expansion, which is not architecture-
 intrinsic in the way section 5's fan-out growth is; a shared-nothing
 design that amortizes startup would likely land closer to the estimated
-1.33x residual than the raw 2.00x to 2.06x this section measured. The
+1.33x-to-1.38x lower bound than the raw 2.00x to 2.06x this section
+measured. The
 direction of the verdict, no gain at any thread budget or partitioning
 tested, is high confidence. The magnitude is not: it depends on how much
 of the measured excess is avoidable startup overhead, which this section
@@ -2265,11 +2280,14 @@ than repeated here.
   default is 2.00x to 2.06x depending on partitioning, but roughly two
   thirds of that excess is estimated, from the solo diagnostic floors
   above, to be redundant per-process startup rather than work
-  genuinely expanded by isolated execution; the residual, intrinsic
-  ratio is estimated at about 1.33x. That estimate was not itself
-  measured as a fourth sweep point (no configuration here amortizes
-  startup across runs), so it is a reasoned bound on the bound, not a
-  measured one.
+  genuinely expanded by isolated execution; because the solo-probe floor
+  behind that estimate is the total cost of a solo run rather than a
+  startup-only measurement, it is an upper bound on startup, and the
+  residual, intrinsic ratio it implies is itself a lower bound, estimated
+  at about 1.33x for the original split and about 1.38x for the
+  rebalanced split. That estimate was not itself measured as a fourth
+  sweep point (no configuration here amortizes startup across runs), so
+  it is a reasoned bound on the bound, not a measured one.
 - **High** that thread oversubscription does not explain the original
   default-configuration result: the group averaged (mean) 4.21 effective
   cores of ten across the three counted repetitions, and the single
