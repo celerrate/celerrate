@@ -1624,3 +1624,314 @@ raises the bound rather than merely moving Celerrate toward it.
   lies. That depends on the irreducible cost of name resolution,
   inference and rendering, which this section deliberately does not
   measure.
+
+## 8. The shared-nothing process-level bound (Task 8)
+
+**Decision gate.** This section's brief runs conditionally: only if
+sections 5 and 6 left the salsa share of the missing cores ambiguous
+after a clear owner failed to emerge. That is this campaign's situation.
+Section 5's salsa buckets at ten threads sum to 6.28 % of worker time
+(5.72 % memo access plus 0.56 % memo wait), under the roughly 15 %
+threshold the gate names. Section 6's mimalloc slope verdict was
+negative: the fan-out speedup from one to ten threads is 3.65x on the
+default allocator against 3.46x on mimalloc, so the allocator moves the
+level, not the slope. Section 4's fan-out still stagnates at 3.83
+effective cores of ten, and no single bucket in section 5 owns the
+shortfall, its largest measured component being productive-work growth
+whose cause section 5 states it did not measure. The gate is met, so
+this probe was built.
+
+Date: 2026-08-07
+Commit: `2621b81` (source tree; the working branch's HEAD at measurement
+time is a later docs-only commit, and `git diff 2621b81 HEAD --stat`
+touches only this measurement document, so the binary this section runs
+is the same performance object every earlier section cites). Binary:
+`target/release/celerrate`, not rebuilt.
+Corpus measured: four clones of the equalized corpus copy at
+`target/comparison-corpus-equalized` (the same corpus as sections 1, 3,
+4, 5, 6 and 7), made with `cp -Rc` into `/tmp/celerrate-partitions/corpus-1`
+through `corpus-4`. Each clone carries its own `celerrate.toml`
+replacing the source corpus's `include = ["."]` with that partition's
+own directory and file list (below), which also keeps the four
+`.celerrate` cache directories separate.
+Machine: otherwise idle for the whole session, except that the four
+partition processes are deliberately concurrent with each other, which
+is the measurement itself.
+Timing mechanism: `/usr/bin/time -p`, the same mechanism sections 3 and
+4 use; for the concurrent measurement it wraps the whole four-process
+`wait` block, so its `real` line is the wall clock until the last
+partition process exits, matching the brief's "last one exits"
+definition.
+
+### Partitioning the corpus
+
+The brief's Step 1 asks for a hand-packed, roughly-equal split by
+top-level directory. Two corrections established earlier in this
+campaign changed what "roughly equal" has to mean here. First, this
+corpus's `vendor/` directory alone holds about 17101 of its 24033 walked
+files, so a naive one-directory-per-partition split puts most of the
+corpus's cost into whichever partition draws `vendor/` and is badly
+imbalanced by construction; splitting within `vendor/` at its next level
+down (one entry per vendor organization, `vendor/symfony`,
+`vendor/rector`, and so on) is necessary to reach balance at all. Second,
+the balancing variable is the *walked* file count (24033 across the
+corpus), not the *project-reported* count (6932): those are different
+sets (`vendor/` is walked and parsed but not project-classified), and
+the brief's own file-count expectation was written against the wrong
+one before Task 7 corrected it.
+
+The split was computed, not hand-packed: every top-level entry in the
+corpus was counted for its own `*.php` file total (each non-vendor
+top-level directory, each `vendor/<organization>` directory, and each
+standalone `*.php` file sitting directly at the corpus root or directly
+under `vendor/`, since `enumerate_php_files` accepts a file as its own
+include root and inserts it as-is (`celerrate_vfs/src/walk.rs:64-65`,
+confirmed against the test `an_explicit_file_root_is_included_regardless_of_extension`),
+so a root-level file like `index.php` or `vendor/autoload.php` can be
+named directly in `include` without pulling in a whole directory around
+it). That produced 97 items summing to exactly 24033. The 97 items were
+then packed into four partitions by longest-processing-time greedy
+bin-packing (sort descending by file count, repeatedly add the next item
+to whichever partition currently holds the smallest sum): the standard
+approximation for balanced multiway partitioning, and a mechanical,
+reproducible stand-in for the brief's "greedy bin-packing by hand is
+fine." Two zero-file entries (`vendor/bin`, the corpus root's `bin`)
+carried no `*.php` files and were left out of every partition's
+`include` list, since naming them would add nothing to any walk.
+
+Recursion needs no explicit subdirectory listing: `walk_directory`
+descends into every subdirectory of a directory root automatically
+(`celerrate_vfs/src/walk.rs:87-133`), so naming `vendor/symfony` in
+`include` is sufficient to pull in everything beneath it.
+
+### The partition table
+
+| Partition | Walked files (`*.php` under its `include` list) | Project files reported (`--verbose`) | Largest entries |
+| --- | ---: | ---: | --- |
+| 1 | 6009 | 5049 | `src` (4965), `vendor/nikic` (250), `vendor/smarty` (220) |
+| 2 | 6008 | 60 | `vendor/symfony` (4730), `vendor/greenlion` (368), `vendor/twig` (238) |
+| 3 | 6008 | 1474 | `vendor/rector` (3117), `tests` (952), `vendor/friendsofphp` (689) |
+| 4 | 6008 | 349 | `vendor/prestashop` (1370), `vendor/doctrine` (1032), `vendor/phpunit` (976) |
+| **Sum** | **24033** | **6932** | |
+
+Both sums check out exactly: the four walked counts (6009, 6008, 6008,
+6008) sum to 24033, the full walked set Task 7 established for this
+corpus, and the four project counts (5049, 60, 1474, 349) sum to 6932,
+the equal-file-set invariant every earlier section in this document
+carries. The walked balance is close to perfect (6008.25 is the exact
+quarter; the actual split is 6009/6008/6008/6008, an imbalance of one
+file). The project-count balance is not attempted and is not close:
+partition 1 alone holds 5049 of the corpus's 6932 project files, because
+`src` is both the corpus's largest single directory and entirely
+first-party, and the bin-packer balances on walked count only, exactly
+as instructed. This asymmetry matters for reading the result below.
+
+Each partition's full `include` list (23, 22, 25 and 27 entries
+respectively) is recorded in this session's scratch directory,
+`/tmp/celerrate-partitions/`, not reproduced here in full; the table
+above names each partition's largest entries.
+
+### Verification that each partition's configuration works
+
+For each partition: `cd /tmp/celerrate-partitions/corpus-<K> && rm -rf
+.celerrate && target/release/celerrate check . --verbose`, absolute
+binary path, captured stdout and stderr separately (`--verbose` writes
+its summary line to stderr).
+
+| Partition | `--verbose` project-file line | Configuration diagnostics (CEL0043 to CEL0049) |
+| --- | --- | --- |
+| 1 | `5049 project files reported; verdicts 0 served / 0 discarded / 5049 absent from the cache` | 0 |
+| 2 | `60 project files reported; verdicts 0 served / 0 discarded / 60 absent from the cache` | 0 |
+| 3 | `1474 project files reported; verdicts 0 served / 0 discarded / 1474 absent from the cache` | 0 |
+| 4 | `349 project files reported; verdicts 0 served / 0 discarded / 349 absent from the cache` | 0 |
+
+Every partition reported exactly the project count its `include` list
+was built to produce, and none raised a configuration diagnostic. Each
+run exited 1, the ordinary exit code for a `check` that finds
+diagnostics in the code it analyzed, not a configuration failure.
+
+The walked count has no equivalent `--verbose` line (that channel
+reports only the project-classified subset; see `verbose.rs:89-92`), so
+it was cross-checked the same way section 1 cross-checks its own project
+count: independently, by walking each partition's own `include` entries
+with `find` (a directory entry counted via `find <entry> -name '*.php'
+-type f | wc -l`, a file entry counted as 1) inside that partition's
+corpus copy. That independent count reproduced the partition table's
+walked column exactly (6009, 6008, 6008, 6008), which is expected since
+the table was built from the same counts, but confirms no entry was
+dropped or misspelled between the plan and the four `celerrate.toml`
+files actually written to disk.
+
+### Session-open control
+
+Three cold runs, default binary, default thread count, on the
+(unpartitioned) equalized corpus:
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 4.49 s |
+| Run 2 | 4.62 s |
+| Run 3 | 4.71 s |
+| **Median** | **4.62 s** |
+
+### The shared-nothing cold run
+
+Three repetitions. Before each, `.celerrate` was removed from all four
+partition copies (cold, outside the timed region); each repetition then
+launched all four partitions as concurrent background processes from
+their own directories and timed the wall clock until the last one
+exited:
+
+| Repetition | Wall clock |
+| --- | ---: |
+| Repetition 1 | 10.41 s |
+| Repetition 2 | 9.96 s |
+| Repetition 3 | 10.08 s |
+| **Median** | **10.08 s** |
+
+This is slower, not faster, than a single ten-thread process over the
+whole corpus: 10.08 s against this session's own control (4.62 s), a
+factor of 2.18x, and against section 4's ten-thread cold median from an
+earlier session (4.57 s), a factor of 2.21x.
+
+**A supplementary, uncontrolled measurement explains most of the gap.**
+Outside the three counted repetitions, one further cold run recorded
+each partition's own `/usr/bin/time -p` wall clock while all four ran
+concurrently (the same launch, with each process wrapped individually
+instead of only the outer `wait` block):
+
+| Partition | Wall clock (concurrent with the other three) |
+| --- | ---: |
+| 1 | 4.58 s |
+| 2 | 3.63 s |
+| 3 | 9.79 s |
+| 4 | 2.96 s |
+
+Partition 3 alone accounts for essentially the whole shared-nothing
+wall clock (9.79 s of the 10.08 s median), even though its walked file
+count (6008) is indistinguishable from the other three. Partition 3
+carries `vendor/rector` (3117 files, the second-largest single entry in
+the whole corpus after `src` and `vendor/symfony`) alongside `tests`
+(952) and `classes` (326); whatever makes those files costlier to walk,
+read, parse or analyze than partition 4's mix of `vendor/prestashop`,
+`vendor/doctrine` and `vendor/phpunit` is not identified by this
+measurement; only its effect is. Equal walked-file-count partitioning,
+which is what the brief asks for and what section 8's balance is
+verified against, does not produce equal wall-clock partitions on this
+corpus. That is the single largest reason the shared-nothing run is
+slower than the ten-thread control rather than faster: the overall wall
+clock is set by its slowest partition, and this partitioning scheme has
+no way to see wall-clock cost in advance, only file counts.
+
+### Session-close control
+
+Three cold runs, default binary, default thread count, on the
+(unpartitioned) equalized corpus:
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 4.39 s |
+| Run 2 | 4.79 s |
+| Run 3 | 4.84 s |
+| **Median** | **4.79 s** |
+
+Drift from open to close control: absolute difference 0.17 s over the
+open median of 4.62 s, about 3.7 %, well inside the ~10 % threshold the
+Protocol section sets. The session's comparisons stand.
+
+### Reading the bound honestly
+
+The brief frames this section as producing "an upper bound on what a
+PHPStan-style isolated-worker architecture could gain." The measurement
+does not support that framing in the direction the brief expects: run
+as measured, four shared-nothing processes over an equal-walked-file
+split of this corpus take about 2.2x *longer* in wall clock than one
+process analyzing the whole corpus at ten threads, not less. Two
+mechanisms plausibly combine to produce that result, and this section
+does not separate their individual contributions:
+
+1. **Per-partition wall-clock imbalance**, documented above: balancing
+   by walked file count does not balance wall-clock cost, and the
+   overall measurement is bounded below by its slowest partition
+   (partition 3, 9.79 s solo-but-concurrent), which alone exceeds the
+   ten-thread control.
+2. **Thread oversubscription**, not separated from the above: each of
+   the four processes runs at the binary's default thread count, which
+   auto-detects the machine's ten cores, so four concurrent processes
+   contend forty rayon worker threads for ten physical cores. Neither
+   the brief's Step 3 command nor this section's re-derivation of it
+   sets `RAYON_NUM_THREADS` per partition process to divide the ten
+   cores four ways; running it that way was not tried, so whether
+   thread-limiting each process would close some or all of the 2.2x gap
+   is not established here.
+
+Because the measured shared-nothing wall clock is worse than the
+control, this section cannot report a positive "gain" figure at all;
+the honest reading is that the naive shared-nothing configuration this
+brief specifies, measured on this corpus and this machine, shows no
+speed advantage over the existing ten-thread single-process run, and
+loses to it by roughly 2.2x. Whatever bound a well-tuned shared-nothing
+deployment (partitioned by measured cost rather than file count,
+thread-limited per worker to avoid oversubscription) might show is not
+measured by this section and is not derivable from it without further
+runs this task does not make.
+
+**The two caveats the brief requires, stated in full.** First, this
+measurement excludes the merge and determinism costs a real
+shared-nothing implementation would have to pay: reconciling four
+independently produced diagnostic sets into one coherent report, and
+guaranteeing that the merged result is deterministic and independent of
+which partition finishes first, are real engineering costs this
+measurement does not include, so even a favourable wall-clock comparison
+would have overstated the gain available to a real implementation.
+Second, each of the four processes redundantly pays its own stub
+loading and process startup: the fixed process cost section 2 measured
+(19.6 ms on an empty project, though this corpus's own Composer and
+autoload discovery costs more than that on every partition) is paid
+four times over here instead of once, which inflates the measured
+shared-nothing wall clock and therefore, had the result come out
+favourable, would have made this section's bound conservative rather
+than optimistic in that one respect.
+
+**A third caveat this measurement warrants.** Partitioning breaks
+cross-partition name resolution: each partition's process only ever
+sees its own slice of the corpus, so a class in partition 1 that extends
+a class physically walked into partition 3 is, from partition 1's
+process, an unresolved symbol exactly as if that class did not exist in
+the project at all. The four processes are therefore not doing the same
+analysis the single ten-thread process does; they are doing four
+smaller, mutually blind analyses whose diagnostics this section never
+attempted to reconcile or compare against the single-process run's
+output. This cuts in a specific direction: it makes the four-process
+wall clock an even less reliable stand-in for "the same work, done in
+parallel," because part of what makes the single-process run slower is
+work (cross-partition resolution, and everything downstream of it in
+type inference and rule evaluation) that the four-process run simply
+never does. Combined with the wall-clock result already being a
+slowdown rather than a speedup, this section's shared-nothing figure is
+not an upper bound on the achievable gain in the way the brief's framing
+intended; it is, at best, a report that the naive version of this
+architecture is not obviously faster even before its diagnostic
+completeness is discounted for the resolution it never performs.
+
+### Confidence
+
+- **High** that the four partitions' walked file counts sum to 24033 and
+  their project-reported counts sum to 6932, both independently
+  verified against the counts each `celerrate.toml` was built from.
+- **High** that the shared-nothing configuration this section measured,
+  as specified by the brief (default thread count per process, no
+  thread-limiting), is slower in wall clock than the single ten-thread
+  control on this corpus and machine: three repetitions (10.41 s,
+  9.96 s, 10.08 s) all exceed both this session's control (4.62 s to
+  4.79 s) and section 4's cross-session ten-thread median (4.57 s) by
+  roughly a factor of two, with no overlap in range.
+- **Medium** on the specific mechanism: the supplementary single-run
+  per-partition breakdown points at wall-clock imbalance (one partition
+  dominating the total) as the larger of the two candidate causes, but
+  that breakdown is one uncontrolled run, not three repetitions, and
+  does not isolate imbalance from thread oversubscription.
+- **Not established**: what a shared-nothing architecture would show if
+  partitioned by measured cost instead of file count, and with each
+  worker thread-limited to avoid oversubscription. Both are plausible
+  next probes; neither was run here.
