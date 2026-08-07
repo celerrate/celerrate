@@ -2307,3 +2307,425 @@ than repeated here.
   startup-amortized shared-nothing implementation would show; 1.33x is
   this section's estimate from solo-probe floors, not a measurement of
   such an implementation.
+
+## 9. The core-second map (Task 9)
+
+Date: 2026-08-07
+Commit: `2621b81` (the source tree every section above measures)
+Corpus: the equalized corpus copy at `target/comparison-corpus-equalized`
+
+This section attributes the cold run's wall clock and its idle cores. It
+introduces no new measurement: every figure below is carried from a
+numbered section above and carries that section as its evidence pointer.
+
+**The two file counts, stated once more so no arithmetic below is read
+against the wrong one.** A cold run walks, reads and parses 24033 PHP
+files; 6932 of them are project-classified and are the count
+`check --verbose` reports (section 7). Every per-file figure in this
+section divides by 24033.
+
+### The map
+
+Median cost is section 3's reference cold run (`check . --verbose`,
+three repetitions, `/usr/bin/time -p`). Measured efficiency is section
+4's single-thread median divided by its ten-thread median for the same
+phase, expressed as effective cores out of the ten the machine has; it
+comes from a different session than the median-cost column, and is
+reported as a ratio for that reason rather than as an absolute time.
+
+| Phase | Median cost | Parallel today | Measured efficiency (effective cores of 10) | Loss owner | Evidence |
+| --- | ---: | --- | ---: | --- | --- |
+| Filesystem walk | 402 ms | No | 0.99 (372 / 374) | Serial by construction: `enumerate_php_files` accumulates into a `BTreeSet` on the calling thread, so no thread count changes it | sections 3, 4, 7 |
+| File read and input set | 467 ms | Yes | 0.73 (394 / 540), negative | Measured: the file input and output bucket grows from 4.72 core-seconds at eight threads to 6.72 at ten, a 42 % increase inside the `open` syscall for the same files. The mechanism behind that growth (filesystem or page-cache contention is the stated candidate) is **not measured** | sections 3, 4, 5 |
+| Analysis fan-out | 1634 ms | Yes | 3.83 (5355 / 1399) | Work expansion 2.62x, plus about 10 % idleness. The expansion decomposes as productive work +4.21 core-seconds (50 % of the summed parts), allocator +2.13 (25 %), salsa memo access +1.17 (14 %), salsa interning lock +0.84 (10 %), memo wait and salsa glue +0.14 together (2 %). The largest term, productive-work growth, is **unattributed as to cause**: no hardware counter was read | sections 3, 4, 5, 6 |
+| Suggest enrich | 234 ms | No | 0.99 (234 / 236) | Serial. No mechanism measured: **unattributed** | sections 3, 4 |
+| Render report | 178 ms | No | 1.00 (187 / 187) | Serial. No mechanism measured: **unattributed** | sections 3, 4 |
+| Persist: collect entries | 1041 ms | Yes | 4.63 (4053 / 875) | The best-scaling phase measured. The 5.37 cores it does not claim are **unattributed**: the phase holds only 2.68 % of worker samples at ten threads, its parallel work being memoized fetches and conversions with the workers largely parked, and section 5 does not size its main-thread serialisation | sections 3, 4, 5 |
+| Persist: collect signatures | 44 ms | No | 0.81 (34 / 42), negative | Serial, and slightly slower at ten threads than at one. **Unattributed** | sections 3, 4 |
+| Persist: pack writes | 135 ms | No | 0.97 (118 / 122) | Serial. **Unattributed** | sections 3, 4 |
+| Fixed process cost | 19.6 ms | No | not applicable | Process start and teardown 5.3 ms, plus a 14.3 ms increment covering embedded-stub loading, configuration, discovery and cache-directory handling as an *empty* project exercises them | section 2 |
+| Unattributed residue | 785 ms | not applicable | not applicable | **Unattributed.** Two candidates were tested and ruled out by measurement (`--verbose` stderr formatting, cache-directory deletion). Thread-pool setup, teardown and scheduling variance are named as plausible and untested. This corpus's own Composer and autoload discovery falls inside this residue and is timed nowhere in this document | sections 3, 7 |
+| **Wall-clock total** | **4940 ms** | | | | section 3 |
+
+The eight phases sum to 4135 ms; adding the fixed process cost (19.6 ms)
+and the residue (785.4 ms) closes on the 4940 ms wall-clock median
+exactly, by construction of the residue.
+
+### The idle cores
+
+Whole run, from the only measurement in this document that reports
+processor time for the entire process: 21.71 core-seconds over a 4.62 s
+wall clock, that is **4.70 effective cores out of ten** (section 8's
+session-open control, its median-wall-clock run). The session-close
+control gives 22.26 over 4.79 s, 4.65 effective cores. Roughly 5.3 of the
+machine's ten cores are idle across a cold run, averaged over its length.
+
+Only one phase has a measured decomposition of where its own cores go,
+and the campaign's central number lives there. For the analysis fan-out
+at ten threads against one (section 5):
+
+- The phase is about 90 % utilised. That costs a factor of 1.10 out of
+  the ten.
+- The phase does 2.62 times more processor work at ten threads than at
+  one, for the same 24033 files and the same result. That costs a factor
+  of 2.62.
+- Together: 10 divided by 2.62, times 0.906, is 3.46 effective cores,
+  against 3.43 measured directly from the profiled artefact's own wall
+  clocks and 3.83 from section 4's stripped artefact.
+
+**Expansion, not idleness, owns the missing cores**, and the single
+largest component of the expansion (productive work, +4.21 core-seconds,
+roughly a third of the fan-out's whole cost at ten threads) has a
+measured size and no measured cause. Section 6 tested the one structural
+hypothesis the campaign could price cheaply and eliminated it: the
+allocator moves the level, not the slope, so the expansion is not
+allocation-bound.
+
+No other phase carries a bucket-level attribution. For the file read and
+input set phase the direction and size of the loss are measured (a 42 %
+growth in `open` time between eight and ten threads) but the mechanism is
+not. For persist: collect entries, for the five serial phases and for the
+785 ms residue, nothing in this campaign attributes the loss at all;
+those rows say unattributed and mean it.
+
+### Per-file scale, for calibration
+
+Over the 24033 files a cold run walks, reads and parses:
+
+- Whole cold run: 4940 ms, about **206 microseconds per file**.
+- Corpus floor (walk, read, parse, fixed cost): 1273.6 ms, about
+  **53 microseconds per file**, that is 24.1 % of the run (section 7).
+- Everything above parsing: about 4.00 s, about **166 microseconds per
+  file** (section 7).
+
+## 10. The Amdahl accounting and the lever list
+
+### The Amdahl accounting
+
+Three of the eight phases run under rayon today: file read and input set
+(`session.rs` line 439), analysis fan-out (`analysis.rs` lines 145 and
+152) and persist: collect entries (`cache/mod.rs` lines 276 and 302), as
+section 5 establishes by reading the source against the profiled call
+sites. The other five phases, the fixed process cost and the residue are
+serial or unattributed and are held constant in every construction below.
+
+The inputs, all from section 4's curve, in milliseconds:
+
+| Phase | Single-thread median | Ten-thread median |
+| --- | ---: | ---: |
+| File read and input set (parallel) | 394 | 540 |
+| Analysis fan-out (parallel) | 5355 | 1399 |
+| Persist: collect entries (parallel) | 4053 | 875 |
+| **Parallelizable sum** | **9802** | **2814** |
+| Filesystem walk (serial) | 372 | 374 |
+| Suggest enrich (serial) | 234 | 236 |
+| Render report (serial) | 187 | 187 |
+| Persist: collect signatures (serial) | 34 | 42 |
+| Persist: pack writes (serial) | 118 | 122 |
+| **Serial sum** | **945** | **961** |
+
+The serial sum is taken at ten threads (961 ms), since every construction
+below describes a ten-thread run; using the single-thread figures instead
+moves every total by 16 ms, which changes no conclusion. Fixed process
+cost is 19.6 ms (section 2) and the residue is 785 ms (section 3), both
+carried unchanged. **Carrying the residue unchanged is an assumption, not
+a measurement**: nothing in this campaign establishes that process
+startup, teardown and thread-pool scheduling cost the same on a faster
+run.
+
+**Construction A, the literal reading: every parallelizable phase at the
+fan-out's measured efficiency (3.83 effective cores of ten).**
+
+    9802 / 3.83                      = 2559.3 ms   (the three parallel phases)
+    2559.3 + 961 + 19.6 + 785        = 4324.9 ms
+
+**Cold total: 4.32 s.** This is *worse* than a like-for-like improvement,
+because persist: collect entries already runs at 4.63 effective cores and
+the construction drags it down to 3.83. It is reported because the brief
+asks for the literal figure, and immediately superseded.
+
+**Construction B, the local path's best case: the fan-out's measured
+efficiency as a floor, with no phase made worse than it is today.**
+
+    File read and input set:  394 / 3.83          =  102.9 ms  (measured today: 540)
+    Analysis fan-out:        5355 / 3.83          = 1398.2 ms  (measured today: 1399)
+    Persist: collect entries: measured             =  875.0 ms  (already 4.63 cores)
+    Parallel sum                                   = 2376.1 ms
+    2376.1 + 961 + 19.6 + 785                      = 4141.7 ms
+
+**Cold total: 4.14 s.** Against section 3's 4.94 s median that is a
+saving of 0.80 s, 16.2 %. Against section 7's same-session PHPStan median
+of 38.361 s it is a ratio of **9.3x**; against section 1's lower
+cross-session PHPStan median of 32.652 s, 7.9x.
+
+Read plainly: bringing every parallel phase up to the fan-out's own
+measured efficiency is worth almost exactly one phase, the file read, and
+nothing else. The fan-out is already at that efficiency by definition and
+persist: collect entries is already above it.
+
+**Construction C, the mimalloc branch.** Section 6's verdict has two
+halves that must not be conflated. Its *slope* verdict is negative: the
+fan-out's speedup from one thread to ten is 3.65x on the default
+allocator against 3.46x on mimalloc, so there is no mimalloc-improved
+efficiency to substitute into construction B. Its *level* verdict is
+positive: mimalloc's fan-out costs 4734 ms at one thread against the
+default's 5347 ms, and its whole-run wall clock is 0.47 s lower at ten
+threads. Only the fan-out phase was measured under mimalloc; the read and
+persist phases were not, and their default-allocator figures are carried.
+
+    C1, fan-out at mimalloc's measured single-thread cost, run at 3.83 cores:
+      4734 / 3.83                                  = 1236.0 ms
+      1236.0 + 102.9 + 875 + 961 + 19.6 + 785      = 3979.5 ms   -> 3.98 s, 9.6x
+
+    C2, fan-out at mimalloc's own measured efficiency (3.46 cores):
+      4734 / 3.46                                  = 1368.2 ms
+      1368.2 + 102.9 + 875 + 961 + 19.6 + 785      = 4111.7 ms   -> 4.11 s, 9.3x
+
+    C3, construction B with section 6's whole-run level gain applied:
+      4141.7 - 470                                 = 3671.7 ms   -> 3.67 s, 10.4x
+
+C2 reproduces construction B almost exactly, which is section 6's slope
+verdict showing up in the arithmetic rather than a separate finding. C3
+is the most favourable of the three and rests on the least: it assumes
+the whole-run level gain measured on today's configuration survives
+unchanged on an improved one, which nothing measures. **The mimalloc
+branch is therefore a band, 3.67 s to 3.98 s, that is 9.6x to 10.4x**,
+with C2's 9.3x as the conservative floor.
+
+**Construction D, the bound above the local path: ideal ten-core scaling
+of every parallelizable phase**, which is the same as removing the
+fan-out's 2.62x work expansion outright and claiming all ten cores:
+
+    9802 / 10                                      =  980.2 ms
+    980.2 + 961 + 19.6 + 785                       = 2745.8 ms
+
+**Cold total: 2.75 s, a ratio of 14.0x.** This is the strongest statement
+the parallelism side of the campaign supports, and it is not achievable
+by anything measured: it requires that the productive-work growth section
+5 could not explain simply not happen. It is recorded because it bounds
+the whole class of parallelism work. **Even perfect parallelism does not
+reach 20x on this corpus and machine.** Everything beyond 14.0x has to
+come from doing less work, and nothing in this campaign measures how much
+less work is possible.
+
+For scale against section 7: at construction B's 4.14 s, the work above
+parsing is 4.14 minus the 1.274 s floor, that is 2.87 s, a compression of
+1.39x against today's 4.00 s. A 20x ratio needs that same quantity at
+644 ms, a compression of 6.2x.
+
+### The lever list
+
+Every lever below carries an estimated gain bounded by a measured figure
+from this document, its class, and its recommended order. A lever whose
+gain no measurement bounds is not on this list; the ones that had to be
+left off are named after it.
+
+**These bounds are not additive.** mimalloc's is a whole-run wall-clock
+figure that overlaps every phase's, and several of the others are upper
+bounds on the same parallel inefficiency. The composed figure is
+construction B and its mimalloc branch above, 4.14 s or 3.67 to 3.98 s,
+not the sum of the rows.
+
+| Order | Lever | Class | Estimated gain, and the measured figure that bounds it | Evidence |
+| ---: | --- | --- | --- | --- |
+| 1 | Adopt mimalloc as the global allocator | Dependency | Up to **-0.47 s**, 10.3 % of the ten-thread wall clock (4.56 s default against 4.09 s mimalloc, medians of three runs each, alternated within one session). Bounded above by that figure; the same session measured 13.3 % at one thread and 18.7 % at four, so the ten-thread figure is the relevant and the smallest of the three | section 6 |
+| 2 | Stop the file read and input set phase scaling negatively (cap its thread count, or serialise its `open` calls) | Local | Up to **-300 ms**, from the phase's own measured curve: 540 ms at ten threads against 240 ms at four, both medians of three runs. Up to **-437 ms** if it instead reached the fan-out's 3.83 effective cores (394 ms single-thread divided by 3.83 is 103 ms). The mechanism is measured in direction and size (file input and output core-seconds 4.72 at eight threads against 6.72 at ten, +42 % inside `open`) but not in cause | sections 4, 5 |
+| 3 | Close persist: collect entries' remaining parallel gap | Local | Up to **-470 ms**: 875 ms measured at ten threads against 405 ms at ideal ten-core scaling of its 4053 ms single-thread cost. An upper bound only: the phase is already the best-scaling one measured, and no bucket attribution exists for the 5.37 cores it does not claim | sections 3, 4, 5 |
+| 4 | Parallelize the filesystem walk | Local | Up to **-362 ms**: the walk costs 402 ms and is thread-independent by construction (372 ms at one thread, 374 ms at ten), so nine tenths of it is the ideal ten-core bound. The cause of its serialisation is named in the source (`BTreeSet` accumulation on the calling thread), which is why this row has a mechanism where rows 5 and 6 do not | sections 3, 4, 7 |
+| 5 | Reduce salsa interning traffic, or contend less for its lock | Local, with a dependency variant | Up to **-91 ms** on section 4's fan-out median (1399 ms), from section 5's own statement that removing this contention entirely moves the fan-out from about 3.46 to about 3.70 effective cores, that is 6.5 % off the phase. The lock is named down to five entry points, 1598 of 1763 contended samples entering through `salsa::interned::IngredientImpl<C>::intern_id` | section 5 |
+| 6 | Make suggest enrich and render report cheaper or parallel | Local | Up to **-412 ms**, which is their entire combined measured cost (234 ms and 178 ms), both flat with thread count. This bound is the phase cost itself: **no measurement in this campaign suggests any particular fraction of it is removable**, so the row is honest about being an upper bound with nothing inside it | sections 3, 4 |
+| 7 | Reduce the fixed process cost | Local | Up to **-19.6 ms**, 0.4 % of the wall clock. Bounded, measured, and immaterial. It is listed so that its size is on the record and it is not revisited | section 2 |
+| 8 | Adopt a shared-nothing, PHPStan-style worker architecture | Architectural | Bounded at **no gain**. Every configuration measured is slower in wall clock than the single ten-thread process (6.43 s to 10.08 s against a 4.62 s control) and burns 1.46x to 2.06x its processor work, across two partitionings and three thread budgets. A startup-amortizing implementation is estimated at a 1.33x residual, which is still a loss, and that estimate is reasoned from solo-probe floors rather than measured. **Recommended order: not to be pursued in the form measured** | section 8 |
+
+Rows 1 to 5 are the ones with both a bound and a mechanism, and they are
+ordered by gain per unit of risk: row 1 is a one-line dependency change
+with the largest measured gain, rows 2 and 4 have named causes, row 3 is
+a bound without a cause, row 5 is small but precisely located. Row 6 is
+a bound with nothing behind it. Row 7 is immaterial. Row 8 is a negative
+result and belongs on the list precisely so that it is not re-proposed.
+
+### Levers that had to be left off, for lack of a measured bound
+
+Naming these is a finding of the campaign, not an omission from it.
+
+- **The productive-work growth in the analysis fan-out.** +4.21
+  core-seconds between one thread and ten, 50 % of the fan-out's work
+  expansion and roughly a third of its cost at ten threads: the largest
+  single quantity this campaign measured. Its size is bounded; its cause
+  is not. Section 5 establishes that it is not lock contention, not memo
+  waiting and not the allocator, because those are separate buckets that
+  grow separately, and section 6 independently eliminates the allocator
+  by showing the level and the slope move differently. No lever can be
+  named against it without an instrument this campaign does not have:
+  hardware performance counters, or an experiment that varies memory
+  pressure independently of thread count. **The campaign's largest
+  finding has no lever attached to it.**
+- **The 785 ms unattributed residue**, and inside it this corpus's own
+  Composer and autoload discovery cost, which is timed nowhere in this
+  document. The residue is 15.9 % of the cold wall clock, larger than
+  five of the eight phases. Two candidates were ruled out by measurement;
+  no positive attribution exists, so no gain can be estimated.
+- **The `tests` and `classes` cost concentration.** `tests` costs 4.73 s
+  in a solo cold run against a roughly 0.95 to 1.0 s floor every solo run
+  in that table shares, and `tests/Unit` accounts for 3.41 s of it over
+  480 files, while `vendor/symfony` costs 0.98 s over 4730 files. The
+  concentration's size is measured and it is large. Section 8 states
+  plainly that it does not open the files to find the cause, so no gain
+  can be estimated and this stays a diagnostic lead rather than a lever.
+  It is the most promising unexplored direction the campaign leaves
+  behind.
+- **Compressing the work above parsing.** 4.00 s today, 166 microseconds
+  per walked file. Section 7 computes that a 20x ratio requires
+  compressing it by about 6.2x. Nothing in this campaign bounds whether
+  any fraction of that compression is achievable, which is precisely why
+  the ambition proposal below cannot be built on it.
+
+## 11. The ambition amendment proposal
+
+**Status: a proposal. Nothing in the parent design document was changed
+by the work that produced this section.** It awaits approval before the
+wording below is applied to
+`.claude/superpowers/specs/2026-07-09-celerrate-design.md`.
+
+### The three figures the proposal rests on
+
+- **The measured ceiling: 30.1x.** PHPStan's same-session cold median of
+  38.361 s divided by the 1.274 s corpus floor, which is the cost of
+  walking, reading, lexing and parsing all 24033 files plus the fixed
+  process cost. Every combination of the observed extremes leaves it
+  between 22.1x and 32.1x; using section 1's lower cross-session PHPStan
+  median gives 25.6x; at one thread it collapses to 12.3x. It is an upper
+  bound on a bound: the truly reachable ceiling is lower by a margin
+  section 7 deliberately does not measure, and lower again because
+  project discovery is omitted from the floor. (Section 7.)
+- **The local path's best case: 9.3x, or 9.6x to 10.4x with the measured
+  allocator gain.** Construction B above: 4.14 s if every parallel phase
+  reached the fan-out's own measured efficiency, 3.67 s to 3.98 s with
+  mimalloc's measured level gain. The bound above the whole class of
+  parallelism work is 14.0x, at 2.75 s, and requires the fan-out's
+  unexplained 2.62x work expansion simply not to happen. (Section 10.)
+- **The architectural path's bound: no gain.** A shared-nothing split
+  into isolated worker processes is slower in wall clock at every
+  partitioning and thread budget measured and burns 1.46x to 2.06x the
+  single process's processor work; the startup-amortized residual is
+  estimated at 1.33x, still a loss, and is an estimate rather than a
+  measurement. (Section 8.)
+
+### What the evidence defends
+
+Today's measured ratio is 6.6x (section 1) and 7.3x (section 7). The
+parallelism-only best case is 9.3x, reaching 10.4x if the allocator lever
+lands and its measured level gain survives. Ideal parallelism, which
+nothing measured makes achievable, reaches 14.0x. The architectural
+alternative delivers nothing. Everything above 14.0x requires doing less
+work, and no measurement in this campaign bounds how much less work is
+possible.
+
+**The evidence therefore defends about 10x, and does not defend 20x.**
+The proposed figure sits at the top of the measured local-path band
+(9.6x to 10.4x) and below the class bound (14.0x), which is where an
+ambition belongs: reachable by the levers this campaign priced, but not
+already reached.
+
+The campaign's central tension should be stated rather than dissolved.
+20x is not arithmetically impossible: it is below the 30.1x ceiling with
+a factor of 1.51x to spare. But the only two structural options the
+campaign priced were an allocator swap, worth about ten percent of the
+wall clock as a level gain and nothing as a slope gain, and a
+shared-nothing architecture, worth nothing at all. What 20x actually
+requires is a 6.2x compression of everything above parsing, and the
+campaign found no lever pointed at it, because its largest measured
+quantity (the fan-out's unexplained productive-work growth) has no
+measured cause and therefore no lever. Amending the published figure down
+to 10x is not a retreat from ambition; it is refusing to publish a number
+that no measurement in this campaign supports.
+
+### The exact replacement wording
+
+Two passages in
+`.claude/superpowers/specs/2026-07-09-celerrate-design.md`, section 7,
+under "Published performance targets", plus one amendment-history entry.
+
+**Passage 1, the target sentence.** Replace:
+
+> Held in CI by benchmarks: at least ~20x faster than PHPStan on a cold full
+> analysis, and sub-second incremental updates on single-file changes in a
+> Symfony-sized project.
+
+with:
+
+> Held in CI by benchmarks: at least ~10x faster than PHPStan on a cold full
+> analysis, and sub-second incremental updates on single-file changes in a
+> Symfony-sized project.
+
+**Passage 2, the position paragraph's closing reasoning.** Replace,
+inside the paragraph beginning "Position at the end of the CLI product
+sub-project", everything from `The "at least ~20x faster" ambition above
+is still not amended down` through `isolates how much, or rules other
+costs in or out.` with:
+
+> The "at least ~20x faster" ambition this section previously held is
+> amended down to "at least ~10x" on the evidence of the 2026-08-07
+> cold-run performance diagnostic
+> (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`).
+> Both reasons the previous measurement gave for not testing the gap are
+> gone: the quadratic did-you-mean pass in the presentation layer is
+> fixed, and the whole process now runs at 4.51 effective cores of 10
+> (22.0 s of CPU over 4.874 s of wall clock), up from the 1.27 the
+> superseded run measured the same way (17.0 s over 13.41 s), still short
+> of PHPStan's own 6.21. The diagnostic then measured what fills the
+> remaining gap, and three of its figures set the new number. First, the
+> arithmetic ceiling on this corpus and machine is 30.1x: walking,
+> reading, lexing and parsing all 24033 PHP files a cold run touches
+> costs 1.274 s against PHPStan's same-session cold median of 38.361 s,
+> so no optimization of anything Celerrate does above parsing can beat
+> that ratio, and the truly reachable ceiling is lower than 30.1x by a
+> margin the diagnostic deliberately does not measure. Second, the
+> parallelism-only best case is 9.3x: if every phase that runs under
+> rayon today reached the analysis fan-out's own measured efficiency
+> (3.83 effective cores of 10), the cold total would fall from 4.94 s to
+> 4.14 s, and to between 3.67 s and 3.98 s (9.6x to 10.4x) with the
+> measured allocator gain on top; even ideal ten-core scaling of every
+> parallelizable phase, with the fan-out's measured 2.62x work expansion
+> removed outright, reaches only 2.75 s and 14.0x. Third, the
+> architectural alternative was priced and rejected: a shared-nothing,
+> PHPStan-style split into isolated worker processes is slower in wall
+> clock at every partitioning and thread budget measured, and burns 1.46x
+> to 2.06x the single process's processor work. Reaching ~20x would
+> require compressing everything Celerrate does above parsing by about
+> 6.2x, and no measurement in that campaign bounds whether any part of
+> that compression is achievable, so ~20x stays arithmetically possible
+> on this corpus while being supported by no measured path. It is
+> recorded here as an unbounded aspiration, not as a held target.
+
+The paragraph's final sentence, beginning "Section 11 of
+`.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`
+carries the evidence", is unchanged and stays where it is.
+
+**Passage 3, the amendment-history entry**, appended to the list near the
+top of the document in its established dated style. The list carries two
+punctuation forms, `2026-07-14 —` and `2026-07-19:`; the colon form is
+used below, since this repository's writing conventions exclude
+em-dashes:
+
+> - 2026-08-07: amended the published cold-run performance target down
+>   from "at least ~20x faster than PHPStan" to "at least ~10x", on the
+>   evidence of the cold-run performance diagnostic
+>   (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`):
+>   the arithmetic ceiling on the pinned corpus is 30.1x, the
+>   parallelism-only best case is 9.3x (9.6x to 10.4x with the measured
+>   allocator gain), ideal ten-core parallelism reaches 14.0x, and the
+>   shared-nothing architectural alternative was measured to deliver no
+>   gain at any partitioning or thread budget tried. Section 7's
+>   published-performance-targets paragraph carries the derivation.
+
+### What this proposal does not claim
+
+- It does not claim 10x is easy. It is above every ratio this campaign
+  measured (6.6x and 7.3x) and needs most of the lever list to land.
+- It does not claim the ceiling is reachable. 30.1x is an upper bound on
+  a bound, and both of its own caveats push the true ceiling down.
+- It does not claim 20x is impossible. It claims that no path this
+  campaign measured reaches it, and that publishing a target with no
+  measured path behind it is what the design document's own
+  anti-false-positive stance on performance claims forbids.
