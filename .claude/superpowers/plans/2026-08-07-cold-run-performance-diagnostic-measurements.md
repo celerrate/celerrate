@@ -329,11 +329,39 @@ would invalidate the session. The session stayed valid throughout, and
 the machine remained idle for its full length. The two default-thread
 controls (4.67 s and 4.59 s) also bracket the N = 10 explicit-thread-
 count median measured mid-session (4.57 s), consistent with the default
-thread count equalling the full ten-core width on this machine; all
-three land at the low end of the 4.8 s to 5.5 s historical band section 1
-recorded, close to but not always inside it, which is consistent with
-the leaner `--verbose`-only workload this section runs rather than a
-change in machine conditions.
+thread count equalling the full ten-core width on this machine.
+
+The genuinely like-for-like comparison is against section 3, which ran
+the identical command (`rm -rf .celerrate` then `check . --verbose`) on
+the identical corpus, binary, and day, and recorded a three-run median
+of 4.94 s. Section 3 and this section were measured in separate tool
+sessions, so this is a cross-session comparison under the Protocol's
+session discipline, disclosed here as such. Against that 4.94 s median,
+this section's open control (4.67 s) is lower by 0.27 s, about 5.5 %,
+and the close control (4.59 s) is lower by 0.35 s, about 7.1 %;
+averaging the two controls (4.63 s) gives a gap of about 6.3 %. That
+gap is larger than the ~10 % drift threshold would tolerate if it were
+being judged as a same-session drift, but it is not being judged as one:
+it is smaller than the spread each session's own runs already show.
+Section 3's three wall clocks ranged from 4.68 s to 5.41 s; this
+section's six control runs (three open, three close) ranged from 4.46 s
+to 5.16 s; the two ranges overlap between 4.68 s and 5.16 s, and
+section 3's lowest run (4.68 s) sits below this section's highest
+control run (5.16 s). A session-median difference of this size is
+therefore consistent with ordinary run-to-run variation rather than a
+systematic effect. No cause distinguishing the two sessions was
+measured, and none is asserted; in particular, the earlier explanation
+citing a leaner `--verbose`-only workload does not hold, since section 3
+also ran with `--verbose`.
+
+Against section 1's historical band (4.8 s to 5.5 s), a cross-harness
+and cross-protocol comparison, since that band comes from
+`cargo xtask benchmark` rather than the `/usr/bin/time -p` and
+`--verbose` protocol sections 3 and 4 share, this section's controls
+(4.67 s and 4.59 s) land at or slightly below the low end. Given the
+closer, like-for-like divergence already found against section 3, this
+is read as the same ordinary variation and not treated as a separate
+finding.
 
 ### Reading the curve
 
