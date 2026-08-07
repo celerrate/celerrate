@@ -128,17 +128,22 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
+      # A GitHub App rather than a deploy key: the organization disables
+      # deploy keys, and an app token is owned by the organization, scoped
+      # to the single mirror repository below, and expires with the job
+      # instead of outliving it in a secret.
+      - uses: actions/create-github-app-token@v3
+        id: mirror-token
+        with:
+          app-id: ${{ secrets.COMPOSER_SPLIT_APP_ID }}
+          private-key: ${{ secrets.COMPOSER_SPLIT_APP_PRIVATE_KEY }}
+          owner: ${{ github.repository_owner }}
+          repositories: composer-bootstrap
       - name: Push the package split and its tag to the read-only mirror
         env:
-          SPLIT_KEY: ${{ secrets.COMPOSER_SPLIT_SSH_KEY }}
+          MIRROR_TOKEN: ${{ steps.mirror-token.outputs.token }}
         run: |
-          mkdir -p ~/.ssh
-          printf '%s\n' "$SPLIT_KEY" > ~/.ssh/composer-split
-          chmod 600 ~/.ssh/composer-split
-          # GitHub's published Ed25519 host key, pinned rather than scanned.
-          echo "github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl" >> ~/.ssh/known_hosts
-          export GIT_SSH_COMMAND="ssh -i ~/.ssh/composer-split -o IdentitiesOnly=yes"
-          mirror="git@github.com:celerrate/composer-bootstrap.git"
+          mirror="https://x-access-token:${MIRROR_TOKEN}@github.com/${GITHUB_REPOSITORY_OWNER}/composer-bootstrap.git"
           split="$(git subtree split --prefix packages/composer-bootstrap HEAD)"
           git push --force "$mirror" "${split}:refs/heads/main"
           git push --force "$mirror" "${split}:refs/tags/${GITHUB_REF_NAME}"
