@@ -44,6 +44,17 @@ Amendment history:
   `celerrate explain` with an executable page per identifier. No
   version tagged; the next public event is v0.1 at the end of
   sub-project 5.
+- 2026-08-07: amended the published cold-run performance target down from
+  "at least ~20x faster than PHPStan" to "at least ~9x", on the evidence of
+  the cold-run performance diagnostic
+  (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`):
+  the arithmetic ceiling on the pinned corpus is 30.1x, the local path's
+  levers with a measured mechanism reach a ceiling of about 9.2x and the
+  full priced lever list one of about 12.3x, ideal ten-core scaling of every
+  phase would reach 17.7x against a measured stagnation at eight threads,
+  and the shared-nothing architectural alternative was measured to deliver
+  no gain at any partitioning or thread budget tried. Section 7's
+  published-performance-targets paragraph carries the derivation.
 
 ## 1. Vision
 
@@ -579,7 +590,7 @@ not packaging.
 
 ### Published performance targets
 
-Held in CI by benchmarks: at least ~20x faster than PHPStan on a cold full
+Held in CI by benchmarks: at least ~9x faster than PHPStan on a cold full
 analysis, and sub-second incremental updates on single-file changes in a
 Symfony-sized project.
 
@@ -592,18 +603,53 @@ the wall clock (the pooled median over three full runs, a 6.87 % span
 across the per-run ratios) and consumes 11.0x less CPU (2026-08-06, the
 median of the three full runs' own CPU totals — hyperfine reports one
 CPU total per invocation, not per timed run, so the two columns do not
-pool the same way). The "at least ~20x faster" ambition above is still
-not amended down to that figure, but the two reasons the previous
-measurement gave for not testing it are both gone: the quadratic
-did-you-mean pass in the presentation layer is fixed, and the whole
-process now runs at 4.51 effective cores of 10 (22.0 s of CPU over
+pool the same way). The "at least ~20x faster" ambition this section
+previously held is amended down to "at least ~9x" on the evidence of the
+2026-08-07 cold-run performance diagnostic
+(`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`).
+Both reasons the previous measurement gave for not testing the gap are gone:
+the quadratic did-you-mean pass in the presentation layer is fixed, and the
+whole process now runs at 4.51 effective cores of 10 (22.0 s of CPU over
 4.874 s of wall clock), up from the 1.27 the superseded run measured the
-same way (17.0 s over 13.41 s) — still short of PHPStan's own 6.21.
-That leaves the remaining gap to ~20x without the
-explanation the previous measurement gave, and this measurement does not
-supply a new one: unclaimed parallelism (4.51 of 10 against PHPStan's
-6.21) plausibly accounts for part of it, but nothing measured here
-isolates how much, or rules other costs in or out. Section 11 of
+same way (17.0 s over 13.41 s), still short of PHPStan's own 6.21. The 8.01x
+above is the highest of three same-session cold ratios now on record, and
+the diagnostic explains the spread rather than resolving it: it paired
+against a PHPStan median near 39.0 s, the top of PHPStan's 31 s to 39 s
+band, while the diagnostic's own two sessions paired against 32.652 s (6.6x)
+and 38.361 s (7.3x), PHPStan's median having moved 17.5 % between two
+sessions on the same day and the same machine. Against that spread, the
+diagnostic measured what fills the remaining gap, and three of its findings
+set the new number. First, the arithmetic ceiling on this corpus and machine
+is 30.1x: walking, reading, lexing and parsing all 24033 PHP files a cold
+run touches costs 1.274 s against PHPStan's same-session cold median of
+38.361 s, so no optimization of anything Celerrate does above parsing can
+beat that ratio, and the truly reachable ceiling is lower than 30.1x by a
+margin the diagnostic deliberately does not measure. Second, the local
+path's priced levers reach a ceiling of about 9.2x with mechanisms behind
+them and about 12.3x in total: bringing every phase that runs under rayon
+today up to the analysis fan-out's own measured parallel efficiency is worth
+about 8.0x, the measured allocator gain takes it to between 8.1x and 8.4x,
+and the filesystem walk and the salsa interning lock take it to 9.2x, which
+is that subset's ceiling and not its floor, since only one of its four
+components (the allocator's 95 ms inside the fan-out, worth 7.4x on its own)
+is a measured gain rather than an upper bound. Reaching 12.3x needs every
+priced lever to land at its upper bound at once, including two whose bounds
+no mechanism supports and one contradicted by its own phase's measured
+curve. Ideal ten-core scaling of every phase would reach 17.7x, and the same
+diagnostic measured that scaling has already stagnated at eight threads, so
+that bound describes a class of work rather than an outcome. The ~9x
+published above is a deliberate stretch: the largest figure that sits
+comfortably inside the levers with a measured mechanism is about 8x, and 9x
+needs nearly everything those levers can give. Third, the architectural
+alternative was priced and rejected: a shared-nothing, PHPStan-style split
+into isolated worker processes is slower in wall clock at every partitioning
+and thread budget measured, and burns 1.46x to 2.06x the single process's
+processor work. Reaching ~20x would require compressing everything Celerrate
+does above parsing by about 6.2x, and no measurement in that campaign bounds
+whether any part of that compression is achievable, so ~20x stays
+arithmetically possible on this corpus while being reached by no path the
+campaign priced. It is recorded here as an unbounded aspiration, not as a
+held target. Section 11 of
 `.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`
 carries the evidence for the earlier measurement and the estimate of what
 removing that churn and parallelising the rest would do to the
