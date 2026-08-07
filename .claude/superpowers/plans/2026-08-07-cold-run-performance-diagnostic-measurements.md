@@ -80,3 +80,77 @@ process cost and the derived increment therefore carry wider uncertainty
 than the reported standard deviation alone suggests; the empty-project
 cold `check` figure itself, at nearly four times that threshold, is not
 affected by this caveat.
+
+## 3. Wall clock versus phase-sum reconciliation (Task 3)
+
+Date: 2026-08-07
+Commit: `2621b81`
+Command: `rm -rf .celerrate` then
+`../../release/celerrate check . --verbose > /dev/null`, three repetitions,
+from the corpus directory
+(`target/comparison-corpus/fc96d0d4eae383e8c6f1f54f19cf592c221a62e3`)
+Machine: otherwise idle for the whole run
+Timing mechanism: `/usr/bin/time -p` wrapping each invocation; wall clock
+read from its `real` line (resolution: hundredths of a second)
+
+| Phase | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| filesystem walk | 281 | 245 | 494 | 281 |
+| file read + input set | 279 | 400 | 482 | 400 |
+| analysis fan-out | 718 | 674 | 731 | 718 |
+| suggest enrich | 364 | 356 | 365 | 364 |
+| render report | 77 | 84 | 77 | 77 |
+| persist: collect entries | 801 | 768 | 878 | 801 |
+| persist: collect signatures | 33 | 30 | 31 | 31 |
+| persist: pack writes | 95 | 87 | 89 | 89 |
+| **Sum of the eight phases** | 2648 | 2644 | 3147 | 2761 |
+
+Wall-clock total per run, as reported by `/usr/bin/time -p`'s `real` line
+around the command (includes process startup/teardown and stderr
+formatting outside the eight measured phases, same caveat as section 2
+above):
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 3.26 s |
+| Run 2 | 3.23 s |
+| Run 3 | 3.77 s |
+| **Median** | **3.26 s** |
+
+Reconciliation, using the phase-sum median above and the fixed process
+cost floor from section 2:
+
+| Component | Median (ms) | Source |
+| --- | ---: | --- |
+| Eight-phase sum | 2761 | phase table above |
+| Fixed process cost | 19.6 | section 2 |
+| Unaccounted residue | 479.4 | wall (3260) minus sum (2761) minus fixed (19.6) |
+
+The residue is 479 ms, about 14.7 % of the 3260 ms wall-clock median,
+which is above the roughly 300 ms threshold that calls for a chase before
+moving on.
+
+Two candidates were checked. First, `--verbose` stderr formatting: three
+further cold runs on the same corpus, same commit, with the flag dropped
+(`rm -rf .celerrate` then `../../release/celerrate check . > /dev/null`),
+gave wall clocks of 3.71 s, 3.62 s, 3.55 s (median 3.62 s), higher than the
+3.26 s median measured with `--verbose`, not lower. Dropping the flag does
+not shrink the wall clock, so stderr formatting from `--verbose` is not the
+source of the residue; the 360 ms gap between the two medians runs the
+wrong direction to be explained by formatting cost, and is consistent with
+ordinary run-to-run variance instead. Second, cache-directory deletion:
+`rm -rf .celerrate` runs before `/usr/bin/time -p` starts timing in every
+repetition of both sets above, which the protocol already places outside
+the timed region by construction; it is confirmed not to be a candidate
+for this residue.
+
+Neither candidate explains the gap. The eight phases are instrumentation
+points inside `check`; they do not cover process startup before the first
+phase begins or teardown after the last phase ends. Across the six cold
+runs in this section, user time ran 13.36 s to 13.81 s and sys time ran
+1.75 s to 4.95 s, both measured against a real time near a third of the
+user figure, confirming the binary is heavily multi-threaded during the
+cold run. Thread-pool setup, teardown, and scheduling variance are
+plausible contributors that the eight phases, as currently instrumented,
+cannot isolate. The residue is recorded as unattributed beyond ruling out
+the two candidates above: 479 ms, about 14.7 % of the wall-clock median.
