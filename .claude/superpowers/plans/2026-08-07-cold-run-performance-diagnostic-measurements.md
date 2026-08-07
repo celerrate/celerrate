@@ -2418,31 +2418,87 @@ Over the 24033 files a cold run walks, reads and parses:
 
 ### The basis, stated before any number
 
-Every construction in this section is built from **section 4's curve and
-nothing else**, and every ratio is derived from it in exactly two steps.
-A reader who mixes bases will get different numbers; this subsection
-exists so that cannot happen silently.
+Every phase figure in this section comes from **section 4's curve**, and
+every ratio is derived from it in exactly two steps. A reader who mixes
+bases will get different numbers; this subsection exists so that cannot
+happen silently.
 
 **Step one: model the improvement as a relative one, against section 4's
 own ten-thread configuration.** That baseline is the section's measured
-phases plus the two constants:
+phases plus two constants imported from elsewhere:
 
-    parallel phases at ten threads   2814.0 ms   (540 + 1399 + 875)
-    serial phases at ten threads      961.0 ms   (374 + 236 + 187 + 42 + 122)
-    fixed process cost                 19.6 ms   (section 2)
-    unattributed residue              785.0 ms   (section 3)
+    parallel phases at ten threads   2814.0 ms   (540 + 1399 + 875, section 4)
+    serial phases at ten threads      961.0 ms   (374 + 236 + 187 + 42 + 122, section 4)
+    fixed process cost                 19.6 ms   (imported from section 2)
+    unattributed residue              785.0 ms   (imported from section 3)
     modelled baseline                4579.6 ms
 
-That baseline reconciles with section 4's own measured ten-thread wall
-clock of 4.57 s, which is the check that the model describes the run it
-claims to describe.
+**The two imports, and the small gap they open.** The basis is therefore
+not section 4 and nothing else. The fixed process cost is section 2's
+empty-project measurement, and the residue is section 3's by-construction
+remainder of a 4.94 s run, not of section 4's. Computing the residue the
+same way from section 4's own ten-thread numbers gives 4570 minus 3775
+minus 19.6, that is 775.4 ms, so the baseline above sits **9.6 ms high,
+0.21 %**, against the 4570 ms section 4 actually measured. Rebuilding
+every construction below on 775.4 ms moves each factor by about two parts
+in a thousand and changes no figure at the precision reported. The gap is
+stated rather than absorbed, because a subsection about basis discipline
+should not describe a 0.21 % mismatch as a reconciliation.
 
-**Step two: transfer the modelled improvement factor onto section 7's
-paired ratio.** Section 7 measured PHPStan and Celerrate in one session:
+**Step two: transfer the modelled improvement onto section 7's paired
+ratio.** Section 7 measured PHPStan and Celerrate in one session:
 38.361 s and 5.278 s, a ratio of **7.27x**. That pair is the only
 same-session ratio in this document measured alongside a PHPStan figure
-this campaign also uses for the ceiling. A modelled cold total of `M`
-milliseconds therefore reports as `7.27 x (4579.6 / M)`.
+this campaign also uses for the ceiling.
+
+**The transfer rule is itself an assumption, and it is worth about as
+much as the basis error it replaces.** Section 7's session ran 15.5 %
+slower than section 4's (5.278 s against 4.57 s). Carrying a modelled
+saving across that gap can be done two ways, and this document has no
+measurement that decides between them:
+
+- **Proportional transfer** (the one used throughout): the model's
+  improvement is a *factor*, and a slower session pays it in proportion.
+  A modelled total `M` reports as `7.27 x (4579.6 / M)`.
+- **Additive transfer**: the model's improvement is a fixed number of
+  *milliseconds* of work removed, and a slower session removes the same
+  milliseconds. A modelled total `M` reports as
+  `38.361 / (5.278 - (4579.6 - M) / 1000)`.
+
+The two disagree by a material amount, and the disagreement grows with
+the size of the modelled saving:
+
+| Construction | Proportional | Additive |
+| --- | ---: | ---: |
+| B, parallel phases at the fan-out's efficiency | 8.04x | 7.93x |
+| C1, the mimalloc branch's upper figure | 8.36x | 8.20x |
+| The mechanism-backed lever composition | 9.19x | 8.88x |
+| The full priced lever list | 12.29x | 11.26x |
+| D-prime, all eight phases scaled ideally | 17.71x | 14.88x |
+
+**Proportional is the rule chosen here**, for two reasons. First, most of
+what the model removes is parallel work whose cost scales with how fast
+the machine is running that day, so a session that runs everything 15.5 %
+slower plausibly runs the removed work 15.5 % slower too. Second, the
+additive rule has an absurd limit: it would let a modelled saving larger
+than the faster session's whole wall clock drive a slower session's total
+below zero. Neither reason is a measurement. **The additive figures are
+reported beside the proportional ones wherever a conclusion depends on
+the difference**, and section 11 checks its proposal under both.
+
+**Why neither rule simply divides the modelled total by 38.361 s.**
+Because the model's phases come from section 4's session and PHPStan's
+median comes from section 7's, and those two sessions differ measurably:
+section 4's Celerrate control medians are 4.67 s and 4.59 s, section 3's
+is 4.94 s, section 7's is 5.278 s. Section 4 itself measured a 6.3 % gap
+against section 3 and warned it is ordinary run-to-run variation, not a
+systematic effect to be spent. Dividing a section 4 model by a section 7
+PHPStan median banks that gap as if it were an optimization. **An earlier
+draft of this section did exactly that**, quoting a saving of 0.80 s
+against section 3's 4.94 s and ratios of 9.3x, 9.6x to 10.4x and 14.0x.
+Those figures are withdrawn and replaced below. The absolute-basis value
+is still shown for one construction, where the gap between the bases is
+itself the point.
 
 **Why not simply divide the modelled total by 38.361 s.** Because the
 model's phases come from section 4's session and PHPStan's median comes
@@ -2619,10 +2675,14 @@ second was wrong on its own terms since two of this section's own levers
 attack phases D holds fixed.
 
 Computed on the absolute basis instead (1879.3 ms divided into section
-7's 38.361 s) D-prime reads **20.41x**. The 2.7x spread between 17.7x and
-20.4x for one and the same construction is the size of the basis error
-this section's opening subsection corrects, displayed rather than hidden.
-On the basis this section declares, D-prime is 17.7x.
+7's 38.361 s) D-prime reads **20.41x**. The spread of 2.7 ratio points
+between 17.7x and 20.4x for one and the same construction is the size of
+the basis error this section's opening subsection corrects, displayed
+rather than hidden. On the additive transfer rule it reads 14.88x
+instead, a further 2.8 ratio points down, so this one construction spans
+14.9x to 20.4x depending only on how its figures are carried between
+sessions. On the basis and the transfer rule this section declares,
+D-prime is 17.7x.
 
 **Neither D nor D-prime is reachable, and section 4 measured why.** Both
 assume ten-core scaling of phases that were already flat at eight
@@ -2668,27 +2728,60 @@ result and belongs on the list precisely so that it is not re-proposed.
 
 ### What the lever list composes to
 
-Two compositions, both on the basis declared at the top of this section,
-and both counting only the 95 ms of mimalloc that is separable to a phase
-so that nothing is double-counted:
+Three compositions, all on the basis declared at the top of this section,
+and all counting only the 95 ms of mimalloc that is separable to a phase
+so that nothing is double-counted.
 
-**The mechanism-backed levers (1, 2, 4, 5):**
+**Why lever 1's 95 ms and lever 5's 90.7 ms may be added even though both
+act on the analysis fan-out.** They are measured in different buckets,
+and section 5's bucketing rules make those buckets disjoint by
+construction: each sample's self time is assigned to exactly one bucket
+by reading the whole stack, and the rules are tested in an order that
+gives a lock ownership of the allocation performed beneath it, so
+allocator time spent inside a contended interning lock counts as salsa
+lock contention and not as allocator. Per-capture bucket counts sum
+exactly to each capture's worker total, which is the arithmetic check
+that no sample is counted twice. The allocator lever and the interning
+lever therefore attack different measured time.
+
+**What is measured outright, before any lever's bound is assumed:**
+
+    4579.6 - 95 (mimalloc's separable fan-out part, 1463 against 1368)
+      = 4484.6 ms      factor 1.021  ->  7.42x   (additive: 7.40x)
+
+**The mechanism-backed levers (1, 2, 4, 5), each landing at its full
+bound:**
 
     4579.6 - 437.1 (read) - 336.8 (walk) - 90.7 (interning) - 95 (mimalloc, fan-out part)
-      = 3619.9 ms      factor 1.265  ->  9.20x
+      = 3619.9 ms      factor 1.265  ->  9.19x   (additive: 8.88x)
 
 **The full priced lever list (1 to 7), every lever landing at its measured
 upper bound simultaneously:**
 
     3619.9 - 469.7 (persist) - 423 (enrich and render) - 19.6 (fixed cost)
-      = 2707.6 ms      factor 1.691  ->  12.29x
+      = 2707.6 ms      factor 1.691  ->  12.29x  (additive: 11.26x)
 
-**About 9.2x is what the levers with a measured mechanism defend. About
-12.3x is the ceiling of the whole priced list**, and reaching it requires
-row 3 to beat its own stagnation measurement and row 6 to be removed
-entirely with no evidence that any of it is removable. Both compositions
-sit below construction D-prime's 17.7x, which is itself unreachable for
-the reason the stagnation measurement gives.
+**9.19x is a ceiling, not a floor, and the distinction decides what may
+be built on it.** Only 95 ms of its 959.6 ms saving is measured outright.
+The other three components are upper bounds under assumptions the
+campaign did not verify: the read phase reaching the fan-out's 3.83
+effective cores, the walk scaling ideally across ten cores, and interning
+contention removed in its entirety. Lever 4's own row carries the
+standing warning against the second of those, since the one filesystem
+phase this campaign measured under threads scales negatively. **9.19x is
+therefore what the mechanism-backed subset reaches if each of its four
+levers pays out in full**, and an earlier draft of this section which
+called it what those levers "defend" and "deliver" overstated it. The
+figure genuinely measured outright is 7.42x, which is barely above
+today's 7.27x, because only one lever in the entire campaign has a gain
+that was measured rather than bounded.
+
+The same reading applies one level up: **12.29x is the ceiling of the
+whole priced list**, and reaching it additionally requires row 3 to beat
+its own stagnation measurement and row 6 to be removed entirely with no
+evidence that any of it is removable. All three compositions sit below
+construction D-prime's 17.7x, which is itself unreachable for the reason
+the stagnation measurement gives.
 
 ### Levers that had to be left off, for lack of a measured bound
 
@@ -2746,16 +2839,23 @@ wording below is applied to
   bound on a bound: the truly reachable ceiling is lower by a margin
   section 7 deliberately does not measure, and lower again because
   project discovery is omitted from the floor. (Section 7.)
-- **The local path's best case: about 9.2x from the levers with a
-  measured mechanism, bounded at about 12.3x for the whole priced list.**
+- **The local path: 7.4x measured outright, a mechanism-backed ceiling of
+  about 9.2x, and a priced ceiling of about 12.3x.** Only one lever in
+  the campaign has a gain that was measured rather than bounded
+  (mimalloc's 95 ms inside the fan-out), and it alone is worth 7.42x.
   Bringing every parallel phase to the fan-out's own measured efficiency
-  is worth 8.0x; adding the measured allocator gain takes it to 8.1x to
-  8.4x; adding the walk and interning levers reaches 9.2x; and letting
-  every priced lever land at its upper bound simultaneously, including
-  two whose bounds have no mechanism behind them, reaches 12.3x. Ideal
-  ten-core scaling of today's three parallel phases would be 12.1x, and
-  of all eight phases 17.7x, both contradicted by the campaign's own
-  measurement that scaling stagnates at eight threads. (Section 10.)
+  is worth 8.04x; adding the measured allocator gain takes it to 8.10x to
+  8.36x; adding the walk and interning levers reaches 9.19x, **which is
+  the ceiling of that subset and not its floor**, since three of its four
+  components are upper bounds under assumptions the campaign did not
+  verify. Letting every priced lever land at its upper bound
+  simultaneously, including two whose bounds have no mechanism behind
+  them and one contradicted by its own phase's stagnation, reaches
+  12.29x. Ideal ten-core scaling of today's three parallel phases would
+  be 12.12x, and of all eight phases 17.71x, both contradicted by the
+  campaign's own measurement that scaling stagnates at eight threads. On
+  the additive transfer rule every figure in this bullet falls: 7.40x,
+  7.93x, 7.98x to 8.20x, 8.88x, 11.26x, 11.14x and 14.88x. (Section 10.)
 - **The architectural path's bound: no gain.** A shared-nothing split
   into isolated worker processes is slower in wall clock at every
   partitioning and thread budget measured and burns 1.46x to 2.06x the
@@ -2774,18 +2874,55 @@ current-ratio figures are not in conflict: they span PHPStan's own
 run-to-run variation, which this campaign measured directly at 17.5 %
 between two sessions on the same day and the same machine.
 
-Above that: 9.2x from the levers with a measured mechanism, 12.3x if
-every priced lever lands at its upper bound, 17.7x if every phase scaled
-ideally across ten cores, which the stagnation at N = 8 says will not
-happen, and a 30.1x arithmetic ceiling that is itself an upper bound on
-a bound. The architectural alternative delivers nothing.
+Above that, as a ladder of ceilings rather than of expectations, on both
+transfer rules:
 
-**The evidence therefore defends about 10x, and does not defend 20x.**
-The proposed figure sits above what the mechanism-backed levers alone
-deliver (9.2x) and below the bound of the full priced list (12.3x). That
-is where an ambition belongs: not already reached, not reachable without
-some of the priced levers paying out, and not dependent on anything the
-campaign failed to measure.
+| Reading | Proportional | Additive |
+| --- | ---: | ---: |
+| Measured today (section 7's paired session) | 7.27x | 7.27x |
+| The one lever whose gain is measured outright | 7.42x | 7.40x |
+| Ceiling of the mechanism-backed levers (1, 2, 4, 5) | 9.19x | 8.88x |
+| Ceiling of the full priced list (1 to 7) | 12.29x | 11.26x |
+| Every phase scaled ideally across ten cores | 17.71x | 14.88x |
+| Arithmetic ceiling (an upper bound on a bound) | 30.1x | 30.1x |
+
+The ideal-scaling row is contradicted by the stagnation at N = 8 and is
+listed to bound a class of work, not to be reached. The architectural
+alternative delivers nothing.
+
+**The evidence defends about 9x, and does not defend 20x.** The proposal
+is therefore **at least ~9x**, revised down from the ~10x an earlier
+draft of this section proposed.
+
+The reason for the revision is the correction one row up. That earlier
+draft placed 10x "above what the mechanism-backed levers deliver (9.2x)
+and below the bound of the full priced list (12.3x)", treating 9.19x as a
+floor to clear. It is not a floor: only 95 ms of its 959.6 ms saving is
+measured outright, and its other three components assume the read phase
+reaches the fan-out's efficiency, the walk scales ideally across ten
+cores, and interning contention disappears entirely. Anchoring a
+published target above a ceiling built from three unverified upper bounds
+is the same top-edge error this document already corrected once, in
+withdrawing construction C3.
+
+**Where 9x sits, checked under both transfer rules.** Proportionally, 9x
+needs a modelled total of 3698.3 ms, that is 881.3 ms of saving, which is
+91.8 % of the mechanism-backed subset's own 959.6 ms: it is reachable
+inside that subset, without calling on either lever whose bound has no
+mechanism. Additively, 9x needs 1015.7 ms, which exceeds the subset by
+56.1 ms, so it additionally needs 6.1 % of the 912.3 ms held by levers 3,
+6 and 7. **9x is therefore inside the mechanism-backed subset under the
+transfer rule this document uses, and just outside it under the other**,
+which is the honest description of a target set at the top of what the
+levers with mechanisms can carry.
+
+For comparison, 10x would need 32.0 % of those mechanism-free levers
+proportionally and 52.9 % additively, on top of all four mechanism-backed
+levers landing in full. That is a target whose path runs mostly through
+bounds with nothing behind them, one of which its own phase's stagnation
+contradicts. It is inside the priced band under both rules, so it is not
+indefensible; it is simply less defensible than 9x, and this document
+proposes the figure it can trace.
 
 The campaign's central tension should be stated rather than dissolved.
 20x is not arithmetically impossible: it is below the 30.1x ceiling with
@@ -2797,9 +2934,14 @@ requires is a compression of everything above parsing of about 6.2x, or
 5.4x after construction B's own modelled improvement, and the campaign
 found no lever pointed at it, because its largest measured quantity (the
 fan-out's unexplained productive-work growth) has no measured cause and
-therefore no lever. Amending the published figure down to 10x is not a
+therefore no lever. Amending the published figure down to 9x is not a
 retreat from ambition; it is refusing to publish a number that no
-measurement in this campaign supports.
+measurement in this campaign supports. The gap between 9x and the 30.1x
+ceiling is not a claim that the remaining room does not exist; it is a
+statement that this campaign found no measured path into it, and the
+directions it could not price (the unexplained productive-work growth,
+the `tests` and `classes` concentration, the 785 ms residue) are named
+above so a later effort knows where to look.
 
 ### The exact replacement wording
 
@@ -2815,7 +2957,7 @@ under "Published performance targets", plus one amendment-history entry.
 
 with:
 
-> Held in CI by benchmarks: at least ~10x faster than PHPStan on a cold full
+> Held in CI by benchmarks: at least ~9x faster than PHPStan on a cold full
 > analysis, and sub-second incremental updates on single-file changes in a
 > Symfony-sized project.
 
@@ -2826,7 +2968,7 @@ is still not amended down` through `isolates how much, or rules other
 costs in or out.` with:
 
 > The "at least ~20x faster" ambition this section previously held is
-> amended down to "at least ~10x" on the evidence of the 2026-08-07
+> amended down to "at least ~9x" on the evidence of the 2026-08-07
 > cold-run performance diagnostic
 > (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`).
 > Both reasons the previous measurement gave for not testing the gap are
@@ -2849,13 +2991,17 @@ costs in or out.` with:
 > Celerrate does above parsing can beat that ratio, and the truly
 > reachable ceiling is lower than 30.1x by a margin the diagnostic
 > deliberately does not measure. Second, the local path's priced levers
-> defend about 9.2x and bound out at about 12.3x: bringing every phase
-> that runs under rayon today up to the analysis fan-out's own measured
-> parallel efficiency is worth about 8.0x, the measured allocator gain
-> takes it to between 8.1x and 8.4x, the filesystem walk and the salsa
-> interning lock take it to 9.2x, and 12.3x needs every priced lever to
-> land at its upper bound at once, including two whose bounds no
-> mechanism supports. Ideal ten-core scaling of every phase would reach
+> reach a ceiling of about 9.2x with mechanisms behind them and about
+> 12.3x in total: bringing every phase that runs under rayon today up to
+> the analysis fan-out's own measured parallel efficiency is worth about
+> 8.0x, the measured allocator gain takes it to between 8.1x and 8.4x,
+> and the filesystem walk and the salsa interning lock take it to 9.2x,
+> which is that subset's ceiling and not its floor, since only one of its
+> four components (the allocator's 95 ms inside the fan-out, worth 7.4x
+> on its own) is a measured gain rather than an upper bound. Reaching
+> 12.3x needs every priced lever to land at its upper bound at once,
+> including two whose bounds no mechanism supports and one contradicted
+> by its own phase's measured curve. Ideal ten-core scaling of every phase would reach
 > 17.7x, and the same diagnostic measured that scaling has already
 > stagnated at eight threads, so that bound describes a class of work
 > rather than an outcome. Third, the architectural alternative was priced
@@ -2880,12 +3026,12 @@ used below, since this repository's writing conventions exclude
 em-dashes:
 
 > - 2026-08-07: amended the published cold-run performance target down
->   from "at least ~20x faster than PHPStan" to "at least ~10x", on the
+>   from "at least ~20x faster than PHPStan" to "at least ~9x", on the
 >   evidence of the cold-run performance diagnostic
 >   (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`):
 >   the arithmetic ceiling on the pinned corpus is 30.1x, the local
->   path's levers with a measured mechanism defend about 9.2x and the
->   full priced lever list bounds it at about 12.3x, ideal ten-core
+>   path's levers with a measured mechanism reach a ceiling of about
+>   9.2x and the full priced lever list one of about 12.3x, ideal ten-core
 >   scaling of every phase would reach 17.7x against a measured
 >   stagnation at eight threads, and the shared-nothing architectural
 >   alternative was measured to deliver no gain at any partitioning or
@@ -2894,9 +3040,12 @@ em-dashes:
 
 ### What this proposal does not claim
 
-- It does not claim 10x is easy. It is above every ratio measured on this
-  corpus (6.6x, 7.27x, and the 8.01x already in the design document) and
-  above what the mechanism-backed levers alone deliver (9.2x).
+- It does not claim 9x is easy. It is above every ratio measured on this
+  corpus (6.6x, 7.27x, and the 8.01x already in the design document), it
+  needs 91.8 % of the mechanism-backed subset's whole bound under the
+  transfer rule this document uses and slightly more than that subset
+  holds under the other, and every one of those component bounds except
+  the allocator's 95 ms is an upper bound the campaign did not verify.
 - It does not claim the ceiling is reachable. 30.1x is an upper bound on
   a bound, and both of its own caveats push the true ceiling down.
 - It does not claim 20x is impossible. It claims that no path this
