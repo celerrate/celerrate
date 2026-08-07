@@ -1426,8 +1426,12 @@ The walk is serial and thread-count-independent: 364 ms at ten threads
 against 406 ms at one, a difference within the run-to-run range of
 either. `enumerate_php_files` accumulates into a `BTreeSet` on the
 calling thread, so no thread count changes it. It is a hard serial
-component of every cold run, and section 3's measured walk phase
-(366 ms) agrees with it.
+component of every cold run, and section 3's measured walk phase agrees
+with it: a median of 402 ms over runs of 402, 396 and 425 ms, against
+this section's 364 ms. The probe's figure is the lower of the two, which
+is the expected direction: section 3 measured the walk inside a full
+`check`, where the phase timer also covers the salsa and VFS state the
+walk feeds.
 
 The read barely parallelizes: 311 ms at ten threads against 440 ms at
 one, a 1.41x speedup for a tenfold thread increase. It is bound by the
@@ -1473,7 +1477,10 @@ instead is quantified afterwards.
 **Corpus floor** = walk + read + parse medians at ten threads, plus the
 fixed process cost section 2 measured for an empty-project cold `check`
 (19.6 ms ± 1.4 ms, which covers startup, embedded-stub loading,
-configuration, discovery and teardown):
+configuration, discovery and teardown, but only as an *empty* project
+exercises them; this corpus's own Composer and autoload discovery is
+timed nowhere in the sum below, an omission the caveat at the end of this
+section states in full):
 
     364 ms + 311 ms + 579 ms + 19.6 ms = 1273.6 ms
 
@@ -1502,9 +1509,10 @@ reading every file, lexing and parsing them, and paying its fixed process
 cost, while PHPStan continued to do its whole job.
 
 The bound is robust to the spreads in its two inputs. Combining the
-observed extremes in the least favourable direction (PHPStan's slowest
+observed extremes in the least favourable direction (PHPStan's fastest
 run, 33.741 s, over the floor's worst envelope, 1.526 s) still gives
-22.1x; the most favourable combination (39.242 s over 1.223 s) gives
+22.1x; the most favourable combination (PHPStan's slowest run, 39.242 s,
+over the floor's best envelope, 1.223 s) gives
 32.1x. Dividing by section 1's lower, cross-session PHPStan median
 (32.652 s) instead of this session's gives 25.6x. Every one of those
 values is above 20x.
@@ -1544,6 +1552,30 @@ the bound is what no optimization can beat, not what any optimization can
 approach. Any figure derived from this section must be read as an upper
 bound on a bound.
 
+**The floor also omits project discovery, and that omission is not
+above-parse work but below-walk work.** The probe runs
+`configuration::load` and `celerrate_project::discover` before starting
+its first timer, so reading `composer.json`, reading
+`vendor/composer/installed.json`, parsing both, and deriving this
+corpus's autoload mappings, walk roots and PHP version range are timed
+nowhere. Section 2's 19.6 ms cannot stand in for them: it was measured on
+an empty project whose `composer.json` is `{}`, with no installed
+packages to enumerate and no autoload map to build, so it captures
+startup and stub loading but essentially none of this corpus's discovery
+work. Discovery is as incompressible as the walk, and nothing in this
+document isolates its cost. It falls inside section 3's 785 ms
+unattributed residue, which explicitly covers everything before the first
+instrumented phase begins; but that residue also covers process startup,
+teardown and thread-pool scheduling variance, so it bounds discovery
+loosely from above rather than measuring it, and no honest point estimate
+can be extracted from it without a measurement this section did not make.
+The direction is nonetheless unambiguous: including discovery would make
+the true floor **higher** than 1.274 s and therefore the true ceiling
+**lower** than 30.1x. That moves the bound the same way the caveat above
+does, so the conclusion about roughly 20x is unaffected in direction,
+only in margin: the room between 20x and the ceiling is narrower than
+30.1x states, never wider.
+
 Two further caveats bound the bound's own precision. First, the floor is
 measured with a warm page cache; a genuinely cold filesystem would raise
 the read median and lower the ceiling. Second, the floor inherits the
@@ -1561,9 +1593,10 @@ raises the bound rather than merely moving Celerrate toward it.
   `check` does: it calls the same discovery and walk functions with the
   same arguments, and its project-classified subset (6932) matches the
   real run's reported count exactly, while its walk median (364 ms) and
-  read median (311 ms) sit alongside the real run's measured walk phase
-  (366 ms) and read-and-set-inputs phase (591 ms, which additionally
-  interns paths and creates salsa inputs).
+  read median (311 ms) sit alongside section 3's measured walk phase
+  (402 ms) and read-and-set-inputs phase (467 ms, which additionally
+  interns paths in the VFS and creates salsa inputs, so its being the
+  larger of the two is expected).
 - **High** that the corpus floor exceeds one second on this corpus and
   machine, and therefore that the ratio ceiling is well under 40x.
 - **Medium** on the floor's exact value of 1.274 s: three runs per thread
