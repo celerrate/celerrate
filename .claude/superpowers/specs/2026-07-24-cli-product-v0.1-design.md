@@ -1,10 +1,10 @@
 # Celerrate: CLI Product v0.1 (Sub-project 5) Design
 
 Date: 2026-07-24
-Status: Closed (v0.1.0, 2026-08-06). Every closure gate below is held,
-including the published comparison. The `v0.1.0` tag is taken by
-decision, not because the closure criterion's ~20x is met: the measured
-figure is 8.01x. See the state of play.
+Status: Closed (v0.1.0, 2026-08-06), closure criterion amended 2026-08-07.
+Every closure gate below is held, including the published comparison. The
+`v0.1.0` tag is taken by decision, not because the closure criterion's ~9x
+is met: the measured figure is 8.01x. See the state of play.
 Parent: `.claude/superpowers/specs/2026-07-09-celerrate-design.md` (sections 7
 and 11)
 
@@ -44,8 +44,11 @@ Celerrate norm as public surface, Laravel in the measured corpus).
 **Closure criterion: the parent's v0.1 statement.** `celerrate check`
 analyzes a real Symfony codebase end to end with a restricted but reliable
 set of diagnostics, no visible false positives, with speed as the proof
-(at least ~20x PHPStan on a cold run, sub-second incremental updates, held
-in CI by the pinned protocol).
+(at least ~9x PHPStan on a cold run, sub-second incremental updates, held
+in CI by the pinned protocol). The cold-run figure read ~20x until the
+parent design amended its ambition on 2026-08-07; the dated update of that
+date in the state of play records the change and what it does to this
+gate.
 
 **Closure gates:**
 
@@ -402,7 +405,7 @@ celerrate/celerrate` must be enough.
   and the machine.
 - **In CI the gate is the ratio, not wall-clock**: the harness runs
   PHPStan and Celerrate on the same machine in the same run and asserts
-  at least 20x cold and sub-second incremental; runners vary, an absolute
+  at least 9x cold and sub-second incremental; runners vary, an absolute
   threshold would be flaky.
 - **Published numbers** (README) come from a reference machine documented
   in the protocol, reproducible by anyone via `cargo xtask benchmark`.
@@ -520,7 +523,7 @@ The order proposed to the planning stage (dependencies respected):
   launch; the explain pages already carry the rule reference, embedded in
   the binary.
 
-## State of play (2026-08-01, updated 2026-08-06)
+## State of play (2026-08-01, updated 2026-08-07)
 
 Every closure gate is held, and the tag is taken. The two facts sit
 together deliberately: the tag follows by decision, not because the
@@ -720,3 +723,45 @@ process's effective core count still trails PHPStan's, so unclaimed
 parallelism plausibly explains part of the remaining gap, but this
 measurement does not establish how much, or what else, if anything,
 accounts for the rest.
+
+**Update (2026-08-07): the closure criterion moves from ~20x to ~9x,
+following the parent design.** The cold-run performance diagnostic
+(`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`)
+measured what fills the gap the update above left unexplained, and the
+parent design amended its published cold-run ambition on that evidence: "at
+least ~20x faster than PHPStan on a cold full analysis" becomes "at least
+~9x". The evidence in short: the arithmetic ceiling on the pinned corpus is
+30.1x, the local path's levers with a measured mechanism behind them reach
+a ceiling of about 9.2x and the full priced lever list one of about 12.3x,
+ideal ten-core scaling of every phase would reach 17.7x against a measured
+stagnation at eight threads, and the shared-nothing worker-process
+architecture PHPStan uses was measured slower in wall clock at every
+partitioning and thread budget tried. ~20x stays arithmetically possible on
+this corpus, but no path the campaign priced reaches it, so the parent now
+records it as an unbounded aspiration rather than a held target.
+
+**What that does to this sub-project's gate.** The closure criterion in
+section 1 read "at least ~20x PHPStan on a cold run"; it now reads "at
+least ~9x PHPStan on a cold run". That lowers a bar this document set for
+itself, and it is recorded as such rather than passed over: the change
+follows the parent amendment the criterion derives from, approved on the
+diagnostic's evidence, and it is not a re-argument of this sub-project's
+own scope, which is untouched. Section 8's CI ratio gate reads ~9x for the
+same reason. The harness floor `COLD_RATIO_FLOOR` stays at 4.0, unchanged
+by this update.
+
+**The verdict on the tag does not change.** The measured 8.01x sits below
+~9x as it sat below ~20x, so `v0.1.0` remains a tag taken by decision with
+the closure criterion unmet, exactly as the two updates above record it.
+Nothing here converts the measured figure into a met criterion.
+
+**The earlier statements stand as written.** Amendment 3 and the 2026-08-03
+and 2026-08-06 updates state that the parent's ambition "stands unamended"
+at ~20x, that 8.01x "is not ~20x", and that the remaining gap has no
+established explanation. Each was true on its date and is left untouched,
+because they are the record of what was believed and measured then; this
+entry is what supersedes them. Read against today, the live figure is ~9x
+everywhere this document states a target: the header status line, the
+closure criterion in section 1, and the CI ratio gate in section 8. The gap
+to the ambition is no longer unexplained either: the diagnostic priced the
+levers that close it and bounded what each can give.
