@@ -2465,8 +2465,14 @@ measurement that decides between them:
   milliseconds. A modelled total `M` reports as
   `38.361 / (5.278 - (4579.6 - M) / 1000)`.
 
-The two disagree by a material amount, and the disagreement grows with
-the size of the modelled saving:
+**Both transfers are computed on the unrounded ratio**, 38.361 / 5.278 =
+7.26810, not on the 7.27x quoted for readability. The difference is
+visible in the second decimal: the mechanism-backed composition is 9.19x
+unrounded and 9.20x if the literal 7.27 is used, and construction C1 is
+8.36x against 8.37x. Every figure below is the unrounded one.
+
+The two transfer rules disagree by a material amount, and the
+disagreement grows with the size of the modelled saving:
 
 | Construction | Proportional | Additive |
 | --- | ---: | ---: |
@@ -2499,20 +2505,6 @@ against section 3's 4.94 s and ratios of 9.3x, 9.6x to 10.4x and 14.0x.
 Those figures are withdrawn and replaced below. The absolute-basis value
 is still shown for one construction, where the gap between the bases is
 itself the point.
-
-**Why not simply divide the modelled total by 38.361 s.** Because the
-model's phases come from section 4's session and PHPStan's median comes
-from section 7's, and those two sessions differ measurably: section 4's
-Celerrate control medians are 4.67 s and 4.59 s, section 3's is 4.94 s,
-section 7's is 5.278 s. Section 4 itself measured a 6.3 % gap against
-section 3 and warned it is ordinary run-to-run variation, not a
-systematic effect to be spent. Dividing a section 4 model by a section 7
-PHPStan median banks that gap as if it were an optimization. **An earlier
-draft of this section did exactly that**, quoting a saving of 0.80 s
-against section 3's 4.94 s and ratios of 9.3x, 9.6x to 10.4x and 14.0x.
-Those figures are withdrawn and replaced below. The absolute-basis value
-is still shown for one construction, where the gap between the two bases
-is itself the point.
 
 ### The inputs
 
@@ -2894,6 +2886,22 @@ alternative delivers nothing.
 is therefore **at least ~9x**, revised down from the ~10x an earlier
 draft of this section proposed.
 
+**One thing must be said plainly, because what is being approved is a
+published number.** The largest whole figure that both transfer rules
+place strictly inside the levers with a measured mechanism is **8x**: it
+needs 43.7 % of that subset's 959.6 ms bound proportionally and 50.3 %
+additively, so it is comfortably inside the subset under either reading.
+**9x is a deliberate stretch above 8x, not the conservative reading of
+the same evidence.** It needs 91.8 % of the subset proportionally, and
+additively it needs the whole subset plus a further 6.1 % of the levers
+whose bounds have no mechanism. Approving ~9x is approving a target that
+requires nearly everything the mechanism-backed levers can give and, on
+the less favourable transfer rule, slightly more than they hold; ~8x is
+what the same evidence supports with room to spare. This document
+proposes 9x because a published ambition should sit above the
+comfortable reading, and it names 8x here so that choice is the owner's
+rather than an artefact of how the figure was presented.
+
 The reason for the revision is the correction one row up. That earlier
 draft placed 10x "above what the mechanism-backed levers deliver (9.2x)
 and below the bound of the full priced list (12.3x)", treating 9.19x as a
@@ -3001,19 +3009,22 @@ costs in or out.` with:
 > on its own) is a measured gain rather than an upper bound. Reaching
 > 12.3x needs every priced lever to land at its upper bound at once,
 > including two whose bounds no mechanism supports and one contradicted
-> by its own phase's measured curve. Ideal ten-core scaling of every phase would reach
-> 17.7x, and the same diagnostic measured that scaling has already
-> stagnated at eight threads, so that bound describes a class of work
-> rather than an outcome. Third, the architectural alternative was priced
-> and rejected: a shared-nothing, PHPStan-style split into isolated
-> worker processes is slower in wall clock at every partitioning and
-> thread budget measured, and burns 1.46x to 2.06x the single process's
-> processor work. Reaching ~20x would require compressing everything
-> Celerrate does above parsing by about 6.2x, and no measurement in that
-> campaign bounds whether any part of that compression is achievable, so
-> ~20x stays arithmetically possible on this corpus while being reached
-> by no path the campaign priced. It is recorded here as an unbounded
-> aspiration, not as a held target.
+> by its own phase's measured curve. Ideal ten-core scaling of every
+> phase would reach 17.7x, and the same diagnostic measured that scaling
+> has already stagnated at eight threads, so that bound describes a
+> class of work rather than an outcome. The ~9x published above is a
+> deliberate stretch: the largest figure that sits comfortably inside
+> the levers with a measured mechanism is about 8x, and 9x needs nearly
+> everything those levers can give. Third, the architectural alternative
+> was priced and rejected: a shared-nothing, PHPStan-style split into
+> isolated worker processes is slower in wall clock at every
+> partitioning and thread budget measured, and burns 1.46x to 2.06x the
+> single process's processor work. Reaching ~20x would require
+> compressing everything Celerrate does above parsing by about 6.2x, and
+> no measurement in that campaign bounds whether any part of that
+> compression is achievable, so ~20x stays arithmetically possible on
+> this corpus while being reached by no path the campaign priced. It is
+> recorded here as an unbounded aspiration, not as a held target.
 
 The paragraph's final sentence, beginning "Section 11 of
 `.claude/superpowers/specs/2026-08-02-benchmark-comparison-corpus-design.md`
