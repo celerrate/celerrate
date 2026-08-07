@@ -1039,3 +1039,250 @@ unit of work as threads are added. That is not a lock-level question, and
 answering it needs an instrument this campaign does not have: hardware
 performance counters, or an experiment that varies memory pressure
 independently of thread count.
+
+## 6. The mimalloc A/B scaling curve (Task 6)
+
+Date: 2026-08-07
+Commit: `18f55ff6da548936fc29365b00f78651faa8bf96` (this branch's HEAD at
+measurement time). The source tree is identical to `2621b81` for every
+crate this campaign measures: `git diff 2621b81 HEAD --stat` touches only
+this measurement document, so the default-allocator binary built here is
+the same performance object every earlier section cites.
+Corpus measured: the equalized corpus copy at
+`target/comparison-corpus-equalized` (the same corpus as sections 1, 3, 4
+and 5). Every run below reported 6932 project files.
+Machine: otherwise idle for the whole session; both binaries were built
+before any timed run, and nothing was built while a run was in progress.
+
+Binaries:
+
+- Default allocator: `target/release/celerrate`, built from this
+  branch's HEAD with the workspace's default release profile, unchanged
+  (no `--config` override).
+- mimalloc probe: built on scratch branch `scratch-mimalloc-probe`,
+  local commit `b6e253d894bd4661397d19dcbfd149dabdd82178`. That commit
+  adds `mimalloc = "0.1.52"` to `celerrate_cli`'s dependencies (via
+  `cargo add mimalloc --package celerrate_cli`) and sets
+  `#[global_allocator] static GLOBAL_ALLOCATOR: mimalloc::MiMalloc = mimalloc::MiMalloc;`
+  in `crates/celerrate_cli/src/main.rs`, with no other source or build
+  configuration change, so the two binaries differ only by the
+  allocator. The branch is local only: never merged, never pushed, and
+  never the base of another branch; its commit hash is recorded here for
+  provenance only. `cargo deny` was not run on the scratch branch, since
+  the licence pass belongs to a future landing effort, not this probe.
+
+Because the build directory is shared across branches, the probe binary
+was copied aside to a scratch path immediately after building it and
+before switching back; the working tree then returned to
+`docs-cold-run-performance-diagnostic` and rebuilt, restoring
+`target/release/celerrate` to the default-allocator artefact before any
+run below was measured. (Deviation from the brief's literal path: the
+probe binary was copied to a session-scoped scratch directory rather than
+`/tmp/celerrate-mimalloc`; this is a path substitution only, made to
+follow this session's own working-file convention, and does not change
+anything the brief specifies about the binaries, the build, or the
+protocol.)
+
+**Verification that mimalloc is actually linked.** The workspace release
+profile sets `strip = "symbols"`, so a symbol-table check is not
+available on either artefact (the same limitation section 5 records for
+naming frames). Two checks were used instead. First, the two binaries
+are byte-for-byte distinct after the rebuild step separated them
+(different SHA-256 digests; they had been identical immediately after
+the probe build, because that build ran while the working tree was still
+on the scratch branch and overwrote the same shared `target/release/`
+path the default binary also occupies). Second, and decisively: mimalloc
+recognizes the `MIMALLOC_SHOW_STATS` environment variable and prints an
+allocator statistics block (page, arena and heap counters) on exit.
+Running `MIMALLOC_SHOW_STATS=1 <binary> --version` against the probe
+binary prints that block; the same invocation against the default binary
+prints only the version line, with no statistics block. This is a
+runtime behavioural check, not a static one, and it is conclusive: the
+statistics block cannot appear unless mimalloc's global allocator is
+actually installed and actually serving the process's allocations.
+
+Command: `rm -rf .celerrate` then
+`env RAYON_NUM_THREADS=<N> /usr/bin/time -p <binary> check . --verbose 2>&1 >/dev/null`,
+three repetitions per binary per thread count, alternating binaries at
+each N in the order default, mimalloc, default, mimalloc, default,
+mimalloc, so machine drift cannot masquerade as an allocator effect. The
+session-open and session-close controls repeat the same command on the
+default binary only, without setting `RAYON_NUM_THREADS`. Both from the
+corpus directory, binary invoked by absolute path. Eighteen cold curve
+runs plus six control runs, twenty-four in total.
+Timing mechanism: `/usr/bin/time -p`, the same mechanism sections 3, 4
+and 5 used, so wall clocks are directly comparable across all four
+sections.
+
+Deviation carried over from sections 4 and 5: the brief's snippets run
+from the pinned corpus directory with the relative path
+`../../release/celerrate`, which walks only 5922 of the corpus's 6932
+files. Every run below instead used the equalized corpus directory and
+an absolute binary path, per the correction already recorded in the
+Protocol section above.
+
+### Session-open control
+
+Three cold runs, default binary, default thread count:
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 5.15 s |
+| Run 2 | 4.62 s |
+| Run 3 | 4.72 s |
+| **Median** | **4.72 s** |
+
+### The curve
+
+Both binaries were re-measured in this session rather than citing
+section 4's default-allocator curve directly, per the brief's re-anchor
+discipline. The re-measured default curve is close to section 4's: 11.41
+s (identical) at N = 1, 5.18 s against 5.23 s at N = 4, 4.56 s against
+4.57 s at N = 10, all within ordinary run-to-run variance.
+
+#### N = 1
+
+Wall clock:
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 11.27 s | 11.56 s | 11.41 s | 11.41 s |
+| mimalloc | 9.89 s | 10.14 s | 9.71 s | 9.89 s |
+
+Analysis fan-out phase (ms):
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 5316 | 5376 | 5347 | 5347 |
+| mimalloc | 4734 | 4734 | 4709 | 4734 |
+
+#### N = 4
+
+Wall clock:
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 5.18 s | 5.05 s | 5.29 s | 5.18 s |
+| mimalloc | 4.21 s | 4.40 s | 4.20 s | 4.21 s |
+
+Analysis fan-out phase (ms):
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 2015 | 1811 | 2115 | 2015 |
+| mimalloc | 1556 | 1682 | 1544 | 1556 |
+
+#### N = 10
+
+Wall clock:
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 5.16 s | 4.56 s | 4.53 s | 4.56 s |
+| mimalloc | 4.36 s | 3.93 s | 4.09 s | 4.09 s |
+
+Analysis fan-out phase (ms):
+
+| Binary | Run 1 | Run 2 | Run 3 | Median |
+| --- | ---: | ---: | ---: | ---: |
+| Default | 1916 | 1463 | 1438 | 1463 |
+| mimalloc | 1421 | 1213 | 1368 | 1368 |
+
+### Session-close control
+
+Three cold runs, default binary, default thread count:
+
+| Run | Wall clock |
+| --- | ---: |
+| Run 1 | 4.59 s |
+| Run 2 | 4.86 s |
+| Run 3 | 4.67 s |
+| **Median** | **4.67 s** |
+
+Drift from open to close control: absolute difference 0.05 s over the
+open median of 4.72 s, about 1.1 %, well inside the ~10 % threshold that
+would invalidate the session. The session stayed valid throughout.
+
+### Reading the curve
+
+Wall-clock medians by thread count, both binaries:
+
+| N | Default median | mimalloc median | Difference | mimalloc faster by |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 11.41 s | 9.89 s | 1.52 s | 13.3 % |
+| 4 | 5.18 s | 4.21 s | 0.97 s | 18.7 % |
+| 10 | 4.56 s | 4.09 s | 0.47 s | 10.3 % |
+
+**Level.** At ten threads, mimalloc's median (4.09 s) sits 0.47 s below
+default's (4.56 s), about 10.3 %. The brief's prior estimate from the
+previous effort was about −0.9 s; this session confirms the direction
+(mimalloc is faster) but at roughly half the previously reported
+magnitude. The estimate is revised down to −0.47 s, measured in this
+session against this session's own re-anchored default curve, not
+against section 4's figure directly.
+
+**Slope.** Fan-out speedup from one thread to ten threads (single-thread
+median divided by ten-thread median):
+
+- Default: 5347 ms to 1463 ms, a 3.65x speedup.
+- mimalloc: 4734 ms to 1368 ms, a 3.46x speedup.
+
+mimalloc's speedup is not materially higher than default's; if anything
+it is marginally lower, a difference well inside what three runs per
+point can resolve. Per the brief's own decision rule, matching slopes
+mean the missing cores are not in the allocator: the contention is not
+allocation-bound, and the structural question section 5 raised stands.
+
+Effective cores at ten threads, computed the same way sections 4 and 5
+did (single-thread fan-out median divided by ten-thread fan-out median):
+default 5347 / 1463, about 3.65 effective cores of 10, close to section
+4's cross-session 3.83 (about 4.7 % apart, inside the variance sections 4
+and 5 already documented for this same comparison); mimalloc 4734 / 1368,
+about 3.46 effective cores of 10 — lower, not higher, than the default
+figure, confirming the slope verdict above rather than the level verdict.
+
+**Stated against section 5's allocator share.** Section 5 measured the
+allocator bucket growing 2.98x between one and ten threads (1.074 to
+3.199 core-seconds), accounting for +2.13 of the 8.49 core-seconds of
+work expansion the fan-out undergoes over that range, about 25 % of the
+summed parts. If that growth were the dominant driver of the missing
+cores, swapping to a faster or less-contended allocator should have
+disproportionately helped at ten threads relative to one, raising
+mimalloc's fan-out speedup above default's. It did not: mimalloc's
+speedup (3.46x) is statistically indistinguishable from default's
+(3.65x), and mimalloc's wall-clock benefit is present at every thread
+count measured, including N = 1 (13.3 % faster serially, where there is
+no cross-thread contention to relieve). That pattern, a roughly constant
+percentage benefit independent of thread count, is the signature of a
+uniformly cheaper allocator (a lower per-call cost) rather than of
+relieved multi-threaded contention. Section 5's 25 % allocator share is a
+real cost, and mimalloc recovers part of it, but as a flat per-run
+improvement rather than a change in scaling shape: the effective-core
+loss between one and ten threads remains, at essentially the same size,
+on the faster allocator. **The allocator is not where the missing cores
+are hiding.** The productive-work growth (50 % of the expansion, section
+5's largest and least-attributed term) and the salsa lock contention
+(10 %) that section 5 could not resolve with a global allocator swap
+remain the open structural question for the campaign's next task.
+
+Confidence, per claim:
+
+- **High** that mimalloc lowers wall clock at every thread count
+  measured, by a consistent 10 % to 19 %, including at N = 1 where there
+  is no multi-threaded contention for it to relieve.
+- **High** that the fan-out's speedup from one to ten threads does not
+  improve under mimalloc (3.46x against default's 3.65x): the level
+  effect and the slope effect are cleanly separable in this data, and
+  they point in different directions relative to what an
+  allocation-contention hypothesis would predict.
+- **Medium** on the exact size of the level effect at N = 10 (−0.47 s):
+  three runs per point on a machine whose own control drifted 1.1 %
+  between session-open and session-close bound this figure loosely, and
+  N = 1 and N = 4 show different percentage benefits (13.3 % and 18.7 %)
+  that a larger sample would be needed to reconcile with the 10.3 % seen
+  at N = 10.
+- **Not established**: why mimalloc is faster at all (its own internal
+  design was not profiled in this session), only that its benefit does
+  not scale with thread count in the way that would indict the allocator
+  for the missing cores.
+
