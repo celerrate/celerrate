@@ -1428,10 +1428,19 @@ either. `enumerate_php_files` accumulates into a `BTreeSet` on the
 calling thread, so no thread count changes it. It is a hard serial
 component of every cold run, and section 3's measured walk phase agrees
 with it: a median of 402 ms over runs of 402, 396 and 425 ms, against
-this section's 364 ms. The probe's figure is the lower of the two, which
-is the expected direction: section 3 measured the walk inside a full
-`check`, where the phase timer also covers the salsa and VFS state the
-walk feeds.
+this section's 364 ms.
+
+The 38 ms difference between those two medians is not explained here.
+It is not a difference in what the two timers cover: `Session::start`
+(`session.rs:267-274`) starts its clock, calls `enumerate_php_files` with
+the walk roots and excluded roots, and records `Phase::Walk` immediately,
+stopping before `session.load(&walk)` on the following line. The probe
+wraps exactly that same call with the same arguments and nothing else, so
+both figures time the same work. Nor is the gap absorbed by within-set
+variation: the two ranges (362 to 372 ms here, 396 to 425 ms in
+section 3) do not overlap. It is a between-session difference this
+campaign does not isolate, and it is load-bearing for nothing, since the
+floor below uses this section's own median and not section 3's.
 
 The read barely parallelizes: 311 ms at ten threads against 440 ms at
 one, a 1.41x speedup for a tenfold thread increase. It is bound by the
@@ -1594,9 +1603,13 @@ raises the bound rather than merely moving Celerrate toward it.
   same arguments, and its project-classified subset (6932) matches the
   real run's reported count exactly, while its walk median (364 ms) and
   read median (311 ms) sit alongside section 3's measured walk phase
-  (402 ms) and read-and-set-inputs phase (467 ms, which additionally
-  interns paths in the VFS and creates salsa inputs, so its being the
-  larger of the two is expected).
+  (402 ms) and read-and-set-inputs phase (467 ms; that phase times
+  `Session::load`, which reads the bytes under rayon as the probe does
+  and then, on the calling thread, interns every path in the VFS and
+  creates or updates each file's `SourceFile` salsa input
+  (`session.rs:437-465`), so its being the larger of the two is
+  expected). The walk figures are the two that differ without an
+  explanation in the source; the paragraph above says so.
 - **High** that the corpus floor exceeds one second on this corpus and
   machine, and therefore that the ratio ceiling is well under 40x.
 - **Medium** on the floor's exact value of 1.274 s: three runs per thread
