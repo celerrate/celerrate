@@ -25,24 +25,44 @@ const PHPSTAN_MEMORY_LIMIT: &str = "2G";
 const PHPSTAN_COLD_RUNS: u32 = 3;
 const CELERRATE_COLD_RUNS: u32 = 5;
 
-/// The gate floor for the cold ratio. Set from the reference run on
-/// the comparison corpus: half the measured median ratio, so
-/// shared-runner variance does not fail a healthy build while a real
-/// regression — anything that halves the advantage — still does.
+/// The gate floor for the cold ratio. This is a regression guard, not
+/// the published ambition. It is set at half the reference run's
+/// measured median ratio, so shared-runner variance does not fail a
+/// healthy build while a real regression, anything that halves the
+/// advantage, still does.
+///
+/// The published ambition is a different figure and lives elsewhere:
+/// "at least ~9x faster than PHPStan on a cold full analysis"
+/// (`.claude/superpowers/specs/2026-07-09-celerrate-design.md`, section
+/// 7, amended down from ~20x on 2026-08-07). Raising this floor to that
+/// figure would fail every build until the ambition is reached, which
+/// is the opposite of what a regression gate is for. The two move
+/// independently: the ambition tracks what the project aims at, this
+/// floor tracks what the last reference measurement established.
 ///
 /// Published reference measurement (2026-08-06, commit 4bc0156, the
 /// protocol machine). Wall clock: the pooled median over twenty-four
 /// timed runs across three full runs, nine timed PHPStan runs and
-/// fifteen timed Celerrate runs — PHPStan 39.058s, Celerrate 4.874s,
+/// fifteen timed Celerrate runs: PHPStan 39.058s, Celerrate 4.874s,
 /// ratio 8.01x. CPU consumed: hyperfine reports one CPU total per
 /// invocation, not per timed run, so this column is the median of the
-/// three full runs' own CPU totals instead — PHPStan 242.5s, Celerrate
+/// three full runs' own CPU totals instead: PHPStan 242.5s, Celerrate
 /// 22.0s, ratio 11.0x. The check pipeline is now parallel: the measured
 /// effective core usage was Celerrate 4.51 of 10, PHPStan 6.21 of 10,
 /// which is the honest account of the remaining gap between the two
-/// ratios — Celerrate's own CPU cost rose to buy the wall-clock win.
-/// The three individual wall-clock ratios ranged 7.52x to 8.04x
+/// ratios, since Celerrate's own CPU cost rose to buy the wall-clock
+/// win. The three individual wall-clock ratios ranged 7.52x to 8.04x
 /// (8.0135 / 2 = 4.00675, floored to 4.0).
+///
+/// The cold-run performance diagnostic of 2026-08-07
+/// (`.claude/superpowers/plans/2026-08-07-cold-run-performance-diagnostic-measurements.md`)
+/// has since measured why that effective core usage is what it is: the
+/// analysis fan-out loses its cores to work expansion rather than to
+/// idleness, costing 5.38 core-seconds at one thread against 14.08 at
+/// ten for identical work. The same campaign measured PHPStan's own
+/// cold median moving 17.5 % between two sessions on one machine in one
+/// day, which is the order of variance this floor's margin exists to
+/// absorb.
 const COLD_RATIO_FLOOR: f64 = 4.0;
 
 /// Runs the comparison and prints the medians and the ratio. With
