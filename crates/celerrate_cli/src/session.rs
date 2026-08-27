@@ -82,6 +82,17 @@ pub enum InternalError {
     },
 }
 
+/// The file read fans out over its own pool, capped, not over the
+/// global one: the read phase scales negatively past this width on
+/// the reference machine (`open` time grows +42 % from eight threads
+/// to ten), and this is where its measured curve is fastest.
+const READ_THREAD_CAP: usize = 4;
+
+/// One file read, rendered for the walk-order error report.
+fn read_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    std::fs::read(path).map_err(|error| error.to_string())
+}
+
 /// Everything one project needs to be analyzed, and everything `--watch`
 /// mutates between cycles.
 pub struct Session {
@@ -434,11 +445,17 @@ impl Session {
         // order. Rayon's indexed `collect` preserves input order, so
         // the zip below reunites each path with its own read and the
         // recorded failures keep their serial-era order.
-        let read_outcomes: Vec<Result<Vec<u8>, String>> = walk
-            .files
-            .par_iter()
-            .map(|path| std::fs::read(path).map_err(|error| error.to_string()))
-            .collect();
+        // A pool that fails to build (resource exhaustion) is not a
+        // reason to fail the load; the global pool is the fallback.
+        let read_outcomes: Vec<Result<Vec<u8>, String>> = match rayon::ThreadPoolBuilder::new()
+            .num_threads(READ_THREAD_CAP)
+            .build()
+        {
+            Ok(pool) => {
+                pool.install(|| walk.files.par_iter().map(|path| read_bytes(path)).collect())
+            }
+            Err(_) => walk.files.par_iter().map(|path| read_bytes(path)).collect(),
+        };
         let mut wanted: BTreeMap<FileId, SourceFile> = BTreeMap::new();
         for (path, outcome) in walk.files.iter().zip(read_outcomes) {
             let contents = match outcome {
