@@ -177,3 +177,87 @@ gain does not clear its own bar. The code change
 this measurement record is kept. The supply-chain note in section 2
 stands as a record of the due diligence performed even though the lever
 itself is not adopted.
+
+## 4. Lever 2 A/B: read fan-out cap
+
+Session date 2026-08-27, commit 690363a on `perf-read-fan-out-cap`
+(`READ_THREAD_CAP` set to 4, the file read moved onto its own capped
+rayon pool with a fallback to the global pool if the capped pool fails
+to build). Binaries: `target/ab/celerrate-base` (system allocator,
+unmodified read fan-out) and `target/ab/celerrate-read-cap` (freshly
+built from commit 690363a, with `cargo test --workspace` at 111 of 111
+`test result: ok`, clippy clean, `cargo fmt --all -- --check` clean, and
+`cargo xtask corpus` / `cargo xtask mixed-rate` byte-identical to their
+committed references). Corpus: `target/comparison-corpus-equalized`.
+
+### Phase sweep (three repetitions per point, `--verbose`, `file read + input set` line)
+
+| Threads | Values (ms) | Median (ms) |
+| --- | --- | --- |
+| 2 | 1012, 1059, 530 | 1012 |
+| 4 | 339, 257, 261 | 261 |
+| 6 | 397, 403, 408 | 403 |
+
+Four threads is at the minimum, consistent with the diagnostic;
+`READ_THREAD_CAP` is set to 4.
+
+### Discarded: session attempt 1
+
+| Control | Values (s) | Median |
+| --- | --- | --- |
+| Open | 4.86, 4.58, 4.46 | 4.58 |
+| Close | 6.07, 6.23, 5.59 | 6.07 |
+
+Drift `(6.07 − 4.58) / 4.58 = 32.5%`. Invalid. Cause identified with
+certainty: an unrelated `cargo clippy --workspace` build for a
+different project, running as a separate concurrent session on the same
+machine, started partway through this session and pegged multiple CPU
+cores exactly during the control-close batch (`uptime` load average
+rose from about 2.17 to 5.61 across the session). Discarded per
+protocol; no side data from this attempt is used below.
+
+### Official session (attempt 2, valid)
+
+| Control | Values (s) | Median |
+| --- | --- | --- |
+| Open | 5.24, 5.42, 5.27 | 5.27 |
+| Close | 5.34, 5.43, 5.20 | 5.34 |
+
+Drift `(5.34 − 5.27) / 5.27 = 1.33%`, well inside the ~10% bound.
+Session valid.
+
+| Side | Values (s) | Median | Min | Max | Spread (max − min) |
+| --- | --- | --- | --- | --- | --- |
+| base | 5.09, 5.49, 5.49 | 5.49 | 5.09 | 5.49 | 0.40 |
+| read-cap | 4.94, 5.02, 4.82 | 4.94 | 4.82 | 5.02 | 0.20 |
+
+Gain: `5.49 − 4.94 = 0.55s`.
+
+Acceptance requires the gain to exceed **each** side's own spread:
+
+- `0.55 > 0.40` (base spread): true.
+- `0.55 > 0.20` (read-cap spread): true.
+
+Both comparisons pass.
+
+### Phase mechanism check
+
+One cold `--verbose` run per side, same corpus, `file read + input set`
+line:
+
+| Side | Phase time |
+| --- | --- |
+| base | 637ms |
+| read-cap | 291ms |
+
+The phase itself moves from 637ms to 291ms (a 54% reduction), consistent
+in direction and rough magnitude with the diagnostic's roughly 540ms to
+roughly 240ms estimate and with the Step 2 phase sweep's four-thread
+median of 261ms.
+
+**Verdict: accept.** The wall-clock gain (0.55s) clears both sides'
+spreads, the phase-level mechanism check confirms the read phase itself
+is what moved, and all local gates plus the corpus and mixed-rate
+byte-identical checks are green on commit 690363a. The code change
+(`READ_THREAD_CAP`, `read_bytes`, and the capped-pool-with-fallback read
+fan-out in `crates/celerrate_cli/src/session.rs`) is kept.
