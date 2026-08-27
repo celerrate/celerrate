@@ -214,7 +214,11 @@ different project, running as a separate concurrent session on the same
 machine, started partway through this session and pegged multiple CPU
 cores exactly during the control-close batch (`uptime` load average
 rose from about 2.17 to 5.61 across the session). Discarded per
-protocol; no side data from this attempt is used below.
+protocol; no side data from this attempt is used below. These two
+control medians are recorded from observation at the time; the
+session's `.times` files were overwritten by the second session's own
+run before they could be archived, so no raw data survives for this
+attempt.
 
 ### Official session (attempt 2, valid)
 
@@ -239,6 +243,26 @@ Acceptance requires the gain to exceed **each** side's own spread:
 - `0.55 > 0.20` (read-cap spread): true.
 
 Both comparisons pass.
+
+The base side's three values are 5.09s, 5.49s, 5.49s: the tie at the
+maximum puts the median at the top edge of the side's own range. Both
+controls from this same session, run on the same `celerrate-base`
+binary, sit below that median (5.27s and 5.34s), which suggests 5.49s
+may be the noisy value rather than 5.09s. Measured against the
+controls instead of against the base side's own median, the gain is
+roughly 0.33s to 0.40s (the control medians of 5.27s and 5.34s minus
+the read-cap median of 4.94s), at or under the base side's own 0.40s
+spread, the same bar the literal 0.55s gain cleared by a margin of
+0.15s. The verdict still stands: the plan's acceptance rule compares
+the two alternated sides measured within the same session, not either
+side against the controls, and by that rule the gain is 0.55s against
+a 0.40s spread. The phase mechanism check below corroborates the
+direction independently of this asymmetry: the read phase itself falls
+from 637ms to 291ms, consistent with the Step 2 sweep's four-thread
+median of 261ms. A reader who does not reproduce a full 0.55s
+wall-clock gain on a different machine should expect this: the honest
+range for this session's gain is roughly 0.33s to 0.55s, not a single
+clean number.
 
 ### Phase mechanism check
 
